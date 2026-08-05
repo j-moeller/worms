@@ -1,0 +1,8 @@
+ss -tlnp | grep 5432
+sudo less /var/log/cloud-init-output.log
+cloud-init status --long
+sudo tail -f /var/log/cloud-init-output.log
+psql -h localhost -U dbuser mydb
+
+ssh -L 8080:localhost:80 -J worms debian@10.0.3.17
+ssh -L 8080:localhost:80 -J worms dbbrowser

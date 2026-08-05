@@ -1,0 +1,70 @@
+#cloud-config
+
+hostname: ${hostname}
+
+ssh_authorized_keys:
+  - ${ssh_public_key}
+
+packages:
+  - postgresql
+
+runcmd:
+  - echo "${secret}" > /tmp/secret
+  # TODO
+  - PASSWORD=test
+
+  - systemctl enable postgresql
+  - systemctl start postgresql
+
+  # Configure PostgreSQL to accept remote connections
+  - POSTGRESQL_CONF=$(find /etc/postgresql -name postgresql.conf | head -n1)
+  - sed -i "s/^#listen_addresses = 'localhost'/listen_addresses = '*'/" $POSTGRESQL_CONF
+
+  # Allow password authentication from anywhere (adjust CIDR for production)
+  - PG_HBA=$(find /etc/postgresql -name pg_hba.conf | head -n1)
+  - echo "host    mydb    dbuser_select    0.0.0.0/0    scram-sha-256" >> $PG_HBA
+  - echo "host    mydb    dbuser_logging    0.0.0.0/0    scram-sha-256" >> $PG_HBA
+  - echo "host    mydb    dbuser_network_monitor    0.0.0.0/0    scram-sha-256" >> $PG_HBA
+
+  - systemctl restart postgresql
+
+  # Create database, dbuser_logging, and insert-only permissions
+  - |
+    sudo -u postgres psql <<'EOF'
+    CREATE DATABASE mydb;
+
+    CREATE USER dbuser_select WITH PASSWORD '${PASSWORD}';
+    CREATE USER dbuser_logging WITH PASSWORD '${PASSWORD}';
+    CREATE USER dbuser_network_monitor WITH PASSWORD '${PASSWORD}';
+
+    \c mydb
+
+    CREATE TABLE data (
+        id SERIAL PRIMARY KEY,
+        payload TEXT NOT NULL
+    );
+
+    -- Database access
+    GRANT CONNECT ON DATABASE mydb TO dbuser_select;
+    GRANT CONNECT ON DATABASE mydb TO dbuser_logging;
+    GRANT CONNECT ON DATABASE mydb TO dbuser_network_monitor;
+
+    -- Schema access
+    GRANT USAGE ON SCHEMA public TO dbuser_select;
+    GRANT USAGE ON SCHEMA public TO dbuser_logging;
+    GRANT USAGE ON SCHEMA public TO dbuser_network_monitor;
+
+    -- Existing table
+    GRANT SELECT ON TABLE data TO dbuser_select;
+    GRANT INSERT ON TABLE data TO dbuser_logging;
+    GRANT INSERT ON TABLE data TO dbuser_network_monitor;
+
+    -- Existing sequence (required for INSERT into a SERIAL column)
+    GRANT USAGE ON SEQUENCE data_id_seq TO dbuser_logging;
+    GRANT USAGE ON SEQUENCE data_id_seq TO dbuser_network_monitor;
+    EOF
+
+  # Restart PostgreSQL to apply configuration
+  - systemctl restart postgresql
+
+  - echo "done" > /tmp/cloud-config.done

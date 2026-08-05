@@ -1,0 +1,28 @@
+#cloud-config
+
+hostname: ${hostname}
+
+ssh_authorized_keys:
+  - ${ssh_public_key}
+
+packages:
+  - tcpdump
+  - tshark
+  - iproute2
+  - bridge-utils
+  - ethtool
+  - tshark
+  - zeek
+  - python3
+
+#      DB_CONFIG = {
+#          "host": "10.0.3.16",
+#          "database": "mydb",
+#          "user": "dbuser_network_monitor",
+#          "password": "test"
+#      }
+
+
+runcmd:
+  - echo "${secret}" > /tmp/secret
+  - echo "done" > /tmp/cloud-config.done

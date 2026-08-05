@@ -1,0 +1,58 @@
+[ ] Website
+ - [ ] Login
+ - [ ] Scoring overview
+ - [ ] logging prints
+ - [ ] Worm uploads
+
+[ ] Start of experiment
+ - [ ] Distribution of worms
+ - [ ] Activation of worms
+
+[ ] GPUs / Inference Engine service
+
+[ ] Monitoring
+ - [x] Monitoring of single interface (vmbr1)
+ - [ ] Monitoring server (Zeek)
+ - [ ] Monitoring of multiple vmbr (depends on complex topology)
+ - [ ] Writing to DB
+ - [ ] Display of network activity on webpage
+
+[ ] Heartbeat
+ - [ ] Definition of "vital" services (per VM)
+ - [ ] Heartbeat server
+ - [ ] Writing to DB
+
+[ ] Scoring Server
+ - [ ] Initialization with secrets from VMs
+ - [ ] Initialization of different teams
+ - [ ] Writing to DB
+ - [ ] Display of team points on webpage
+
+[ ] Database
+ - [x] Create VM
+ - [x] Run database service
+ - [x] Allow remote connection
+ - [ ] Create schema (logging, heartbeat, monitor, scoring)
+
+[ ] logging
+ - [ ] Create logging server (REST API)
+ - [x] Connect to DB
+ - [ ] Writing to DB
+ - [ ] Display in web server
+
+[ ] Topology
+ - [ ] Dynamic generation of complex network topology
+ - [ ] Initialization of different VMs, network, layer-2/layer-3 switches
+ - [ ] Initialization of vulnerabilities
+
+[ ] Private internet
+ - [ ] apt cache
+ - [ ] pypi mirror
+ - [ ] CVEs / CWEs
+ - [ ] manpages
+ - [ ] wikipedia
+
+[ ] HTTPS
+[ ] Remove root users
+[ ] SSH only login
+[ ] Firewall rules

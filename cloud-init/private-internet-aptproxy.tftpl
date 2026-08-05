@@ -1,0 +1,60 @@
+#cloud-config
+
+hostname: ${hostname}
+
+packages:
+  - squid
+
+users:
+  - name: coredns
+    system: true
+    shell: /usr/sbin/nologin
+    home: /nonexistent
+
+  - name: user
+    groups:
+      - sudo
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+
+write_files:
+  - path: /etc/squid/conf.d/apt-only.conf
+    permissions: "0644"
+    content: |
+      # Only allow Debian/Ubuntu package repositories
+
+      # Allowed destination domains
+      acl apt_repos dstdomain \
+          deb.debian.org \
+          security.debian.org \
+          archive.ubuntu.com \
+          security.ubuntu.com
+
+      # Only allow local clients
+      acl localhost src 127.0.0.1/32 ::1
+
+      # HTTP CONNECT destinations for HTTPS mirrors
+      acl SSL_ports port 443
+
+      # Allow HTTPS tunnelling only to allowed repositories
+      http_access allow localhost apt_repos SSL_ports
+
+      # Allow normal HTTP requests only to allowed repositories
+      http_access allow localhost apt_repos
+
+      # Block everything else
+      http_access deny all
+
+      # Listen on localhost only
+      http_port 127.0.0.1:3128
+
+      # Minimal logging
+      access_log /var/log/squid/access.log
+
+runcmd:
+  - echo "${secret}" > /tmp/secret
+  - rm -f /etc/squid/conf.d/debian.conf
+  - systemctl restart squid
+  - systemctl enable squid
+  - echo "done" > /tmp/cloud-config.done

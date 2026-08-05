@@ -1,0 +1,11 @@
+variable "name" {}
+variable "proxmox_instance" {}
+variable "cpu" {}
+variable "ram" {}
+variable "network_cidr" {}
+variable "network_gateway_ip" {}
+variable "maintenance_network_cidr" {}
+variable "user_data_file_id" {}
+variable "vmbr_network" {}
+variable "vmbr_maintenance_network" {}
+variable "disk_file_id" {}

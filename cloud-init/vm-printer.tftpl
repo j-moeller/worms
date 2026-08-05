@@ -1,0 +1,81 @@
+#cloud-config
+
+hostname: ${hostname}
+
+ssh_authorized_keys:
+  - ${ssh_public_key}
+
+packages:
+  - cups
+  - cups-bsd
+  - avahi-daemon
+  - printer-driver-cups-pdf
+
+write_files:
+  - path: /etc/cups/cupsd.conf
+    permissions: '0644'
+    content: |
+      LogLevel warn
+      Listen *:631
+      Browsing Yes
+      BrowseLocalProtocols dnssd
+
+      DefaultAuthType Basic
+
+      <Location />
+        Order allow,deny
+        Allow all
+      </Location>
+
+      <Location /admin>
+        Order allow,deny
+        Allow localhost
+      </Location>
+
+      WebInterface Yes
+
+  - path: /usr/local/bin/setup-printer.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -e
+
+      mkdir -p /var/spool/fake-printer
+      mkdir -p /var/spool/cups-pdf/ANONYMOUS
+
+      systemctl restart cups
+
+      # Remove existing queue if present
+      lpadmin -x OfficePrinter 2>/dev/null || true
+
+      # Create PDF printer
+      lpadmin \
+        -p OfficePrinter \
+        -E \
+        -v cups-pdf:/ \
+        -m drv:///sample.drv/generic.ppd
+
+      cupsenable OfficePrinter
+      cupsaccept OfficePrinter
+
+      lpoptions -d OfficePrinter
+
+      echo "Printer configured."
+
+runcmd:
+  - echo "${secret}" > /tmp/secret
+  - systemctl enable cups
+  - systemctl enable avahi-daemon
+  - systemctl restart avahi-daemon
+  - /usr/local/bin/setup-printer.sh
+  - echo "done" > /tmp/cloud-config.done
+
+final_message: |
+  Fake printer is ready.
+
+  Printer name: OfficePrinter
+  Protocol: IPP
+  URL: ipp://<vm-ip>:631/printers/OfficePrinter
+
+  Submitted print jobs are written as PDFs under:
+      /var/spool/cups-pdf/ANONYMOUS/

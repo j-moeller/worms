@@ -1,0 +1,105 @@
+#cloud-config
+
+hostname: ${hostname}
+fqdn: ${hostname}.service
+
+packages:
+  - curl
+  - ca-certificates
+
+users:
+  - name: coredns
+    system: true
+    shell: /usr/sbin/nologin
+    home: /nonexistent
+
+  - name: user
+    groups:
+      - sudo
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+
+write_files:
+
+  - path: /etc/coredns/Corefile
+    owner: root:root
+    permissions: "0644"
+    content: |
+      service:53 {
+
+          hosts {
+              172.16.0.4 telemetry.service
+              172.16.0.5 scoring.service
+              172.16.0.6 aptcache.service
+
+              fallthrough
+          }
+
+          forward . 1.1.1.1 1.0.0.1
+
+          errors
+          log
+      }
+
+  - path: /etc/systemd/system/coredns.service
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=CoreDNS DNS Server
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      User=coredns
+      Group=coredns
+
+      ExecStart=/usr/local/bin/coredns -conf /etc/coredns/Corefile
+
+      Restart=always
+      RestartSec=5
+
+      AmbientCapabilities=CAP_NET_BIND_SERVICE
+      CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+      NoNewPrivileges=yes
+
+      PrivateTmp=yes
+      PrivateDevices=yes
+
+      ProtectSystem=strict
+      ProtectHome=yes
+      ProtectKernelTunables=yes
+      ProtectKernelModules=yes
+      ProtectControlGroups=yes
+
+      ReadWritePaths=/var/lib/coredns
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - echo "${secret}" > /tmp/secret
+
+  - mkdir -p /etc/coredns
+  - mkdir -p /var/lib/coredns
+
+  - curl -L -o /tmp/coredns.tgz https://github.com/coredns/coredns/releases/download/v1.14.6/coredns_1.14.6_linux_amd64.tgz
+  - echo "4402578c8f7b95dac1d8258bfd13e7a9d30f70d7a53f396b02a6d6ca78d56152 /tmp/coredns.tgz" | sha256sum -c
+  - tar -xzf /tmp/coredns.tgz -C /tmp
+  - install -o root -g root -m 0755 /tmp/coredns /usr/local/bin/coredns
+  - # rm -f /tmp/coredns /tmp/coredns.tgz
+
+  - systemctl daemon-reload
+  - systemctl disable --now systemd-resolved
+  - systemctl disable --now systemd-resolved-varlink.socket
+  - systemctl disable --now systemd-resolved-monitor.socket
+  - systemctl enable coredns
+  - systemctl start coredns
+  - # echo "nameserver 127.0.0.1" > /etc/resolv.conf
+  - # ss -tulpn | grep :53
+  - echo "done" > /tmp/cloud-config.done
+
+final_message: |
+  CoreDNS installation complete.

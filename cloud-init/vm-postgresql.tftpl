@@ -1,0 +1,15 @@
+#cloud-config
+
+hostname: ${hostname}
+
+ssh_authorized_keys:
+  - ${ssh_public_key}
+
+packages:
+  - postgresql
+
+runcmd:
+  - echo "${secret}" > /tmp/secret
+  - systemctl enable postgresql
+  - systemctl start postgresql
+  - echo "done" > /tmp/cloud-config.done

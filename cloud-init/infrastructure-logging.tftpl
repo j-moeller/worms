@@ -1,0 +1,167 @@
+#cloud-config
+
+hostname: ${hostname}
+
+# ssh_pwauth: false
+# disable_root: true
+
+# timezone: UTC
+
+ssh_authorized_keys:
+  - ${ssh_public_key}
+
+users:
+  - default
+
+  - name: flask
+    gecos: Flask Application
+    shell: /bin/bash
+    groups:
+      - www-data
+    sudo: []
+    lock_passwd: true
+
+packages:
+  - nginx
+  - python3
+  - python3-venv
+  - python3-pip
+  - fail2ban
+  - git
+  - curl
+
+bootcmd:
+  - mkdir -p /opt/flaskapp
+
+write_files:
+
+  - path: /etc/systemd/system/flask.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Gunicorn Flask Application
+      After=network.target
+
+      [Service]
+      User=flask
+      Group=www-data
+      WorkingDirectory=/opt/flaskapp
+
+      Environment="PATH=/opt/flaskapp/venv/bin"
+
+      ExecStart=/opt/flaskapp/venv/bin/gunicorn \
+          --workers 2 \
+          --bind unix:/run/flask/flask.sock \
+          app:app
+
+      Restart=always
+      RestartSec=5
+
+      NoNewPrivileges=true
+      PrivateTmp=true
+      ProtectSystem=strict
+      ProtectHome=true
+      ProtectKernelTunables=true
+      ProtectKernelModules=true
+      ProtectControlGroups=true
+      RestrictSUIDSGID=true
+      LockPersonality=true
+      MemoryDenyWriteExecute=true
+
+      RuntimeDirectory=flask
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/nginx/sites-available/flask
+    permissions: '0644'
+    content: |
+      server {
+
+          listen 80;
+          server_name _;
+
+          location / {
+
+              proxy_pass http://unix:/run/flask/flask.sock;
+
+              proxy_set_header Host $host;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_set_header X-Real-IP $remote_addr;
+
+          }
+
+      }
+
+  - path: /opt/flaskapp/app.py
+    owner: flask:www-data
+    permissions: '0644'
+    content: |
+      from flask import Flask
+      import psycopg2
+      import random
+      import string
+
+      app = Flask(__name__)
+
+      DB_CONFIG = {
+          "host": "10.0.3.16",
+          "database": "mydb",
+          "user": "dbuser_logging",
+          "password": "test"
+      }
+
+      def get_random_text(length=20):
+          return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
+
+      def insert_payload(payload):
+          conn = psycopg2.connect(**DB_CONFIG)
+          try:
+              cur = conn.cursor()
+              cur.execute(
+                  "INSERT INTO data (payload) VALUES (%s)",
+                  (payload,)
+              )
+              conn.commit()
+              cur.close()
+          finally:
+              conn.close()
+
+      @app.route("/")
+      def hello():
+          return "Hello from Flask!"
+
+      @app.route("/insert")
+      def insert():
+          text = get_random_text()
+          insert_payload(text)
+          return f"Inserted payload: {text}"
+
+runcmd:
+  - echo "${secret}" > /tmp/secret
+
+  - mkdir -p /opt/flaskapp
+  - chown flask:www-data /opt/flaskapp
+
+  - sudo -u flask python3 -m venv /opt/flaskapp/venv
+  - sudo -u flask /opt/flaskapp/venv/bin/pip install --upgrade pip
+  - sudo -u flask /opt/flaskapp/venv/bin/pip install flask gunicorn psycopg2-binary
+
+  - chown -R flask:www-data /opt/flaskapp
+
+  - rm -f /etc/nginx/sites-enabled/default
+  - ln -s /etc/nginx/sites-available/flask /etc/nginx/sites-enabled/flask
+
+  - systemctl daemon-reload
+  - systemctl enable flask
+  - systemctl enable nginx
+  - systemctl enable fail2ban
+
+  - systemctl start flask
+  - systemctl start nginx
+
+  - systemctl reload flask
+  - systemctl reload nginx
+
+  - echo "done" > /tmp/cloud-config.done

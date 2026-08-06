@@ -1,0 +1,23 @@
+---
+- name: Install nginx config
+  copy:
+    src: nginx.conf
+    dest: /etc/nginx/sites-available/flask
+  notify: Restart nginx
+
+- name: Remove default site
+  file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+
+- name: Enable flask site
+  file:
+    src: /etc/nginx/sites-available/flask
+    dest: /etc/nginx/sites-enabled/flask
+    state: link
+  notify: Restart nginx
+
+- name: Enable nginx
+  systemd:
+    name: nginx
+    enabled: true

@@ -1,0 +1,20 @@
+---
+- name: Create virtual environment
+  command:
+    cmd: python3 -m venv {{ flask_app_dir }}/venv
+    creates: "{{ flask_app_dir }}/venv/bin/python"
+  become_user: "{{ flask_user }}"
+
+- name: Upgrade pip
+  pip:
+    name: pip
+    state: latest
+    virtualenv: "{{ flask_app_dir }}/venv"
+
+- name: Install Python packages
+  pip:
+    virtualenv: "{{ flask_app_dir }}/venv"
+    name:
+      - flask
+      - gunicorn
+      - psycopg2-binary

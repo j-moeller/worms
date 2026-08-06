@@ -56,39 +56,21 @@ resource "proxmox_virtual_environment_file" "network_monitor_vm_static" {
   }
 }
 
-resource "proxmox_virtual_environment_file" "logging_vm_static" {
+resource "proxmox_virtual_environment_file" "flask_vm_static" {
   content_type = "snippets"
   datastore_id = var.datastore_id
   node_name    = var.proxmox_instance
 
   source_raw {
     data = templatefile(
-      "${path.module}/cloud-init/infrastructure-logging.tftpl",
+      "${path.module}/cloud-init/vm-flask.tftpl",
       {
         ssh_public_key = trimspace(file("${var.ssh_key_name}.pub")),
-        hostname       = "logging"
+        hostname       = "flask"
         secret         = "<none>"
       }
     )
-    file_name = "infrastructure-logging.yml"
-  }
-}
-
-resource "proxmox_virtual_environment_file" "database_vm_static" {
-  content_type = "snippets"
-  datastore_id = var.datastore_id
-  node_name    = var.proxmox_instance
-
-  source_raw {
-    data = templatefile(
-      "${path.module}/cloud-init/infrastructure-database.tftpl",
-      {
-        ssh_public_key = trimspace(file("${var.ssh_key_name}.pub")),
-        hostname       = "database"
-        secret         = "<none>"
-      }
-    )
-    file_name = "infrastructure-database.yml"
+    file_name = "vm-flask.yml"
   }
 }
 

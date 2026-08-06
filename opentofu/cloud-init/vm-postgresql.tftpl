@@ -7,6 +7,8 @@ ssh_authorized_keys:
 
 packages:
   - postgresql
+  - python3-psycopg2
+  - acl
 
 runcmd:
   - echo "${secret}" > /tmp/secret

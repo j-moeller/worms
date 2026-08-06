@@ -44,23 +44,23 @@ locals {
         user_data_file_id        = proxmox_virtual_environment_file.nginx_vm_static.id
         disk_file_id             = proxmox_virtual_environment_file.debian_image.id
       }
-      scoring = {
-        maintenance_network_cidr = "10.0.3.14/24"
-        maintenance_network_gateway = "10.0.3.1"
-        user_data_file_id        = proxmox_virtual_environment_file.nginx_vm_static.id
-        disk_file_id             = proxmox_virtual_environment_file.debian_image.id
-      }
       */
+      scoring = {
+        maintenance_network_cidr    = "10.0.3.14/24"
+        maintenance_network_gateway = "10.0.3.1"
+        user_data_file_id           = proxmox_virtual_environment_file.flask_vm_static.id
+        disk_file_id                = proxmox_virtual_environment_file.debian_image.id
+      }
       logging = {
         maintenance_network_cidr    = "10.0.3.15/24"
         maintenance_network_gateway = "10.0.3.1"
-        user_data_file_id           = proxmox_virtual_environment_file.logging_vm_static.id
+        user_data_file_id           = proxmox_virtual_environment_file.flask_vm_static.id
         disk_file_id                = proxmox_virtual_environment_file.debian_image.id
       }
       db = {
         maintenance_network_cidr    = "10.0.3.16/24"
         maintenance_network_gateway = "10.0.3.1"
-        user_data_file_id           = proxmox_virtual_environment_file.database_vm_static.id
+        user_data_file_id           = proxmox_virtual_environment_file.postgresql_vm_static.id
         disk_file_id                = proxmox_virtual_environment_file.debian_image.id
       }
       dbbrowser = {

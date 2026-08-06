@@ -1,0 +1,35 @@
+[Unit]
+Description=Gunicorn Flask Application
+After=network.target
+
+[Service]
+User={{ flask_user }}
+Group={{ flask_group }}
+WorkingDirectory={{ flask_app_dir }}
+
+EnvironmentFile=/etc/flask.env
+Environment="PATH=/opt/flaskapp/venv/bin"
+
+ExecStart={{ flask_app_dir }}/venv/bin/gunicorn \
+    --workers 2 \
+    --bind unix:/run/flask/flask.sock \
+    app:app
+
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+RuntimeDirectory=flask
+
+[Install]
+WantedBy=multi-user.target

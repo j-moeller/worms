@@ -1,0 +1,37 @@
+#cloud-config
+
+hostname: ${hostname}
+
+# ssh_pwauth: false
+# disable_root: true
+
+# timezone: UTC
+
+ssh_authorized_keys:
+  - ${ssh_public_key}
+
+users:
+  - default
+
+  - name: flask
+    gecos: Flask Application
+    shell: /bin/bash
+    groups:
+      - www-data
+    sudo: []
+    lock_passwd: true
+
+packages:
+  - nginx
+  - python3
+  - python3-venv
+  - python3-pip
+  - fail2ban
+  - git
+  - curl
+  - acl
+
+runcmd:
+  - echo "${secret}" > /tmp/secret
+  - systemctl enable fail2ban
+  - echo "done" > /tmp/cloud-config.done

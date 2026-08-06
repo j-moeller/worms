@@ -1,0 +1,16 @@
+postgres_db: mydb
+postgresql_listen_addresses: "*"
+
+postgresql_users:
+  - name: dbuser_select
+    # password: "{{ vault_dbuser_select_password }}"
+    password: "test"
+  - name: dbuser_logging
+    # password: "{{ vault_dbuser_logging_password }}"
+    password: "test"
+  - name: dbuser_network_monitor
+    # password: "{{ vault_dbuser_network_monitor_password }}"
+    password: "test"
+  - name: dbuser_scoring
+    # password: "{{ vault_dbuser_scoring_password }}"
+    password: "test"

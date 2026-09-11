@@ -1,0 +1,19 @@
+- name: Install CA certificate into Debian trust store
+  ansible.builtin.copy:
+    src: "{{ pki_ca_cert_path }}"
+    dest: /usr/local/share/ca-certificates/worms-internal-ca.crt
+    owner: root
+    group: root
+    mode: "0644"
+  when: ansible_os_family == "Debian"
+  notify: Update CA trust
+
+- name: Install CA certificate into RedHat trust store
+  ansible.builtin.copy:
+    src: "{{ pki_ca_cert_path }}"
+    dest: /etc/pki/ca-trust/source/anchors/worms-internal-ca.crt
+    owner: root
+    group: root
+    mode: "0644"
+  when: ansible_os_family == "RedHat"
+  notify: Update CA trust

@@ -1,0 +1,1 @@
+projects_local_source: "{{ lookup('env', 'WORKSPACE') }}/projects"

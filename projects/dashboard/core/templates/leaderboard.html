@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+
+{% block header %}
+<title>Leaderboard</title>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
+{% endblock %}
+
+{% block content %}
+<form method="post" action="dev/seed_dummy_data">
+{% csrf_token %}
+<button type="submit">
+    Seed Database
+</button>
+</form>
+
+<h1>Leaderboard</h1>
+
+<table>
+    <thead>
+        <tr>
+            <th>Rank</th>
+            <th>Team</th>
+            <th>Points</th>
+        </tr>
+    </thead>
+
+    <tbody>
+        {% for team in teams %}
+            <tr>
+                <td>{{ forloop.counter }}</td>
+                <td>{{ team.name }}</td>
+                <td>{{ team.points }}</td>
+            </tr>
+        {% empty %}
+            <tr>
+                <td colspan="3">No teams yet.</td>
+            </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<h2>Points over time</h2>
+
+<div style="width: 100%; max-width: 1200px;">
+    <canvas id="pointsChart"></canvas>
+</div>
+
+{{ chart_data|json_script:"chart-data" }}
+{{ round_data|json_script:"round-data" }}
+
+<script>
+    const chartData = JSON.parse(
+        document.getElementById("chart-data").textContent
+    );
+
+    const roundData = JSON.parse(
+        document.getElementById("round-data").textContent
+    );
+
+    // Get unique teams.
+    const teamNames = [
+        ...new Set(chartData.map(item => item.team))
+    ];
+
+    const datasets = teamNames.map(teamName => {
+        return {
+            label: teamName,
+            data: chartData
+                .filter(item => item.team === teamName)
+                .map(item => ({
+                    x: item.time,
+                    y: item.points,
+                })),
+            stepped: true,
+            fill: false,
+        };
+    });
+
+    // Create semi-transparent background areas for each round.
+    const roundColors = [
+        "rgba(54, 162, 235, 0.12)",
+        "rgba(255, 99, 132, 0.12)",
+        "rgba(75, 192, 192, 0.12)",
+        "rgba(255, 159, 64, 0.12)",
+        "rgba(153, 102, 255, 0.12)",
+        "rgba(255, 205, 86, 0.12)",
+    ];
+
+    const annotations = {};
+
+    roundData.forEach((round, index) => {
+        annotations[`round-${index}`] = {
+            type: "box",
+
+            xMin: round.start,
+            xMax: round.end,
+
+            // Extend the box across the entire chart vertically.
+            yMin: "min",
+            yMax: "max",
+
+            backgroundColor: roundColors[index % roundColors.length],
+            borderWidth: 0,
+
+            label: {
+                display: true,
+                content: round.name,
+                position: "start",
+                color: "rgba(0, 0, 0, 0.7)",
+                font: {
+                    weight: "bold",
+                },
+                padding: 4,
+            },
+        };
+    });
+
+    const ctx = document
+        .getElementById("pointsChart")
+        .getContext("2d");
+
+    new Chart(ctx, {
+        type: "line",
+
+        data: {
+            datasets: datasets,
+        },
+
+        options: {
+            responsive: true,
+
+            interaction: {
+                mode: "nearest",
+                intersect: false,
+            },
+
+            scales: {
+                x: {
+                    type: "time",
+                    title: {
+                        display: true,
+                        text: "Time",
+                    },
+                },
+
+                y: {
+                    beginAtZero: true,
+                    ticks: {
+                        precision: 0,
+                    },
+                    title: {
+                        display: true,
+                        text: "Points",
+                    },
+                },
+            },
+
+            plugins: {
+                legend: {
+                    display: true,
+                },
+
+                annotation: {
+                    annotations: annotations,
+                },
+            },
+        },
+    });
+</script>
+{% endblock %}

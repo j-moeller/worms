@@ -1,0 +1,45 @@
+postgres_db: mydb
+postgres_host: 10.3.0.16
+
+postgres_admin_name: admin
+postgres_admin_password: super_secure_password # TODO # PASSWORD
+postgres_admin_cidr: 0.0.0.0/0
+
+postgres_migrator_name: django_migrator
+postgres_migrator_password: test # TODO # PASSWORD
+postgres_migrator_cidr: 0.0.0.0/0
+
+postgresql_users:
+  - name: django_dashboard
+    # password: "{{ vault_django_dashboard_password }}"
+    password: "test" # TODO # PASSWORD
+    cidr: 0.0.0.0/0
+  - name: dbuser_logging
+    # password: "{{ vault_dbuser_logging_password }}"
+    password: "test" # TODO # PASSWORD
+    cidr: 0.0.0.0/0
+  - name: dbuser_network_monitor
+    # password: "{{ vault_dbuser_network_monitor_password }}"
+    password: "test" # TODO # PASSWORD
+    cidr: 0.0.0.0/0
+  - name: dbuser_scoring
+    # password: "{{ vault_dbuser_scoring_password }}"
+    password: "test" # TODO # PASSWORD
+    cidr: 0.0.0.0/0
+
+pki_domain: worms.internal
+
+pki_ca_host: localhost
+pki_ca_passphrase: "A-long-random-secret" # TODO # PASSWORD
+
+pki_ca_common_name: "worms.mlsec.de"
+pki_ca_organization: "Machine Learning and Security - WORMS project"
+
+pki_ca_key_path: "{{ playbook_dir }}/pki/worms/ca.key"
+pki_ca_cert_path: "{{ playbook_dir }}/pki/worms/ca.crt"
+
+pki_ca_key_size: 4096
+pki_ca_validity: "+3650d"
+
+pki_server_key_size: 3072
+pki_server_validity: "+825d"

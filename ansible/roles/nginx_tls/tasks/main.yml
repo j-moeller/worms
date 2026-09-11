@@ -1,0 +1,60 @@
+---
+- name: Create TLS directory
+  ansible.builtin.file:
+    path: "{{ tls_key_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Generate server private key
+  community.crypto.openssl_privatekey:
+    path: "{{ tls_key_path }}"
+    type: RSA
+    size: "{{ tls_key_size }}"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Generate server CSR
+  community.crypto.openssl_csr_pipe:
+    privatekey_path: "{{ tls_key_path }}"
+    common_name: "{{ tls_dns_name }}"
+    subject_alt_name: "DNS:{{ tls_dns_name }}"
+    key_usage:
+      - digitalSignature
+      - keyEncipherment
+    extended_key_usage:
+      - serverAuth
+    create_subject_key_identifier: true
+  register: tls_csr
+
+- name: Sign server certificate on trusted CA
+  community.crypto.x509_certificate_pipe:
+    csr_content: "{{ tls_csr.csr }}"
+    provider: ownca
+    ownca_path: "{{ pki_ca_cert_path }}"
+    ownca_privatekey_path: "{{ pki_ca_key_path }}"
+    ownca_privatekey_passphrase: "{{ pki_ca_passphrase }}"
+    ownca_not_after: "{{ tls_validity }}"
+    ownca_version: 3
+  delegate_to: "{{ pki_ca_host }}"
+  register: tls_certificate
+  no_log: true
+
+- name: Install signed server certificate
+  ansible.builtin.copy:
+    content: "{{ tls_certificate.certificate }}"
+    dest: "{{ tls_cert_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload nginx
+
+- name: Install CA certificate for local trust
+  ansible.builtin.copy:
+    src: "{{ pki_ca_cert_path }}"
+    dest: "{{ tls_ca_path }}"
+    owner: root
+    group: root
+    mode: "0644"

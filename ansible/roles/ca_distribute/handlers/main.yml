@@ -1,0 +1,10 @@
+---
+- name: Update CA trust
+  ansible.builtin.command:
+    cmd: update-ca-certificates
+  when: ansible_os_family == "Debian"
+
+- name: Update CA trust
+  ansible.builtin.command:
+    cmd: update-ca-trust
+  when: ansible_os_family == "RedHat"

@@ -1,0 +1,6 @@
+- name: Configures TLS on nginx servers
+  hosts: nginx_hosts
+  become: true
+
+  roles:
+    - role: nginx_tls

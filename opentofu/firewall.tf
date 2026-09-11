@@ -20,7 +20,7 @@ resource "proxmox_node_firewall" "worms-pve-firewall" {
 
 /*
 // This firewall rule should always exist regardless of whether we added it
-// with tofu.
+// with tofu. We thus do not manage it with tofu.
 
 resource "proxmox_virtual_environment_firewall_rules" "worms-pve-inbound" {
   node_name = var.proxmox_instance
@@ -41,47 +41,61 @@ resource "proxmox_virtual_environment_firewall_rules" "worms-pve-inbound" {
 }
 */
 
-/* 
- * vm firewall
+/**
+ * # TODO: Specify ports
+ *
+ * Firewall rules:
+ *  - DB:
+ *     (reads)
+ *    - Dashboard --> DB:5432 (allow)
+ *    - DBBrowser --> DB:5432 (allow)
+ *     (writes)
+ *    - Heartbeat --> DB:5432 (allow)
+ *    - Monitor --> DB:5432 (allow)
+ *    - Logging --> DB:5432 (allow)
+ *    - Scoring --> DB:5432 (allow)
+ *    - else (drop)
+ *
+ *  - Monitor
+ *    - ??? --> Monitor (allow) # How do we allow promiscous mode via FW?
+ *    - Monitor --> DB:5432 (allow)
+ *    - else (drop)
+ *
+ *  - Heartbeat
+ *    - Heartbeat --> User VM (allow)
+ *    - Heartbeat --> DB:5432 (allow)
+ *    - else (drop)
+ *
+ *  - Scoring
+ *    - User VM --> Scoring (allow)
+ *    - Scoring --> DB:5432 (allow)
+ *    - else (drop)
+ *
+ *  - Logging
+ *    - User VM --> Logging (allow)
+ *    - Logging --> DB:5432 (allow)
+ *    - else (drop)
+ *
+ *  - Private Internet VMs (except apt-cache-ng VM, or other caches)
+ *    - User VM --> Private Internet VM (allow)
+ *    - else (drop)
+ *
+ *  - apt-cache-ng VM, or other caches
+ *    - User VM --> Private Internet VM (allow)
+ *    - Private Internet VM --> Internet (allow)
+ *    - else (drop)
+ *
+ *  - DNS
+ *    - any --> DNS:53 (allow)
+ *    - else (drop)
+ *
+ *  - User VMs:
+ *    - User VM <--> User VM (accept)
+ *    - User VM --> Scoring (accept)
+ *    - User VM --> Logging (accept)
+ *    - User VM --> Private Internet Gateway (accept)
+ *    - User VM --> Private Internet VMs (accept)
+ *    - Heartbeat --> User VM (accept)
+ *    - ??? --> User VM (accept) # SSH maintenance
+ *    - else (drop)
  */
-/*
-resource "proxmox_virtual_environment_firewall_options" "heartbeat-firewall" {
-  depends_on = [proxmox_virtual_environment_vm.heartbeat_server]
-
-  node_name = var.proxmox_instance
-  vm_id     = proxmox_virtual_environment_vm.heartbeat_server.id
-
-  enabled       = true
-  input_policy  = "DROP"
-  output_policy = "ACCEPT"
-}
-
-resource "proxmox_virtual_environment_firewall_options" "vm-firewall" {
-  for_each = proxmox_virtual_environment_vm.vm
-
-  node_name = var.proxmox_instance
-  vm_id     = each.value.id
-
-  enabled       = true
-  input_policy  = "ACCEPT"
-  output_policy = "DROP"
-}
-*/
-
-
-/*
-resource "proxmox_virtual_environment_firewall_rules" "vm-heartbeat-fw" {
-  node_name = var.proxmox_instance
-  vm_id     = proxmox_virtual_environment_vm.heartbeat_server.vm_id
-}
-*/
-
-/*
-TODO: Add a firewall for the monitoring VM that DROPS every outgoing packet
-and only allows for incoming packets.
-
-resource "proxmox_virtual_environment_firewall_rules" "vm-heartbeat-fw" {
-  node_name = var.proxmox_instance
-  vm_id     = proxmox_virtual_environment_vm.heartbeat_server.vm_id
-}
-*/

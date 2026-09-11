@@ -1,0 +1,124 @@
+---
+
+#
+# Guarantee basic connections and variables
+#
+
+- name: Ensure PostgreSQL is running
+  systemd:
+    name: postgresql
+    state: started
+    enabled: true
+
+- name: Gather installed PostgreSQL version
+  ansible.builtin.find:
+    paths: /etc/postgresql
+    file_type: directory
+    recurse: false
+  register: postgres_versions
+
+- name: Set PostgreSQL version fact
+  ansible.builtin.set_fact:
+    postgresql_version: "{{ postgres_versions.files | map(attribute='path') | map('basename') | first }}"
+
+#
+# Find PostgreSQL config paths
+#
+
+- name: Find postgresql.conf
+  shell: |
+    find /etc/postgresql -name postgresql.conf | head -n1
+  register: postgresql_conf
+  changed_when: false
+
+
+- name: Find pg_hba.conf
+  shell: |
+    find /etc/postgresql -name pg_hba.conf | head -n1
+  register: pg_hba_conf
+  changed_when: false
+
+#
+# Configure PostgreSQL networking
+#
+
+- name: Allow PostgreSQL remote connections
+  lineinfile:
+    path: "{{ postgresql_conf.stdout }}"
+    regexp: '^#?\s*listen_addresses\s*='
+    line: "listen_addresses = '{{ postgresql_listen_addresses }}'"
+  notify: Restart PostgreSQL
+
+
+- name: Allow database users remote access
+  blockinfile:
+    path: "{{ pg_hba_conf.stdout }}"
+    marker: "# {mark} ANSIBLE DATABASE ACCESS"
+    block: "{{ lookup('template', 'pg_hba_users.j2') }}"
+  notify: Restart PostgreSQL
+
+#
+# Database creation
+#
+
+- name: Create application database
+  community.postgresql.postgresql_db:
+    name: "{{ postgres_db }}"
+    state: present
+  become_user: postgres
+
+- name: Flush handlers before creating users
+  meta: flush_handlers
+
+#
+# Users
+#
+
+- name: Create PostgreSQL admin user
+  become: true
+  become_user: postgres
+  community.postgresql.postgresql_user:
+    login_user: postgres
+    login_unix_socket: /var/run/postgresql
+    name: "{{ postgres_admin_name }}"
+    password: "{{ postgres_admin_password }}"
+    role_attr_flags: "SUPERUSER,CREATEDB,CREATEROLE,LOGIN"
+    encrypted: true
+    state: present
+
+
+- name: Create PostgreSQL users
+  become: true
+  become_user: postgres
+  community.postgresql.postgresql_user:
+    login_user: postgres
+    login_unix_socket: /var/run/postgresql
+    name: "{{ item.name }}"
+    password: "{{ item.password }}"
+    role_attr_flags: LOGIN
+    encrypted: true
+  loop: "{{ postgresql_users }}"
+
+
+# Migrator (django_migrator)
+- name: Allow migrator to connect
+  become: true
+  become_user: postgres
+  community.postgresql.postgresql_privs:
+    database: "{{ postgres_db }}"
+    roles: django_migrator
+    type: database
+    privs: CONNECT
+    state: present
+
+
+- name: Allow migrator to use and create in public schema
+  become: true
+  become_user: postgres
+  community.postgresql.postgresql_privs:
+    database: "{{ postgres_db }}"
+    roles: django_migrator
+    type: schema
+    objs: public
+    privs: USAGE,CREATE
+    state: present

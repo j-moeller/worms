@@ -2,4 +2,3 @@
 - import_tasks: app.yml
 - import_tasks: python.yml
 - import_tasks: service.yml
-- import_tasks: nginx.yml

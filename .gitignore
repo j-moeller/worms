@@ -1,2 +1,6 @@
+.git
 .env
 .ssh
+
+*.crt
+*.key

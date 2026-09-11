@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Seed Dummy Data</h1>
+
+<p>
+    This will create dummy competition data in the database.
+</p>
+
+<form method="post">
+    {% csrf_token %}
+    <button type="submit">
+        Seed Database
+    </button>
+</form>
+{% endblock %}

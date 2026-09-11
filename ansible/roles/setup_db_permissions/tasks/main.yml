@@ -1,0 +1,113 @@
+---
+
+#
+# Database permissions
+#
+
+- name: Grant database CONNECT
+  community.postgresql.postgresql_privs:
+    database: "{{ postgres_db }}"
+    roles: "{{ item.name }}"
+    type: database
+    privs: CONNECT
+    state: present
+  loop: "{{ postgresql_users }}"
+  become_user: postgres
+
+
+- name: Grant schema usage
+  community.postgresql.postgresql_privs:
+    database: "{{ postgres_db }}"
+    roles: "{{ item.name }}"
+    objs: public
+    type: schema
+    privs: USAGE
+    state: present
+  loop: "{{ postgresql_users }}"
+  become_user: postgres
+
+
+# django_dashboard:
+# - query all tables
+# - insert into uploads table
+- name: Grant SELECT on all tables to django_dashboard
+  community.postgresql.postgresql_privs:
+    database: "{{ postgres_db }}"
+    roles: django_dashboard
+    objs: ALL_IN_SCHEMA
+    schema: public
+    type: table
+    privs: SELECT
+    state: present
+  become_user: postgres
+
+
+- name: Grant SELECT on all sequences to django_dashboard
+  community.postgresql.postgresql_privs:
+    database: "{{ postgres_db }}"
+    roles: django_dashboard
+    objs: ALL_IN_SCHEMA
+    schema: public
+    type: sequence
+    privs: SELECT
+    state: present
+  become_user: postgres
+
+
+- name: Grant INSERT on uploads table to django_dashboard
+  community.postgresql.postgresql_privs:
+    database: "{{ postgres_db }}"
+    roles: django_dashboard
+    objs: uploads
+    type: table
+    privs: INSERT
+    state: present
+  become_user: postgres
+
+
+# dbuser_logging
+# - insert into logging table
+- name: Grant INSERT on logging_attempts table
+  community.postgresql.postgresql_privs:
+    database: "{{ postgres_db }}"
+    roles: dbuser_logging
+    objs: logging_attempts
+    type: table
+    privs: INSERT
+    state: present
+  become_user: postgres
+
+
+- name: Grant USAGE on logging_id_seq
+  community.postgresql.postgresql_privs:
+    database: "{{ postgres_db }}"
+    roles: dbuser_logging
+    objs: logging_id_seq
+    type: sequence
+    privs: USAGE
+    state: present
+  become_user: postgres
+
+
+# dbuser_scoring
+# - insert into scoring table
+- name: Grant INSERT on flag_capture_attempts table
+  community.postgresql.postgresql_privs:
+    database: "{{ postgres_db }}"
+    roles: dbuser_scoring
+    objs: flag_capture_attempts
+    type: table
+    privs: INSERT
+    state: present
+  become_user: postgres
+
+
+- name: Grant USAGE on flag_capture_attempts_id_seq
+  community.postgresql.postgresql_privs:
+    database: "{{ postgres_db }}"
+    roles: dbuser_scoring
+    objs: flag_capture_attempts_id_seq
+    type: sequence
+    privs: USAGE
+    state: present
+  become_user: postgres

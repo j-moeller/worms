@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Flag Capture Attempts</h1>
+
+<table>
+    <thead>
+        <tr>
+            <th>Round</th>
+            <th>Timestamp</th>
+            <th>VM Identifier</th>
+        </tr>
+    </thead>
+
+    <tbody>
+        {% regroup rows by round as round_groups %}
+
+        {% for group in round_groups %}
+            {% for row in group.list %}
+                <tr {% if row.invalid %}style="background-color: #f8d7da;"{% endif %}>
+                    {% if forloop.first %}
+                        <td rowspan="{{ group.list|length }}">
+                            {{ group.grouper.name }}
+                        </td>
+                    {% endif %}
+
+                    <td>
+                        {{ row.attempt.created_at }}
+                    </td>
+
+                    <td>
+                        {% if row.invalid %}
+                            Invalid attempt
+                        {% else %}
+                            {{ row.vm_identifier }}
+                        {% endif %}
+                    </td>
+                </tr>
+            {% endfor %}
+        {% endfor %}
+    </tbody>
+</table>
+
+{% if not rows %}
+    <p>No flag capture attempts found.</p>
+{% endif %}
+{% endblock %}

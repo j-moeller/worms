@@ -1,14 +1,17 @@
 [ ] Website
- - [ ] Login
- - [ ] Scoring overview
- - [ ] logging prints
+ - [x] Login
+ - [x] Leaderboard
+ - [x] Captures
+ - [x] logging prints
  - [ ] Worm uploads
+ - [ ] Design
 
 [ ] Start of experiment
  - [ ] Distribution of worms
  - [ ] Activation of worms
 
 [ ] GPUs / Inference Engine service
+ - [ ] Jailbreaking ?
 
 [ ] Monitoring
  - [x] Monitoring of single interface (vmbr1)
@@ -25,20 +28,26 @@
 [ ] Scoring Server
  - [ ] Initialization with secrets from VMs
  - [ ] Initialization of different teams
+ - [x] Connect to DB
  - [ ] Writing to DB
- - [ ] Display of team points on webpage
+ - [x] Display of team points on webpage
 
 [ ] Database
  - [x] Create VM
  - [x] Run database service
  - [x] Allow remote connection
  - [ ] Create schema (logging, heartbeat, monitor, scoring)
+    - [x] Logging
+    - [x] scoring
+    - [ ] heartbeat
+    - [ ] monitor
 
 [ ] logging
- - [ ] Create logging server (REST API)
+ - [x] Create logging server (REST API)
  - [x] Connect to DB
  - [ ] Writing to DB
  - [ ] Display in web server
+ - [ ] Download
 
 [ ] Topology
  - [ ] Dynamic generation of complex network topology
@@ -53,6 +62,12 @@
  - [ ] wikipedia
 
 [ ] HTTPS
-[ ] Remove root users
+ - [x] Services
+ - [ ] DB connection
+
 [ ] SSH only login
 [ ] Firewall rules
+[ ] Remove root users
+[ ] Remove hardcoded passwords
+
+[ ] Limit request size, limit request frequency

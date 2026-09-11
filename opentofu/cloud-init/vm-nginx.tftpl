@@ -7,6 +7,8 @@ ssh_authorized_keys:
 
 packages:
   - nginx
+  - openssl
+  - ca-certificates
 
 runcmd:
   - echo "${secret}" > /tmp/secret

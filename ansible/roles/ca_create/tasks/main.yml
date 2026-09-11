@@ -1,0 +1,52 @@
+---
+- name: Create CA directory
+  ansible.builtin.file:
+    path: "{{ pki_ca_key_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Generate CA private key
+  community.crypto.openssl_privatekey:
+    path: "{{ pki_ca_key_path }}"
+    type: RSA
+    size: "{{ pki_ca_key_size }}"
+    passphrase: "{{ pki_ca_passphrase }}"
+    cipher: auto
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Generate CA CSR
+  community.crypto.openssl_csr_pipe:
+    privatekey_path: "{{ pki_ca_key_path }}"
+    privatekey_passphrase: "{{ pki_ca_passphrase }}"
+    common_name: "{{ pki_ca_common_name }}"
+    organization_name: "{{ pki_ca_organization }}"
+    use_common_name_for_san: false
+
+    basic_constraints:
+      - "CA:TRUE"
+      - "pathlen:0"
+    basic_constraints_critical: true
+
+    key_usage:
+      - keyCertSign
+      - cRLSign
+    key_usage_critical: true
+
+    create_subject_key_identifier: true
+  register: pki_ca_csr
+
+- name: Generate self-signed root CA certificate
+  community.crypto.x509_certificate:
+    path: "{{ pki_ca_cert_path }}"
+    csr_content: "{{ pki_ca_csr.csr }}"
+    privatekey_path: "{{ pki_ca_key_path }}"
+    privatekey_passphrase: "{{ pki_ca_passphrase }}"
+    provider: selfsigned
+    selfsigned_not_after: "{{ pki_ca_validity }}"
+    owner: root
+    group: root
+    mode: "0644"

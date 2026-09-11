@@ -1,0 +1,20 @@
+---
+- name: Create virtual environment
+  command:
+    cmd: python3 -m venv {{ django_app_dir }}/venv
+    creates: "{{ django_app_dir }}/venv/bin/python"
+  become_user: "{{ django_app_user }}"
+
+- name: Upgrade pip
+  pip:
+    name: pip
+    state: latest
+    virtualenv: "{{ django_app_dir }}/venv"
+
+- name: Install Python packages
+  pip:
+    virtualenv: "{{ django_app_dir }}/venv"
+    name:
+      - django
+      - gunicorn
+      - psycopg2-binary

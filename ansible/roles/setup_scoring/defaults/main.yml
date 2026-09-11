@@ -2,9 +2,7 @@ flask_app_dir: /opt/flaskapp
 flask_user: flask
 flask_group: www-data
 
-db_host: 10.0.3.16
-db_name: mydb
 db_user: dbuser_scoring
-db_password: test
+db_password: test # TODO # PASSWORD
 
 gunicorn_workers: 2

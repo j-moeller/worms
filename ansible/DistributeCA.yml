@@ -1,0 +1,6 @@
+- name: Issue TLS certificates to servers
+  hosts: tls_hosts
+  become: true
+
+  roles:
+    - role: ca_distribute

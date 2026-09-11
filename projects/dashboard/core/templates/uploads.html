@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Uploads</h1>
+
+<form
+    id="upload-form"
+    method="post"
+    action="{% url 'upload' %}"
+    enctype="application/octet-stream"
+>
+    {% csrf_token %}
+
+    <div
+        id="drop-zone"
+        class="upload-drop-zone"
+        tabindex="0"
+        role="button"
+        aria-label="Choose a file to upload"
+    >
+        <input
+            id="file-input"
+            type="file"
+            hidden
+        >
+
+        <p id="drop-zone-text">
+            Drag and drop a file here, or click to select one.
+        </p>
+
+        <p id="selected-file" class="selected-file" hidden></p>
+    </div>
+
+    <button
+        id="upload-button"
+        type="submit"
+        disabled
+    >
+        Upload
+    </button>
+</form>
+
+<table>
+    <thead>
+        <tr>
+            <th>content_hash</th>
+            <th>time/date</th>
+            <th>username</th>
+            <th>row</th>
+        </tr>
+    </thead>
+
+    <tbody>
+        {% for upload in uploads %}
+            <tr{% if upload.referenced %} class="referenced"{% endif %}>
+                <td>{{ upload.content_hash }}</td>
+                <td>{{ upload.time_date }}</td>
+                <td>{{ upload.username }}</td>
+                <td>
+                    {% for round in upload.rounds %}
+                        {{ round }}{% if not forloop.last %}, {% endif %}
+                    {% endfor %}
+                </td>
+            </tr>
+        {% empty %}
+            <tr>
+                <td colspan="4">No uploads.</td>
+            </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<style>
+    .upload-drop-zone {
+        border: 2px dashed #aaa;
+        border-radius: 8px;
+        padding: 2rem;
+        margin-bottom: 1rem;
+        text-align: center;
+        cursor: pointer;
+        transition: border-color 0.15s, background-color 0.15s;
+    }
+
+    .upload-drop-zone:hover,
+    .upload-drop-zone:focus,
+    .upload-drop-zone.dragover {
+        border-color: #333;
+        background: #f5f5f5;
+        outline: none;
+    }
+
+    .selected-file {
+        margin-top: 1rem;
+        font-weight: 600;
+    }
+
+    #upload-button:disabled {
+        cursor: not-allowed;
+        opacity: 0.5;
+    }
+
+    #upload-button:not(:disabled) {
+        cursor: pointer;
+    }
+</style>
+
+<script>
+    (() => {
+        const form = document.getElementById("upload-form");
+        const dropZone = document.getElementById("drop-zone");
+        const fileInput = document.getElementById("file-input");
+        const uploadButton = document.getElementById("upload-button");
+        const dropZoneText = document.getElementById("drop-zone-text");
+        const selectedFile = document.getElementById("selected-file");
+
+        let file = null;
+
+        function setFile(selected) {
+            file = selected;
+
+            if (file) {
+                dropZoneText.textContent = "File selected:";
+                selectedFile.textContent =
+                    `${file.name} (${file.size.toLocaleString()} bytes)`;
+                selectedFile.hidden = false;
+                uploadButton.disabled = false;
+            } else {
+                dropZoneText.textContent =
+                    "Drag and drop a file here, or click to select one.";
+                selectedFile.textContent = "";
+                selectedFile.hidden = true;
+                uploadButton.disabled = true;
+            }
+        }
+
+        dropZone.addEventListener("click", () => {
+            fileInput.click();
+        });
+
+        dropZone.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                fileInput.click();
+            }
+        });
+
+        fileInput.addEventListener("change", () => {
+            setFile(fileInput.files[0] || null);
+        });
+
+        dropZone.addEventListener("dragover", (event) => {
+            event.preventDefault();
+            dropZone.classList.add("dragover");
+        });
+
+        dropZone.addEventListener("dragleave", () => {
+            dropZone.classList.remove("dragover");
+        });
+
+        dropZone.addEventListener("drop", (event) => {
+            event.preventDefault();
+            dropZone.classList.remove("dragover");
+
+            const droppedFile = event.dataTransfer.files[0];
+
+            if (droppedFile) {
+                setFile(droppedFile);
+            }
+        });
+
+        form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+
+            if (!file) {
+                return;
+            }
+
+            uploadButton.disabled = true;
+            uploadButton.textContent = "Uploading…";
+
+            try {
+                const response = await fetch(form.action, {
+                    method: "POST",
+                    headers: {
+                        "X-CSRFToken": "{{ csrf_token }}",
+                        "Content-Type": "application/octet-stream",
+                    },
+                    body: file,
+                });
+
+                if (!response.ok) {
+                    let message = "Upload failed.";
+
+                    try {
+                        const data = await response.json();
+                        if (data.error) {
+                            message = data.error;
+                        }
+                    } catch (_) {
+                        // Keep the generic error message.
+                    }
+
+                    throw new Error(message);
+                }
+
+                // Reload the page so the new upload appears in the table.
+                window.location.reload();
+            } catch (error) {
+                alert(error.message);
+
+                uploadButton.disabled = false;
+                uploadButton.textContent = "Upload";
+            }
+        });
+    })();
+</script>
+{% endblock %}

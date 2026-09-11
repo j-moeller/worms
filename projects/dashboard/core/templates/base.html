@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {
+            font-family: sans-serif;
+            max-width: 1000px;
+            margin: 80px auto;
+            padding: 20px;
+        }
+    </style>
+{% block header %}
+{% endblock %}
+</head>
+<body>
+{% if debug %}
+<div style="position: absolute; width: 400px; top:0; right:0;">
+    <h2>Debug: Log in as user</h2>
+
+    <ul>
+        {% for available_user in available_users %}
+            <li>
+                <form
+                    method="post"
+                    action="{% url 'debug_login_as' available_user.pk %}"
+                    style="display: inline;"
+                >
+                    {% csrf_token %}
+                    <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                    <button type="submit">
+                        {{ available_user.username }}
+                        — {{ available_user.first_name }}
+                        — {{ available_user.team.name }}
+                    </button>
+                </form>
+            </li>
+        {% empty %}
+            <li>No users available.</li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+<p>
+    <a href="{% url 'index' %}">index</a>
+    {% if user.is_authenticated %}
+    <a href="{% url 'dashboard' %}">dashboard</a>
+    <a href="{% url 'captures' %}">captures</a>
+    <a href="{% url 'logs' %}">logs</a>
+    -
+    <a href="{% url 'upload' %}">upload</a>
+    -
+    <a href="{% url 'logout' %}">logout</a>
+    {% else %}
+        <a href="{% url 'login' %}">login</a>
+    {% endif %}
+</p>
+
+{% block content %}
+{% endblock %}
+</body>
+</html>
+
+

@@ -18,62 +18,85 @@ provider "proxmox" {
 }
 
 locals {
+  networks = {
+    user_vms         = "10.1.0.0/24"
+    private_internet = "10.2.0.0/24"
+    maintenance      = "10.3.0.0/24"
+  }
+
+  infrastructure_ips = {
+    dns       = "10.2.0.11"
+    heartbeat = "10.3.0.13"
+    scoring   = "10.3.0.14"
+    logging   = "10.3.0.15"
+    db        = "10.3.0.16"
+    dbbrowser = "10.3.0.17"
+    dashboard = "10.3.0.18"
+    monitor   = "10.3.0.100"
+  }
+}
+
+locals {
   private_internet = {
-    /*
     dns = {
-      cpu                      = 1
-      ram                      = 1024
-      network_cidr             = "10.0.2.11/24"
-      network_gateway_ip       = "10.0.2.1"
-      maintenance_network_cidr = "10.0.3.11/24"
-      maintenance_network_gateway = "10.0.3.1"
-      user_data_file_id        = proxmox_virtual_environment_file.nginx_vm_static.id
-      vmbr_network             = proxmox_network_linux_bridge.vmbr_private_internet.name
-      vmbr_maintenance_network = proxmox_network_linux_bridge.vmbr_maintenance_network.name
-      disk_file_id             = proxmox_virtual_environment_file.debian_image.id
+      cpu                         = 1
+      ram                         = 1024
+      network_cidr                = "10.2.0.11/24"
+      network_gateway_ip          = "10.2.0.1"
+      maintenance_network_cidr    = "10.3.0.11/24"
+      maintenance_network_gateway = "10.3.0.1"
+      user_data_file_id           = proxmox_virtual_environment_file.dns_vm_static.id
+      vmbr_network                = proxmox_network_linux_bridge.vmbr_private_internet.name
+      vmbr_maintenance_network    = proxmox_network_linux_bridge.vmbr_maintenance_network.name
+      disk_file_id                = proxmox_virtual_environment_file.debian_image.id
     }
-    */
   }
 
   infrastructure = {
     generic = {
       /*
       heartbeat = {
-        maintenance_network_cidr = "10.0.3.13/24"
-        maintenance_network_gateway = "10.0.3.1"
+        maintenance_network_cidr = "10.3.0.13/24"
+        maintenance_network_gateway = "10.3.0.1"
         user_data_file_id        = proxmox_virtual_environment_file.nginx_vm_static.id
         disk_file_id             = proxmox_virtual_environment_file.debian_image.id
       }
       */
       scoring = {
-        maintenance_network_cidr    = "10.0.3.14/24"
-        maintenance_network_gateway = "10.0.3.1"
+        maintenance_network_cidr    = "10.3.0.14/24"
+        maintenance_network_gateway = "10.3.0.1"
         user_data_file_id           = proxmox_virtual_environment_file.flask_vm_static.id
         disk_file_id                = proxmox_virtual_environment_file.debian_image.id
       }
       logging = {
-        maintenance_network_cidr    = "10.0.3.15/24"
-        maintenance_network_gateway = "10.0.3.1"
+        maintenance_network_cidr    = "10.3.0.15/24"
+        maintenance_network_gateway = "10.3.0.1"
         user_data_file_id           = proxmox_virtual_environment_file.flask_vm_static.id
         disk_file_id                = proxmox_virtual_environment_file.debian_image.id
       }
       db = {
-        maintenance_network_cidr    = "10.0.3.16/24"
-        maintenance_network_gateway = "10.0.3.1"
+        maintenance_network_cidr    = "10.3.0.16/24"
+        maintenance_network_gateway = "10.3.0.1"
         user_data_file_id           = proxmox_virtual_environment_file.postgresql_vm_static.id
         disk_file_id                = proxmox_virtual_environment_file.debian_image.id
       }
       dbbrowser = {
-        maintenance_network_cidr    = "10.0.3.17/24"
-        maintenance_network_gateway = "10.0.3.1"
+        maintenance_network_cidr    = "10.3.0.17/24"
+        maintenance_network_gateway = "10.3.0.1"
         user_data_file_id           = proxmox_virtual_environment_file.database_browser_vm_static.id
+        disk_file_id                = proxmox_virtual_environment_file.debian_image.id
+      }
+      dashboard = {
+        maintenance_network_cidr    = "10.3.0.18/24"
+        maintenance_network_gateway = "10.3.0.1"
+        user_data_file_id           = proxmox_virtual_environment_file.nginx_vm_static.id
         disk_file_id                = proxmox_virtual_environment_file.debian_image.id
       }
     }
     specific = {
       monitor = {
-        maintenance_network_cidr    = "10.0.3.100/24"
-        maintenance_network_gateway = "10.0.3.1"
+        maintenance_network_cidr    = "10.3.0.100/24"
+        maintenance_network_gateway = "10.3.0.1"
         user_data_file_id           = proxmox_virtual_environment_file.network_monitor_vm_static.id
         disk_file_id                = proxmox_virtual_environment_file.debian_image.id
       }
@@ -81,27 +104,27 @@ locals {
   }
 
   user_vms = {
-    /*
-    db01 = {
-      cpu                      = 1
-      ram                      = 2048
-      network_cidr             = "10.0.1.11/24"
-      network_gateway_ip       = "10.0.1.1"
-      maintenance_network_cidr = "10.0.3.101/24"
-      maintenance_network_gateway = "10.0.3.1"
-      vmbr_network             = proxmox_network_linux_bridge.vmbr_vm_private_network.name
-      vmbr_maintenance_network = proxmox_network_linux_bridge.vmbr_maintenance_network.name
-      disk_file_id             = proxmox_virtual_environment_file.debian_image.id
-      secret                   = "63a106e0cafad63cc1305434762cf5901d86b3f4d19fb578e275af90c84bbdb4"
-      snippet_type             = "vm-nginx"
+    user01 = {
+      cpu                         = 1
+      ram                         = 2048
+      network_cidr                = "10.1.0.11/24"
+      network_gateway_ip          = "10.1.0.1"
+      maintenance_network_cidr    = "10.3.0.101/24"
+      maintenance_network_gateway = "10.3.0.1"
+      vmbr_network                = proxmox_network_linux_bridge.vmbr_vm_private_network.name
+      vmbr_maintenance_network    = proxmox_network_linux_bridge.vmbr_maintenance_network.name
+      disk_file_id                = proxmox_virtual_environment_file.debian_image.id
+      secret                      = "63a106e0cafad63cc1305434762cf5901d86b3f4d19fb578e275af90c84bbdb4"
+      snippet_type                = "vm-nginx"
     }
+    /*
     db02 = {
       cpu                      = 1
       ram                      = 2048
-      network_cidr             = "10.0.1.12/24"
-      network_gateway_ip       = "10.0.1.1"
-      maintenance_network_cidr = "10.0.3.102/24"
-      maintenance_network_gateway = "10.0.3.1"
+      network_cidr             = "10.1.0.12/24"
+      network_gateway_ip       = "10.1.0.1"
+      maintenance_network_cidr = "10.3.0.102/24"
+      maintenance_network_gateway = "10.3.0.1"
       vmbr_network             = proxmox_network_linux_bridge.vmbr_vm_private_network.name
       vmbr_maintenance_network = proxmox_network_linux_bridge.vmbr_maintenance_network.name
       disk_file_id             = proxmox_virtual_environment_file.debian_image.id
@@ -111,10 +134,10 @@ locals {
     db03 = {
       cpu                      = 1
       ram                      = 2048
-      network_cidr             = "10.0.1.13/24"
-      network_gateway_ip       = "10.0.1.1"
-      maintenance_network_cidr = "10.0.3.103/24"
-      maintenance_network_gateway = "10.0.3.1"
+      network_cidr             = "10.1.0.13/24"
+      network_gateway_ip       = "10.1.0.1"
+      maintenance_network_cidr = "10.3.0.103/24"
+      maintenance_network_gateway = "10.3.0.1"
       vmbr_network             = proxmox_network_linux_bridge.vmbr_vm_private_network.name
       vmbr_maintenance_network = proxmox_network_linux_bridge.vmbr_maintenance_network.name
       disk_file_id             = proxmox_virtual_environment_file.debian_image.id
@@ -124,10 +147,10 @@ locals {
     db04 = {
       cpu                      = 1
       ram                      = 2048
-      network_cidr             = "10.0.1.14/24"
-      network_gateway_ip       = "10.0.1.1"
-      maintenance_network_cidr = "10.0.3.104/24"
-      maintenance_network_gateway = "10.0.3.1"
+      network_cidr             = "10.1.0.14/24"
+      network_gateway_ip       = "10.1.0.1"
+      maintenance_network_cidr = "10.3.0.104/24"
+      maintenance_network_gateway = "10.3.0.1"
       vmbr_network             = proxmox_network_linux_bridge.vmbr_vm_private_network.name
       vmbr_maintenance_network = proxmox_network_linux_bridge.vmbr_maintenance_network.name
       disk_file_id             = proxmox_virtual_environment_file.debian_image.id
@@ -137,10 +160,10 @@ locals {
     db05 = {
       cpu                      = 1
       ram                      = 2048
-      network_cidr             = "10.0.1.15/24"
-      network_gateway_ip       = "10.0.1.1"
-      maintenance_network_cidr = "10.0.3.105/24"
-      maintenance_network_gateway = "10.0.3.1"
+      network_cidr             = "10.1.0.15/24"
+      network_gateway_ip       = "10.1.0.1"
+      maintenance_network_cidr = "10.3.0.105/24"
+      maintenance_network_gateway = "10.3.0.1"
       vmbr_network             = proxmox_network_linux_bridge.vmbr_vm_private_network.name
       vmbr_maintenance_network = proxmox_network_linux_bridge.vmbr_maintenance_network.name
       disk_file_id             = proxmox_virtual_environment_file.debian_image.id
@@ -150,10 +173,10 @@ locals {
     db06 = {
       cpu                      = 1
       ram                      = 2048
-      network_cidr             = "10.0.1.16/24"
-      network_gateway_ip       = "10.0.1.1"
-      maintenance_network_cidr = "10.0.3.106/24"
-      maintenance_network_gateway = "10.0.3.1"
+      network_cidr             = "10.1.0.16/24"
+      network_gateway_ip       = "10.1.0.1"
+      maintenance_network_cidr = "10.3.0.106/24"
+      maintenance_network_gateway = "10.3.0.1"
       vmbr_network             = proxmox_network_linux_bridge.vmbr_vm_private_network.name
       vmbr_maintenance_network = proxmox_network_linux_bridge.vmbr_maintenance_network.name
       disk_file_id             = proxmox_virtual_environment_file.debian_image.id
@@ -163,10 +186,10 @@ locals {
     db07 = {
       cpu                      = 1
       ram                      = 2048
-      network_cidr             = "10.0.1.17/24"
-      network_gateway_ip       = "10.0.1.1"
-      maintenance_network_cidr = "10.0.3.107/24"
-      maintenance_network_gateway = "10.0.3.1"
+      network_cidr             = "10.1.0.17/24"
+      network_gateway_ip       = "10.1.0.1"
+      maintenance_network_cidr = "10.3.0.107/24"
+      maintenance_network_gateway = "10.3.0.1"
       vmbr_network             = proxmox_network_linux_bridge.vmbr_vm_private_network.name
       vmbr_maintenance_network = proxmox_network_linux_bridge.vmbr_maintenance_network.name
       disk_file_id             = proxmox_virtual_environment_file.debian_image.id
@@ -176,10 +199,10 @@ locals {
     db08 = {
       cpu                      = 1
       ram                      = 2048
-      network_cidr             = "10.0.1.18/24"
-      network_gateway_ip       = "10.0.1.1"
-      maintenance_network_cidr = "10.0.3.108/24"
-      maintenance_network_gateway = "10.0.3.1"
+      network_cidr             = "10.1.0.18/24"
+      network_gateway_ip       = "10.1.0.1"
+      maintenance_network_cidr = "10.3.0.108/24"
+      maintenance_network_gateway = "10.3.0.1"
       vmbr_network             = proxmox_network_linux_bridge.vmbr_vm_private_network.name
       vmbr_maintenance_network = proxmox_network_linux_bridge.vmbr_maintenance_network.name
       disk_file_id             = proxmox_virtual_environment_file.debian_image.id
@@ -214,7 +237,7 @@ module "user_vms" {
   for_each = local.user_vms
 
   proxmox_instance             = var.proxmox_instance
-  service_network_dns_vm_ipraw = "10.0.2.11"
+  service_network_dns_vm_ipraw = "10.2.0.11"
 
   name                     = each.key
   cpu                      = each.value.cpu

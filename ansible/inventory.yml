@@ -1,0 +1,72 @@
+all:
+  children:
+
+    ca:
+      hosts:
+        pki_ca_host:
+          ansible_host: 127.0.0.1
+
+    dns_hosts:
+      hosts:
+        dns.worms.internal:
+          ansible_host: 10.2.0.11
+          ansible_user: debian
+          dns_entries:
+            - name: scoring.worms.internal
+              ip: 10.3.0.14
+            - name: logging.worms.internal
+              ip: 10.3.0.15
+            # - name: database.worms.internal
+            #   ip: 10.3.0.16
+            # - name: dashboard.worms.internal
+            #   ip: 10.3.0.18
+
+    tls_hosts:
+      hosts:
+        scoring.worms.internal:
+          ansible_host: 10.3.0.14
+          ansible_user: debian
+          tls_dns_name: scoring.worms.internal
+
+        logging.worms.internal:
+          ansible_host: 10.3.0.15
+          ansible_user: debian
+          tls_dns_name: logging.worms.internal
+
+        database.worms.internal:
+          ansible_host: 10.3.0.16
+          ansible_user: debian
+          tls_dns_name: database.worms.internal
+
+        dashboard.worms.internal:
+          ansible_host: 10.3.0.18
+          ansible_user: debian
+          tls_dns_name: dashboard.worms.internal
+
+    nginx_hosts:
+      hosts:
+        scoring.worms.internal:
+        logging.worms.internal:
+        dashboard.worms.internal:
+
+    flask_hosts:
+      hosts:
+        scoring.worms.internal:
+        logging.worms.internal:
+        dashboard.worms.internal:
+
+    scoring:
+      hosts:
+        scoring.worms.internal:
+
+    logging:
+      hosts:
+        logging.worms.internal:
+
+    database:
+      hosts:
+        database.worms.internal:
+
+    dashboard:
+      hosts:
+        dashboard.worms.internal:

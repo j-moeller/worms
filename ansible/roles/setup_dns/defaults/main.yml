@@ -1,0 +1,3 @@
+---
+dns_domain: worms.internal
+dns_entries: [] # Set in inventory.yml

@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% load tz %}
+
+{% block content %}
+<h1>Logging events</h1>
+
+<pre id="log-viewer"><code>Select a logging event to view its JSON.</code></pre>
+
+<table>
+    <thead>
+        <tr>
+            <th>Round</th>
+            <th>Timestamp</th>
+        </tr>
+    </thead>
+
+    <tbody>
+        {% for group in rounds %}
+            {% for event in group.events %}
+                <tr
+                    class="logging-event"
+                    data-uuid="{{ event.logging_attempt.uuid }}"
+                    tabindex="0"
+                >
+                    {% if forloop.first %}
+                        <td rowspan="{{ group.events|length }}">
+                            {{ group.round.name }}
+                        </td>
+                    {% endif %}
+
+                    <td>{{ event.created_at }}</td>
+                </tr>
+            {% endfor %}
+        {% empty %}
+            <tr>
+                <td colspan="2">No logging events found.</td>
+            </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<script>
+    const logViewer = document.querySelector("#log-viewer code");
+
+    async function showLoggingEvent(row) {
+        const uuid = row.dataset.uuid;
+
+        logViewer.textContent = "Loading...";
+
+        document
+            .querySelectorAll(".logging-event")
+            .forEach(eventRow => {
+                eventRow.classList.remove("selected");
+            });
+
+        row.classList.add("selected");
+
+        try {
+            const response = await fetch(
+                `/logging/events/${encodeURIComponent(uuid)}/`,
+                {
+                    method: "GET",
+                    credentials: "same-origin",
+                    headers: {
+                        "Accept": "application/json",
+                    },
+                }
+            );
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const data = await response.json();
+
+            // IMPORTANT:
+            // textContent is intentional. Never use innerHTML here.
+            logViewer.textContent = JSON.stringify(data, null, 2);
+        } catch (error) {
+            console.error("Failed to load logging event:", error);
+            logViewer.textContent = "Unable to load logging event.";
+        }
+    }
+
+    document.querySelectorAll(".logging-event").forEach(row => {
+        row.addEventListener("click", () => {
+            showLoggingEvent(row);
+        });
+
+        row.addEventListener("keydown", event => {
+            if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                showLoggingEvent(row);
+            }
+        });
+    });
+</script>
+
+<style>
+    #log-viewer {
+        max-height: 500px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+
+    .logging-event {
+        cursor: pointer;
+    }
+
+    .logging-event:hover {
+        background: #f5f5f5;
+    }
+
+    .logging-event:focus,
+    .logging-event.selected {
+        background: #e8f0fe;
+        outline: none;
+    }
+</style>
+{% endblock %}

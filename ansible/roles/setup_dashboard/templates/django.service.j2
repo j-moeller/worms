@@ -1,0 +1,38 @@
+[Unit]
+Description=Gunicorn Django Application
+After=network.target
+
+[Service]
+User={{ django_appuser }}
+Group={{ django_appgroup }}
+WorkingDirectory={{ django_source_dir }}
+
+EnvironmentFile=/etc/django.env
+Environment="DJANGO_SETTINGS_MODULE={{ django_settings_module }}"
+
+ExecStart={{ django_venv_dir }}/bin/gunicorn \
+    --bind unix:/run/django/django.sock \
+    --workers {{ gunicorn_workers }} \
+    --access-logfile - \
+    --error-logfile - \
+    {{ django_asgi_module }}
+
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+RuntimeDirectory=django
+
+[Install]
+WantedBy=multi-user.target

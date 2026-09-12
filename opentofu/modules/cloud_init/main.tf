@@ -1,3 +1,20 @@
+resource "proxmox_virtual_environment_file" "blank_vm_static" {
+  content_type = "snippets"
+  datastore_id = var.datastore_id
+  node_name    = var.node_name
+
+  source_raw {
+    data = templatefile(
+      "${path.module}/templates/vm-blank.tftpl",
+      {
+        ssh_public_key = trimspace(file("${var.ssh_public_key}")),
+        hostname       = "vm"
+      }
+    )
+    file_name = "vm-blank.yml"
+  }
+}
+
 resource "proxmox_virtual_environment_file" "dns_vm_static" {
   content_type = "snippets"
   datastore_id = var.datastore_id

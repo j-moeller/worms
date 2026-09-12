@@ -1,3 +1,11 @@
+output "blank" {
+  value = {
+    file_id      = proxmox_virtual_environment_file.blank_vm_static.id
+    datastore_id = var.datastore_id
+    node_name    = var.node_name
+  }
+}
+
 output "dns" {
   value = {
     file_id      = proxmox_virtual_environment_file.dns_vm_static.id

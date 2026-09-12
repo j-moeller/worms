@@ -30,67 +30,33 @@ locals {
 }
 
 resource "proxmox_network_linux_bridge" "vmbr_sandbox" {
+  for_each = local.sandbox_bridges
+
   node_name = var.proxmox_instance
-  name      = "vmbr1111"
+  name      = each.value.name
 
-  address   = "10.1.0.1/24"
-  ports     = []
-  autostart = true
-}
-
-locals {
-  sandbox_vms = {
-    user01 = {
-      cpu                         = 1
-      ram                         = 2048
-      network_cidr                = "10.1.0.11/24"
-      network_gateway_ip          = "10.1.0.1"
-      maintenance_network_cidr    = "10.3.0.101/24"
-      maintenance_network_gateway = "10.3.0.1"
-      vmbr_network                = proxmox_network_linux_bridge.vmbr_sandbox.name
-      vmbr_maintenance_network    = local.platform.networks.maintenance.name
-      disk_file_id                = local.platform.os_images.debian.file_id
-      user_data_file_id           = local.platform.cloud_init.nginx.file_id
-    }
-  }
-}
-
-module "sandbox_vms" {
-  source = "../../modules/sandbox_vm"
-
-  for_each = local.sandbox_vms
-
-  proxmox_instance             = var.proxmox_instance
-  service_network_dns_vm_ipraw = "10.2.0.11"
-
-  name                     = each.key
-  cpu                      = each.value.cpu
-  ram                      = each.value.ram
-  network_cidr             = each.value.network_cidr
-  network_gateway_ip       = each.value.network_gateway_ip
-  maintenance_network_cidr = each.value.maintenance_network_cidr
-  user_data_file_id        = each.value.user_data_file_id
-  vmbr_network             = each.value.vmbr_network
-  vmbr_maintenance_network = each.value.vmbr_maintenance_network
-  disk_file_id             = each.value.disk_file_id
-}
-
-resource "proxmox_network_linux_bridge" "vmbr_sandbox" {
-  node_name = var.proxmox_instance
-  name      = "vmbr1111"
-
-  address   = "10.1.0.1/24"
+  address   = each.value.network_cidr
   ports     = []
   autostart = true
 }
 
 resource "proxmox_virtual_environment_vm" "vm" {
-  name      = var.name
+  for_each = local.sandbox_vms
+
+  name      = each.key
   node_name = var.proxmox_instance
 
-  cpu { cores = var.cpu }
-  memory { dedicated = var.ram }
-  agent { enabled = true }
+  cpu {
+    cores = each.value.cpu
+  }
+
+  memory {
+    dedicated = each.value.ram
+  }
+
+  agent {
+    enabled = true
+  }
 
   tags = [
     "untrusted"
@@ -99,36 +65,42 @@ resource "proxmox_virtual_environment_vm" "vm" {
   initialization {
     datastore_id = "local-zfs"
 
-    ip_config {
-      ipv4 {
-        address = var.network_cidr
-        gateway = var.network_gateway_ip
+    dynamic "ip_config" {
+      for_each = each.value.ip_configs
+
+      content {
+        ipv4 {
+          address = ip_config.value.network_cidr
+          gateway = ip_config.value.gateway
+        }
       }
     }
 
     ip_config {
       ipv4 {
-        address = var.maintenance_network_cidr
+        address = each.value.maintenance_network_cidr
       }
     }
 
     dns {
-      servers = [
-        var.service_network_dns_vm_ipraw
-      ]
-      domain = "interal"
+      servers = [local.infrastructure_ips.dns]
+      domain  = "interal"
     }
 
-    user_data_file_id = var.user_data_file_id
+    user_data_file_id = each.value.user_data_file_id
+  }
+
+  dynamic "network_device" {
+    for_each = each.value.network_devices
+
+    content {
+      bridge = network_device.value.bridge
+      model  = "virtio"
+    }
   }
 
   network_device {
-    bridge = var.vmbr_network
-    model  = "virtio"
-  }
-
-  network_device {
-    bridge = var.vmbr_maintenance_network
+    bridge = local.platform.networks.maintenance.name
     model  = "virtio"
   }
 
@@ -136,7 +108,7 @@ resource "proxmox_virtual_environment_vm" "vm" {
 
   disk {
     datastore_id = "local-zfs"
-    file_id      = var.disk_file_id
+    file_id      = each.value.disk_file_id
     interface    = "virtio0"
     iothread     = true
     discard      = "on"

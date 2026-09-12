@@ -7,6 +7,8 @@ terraform.tfstate
 
 *.img
 images/
+iso/
+*.qcow2
 
 # Local .terraform directories
 .terraform/

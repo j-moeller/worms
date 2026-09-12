@@ -6,9 +6,7 @@ resource "proxmox_virtual_environment_vm" "infrastructure_server" {
   memory { dedicated = 1024 }
   agent { enabled = true }
 
-  tags = [
-    "infrastructure"
-  ]
+  tags = ["infrastructure", var.tag]
 
   initialization {
     datastore_id = "local-zfs"

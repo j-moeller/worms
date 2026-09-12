@@ -99,14 +99,25 @@
     encrypted: true
   loop: "{{ postgresql_users }}"
 
-
 # Migrator (django_migrator)
+- name: Create PostgreSQL migrator user
+  become: true
+  become_user: postgres
+  community.postgresql.postgresql_user:
+    login_user: postgres
+    login_unix_socket: /var/run/postgresql
+    name: "{{ postgres_migrator_name }}"
+    password: "{{ postgres_migrator_password }}"
+    role_attr_flags: "LOGIN"
+    encrypted: true
+    state: present
+
 - name: Allow migrator to connect
   become: true
   become_user: postgres
   community.postgresql.postgresql_privs:
     database: "{{ postgres_db }}"
-    roles: django_migrator
+    roles: "{{ postgres_migrator_name }}"
     type: database
     privs: CONNECT
     state: present
@@ -117,7 +128,7 @@
   become_user: postgres
   community.postgresql.postgresql_privs:
     database: "{{ postgres_db }}"
-    roles: django_migrator
+    roles: "{{ postgres_migrator_name }}"
     type: schema
     objs: public
     privs: USAGE,CREATE

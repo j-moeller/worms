@@ -2,11 +2,6 @@
 
 hostname: ${hostname}
 
-# ssh_pwauth: false
-# disable_root: true
-
-# timezone: UTC
-
 ssh_authorized_keys:
   - ${ssh_public_key}
 
@@ -34,6 +29,5 @@ packages:
   - ca-certificates
 
 runcmd:
-  - echo "${secret}" > /tmp/secret
   - systemctl enable fail2ban
   - echo "done" > /tmp/cloud-config.done

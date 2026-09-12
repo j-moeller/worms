@@ -1,0 +1,19 @@
+#cloud-config
+
+hostname: ${hostname}
+
+ssh_authorized_keys:
+  - ${ssh_public_key}
+
+packages:
+  - tcpdump
+  - tshark
+  - iproute2
+  - bridge-utils
+  - ethtool
+  - tshark
+  - zeek
+  - python3
+
+runcmd:
+  - echo "done" > /tmp/cloud-config.done

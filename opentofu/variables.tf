@@ -21,8 +21,8 @@ variable "datastore_id" {
   default     = "local"
 }
 
-variable "ssh_key_name" {
-  description = "Existing SSH key name"
+variable "ssh_public_key_name" {
+  description = "Existing public SSH key name"
   type        = string
-  default     = "~/.ssh/id_rsa"
+  default     = "~/.ssh/id_rsa.pub"
 }

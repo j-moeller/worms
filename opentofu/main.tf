@@ -30,7 +30,6 @@ locals {
     scoring   = "10.3.0.14"
     logging   = "10.3.0.15"
     db        = "10.3.0.16"
-    dbbrowser = "10.3.0.17"
     dashboard = "10.3.0.18"
     monitor   = "10.3.0.100"
   }
@@ -78,12 +77,6 @@ locals {
         maintenance_network_cidr    = "10.3.0.16/24"
         maintenance_network_gateway = "10.3.0.1"
         user_data_file_id           = proxmox_virtual_environment_file.postgresql_vm_static.id
-        disk_file_id                = proxmox_virtual_environment_file.debian_image.id
-      }
-      dbbrowser = {
-        maintenance_network_cidr    = "10.3.0.17/24"
-        maintenance_network_gateway = "10.3.0.1"
-        user_data_file_id           = proxmox_virtual_environment_file.database_browser_vm_static.id
         disk_file_id                = proxmox_virtual_environment_file.debian_image.id
       }
       dashboard = {

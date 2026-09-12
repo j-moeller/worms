@@ -6,15 +6,9 @@ ssh_authorized_keys:
   - ${ssh_public_key}
 
 packages:
-  - tcpdump
-  - tshark
-  - iproute2
-  - bridge-utils
-  - ethtool
-  - tshark
-  - zeek
-  - python3
+  - dnsmasq
+  - ca-certificates
+  - bind9-dnsutils
 
 runcmd:
-  - echo "${secret}" > /tmp/secret
   - echo "done" > /tmp/cloud-config.done

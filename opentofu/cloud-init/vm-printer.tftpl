@@ -63,7 +63,6 @@ write_files:
       echo "Printer configured."
 
 runcmd:
-  - echo "${secret}" > /tmp/secret
   - systemctl enable cups
   - systemctl enable avahi-daemon
   - systemctl restart avahi-daemon

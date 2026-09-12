@@ -9,32 +9,14 @@ resource "proxmox_virtual_environment_file" "dns_vm_static" {
 
   source_raw {
     data = templatefile(
-      "${path.module}/cloud-init/private-internet-dns.tftpl",
+      "${path.module}/cloud-init/vm-dns.tftpl",
       {
-        ssh_public_key = trimspace(file("${var.ssh_key_name}.pub")),
+        ssh_public_key = trimspace(file("${var.ssh_public_key_name}")),
         hostname       = "dns"
         secret         = "<none>"
       }
     )
-    file_name = "private-internet-dns.yml"
-  }
-}
-
-resource "proxmox_virtual_environment_file" "aptcache_vm_static" {
-  content_type = "snippets"
-  datastore_id = var.datastore_id
-  node_name    = var.proxmox_instance
-
-  source_raw {
-    data = templatefile(
-      "${path.module}/cloud-init/private-internet-aptcache.tftpl",
-      {
-        ssh_public_key = trimspace(file("${var.ssh_key_name}.pub")),
-        hostname       = "aptcache"
-        secret         = "<none>"
-      }
-    )
-    file_name = "private-internet-aptcache.yml"
+    file_name = "vm-dns.yml"
   }
 }
 
@@ -45,14 +27,14 @@ resource "proxmox_virtual_environment_file" "network_monitor_vm_static" {
 
   source_raw {
     data = templatefile(
-      "${path.module}/cloud-init/infrastructure-network-monitor.tftpl",
+      "${path.module}/cloud-init/vm-network-monitor.tftpl",
       {
-        ssh_public_key = trimspace(file("${var.ssh_key_name}.pub")),
+        ssh_public_key = trimspace(file("${var.ssh_public_key_name}")),
         hostname       = "network-monitor"
         secret         = "<none>"
       }
     )
-    file_name = "infrastructure-network-monitor.yml"
+    file_name = "vm-network-monitor.yml"
   }
 }
 
@@ -65,30 +47,12 @@ resource "proxmox_virtual_environment_file" "flask_vm_static" {
     data = templatefile(
       "${path.module}/cloud-init/vm-flask.tftpl",
       {
-        ssh_public_key = trimspace(file("${var.ssh_key_name}.pub")),
+        ssh_public_key = trimspace(file("${var.ssh_public_key_name}")),
         hostname       = "flask"
         secret         = "<none>"
       }
     )
     file_name = "vm-flask.yml"
-  }
-}
-
-resource "proxmox_virtual_environment_file" "database_browser_vm_static" {
-  content_type = "snippets"
-  datastore_id = var.datastore_id
-  node_name    = var.proxmox_instance
-
-  source_raw {
-    data = templatefile(
-      "${path.module}/cloud-init/infrastructure-database-browser.tftpl",
-      {
-        ssh_public_key = trimspace(file("${var.ssh_key_name}.pub")),
-        hostname       = "database-browser"
-        secret         = "<none>"
-      }
-    )
-    file_name = "infrastructure-database-browser.yml"
   }
 }
 
@@ -105,7 +69,7 @@ resource "proxmox_virtual_environment_file" "nginx_vm_static" {
     data = templatefile(
       "${path.module}/cloud-init/vm-nginx.tftpl",
       {
-        ssh_public_key = trimspace(file("${var.ssh_key_name}.pub")),
+        ssh_public_key = trimspace(file("${var.ssh_public_key_name}")),
         hostname       = "nginx"
         secret         = "<none>"
       }
@@ -123,7 +87,7 @@ resource "proxmox_virtual_environment_file" "postgresql_vm_static" {
     data = templatefile(
       "${path.module}/cloud-init/vm-postgresql.tftpl",
       {
-        ssh_public_key = trimspace(file("${var.ssh_key_name}.pub")),
+        ssh_public_key = trimspace(file("${var.ssh_public_key_name}")),
         hostname       = "postgresql"
         secret         = "<none>"
       }
@@ -143,7 +107,7 @@ resource "proxmox_virtual_environment_file" "vm_config" {
     data = templatefile(
       "${path.module}/cloud-init/${each.value.snippet_type}.tftpl",
       {
-        ssh_public_key = trimspace(file("${var.ssh_key_name}.pub")),
+        ssh_public_key = trimspace(file("${var.ssh_public_key_name}")),
         hostname       = each.key
         secret         = each.value.secret
       }

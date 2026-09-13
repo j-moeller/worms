@@ -6,9 +6,9 @@ django_app_dir: /opt/dashboard
 django_source_dir: /opt/dashboard/src
 django_venv_dir: /opt/dashboard/venv
 
-django_local_source: "{{ lookup('env', 'WORKSPACE') }}/projects/dashboard"
+django_local_source: "../projects/dashboard"
 
-django_asgi_module: "dashboard.asgi"
+django_asgi_module: "dashboard.asgi:application"
 django_settings_module: "dashboard.settings"
 
 db_user: django_dashboard
@@ -22,3 +22,10 @@ required_packages:
   - python3-pip
   - git
   - build-essential
+  - rsync
+  - acl
+
+pip_packages:
+  - django
+  - gunicorn
+  - psycopg2-binary

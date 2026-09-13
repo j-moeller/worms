@@ -53,6 +53,9 @@ all:
       hosts:
         scoring.worms.internal:
         logging.worms.internal:
+
+    django_hosts:
+      hosts:
         dashboard.worms.internal:
 
     scoring:

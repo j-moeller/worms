@@ -10,13 +10,12 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
-from pathlib import Path
 import os
 import socket
+from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
@@ -24,7 +23,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # SECURITY WARNING: keep the secret key used in production secret!
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get("PRODUCTION", None) != "1"
+
+if DEBUG:
+    print("[DEBUG] We are running in DEBUG mode")
+else:
+    print("[PRODUCTION] We are running in PRODUCTION mode")
 
 # TODO:
 # PASSWORD
@@ -34,7 +38,11 @@ if DEBUG:
     SECRET_KEY = "django-insecure-@@iayl=pwga9ptu0rjh476a#jhfs#274vkky#avp80b5auytf$"
     ALLOWED_HOSTS = ["worms-pve.mlsec.tu-berlin.de"]
 else:
-    ALLOWED_HOSTS = []
+    SECRET_KEY = "INSECURE-e3dcb93337060fe3646cfefd60ac25131698c1fc9d89ce54b4a3fea81c21523c5d9d3fe63e91baa336ab35d4ed9434d91854f52c98cf6bc1f8c1be0e83d19889"
+    ALLOWED_HOSTS = [
+        "dashboard.worms.internal",
+        "10.3.0.18",
+    ]
 
 # Application definition
 
@@ -159,3 +167,74 @@ STATIC_URL = "static/"
 #         'BACKEND': 'django.core.mail.backends.console.EmailBackend',
 #     },
 # }
+
+LOG_LEVEL = os.getenv("DJANGO_LOG_LEVEL", "INFO").upper()
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "filters": {
+        "require_debug_false": {
+            "()": "django.utils.log.RequireDebugFalse",
+        },
+    },
+    "formatters": {
+        "verbose": {
+            "format": (
+                "{asctime} {levelname} " "[{name}] {process:d} {thread:d} " "{message}"
+            ),
+            "style": "{",
+        },
+        "simple": {
+            "format": "{levelname} {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+        },
+        "mail_admins": {
+            "class": "django.utils.log.AdminEmailHandler",
+            "level": "ERROR",
+            "filters": ["require_debug_false"],
+        },
+    },
+    "loggers": {
+        # Your application logs.
+        "django": {
+            "handlers": ["console", "mail_admins"],
+            "level": LOG_LEVEL,
+            "propagate": False,
+        },
+        "django.request": {
+            "handlers": ["console", "mail_admins"],
+            "level": "ERROR",
+            "propagate": False,
+        },
+        "django.server": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        # Database queries. Keep this WARNING in production.
+        "django.db.backends": {
+            "handlers": ["console"],
+            "level": "WARNING",
+            "propagate": False,
+        },
+        # Security-related events.
+        "django.security": {
+            "handlers": ["console", "mail_admins"],
+            "level": "WARNING",
+            "propagate": False,
+        },
+        # Replace "dashboard" with your project/app logger namespace.
+        "dashboard": {
+            "handlers": ["console"],
+            "level": LOG_LEVEL,
+            "propagate": False,
+        },
+    },
+}

@@ -108,10 +108,12 @@ resource "proxmox_virtual_environment_vm" "vm" {
 
   disk {
     datastore_id = "local-zfs"
-    file_id      = each.value.disk_file_id
-    interface    = "virtio0"
-    iothread     = true
-    discard      = "on"
-    size         = 5
+    import_from  = (each.value.os_image.content_type == "import") ? each.value.os_image.file_id : null
+    file_id      = (each.value.os_image.content_type == "import") ? null : each.value.os_image.file_id
+
+    interface = "virtio0"
+    iothread  = true
+    discard   = "on"
+    size      = 5
   }
 }

@@ -51,7 +51,7 @@ def leaderboard(request):
             key="current"
         )
     except ApplicationSetting.DoesNotExist:
-        return redirect("dev/seed_dummy_data")
+        return HttpResponse("No competition selected")
 
     competition = settings.current_competition
 

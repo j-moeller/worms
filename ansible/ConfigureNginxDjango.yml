@@ -1,0 +1,6 @@
+- name: Configures TLS on nginx servers for django
+  hosts: django_hosts
+  become: true
+
+  roles:
+    - role: nginx_tls_django

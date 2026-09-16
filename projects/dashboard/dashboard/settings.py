@@ -17,6 +17,9 @@ from pathlib import Path
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 MiB
+CHUNK_SIZE = 1024 * 1024  # 1 MiB
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
@@ -38,8 +41,15 @@ if DEBUG:
     SECRET_KEY = "django-insecure-@@iayl=pwga9ptu0rjh476a#jhfs#274vkky#avp80b5auytf$"
     ALLOWED_HOSTS = ["worms-pve.mlsec.tu-berlin.de"]
 else:
+    print("WARNING: HARDCODED SECRET")
+    # TODO
+    # PASSWORD
     SECRET_KEY = "INSECURE-e3dcb93337060fe3646cfefd60ac25131698c1fc9d89ce54b4a3fea81c21523c5d9d3fe63e91baa336ab35d4ed9434d91854f52c98cf6bc1f8c1be0e83d19889"
+
+    # TODO
+    print("WARNING: worms-pve.mlsec.tu-berlin.de as allowed host")
     ALLOWED_HOSTS = [
+        "worms-pve.mlsec.tu-berlin.de",  # TODO
         "dashboard.worms.internal",
         "10.3.0.18",
     ]

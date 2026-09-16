@@ -22,7 +22,7 @@
             <li>
                 <form
                     method="post"
-                    action="{% url 'debug_login_as' available_user.pk %}"
+                    action="{% url 'debug_login_as' available_user.uuid %}"
                     style="display: inline;"
                 >
                     {% csrf_token %}
@@ -30,7 +30,6 @@
                     <button type="submit">
                         {{ available_user.username }}
                         — {{ available_user.first_name }}
-                        — {{ available_user.team.name }}
                     </button>
                 </form>
             </li>
@@ -42,15 +41,20 @@
 {% endif %}
 
 <p>
-    <a href="{% url 'index' %}">index</a>
+    <a href="{% url 'index' %}">index ({{ user }})</a>
     {% if user.is_authenticated %}
-    <a href="{% url 'dashboard' %}">dashboard</a>
-    <a href="{% url 'captures' %}">captures</a>
-    <a href="{% url 'logs' %}">logs</a>
-    -
-    <a href="{% url 'upload' %}">upload</a>
-    -
-    <a href="{% url 'logout' %}">logout</a>
+        <a href="{% url 'profile' %}">profile</a>
+        {% if user_team %}
+            <a href="{% url 'captures' %}">captures</a>
+            <a href="{% url 'logs' %}">logs</a>
+            -
+            <a href="{% url 'upload' %}">upload</a>
+        {% endif %}
+        {% if is_registration_period %}
+            <a href="{% url 'team_registration' %}">teams</a>
+        {% endif %}
+        -
+        <a href="{% url 'logout' %}">logout</a>
     {% else %}
         <a href="{% url 'login' %}">login</a>
     {% endif %}

@@ -3,19 +3,18 @@
 {% block header %}
 <title>Leaderboard</title>
 
+<style>
+.highlight {
+    font-weight: bold;
+}
+</style>
+
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
 {% endblock %}
 
 {% block content %}
-<form method="post" action="dev/seed_dummy_data">
-{% csrf_token %}
-<button type="submit">
-    Seed Database
-</button>
-</form>
-
 <h1>Leaderboard</h1>
 
 <table>
@@ -29,7 +28,7 @@
 
     <tbody>
         {% for team in teams %}
-            <tr>
+            <tr class="{% if team.is_user_team %}highlight{% endif %}">
                 <td>{{ forloop.counter }}</td>
                 <td>{{ team.name }}</td>
                 <td>{{ team.points }}</td>

@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<div class="container">
+    <h1>Teams</h1>
+
+    <div class="teams">
+        <table>
+            <tr>
+                <td>Team Name</td>
+                <td>Occupancy</td>
+                <td>Join</td>
+            </tr>
+            {% for team in competition.teams.all %}
+            <tr>
+                <td>{{ team.name }}</td>
+                <td>{{ team.users.count }} / {{ team.max_members }} members</td>
+                <td>
+                    {% if user in team.users.all %}
+                        <form method="post" action="{% url 'leave_team' team.uuid %}">
+                            {% csrf_token %}
+                            <button type="submit">Leave team</button>
+                        </form>
+                    {% elif team.users.count < team.max_members %}
+                        {% if user_team %}
+
+                        {% else %}
+                        <form method="post" action="{% url 'join_team' team.uuid %}">
+                            {% csrf_token %}
+                            <button type="submit">Join team</button>
+                        </form>
+                        {% endif %}
+                    {% else %}
+                        <span>Full</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+</div>
+{% endblock %}

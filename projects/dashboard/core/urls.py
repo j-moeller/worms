@@ -1,32 +1,41 @@
-from django.urls import path
 from django.conf import settings
+from django.urls import path
 
-from . import debug_views, views
+from core.views.auth import login_view, logout_view
+from core.views.profile import profile
+from core.views.debug import debug_login_as
+from core.views.leaderboard import leaderboard
+from core.views.logging import logging_event_data, logs
+from core.views.scoring import flag_capture_attempts
+from core.views.uploads import upload
+from core.views.teams import team_registration, join_team, leave_team
 
 urlpatterns = [
-    path("", views.leaderboard, name="index"),
-    path("dashboard/", views.dashboard, name="dashboard"),
-    path("captures/", views.flag_capture_attempts, name="captures"),
-    path("logs/", views.logs, name="logs"),
+    path("", leaderboard, name="index"),
+    path("profile/", profile, name="profile"),
+    path("captures/", flag_capture_attempts, name="captures"),
+    path("logs/", logs, name="logs"),
     path(
         "logging/events/<uuid:uuid>/",
-        views.logging_event_data,
+        logging_event_data,
         name="logging_event_data",
     ),
     #
-    path("upload/", views.upload, name="upload"),
+    path("upload/", upload, name="upload"),
     #
-    path("login/", views.login_view, name="login"),
-    path("logout/", views.logout_view, name="logout"),
+    path("login/", login_view, name="login"),
+    path("logout/", logout_view, name="logout"),
     #
+    path("teams/", team_registration, name="team_registration"),
+    path("join_team/<uuid:uuid>", join_team, name="join_team"),
+    path("leave_team/<uuid:uuid>", leave_team, name="leave_team"),
 ]
 
 if settings.DEBUG:
     urlpatterns += [
-        path("dev/seed_dummy_data", debug_views.seed_dummy_data),
         path(
-            "debug/login-as/<int:user_id>/",
-            views.debug_login_as,
+            "debug/login-as/<uuid:uuid>/",
+            debug_login_as,
             name="debug_login_as",
         ),
     ]

@@ -11,6 +11,7 @@ init:
 	cd opentofu/stacks/infrastructure/persistent && tofu init
 	cd opentofu/stacks/infrastructure/ephemeral && tofu init
 	cd opentofu/stacks/sandbox && tofu init
+	cd opentofu/stacks/private_internet && tofu init
 
 apply:
 	cd opentofu/stacks/platform && make apply

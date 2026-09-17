@@ -2,10 +2,10 @@ import hashlib
 import os
 import tempfile
 
+from core.models.competition import Competition
 from core.models.team import Team
-from core.models.user import User
 from core.models.worms import MalwareArtifact, Upload
-from core.views.decorators import require_competition, user_in_team_required
+from core.views.decorators import user_in_team_required
 from core.views.util import render_with_base_info
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
@@ -17,7 +17,7 @@ from django.http import HttpRequest, JsonResponse
 
 @login_required
 @user_in_team_required
-def upload_get_method(request: HttpRequest, team: Team):
+def upload_get_method(request: HttpRequest, team: Team, *, competition: Competition):
     uploads = (
         Upload.objects.filter(
             user__team_memberships__team=team,

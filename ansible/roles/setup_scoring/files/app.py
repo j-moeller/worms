@@ -1,9 +1,9 @@
 import hashlib
-
-from flask import Flask, request, jsonify
-from psycopg2.pool import ThreadedConnectionPool
-from psycopg2 import errors
 import os
+
+from flask import Flask, jsonify, request
+from psycopg2 import errors
+from psycopg2.pool import ThreadedConnectionPool
 
 app = Flask(__name__)
 
@@ -40,9 +40,7 @@ def make_submission(team_api_token, vm_flag):
         pool.putconn(conn)
 
 
-# TODO:
-# API: team_api_token: str, vm_flag: str
-@app.route("/submit", methods=["POST"])
+@app.post("/submit")
 def submit():
     # Flask will normally return 405 for non-POST requests because of
     # methods=["POST"], but keep this check for an explicit JSON response.
@@ -52,16 +50,20 @@ def submit():
             405,
         )
 
-    # Accept either JSON or form-encoded data.
-    if request.is_json:
-        data = request.get_json(silent=True) or {}
-    else:
-        data = request.form
+    # Accept JSON only
+    data = request.get_json(silent=True)
 
     team_api_token = data.get("team_api_token")
     vm_flag = data.get("vm_flag")
 
-    # TODO: Verify team_api_token = str and vm_flag = str
+    if not isinstance(team_api_token, str):
+        return (
+            jsonify({"status": "error", "message": "team_api_token must be a string."}),
+            400,
+        )
+
+    if not isinstance(vm_flag, str):
+        return jsonify({"status": "error", "message": "vm_flag must be a string."}), 400
 
     missing = []
     if not team_api_token:
@@ -77,6 +79,25 @@ def submit():
                     "message": "Missing required parameter(s).",
                     "missing": missing,
                 }
+            ),
+            400,
+        )
+
+    if len(team_api_token) > 64:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "team_api_token is longer than 64 characters.",
+                }
+            ),
+            400,
+        )
+
+    if len(vm_flag) > 64:
+        return (
+            jsonify(
+                {"status": "error", "message": "vm_flag is longer than 64 characters."}
             ),
             400,
         )

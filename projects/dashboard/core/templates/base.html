@@ -49,6 +49,7 @@
 
         color: var(--text);
         font-family: "Space Grotesk", system-ui, sans-serif;
+        margin: 0px;
     }
 
     body::before {
@@ -1012,7 +1013,14 @@
 
                 {% if user.is_authenticated %}
 
-                    {% if user_team %}
+                    {% if user_team and not is_registration_period %}
+
+                        <a
+                            href="{% url 'access' %}"
+                            class="nav-link {% if request.resolver_match.url_name == 'access' %}active{% endif %}"
+                        >
+                            <span>ACCESS</span>
+                        </a>
 
                         <a
                             href="{% url 'captures' %}"
@@ -1054,8 +1062,7 @@
                             href="{% url 'profile' %}"
                             class="nav-link {% if request.resolver_match.url_name == 'profile' %}active{% endif %}"
                         >
-                            <span class="session-dot"></span>
-                            <span>{{ user.username }}</span>
+                            <span>PROFILE</span>
                         </a>
 
                 {% else %}

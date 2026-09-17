@@ -25,3 +25,6 @@ class VirtualMachine(models.Model):
                 name="unique_vm_per_round",
             ),
         ]
+
+    def __str__(self):
+        return f"VM({self.vm_identifier})"

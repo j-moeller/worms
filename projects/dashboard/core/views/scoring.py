@@ -1,4 +1,4 @@
-from core.models.competition import Round
+from core.models.competition import Competition, Round
 from core.models.scoring import FlagCapture, FlagCaptureAttempt
 from core.models.team import AccessTokens, Team
 from core.views.decorators import user_in_team_required
@@ -9,17 +9,22 @@ from django.http import HttpRequest
 
 @login_required
 @user_in_team_required
-def flag_capture_attempts(request: HttpRequest, team: Team):
+def flag_capture_attempts(
+    request: HttpRequest, team: Team, *, competition: Competition
+):
     team_token_hashes = AccessTokens.objects.filter(
         team=team,
-        revoked=False,
     ).values_list("access_token_hash", flat=True)
+
+    print(len(team_token_hashes))
 
     attempts = list(
         FlagCaptureAttempt.objects.filter(
             team_token_hash__in=team_token_hashes,
         ).order_by("-created_at", "-id")
     )
+
+    print(len(attempts))
 
     attempt_ids = [attempt.id for attempt in attempts]
 
@@ -29,6 +34,8 @@ def flag_capture_attempts(request: HttpRequest, team: Team):
         round__competition_id=team.competition_id,
         vm__round__competition_id=team.competition_id,
     ).select_related("vm", "round")
+
+    print(len(captures))
 
     capture_by_attempt = {
         capture.flag_capture_attempt_id: capture for capture in captures

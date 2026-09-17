@@ -33,8 +33,13 @@ class Team(models.Model):
             ),
         ]
 
+    def __str__(self):
+        return f"Team({self.name})"
+
 
 class AccessTokens(models.Model):
+    name = models.TextField()
+    description = models.TextField(default="")
     access_token_hash = models.TextField(unique=True)
     team = models.ForeignKey(Team, on_delete=models.CASCADE)
     revoked = models.BooleanField(default=False)

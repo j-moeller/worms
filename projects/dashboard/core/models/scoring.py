@@ -62,3 +62,6 @@ class FlagCapture(models.Model):
                 name="unique_capture_per_attempt",
             ),
         ]
+
+    def __str__(self):
+        return f"FlagCapture({self.team}, {self.vm}, , {self.round})"

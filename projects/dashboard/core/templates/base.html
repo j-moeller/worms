@@ -1,68 +1,1177 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <style>
-        body {
-            font-family: sans-serif;
-            max-width: 1000px;
-            margin: 80px auto;
-            padding: 20px;
+<style>
+    /* =========================================================
+    WORMS//ARENA — DESIGN TOKENS
+    ========================================================= */
+
+    :root {
+        --bg: #050609;
+        --panel: #090c11;
+        --panel-light: #0d1218;
+
+        --border: rgba(0, 229, 255, 0.16);
+        --border-bright: rgba(0, 229, 255, 0.35);
+
+        --text: #d8e2e8;
+        --nav-text: #b8c5cc;
+
+        --muted: #68757f;
+        --nav-muted: #5e6a73;
+
+        --cyan: #00e5ff;
+        --nav-cyan: #00e5ff;
+
+        --green: #39ff88;
+        --nav-green: #39ff88;
+
+        --red: #ff3158;
+        --nav-red: #ff3158;
+
+        --nav-bg: rgba(5, 6, 9, 0.94);
+        --nav-border: rgba(0, 229, 255, 0.15);
+    }
+
+
+    /* =========================================================
+    GLOBAL
+    ========================================================= */
+
+    body {
+        background:
+            radial-gradient(
+                circle at 50% -15%,
+                rgba(0, 229, 255, 0.08),
+                transparent 40%
+            ),
+            var(--bg);
+
+        color: var(--text);
+        font-family: "Space Grotesk", system-ui, sans-serif;
+    }
+
+    body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: 100;
+        pointer-events: none;
+
+        background: repeating-linear-gradient(
+            to bottom,
+            transparent 0,
+            transparent 3px,
+            rgba(255, 255, 255, 0.012) 4px
+        );
+    }
+
+    body::after {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+
+        opacity: 0.08;
+
+        background-image:
+            linear-gradient(
+                rgba(0, 229, 255, 0.12) 1px,
+                transparent 1px
+            ),
+            linear-gradient(
+                90deg,
+                rgba(0, 229, 255, 0.12) 1px,
+                transparent 1px
+            );
+
+        background-size: 50px 50px;
+
+        mask-image: linear-gradient(
+            to bottom,
+            black,
+            transparent 80%
+        );
+    }
+
+
+    /* =========================================================
+    NAVIGATION
+    ========================================================= */
+
+    .arena-nav {
+        position: relative;
+        z-index: 50;
+
+        width: 100%;
+
+        background:
+            linear-gradient(
+                180deg,
+                rgba(10, 13, 18, 0.98),
+                rgba(5, 6, 9, 0.94)
+            );
+
+        border-bottom: 1px solid var(--nav-border);
+
+        box-shadow:
+            0 1px 0 rgba(0, 229, 255, 0.025),
+            0 15px 50px rgba(0, 0, 0, 0.25);
+    }
+
+    .nav-inner {
+        width: min(1400px, 94%);
+        min-height: 68px;
+
+        margin: 0 auto;
+
+        display: flex;
+        align-items: center;
+        gap: 28px;
+    }
+
+
+    /* BRAND */
+
+    .arena-brand {
+        display: flex;
+        align-items: baseline;
+        flex-shrink: 0;
+
+        color: var(--nav-text);
+        text-decoration: none;
+
+        font-family: "Share Tech Mono", monospace;
+        font-size: 1.05rem;
+        letter-spacing: 2px;
+    }
+
+    .brand-main {
+        color: var(--nav-cyan);
+
+        text-shadow:
+            0 0 15px rgba(0, 229, 255, 0.25);
+    }
+
+    .brand-separator {
+        margin: 0 2px;
+        color: var(--nav-muted);
+    }
+
+    .brand-secondary {
+        color: #8d9aa2;
+    }
+
+
+    /* SYSTEM STATUS */
+
+    .nav-status {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+
+        flex-shrink: 0;
+
+        font-family: "Share Tech Mono", monospace;
+    }
+
+    .status-indicator {
+        width: 7px;
+        height: 7px;
+
+        flex-shrink: 0;
+
+        border-radius: 50%;
+
+        background: var(--nav-green);
+
+        box-shadow:
+            0 0 6px var(--nav-green),
+            0 0 14px rgba(57, 255, 136, 0.45);
+    }
+
+    .nav-status-warning .status-indicator {
+        background: #ffd43b;
+
+        box-shadow:
+            0 0 6px #ffd43b,
+            0 0 14px rgba(255, 212, 59, 0.5);
+
+        animation: competition-warning-pulse 1s infinite;
+    }
+
+    .nav-status-finished .status-indicator {
+        background: var(--nav-green);
+
+        box-shadow:
+            0 0 6px var(--nav-green),
+            0 0 14px rgba(57, 255, 136, 0.45);
+    }
+
+    .status-information {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .status-label {
+        color: var(--nav-text);
+
+        font-size: 0.65rem;
+        letter-spacing: 1px;
+        line-height: 1;
+    }
+
+    .status-countdown {
+        color: var(--nav-muted);
+
+        font-size: 0.57rem;
+        letter-spacing: 0.5px;
+        line-height: 1;
+    }
+
+    .countdown-value {
+        color: var(--nav-cyan);
+    }
+
+    .nav-status-warning .countdown-value {
+        color: #ffd43b;
+    }
+
+    @keyframes competition-warning-pulse {
+        0%,
+        100% {
+            opacity: 1;
+            transform: scale(1);
         }
-    </style>
+
+        50% {
+            opacity: 0.25;
+            transform: scale(0.7);
+        }
+    }
+
+    /* LINKS */
+
+    .nav-links {
+        display: flex;
+        align-items: stretch;
+        align-self: stretch;
+
+        margin-left: auto;
+    }
+
+    .nav-link {
+        position: relative;
+
+        display: flex;
+        align-items: center;
+        gap: 7px;
+
+        padding: 0 13px;
+
+        color: var(--nav-muted);
+        text-decoration: none;
+
+        font-family: "Share Tech Mono", monospace;
+        font-size: 0.67rem;
+        letter-spacing: 0.8px;
+
+        transition:
+            color 0.15s ease,
+            background 0.15s ease;
+    }
+
+    .nav-link:hover {
+        color: var(--nav-text);
+        background: rgba(0, 229, 255, 0.025);
+    }
+
+    .nav-link.active {
+        color: var(--nav-cyan);
+    }
+
+    .nav-link.active::after {
+        content: "";
+
+        position: absolute;
+        left: 13px;
+        right: 13px;
+        bottom: 0;
+
+        height: 1px;
+
+        background: var(--nav-cyan);
+
+        box-shadow:
+            0 0 8px rgba(0, 229, 255, 0.6);
+    }
+
+    .nav-index {
+        color: #39434a;
+        font-size: 0.55rem;
+    }
+
+    .nav-link.active .nav-index {
+        color: rgba(0, 229, 255, 0.5);
+    }
+
+
+    /* SESSION */
+
+    .nav-session {
+        display: flex;
+        align-items: center;
+        gap: 15px;
+        flex-shrink: 0;
+
+        padding-left: 18px;
+
+        border-left: 1px solid rgba(255, 255, 255, 0.06);
+
+        font-family: "Share Tech Mono", monospace;
+        font-size: 0.65rem;
+    }
+
+    .session-user {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+
+        color: var(--nav-text);
+    }
+
+    .session-dot {
+        width: 5px;
+        height: 5px;
+
+        border-radius: 50%;
+
+        background: var(--nav-cyan);
+        box-shadow: 0 0 7px var(--nav-cyan);
+    }
+
+    .session-guest {
+        color: var(--nav-muted);
+    }
+
+    .logout-link {
+        color: var(--nav-red);
+        text-decoration: none;
+
+        letter-spacing: 1px;
+        opacity: 0.7;
+
+        transition: opacity 0.15s ease;
+    }
+
+    .logout-link:hover {
+        opacity: 1;
+    }
+
+
+    /* =========================================================
+    DEBUG CONSOLE
+    ========================================================= */
+
+    .debug-console {
+        position: fixed;
+        bottom: 12px;
+        right: 20px;
+        z-index: 200;
+
+        width: min(360px, calc(100vw - 40px));
+        padding: 0;
+
+        background:
+            linear-gradient(
+                145deg,
+                rgba(13, 17, 24, 0.98),
+                rgba(5, 7, 10, 0.98)
+            );
+
+        border: 1px solid rgba(255, 49, 88, 0.3);
+
+        box-shadow:
+            0 20px 60px rgba(0, 0, 0, 0.5),
+            0 0 30px rgba(255, 49, 88, 0.04);
+
+        font-family: "Share Tech Mono", monospace;
+    }
+
+    .debug-console-header {
+        display: flex;
+        justify-content: space-between;
+
+        padding: 10px 14px;
+
+        border-bottom: 1px solid rgba(255, 49, 88, 0.16);
+
+        color: var(--nav-red);
+
+        font-size: 0.62rem;
+        letter-spacing: 1.5px;
+    }
+
+    .debug-live {
+        color: var(--nav-green);
+    }
+
+    .debug-console-title {
+        padding: 15px 14px 10px;
+
+        color: var(--nav-muted);
+
+        font-size: 0.65rem;
+        letter-spacing: 1px;
+    }
+
+    .debug-users {
+        padding: 0 8px 10px;
+    }
+
+    .debug-users form {
+        margin: 0;
+    }
+
+    .debug-users button {
+        width: 100%;
+
+        display: grid;
+        grid-template-columns: 30px 1fr auto;
+        align-items: center;
+        gap: 8px;
+
+        padding: 9px 7px;
+
+        border: 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.035);
+
+        background: transparent;
+
+        color: var(--nav-text);
+
+        font: inherit;
+        font-size: 0.7rem;
+
+        text-align: left;
+        cursor: pointer;
+    }
+
+    .debug-users button:hover {
+        background: rgba(255, 49, 88, 0.05);
+        color: white;
+    }
+
+    .debug-user-index {
+        color: var(--nav-red);
+    }
+
+    .debug-user-name {
+        color: var(--nav-muted);
+        text-align: right;
+    }
+
+    .debug-empty {
+        padding: 12px 7px;
+
+        color: var(--nav-muted);
+        font-size: 0.65rem;
+    }
+
+
+    /* =========================================================
+    MAIN
+    ========================================================= */
+
+    .arena-main {
+        position: relative;
+        z-index: 1;
+
+        min-height: calc(100vh - 68px);
+    }
+
+    .leaderboard-page {
+        width: min(1200px, 92%);
+
+        margin: 0 auto;
+        padding: 70px 0 80px;
+
+        position: relative;
+        z-index: 1;
+    }
+
+
+    /* =========================================================
+    PAGE HEADER
+    ========================================================= */
+
+    .page-header {
+        margin-bottom: 35px;
+    }
+
+    .classification {
+        margin-bottom: 12px;
+
+        color: var(--red);
+
+        font-family: "Share Tech Mono", monospace;
+        font-size: 0.72rem;
+        letter-spacing: 3px;
+        text-transform: uppercase;
+    }
+
+    .page-header h1 {
+        margin: 0;
+
+        color: var(--text);
+
+        font-family: "Share Tech Mono", monospace;
+        font-size: clamp(2.5rem, 6vw, 5rem);
+        font-weight: normal;
+        line-height: 0.9;
+        letter-spacing: -2px;
+        text-transform: uppercase;
+    }
+
+    .page-header h1 span {
+        color: var(--cyan);
+
+        text-shadow:
+            0 0 25px rgba(0, 229, 255, 0.3);
+    }
+
+    .subtitle {
+        margin-top: 18px;
+
+        color: var(--muted);
+
+        font-family: "Share Tech Mono", monospace;
+        font-size: 0.82rem;
+        letter-spacing: 0.5px;
+    }
+
+
+    /* =========================================================
+    PANELS
+    ========================================================= */
+
+    .panel {
+        position: relative;
+        overflow: hidden;
+
+        background:
+            linear-gradient(
+                145deg,
+                rgba(13, 17, 24, 0.96),
+                rgba(6, 8, 12, 0.96)
+            );
+
+        border: 1px solid var(--border);
+    }
+
+    .panel::before {
+        content: "";
+
+        position: absolute;
+        top: 0;
+        left: 0;
+
+        width: 45px;
+        height: 1px;
+
+        background: var(--cyan);
+
+        box-shadow:
+            0 0 12px var(--cyan);
+    }
+
+    .panel-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+
+        padding: 20px 24px;
+
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .panel-title {
+        font-family: "Share Tech Mono", monospace;
+        font-size: 0.82rem;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+    }
+
+    .panel-status {
+        color: var(--green);
+
+        font-family: "Share Tech Mono", monospace;
+        font-size: 0.68rem;
+        text-transform: uppercase;
+    }
+
+    .panel-status::before {
+        content: "";
+        display: inline-block;
+
+        width: 6px;
+        height: 6px;
+        margin-right: 7px;
+
+        border-radius: 50%;
+
+        background: var(--green);
+
+        box-shadow:
+            0 0 10px var(--green);
+    }
+
+
+    /* =========================================================
+    LEADERBOARD
+    ========================================================= */
+
+    .leaderboard {
+        margin-bottom: 25px;
+    }
+
+    .table-wrapper {
+        overflow-x: auto;
+    }
+
+    table {
+        width: 100%;
+        border-collapse: collapse;
+
+        font-family: "Share Tech Mono", monospace;
+    }
+
+    thead {
+        background: rgba(0, 229, 255, 0.025);
+    }
+
+    th {
+        padding: 14px 24px;
+
+        color: var(--muted);
+
+        font-size: 0.67rem;
+        font-weight: normal;
+        letter-spacing: 1.5px;
+
+        text-align: left;
+        text-transform: uppercase;
+    }
+
+    td {
+        padding: 17px 24px;
+
+        border-top: 1px solid rgba(255, 255, 255, 0.045);
+
+        color: #b8c3ca;
+
+        font-size: 0.84rem;
+    }
+
+    tbody tr {
+        transition:
+            background 0.15s ease,
+            box-shadow 0.15s ease;
+    }
+
+    tbody tr:hover {
+        background: rgba(0, 229, 255, 0.035);
+    }
+
+    td:first-child {
+        width: 90px;
+        color: var(--muted);
+    }
+
+    th:last-child,
+    td:last-child {
+        text-align: right;
+    }
+
+    td:last-child {
+        color: var(--cyan);
+    }
+
+
+    /* CURRENT USER */
+
+    .highlight {
+        background:
+            linear-gradient(
+                90deg,
+                rgba(0, 229, 255, 0.08),
+                rgba(0, 229, 255, 0.015)
+            );
+
+        box-shadow:
+            inset 2px 0 0 var(--cyan),
+            inset 0 1px 0 rgba(0, 229, 255, 0.08),
+            inset 0 -1px 0 rgba(0, 229, 255, 0.08);
+    }
+
+    .highlight td {
+        color: var(--text);
+    }
+
+    .highlight td:nth-child(2)::after {
+        content: " // YOU";
+
+        margin-left: 10px;
+
+        color: var(--cyan);
+
+        font-size: 0.62rem;
+        letter-spacing: 1px;
+    }
+
+    .highlight td:first-child {
+        color: var(--cyan);
+    }
+
+    .empty {
+        padding: 35px 20px;
+
+        color: var(--muted);
+        text-align: center !important;
+    }
+
+
+    /* =========================================================
+    GRAPH
+    ========================================================= */
+
+    .graph-panel {
+        padding-bottom: 25px;
+    }
+
+    .chart-wrapper {
+        position: relative;
+
+        width: 100%;
+        height: 520px;
+
+        padding: 25px;
+    }
+
+    #pointsChart {
+        width: 100% !important;
+        height: 100% !important;
+    }
+
+
+    /* =========================================================
+    FOOTER
+    ========================================================= */
+
+    .page-footer {
+        display: flex;
+        justify-content: space-between;
+
+        margin-top: 25px;
+        padding-top: 20px;
+
+        border-top: 1px solid var(--border);
+
+        color: var(--muted);
+
+        font-family: "Share Tech Mono", monospace;
+        font-size: 0.65rem;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+    }
+
+
+    /* =========================================================
+    RESPONSIVE
+    ========================================================= */
+
+    @media (max-width: 1050px) {
+        .nav-status {
+            display: none;
+        }
+
+        .nav-links {
+            margin-left: auto;
+        }
+
+        .nav-link {
+            padding: 0 9px;
+        }
+
+        .nav-index {
+            display: none;
+        }
+    }
+
+    @media (max-width: 800px) {
+        .nav-inner {
+            min-height: 60px;
+            gap: 15px;
+        }
+
+        .nav-links {
+            overflow-x: auto;
+            max-width: 100%;
+        }
+
+        .nav-session {
+            display: none;
+        }
+
+        .arena-brand {
+            font-size: 0.9rem;
+        }
+
+        .nav-link {
+            white-space: nowrap;
+        }
+
+        .debug-console {
+            top: 70px;
+        }
+    }
+
+    @media (max-width: 700px) {
+        .leaderboard-page {
+            padding-top: 40px;
+        }
+
+        .chart-wrapper {
+            height: 400px;
+            padding: 15px;
+        }
+
+        th,
+        td {
+            padding: 14px 15px;
+        }
+
+        .page-footer {
+            flex-direction: column;
+            gap: 8px;
+        }
+    }
+
+    @media (max-width: 560px) {
+        .nav-inner {
+            width: 94%;
+        }
+
+        .brand-secondary,
+        .brand-separator {
+            display: none;
+        }
+
+        .nav-links {
+            margin-left: auto;
+        }
+
+        .nav-link {
+            padding: 0 7px;
+            font-size: 0.6rem;
+        }
+    }
+</style>
+
+<link
+    rel="preconnect"
+    href="https://fonts.googleapis.com"
+/>
+
+<link
+    rel="preconnect"
+    href="https://fonts.gstatic.com"
+    crossorigin
+/>
+
+<link
+    href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Space+Grotesk:wght@400;600;700&display=swap"
+    rel="stylesheet"
+/>
 {% block header %}
 {% endblock %}
 </head>
 <body>
-{% if debug %}
-<div style="position: absolute; width: 400px; top:0; right:0;">
-    <h2>Debug: Log in as user</h2>
 
-    <ul>
-        {% for available_user in available_users %}
-            <li>
-                <form
-                    method="post"
-                    action="{% url 'debug_login_as' available_user.uuid %}"
-                    style="display: inline;"
-                >
-                    {% csrf_token %}
-                    <input type="hidden" name="next" value="{{ request.get_full_path }}">
-                    <button type="submit">
-                        {{ available_user.username }}
-                        — {{ available_user.first_name }}
-                    </button>
-                </form>
-            </li>
-        {% empty %}
-            <li>No users available.</li>
-        {% endfor %}
-    </ul>
-</div>
-{% endif %}
+    {% if debug %}
+        <div class="debug-console">
 
-<p>
-    <a href="{% url 'index' %}">index ({{ user }})</a>
-    {% if user.is_authenticated %}
-        <a href="{% url 'profile' %}">profile</a>
-        {% if user_team %}
-            <a href="{% url 'captures' %}">captures</a>
-            <a href="{% url 'logs' %}">logs</a>
-            -
-            <a href="{% url 'upload' %}">upload</a>
-        {% endif %}
-        {% if is_registration_period %}
-            <a href="{% url 'team_registration' %}">teams</a>
-        {% endif %}
-        -
-        <a href="{% url 'logout' %}">logout</a>
-    {% else %}
-        <a href="{% url 'login' %}">login</a>
+            <div class="debug-console-header">
+                <span>// DEBUG ACCESS</span>
+                <span class="debug-live">LOCAL</span>
+            </div>
+
+            <div class="debug-console-title">
+                IMPERSONATE USER
+            </div>
+
+            <div class="debug-users">
+
+                {% for available_user in available_users %}
+
+                    <form
+                        method="post"
+                        action="{% url 'debug_login_as' available_user.uuid %}"
+                    >
+                        {% csrf_token %}
+
+                        <input
+                            type="hidden"
+                            name="next"
+                            value="{{ request.get_full_path }}"
+                        >
+
+                        <button type="submit">
+                            <span class="debug-user-index">
+                                {{ forloop.counter|stringformat:"02d" }}
+                            </span>
+
+                            <span>
+                                {{ available_user.username }}
+                            </span>
+
+                            <span class="debug-user-name">
+                                {{ available_user.first_name }}
+                            </span>
+                        </button>
+                    </form>
+
+                {% empty %}
+
+                    <div class="debug-empty">
+                        NO USERS AVAILABLE
+                    </div>
+
+                {% endfor %}
+
+            </div>
+        </div>
     {% endif %}
-</p>
 
-{% block content %}
-{% endblock %}
+
+    <nav class="arena-nav">
+
+        <div class="nav-inner">
+
+            <!-- BRAND -->
+
+            <a href="{% url 'index' %}" class="arena-brand">
+                <span class="brand-main">WORMS</span>
+                <span class="brand-separator">//</span>
+                <span class="brand-secondary">ARENA</span>
+            </a>
+
+
+            <!-- SYSTEM STATUS -->
+
+            <div class="nav-status
+                {% if competition_state.warning %}nav-status-warning{% endif %}
+                {% if competition_state.key == 'finished' %}nav-status-finished{% endif %}
+            ">
+
+                <span class="status-indicator"></span>
+
+                <div class="status-information">
+
+                    <span class="status-label">
+                        {{ competition_state.label }}
+                    </span>
+
+                    {% if competition_state.target %}
+
+                        <span
+                            class="status-countdown"
+                            data-countdown="{{ competition_state.target|date:'c' }}"
+                        >
+                            <span class="countdown-value">--:--:--</span>
+                            REMAINING
+                        </span>
+
+                    {% else %}
+
+                        <span class="status-countdown">
+                            ALL ROUNDS COMPLETE
+                        </span>
+
+                    {% endif %}
+
+                </div>
+
+            </div>
+
+
+            <!-- NAVIGATION -->
+
+            <div class="nav-links">
+
+                {% if user.is_authenticated %}
+
+                    {% if user_team %}
+
+                        <a
+                            href="{% url 'captures' %}"
+                            class="nav-link {% if request.resolver_match.url_name == 'captures' %}active{% endif %}"
+                        >
+                            <span>CAPTURES</span>
+                        </a>
+
+                        <a
+                            href="{% url 'logs' %}"
+                            class="nav-link {% if request.resolver_match.url_name == 'logs' %}active{% endif %}"
+                        >
+                            <span>LOGS</span>
+                        </a>
+
+
+                        <a
+                            href="{% url 'upload' %}"
+                            class="nav-link {% if request.resolver_match.url_name == 'upload' %}active{% endif %}"
+                        >
+                            <span>UPLOAD</span>
+                        </a>
+
+                    {% endif %}
+
+
+                    {% if is_registration_period %}
+
+                        <a
+                            href="{% url 'team_registration' %}"
+                            class="nav-link {% if request.resolver_match.url_name == 'team_registration' %}active{% endif %}"
+                        >
+                            <span>TEAMS</span>
+                        </a>
+
+                    {% endif %}
+
+                        <a
+                            href="{% url 'profile' %}"
+                            class="nav-link {% if request.resolver_match.url_name == 'profile' %}active{% endif %}"
+                        >
+                            <span class="session-dot"></span>
+                            <span>{{ user.username }}</span>
+                        </a>
+
+                {% else %}
+
+                    <a
+                        href="{% url 'login' %}"
+                        class="nav-link {% if request.resolver_match.url_name == 'login' %}active{% endif %}"
+                    >
+                        <span>LOGIN</span>
+                    </a>
+
+                {% endif %}
+
+            </div>
+
+
+            <!-- USER / SESSION -->
+
+            <div class="nav-session">
+
+                {% if user.is_authenticated %}
+
+                    <a
+                        href="{% url 'logout' %}"
+                        class="logout-link"
+                    >
+                        EXIT
+                    </a>
+
+                {% else %}
+
+                {% endif %}
+
+            </div>
+
+        </div>
+
+    </nav>
+
+
+    <!-- PAGE CONTENT -->
+
+    <main class="arena-main">
+
+        {% block content %}
+        {% endblock %}
+
+    </main>
+
+<script>
+    function updateCompetitionCountdown() {
+        const countdowns = document.querySelectorAll(
+            "[data-countdown]"
+        );
+
+        const now = Date.now();
+
+        countdowns.forEach(element => {
+            const target = new Date(
+                element.dataset.countdown
+            ).getTime();
+
+            let remaining = Math.max(0, target - now);
+
+            const totalSeconds = Math.floor(
+                remaining / 1000
+            );
+
+            const days = Math.floor(
+                totalSeconds / 86400
+            );
+
+            const hours = Math.floor(
+                (totalSeconds % 86400) / 3600
+            );
+
+            const minutes = Math.floor(
+                (totalSeconds % 3600) / 60
+            );
+
+            const seconds = totalSeconds % 60;
+
+            let text;
+
+            if (days > 0) {
+                text =
+                    `${days}d ` +
+                    `${String(hours).padStart(2, "0")}:` +
+                    `${String(minutes).padStart(2, "0")}:` +
+                    `${String(seconds).padStart(2, "0")}`;
+            } else {
+                text =
+                    `${String(hours).padStart(2, "0")}:` +
+                    `${String(minutes).padStart(2, "0")}:` +
+                    `${String(seconds).padStart(2, "0")}`;
+            }
+
+            const value = element.querySelector(
+                ".countdown-value"
+            );
+
+            if (value) {
+                value.textContent = text;
+            }
+        });
+    }
+
+    updateCompetitionCountdown();
+
+    setInterval(
+        updateCompetitionCountdown,
+        1000
+    );
+</script>
 </body>
+
 </html>
 
 

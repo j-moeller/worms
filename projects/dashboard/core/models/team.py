@@ -15,7 +15,7 @@ class Team(models.Model):
         on_delete=models.CASCADE,
         related_name="teams",
     )
-    max_members = models.PositiveIntegerField(default=4)
+    max_members = models.PositiveIntegerField(default=2)
     created_at = models.DateTimeField(default=timezone.now)
 
     users = models.ManyToManyField(

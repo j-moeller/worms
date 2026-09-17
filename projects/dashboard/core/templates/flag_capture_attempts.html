@@ -1,47 +1,461 @@
 {% extends "base.html" %}
 
 {% block content %}
-<h1>Flag Capture Attempts</h1>
 
-<table>
-    <thead>
-        <tr>
-            <th>Round</th>
-            <th>Timestamp</th>
-            <th>VM Identifier</th>
-        </tr>
-    </thead>
+<style>
+    .captures-page {
+        width: min(1200px, 92%);
+        margin: 0 auto;
+        padding: 70px 0 80px;
+    }
 
-    <tbody>
-        {% regroup rows by round as round_groups %}
+    .captures-header {
+        margin-bottom: 35px;
+    }
 
-        {% for group in round_groups %}
-            {% for row in group.list %}
-                <tr {% if row.invalid %}style="background-color: #f8d7da;"{% endif %}>
-                    {% if forloop.first %}
-                        <td rowspan="{{ group.list|length }}">
-                            {{ group.grouper.name }}
-                        </td>
-                    {% endif %}
+    .captures-classification {
+        color: var(--red);
+        font-family: "Share Tech Mono", monospace;
+        font-size: 0.72rem;
+        letter-spacing: 3px;
+        margin-bottom: 12px;
+        text-transform: uppercase;
+    }
 
-                    <td>
-                        {{ row.attempt.created_at }}
-                    </td>
+    .captures-header h1 {
+        margin: 0;
 
-                    <td>
-                        {% if row.invalid %}
-                            Invalid attempt
-                        {% else %}
-                            {{ row.vm_identifier }}
-                        {% endif %}
-                    </td>
-                </tr>
-            {% endfor %}
-        {% endfor %}
-    </tbody>
-</table>
+        color: var(--text);
 
-{% if not rows %}
-    <p>No flag capture attempts found.</p>
-{% endif %}
+        font-family: "Share Tech Mono", monospace;
+        font-size: clamp(2.5rem, 6vw, 5rem);
+        font-weight: normal;
+        line-height: 0.9;
+        letter-spacing: -2px;
+        text-transform: uppercase;
+    }
+
+    .captures-header h1 span {
+        color: var(--cyan);
+        text-shadow: 0 0 25px rgba(0, 229, 255, 0.3);
+    }
+
+    .captures-subtitle {
+        max-width: 680px;
+        margin-top: 18px;
+
+        color: var(--muted);
+
+        font-family: "Share Tech Mono", monospace;
+        font-size: 0.8rem;
+        line-height: 1.7;
+    }
+
+    /* =========================================================
+       CAPTURE LOG PANEL
+       ========================================================= */
+
+    .captures-panel {
+        position: relative;
+        overflow: hidden;
+
+        background:
+            linear-gradient(
+                145deg,
+                rgba(13, 17, 24, 0.96),
+                rgba(6, 8, 12, 0.96)
+            );
+
+        border: 1px solid var(--border);
+    }
+
+    .captures-panel::before {
+        content: "";
+
+        position: absolute;
+        top: 0;
+        left: 0;
+
+        width: 45px;
+        height: 1px;
+
+        background: var(--cyan);
+        box-shadow: 0 0 12px var(--cyan);
+    }
+
+    .captures-panel-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+
+        padding: 20px 24px;
+
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .captures-panel-title {
+        color: var(--text);
+
+        font-family: "Share Tech Mono", monospace;
+        font-size: 0.82rem;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+    }
+
+    .captures-panel-status {
+        color: var(--green);
+
+        font-family: "Share Tech Mono", monospace;
+        font-size: 0.65rem;
+        letter-spacing: 1px;
+    }
+
+    .captures-panel-status::before {
+        content: "";
+
+        display: inline-block;
+
+        width: 6px;
+        height: 6px;
+
+        margin-right: 7px;
+
+        border-radius: 50%;
+
+        background: var(--green);
+        box-shadow: 0 0 9px var(--green);
+    }
+
+    /* =========================================================
+       TABLE
+       ========================================================= */
+
+    .captures-table-wrapper {
+        overflow-x: auto;
+    }
+
+    .captures-table {
+        width: 100%;
+        border-collapse: collapse;
+
+        font-family: "Share Tech Mono", monospace;
+    }
+
+    .captures-table th {
+        padding: 14px 24px;
+
+        background: rgba(0, 229, 255, 0.025);
+
+        color: var(--muted);
+
+        font-size: 0.66rem;
+        font-weight: normal;
+        letter-spacing: 1.5px;
+        text-align: left;
+        text-transform: uppercase;
+    }
+
+    .captures-table td {
+        padding: 17px 24px;
+
+        border-top: 1px solid rgba(255, 255, 255, 0.045);
+
+        color: #b8c3ca;
+
+        font-size: 0.8rem;
+        vertical-align: middle;
+    }
+
+    .captures-table tbody tr {
+        transition:
+            background 0.15s ease,
+            box-shadow 0.15s ease;
+    }
+
+    .captures-table tbody tr:hover {
+        background: rgba(0, 229, 255, 0.035);
+    }
+
+    /* =========================================================
+       ROUND
+       ========================================================= */
+
+    .round-cell {
+        width: 180px;
+
+        color: var(--cyan) !important;
+
+        font-size: 0.82rem !important;
+    }
+
+    .round-cell::before {
+        content: "//";
+
+        margin-right: 8px;
+
+        color: var(--muted);
+    }
+
+    /* =========================================================
+       TIMESTAMP
+       ========================================================= */
+
+    .timestamp {
+        color: var(--muted) !important;
+
+        white-space: nowrap;
+    }
+
+    /* =========================================================
+       VM IDENTIFIER
+       ========================================================= */
+
+    .vm-identifier {
+        color: var(--text) !important;
+
+        letter-spacing: 0.4px;
+    }
+
+    .valid-marker {
+        display: inline-block;
+
+        margin-right: 9px;
+
+        color: var(--green);
+
+        font-size: 0.6rem;
+    }
+
+    /* =========================================================
+       INVALID ATTEMPTS
+       ========================================================= */
+
+    .invalid-row {
+        background:
+            linear-gradient(
+                90deg,
+                rgba(255, 49, 88, 0.07),
+                rgba(255, 49, 88, 0.015)
+            );
+
+        box-shadow:
+            inset 2px 0 0 var(--red);
+    }
+
+    .invalid-row:hover {
+        background:
+            linear-gradient(
+                90deg,
+                rgba(255, 49, 88, 0.11),
+                rgba(255, 49, 88, 0.025)
+            ) !important;
+    }
+
+    .invalid-marker {
+        display: inline-block;
+
+        margin-right: 9px;
+
+        color: var(--red);
+
+        font-size: 0.6rem;
+    }
+
+    .invalid-attempt {
+        color: var(--red) !important;
+
+        font-size: 0.7rem !important;
+        letter-spacing: 0.8px;
+        text-transform: uppercase;
+    }
+
+    /* =========================================================
+       EMPTY STATE
+       ========================================================= */
+
+    .captures-empty {
+        padding: 55px 25px;
+
+        color: var(--muted);
+
+        font-family: "Share Tech Mono", monospace;
+        font-size: 0.75rem;
+        letter-spacing: 1px;
+        text-align: center;
+        text-transform: uppercase;
+    }
+
+    .captures-empty::before {
+        content: "//";
+
+        display: block;
+
+        margin-bottom: 10px;
+
+        color: var(--cyan);
+    }
+
+    /* =========================================================
+       FOOTER NOTE
+       ========================================================= */
+
+    .captures-note {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+
+        margin-top: 20px;
+
+        color: var(--muted);
+
+        font-family: "Share Tech Mono", monospace;
+        font-size: 0.65rem;
+        letter-spacing: 0.5px;
+    }
+
+    .captures-note-mark {
+        color: var(--cyan);
+    }
+
+    @media (max-width: 700px) {
+
+        .captures-page {
+            padding-top: 40px;
+        }
+
+        .captures-table th,
+        .captures-table td {
+            padding: 14px 15px;
+        }
+
+        .round-cell {
+            width: 140px;
+        }
+
+    }
+</style>
+
+
+<div class="captures-page">
+
+    <section class="captures-panel">
+
+        <div class="captures-panel-header">
+
+            <div class="captures-panel-title">
+                // CAPTURE ATTEMPTS
+            </div>
+
+            <div class="captures-panel-status">
+                TELEMETRY ACTIVE
+            </div>
+
+        </div>
+
+
+        <div class="captures-table-wrapper">
+
+            <table class="captures-table">
+
+                <thead>
+                    <tr>
+                        <th>Round</th>
+                        <th>Timestamp</th>
+                        <th>VM Identifier</th>
+                    </tr>
+                </thead>
+
+
+                <tbody>
+
+                    {% regroup rows by round as round_groups %}
+
+                    {% for group in round_groups %}
+
+                        {% for row in group.list %}
+
+                            <tr
+                                {% if row.invalid %}
+                                    class="invalid-row"
+                                {% endif %}
+                            >
+
+                                {% if forloop.first %}
+
+                                    <td
+                                        rowspan="{{ group.list|length }}"
+                                        class="round-cell"
+                                    >
+                                        {{ group.grouper.name }}
+                                    </td>
+
+                                {% endif %}
+
+
+                                <td class="timestamp">
+                                    {{ row.attempt.created_at }}
+                                </td>
+
+
+                                <td>
+
+                                    {% if row.invalid %}
+
+                                        <span class="invalid-marker">
+                                            [X]
+                                        </span>
+
+                                        <span class="invalid-attempt">
+                                            Invalid attempt
+                                        </span>
+
+                                    {% else %}
+
+                                        <span class="valid-marker">
+                                            [OK]
+                                        </span>
+
+                                        <span class="vm-identifier">
+                                            {{ row.vm_identifier }}
+                                        </span>
+
+                                    {% endif %}
+
+                                </td>
+
+                            </tr>
+
+                        {% endfor %}
+
+                    {% empty %}
+
+                        <tr>
+                            <td
+                                colspan="3"
+                                class="captures-empty"
+                            >
+                                NO FLAG CAPTURE ATTEMPTS RECORDED
+                            </td>
+                        </tr>
+
+                    {% endfor %}
+
+                </tbody>
+
+            </table>
+
+        </div>
+
+    </section>
+
+
+    <div class="captures-note">
+        <span class="captures-note-mark">//</span>
+        <span>
+            CAPTURE TELEMETRY IS RETAINED ACROSS COMPETITION ROUNDS.
+        </span>
+    </div>
+
+</div>
+
 {% endblock %}

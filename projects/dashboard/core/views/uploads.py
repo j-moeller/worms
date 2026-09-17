@@ -19,7 +19,9 @@ from django.http import HttpRequest, JsonResponse
 @user_in_team_required
 def upload_get_method(request: HttpRequest, team: Team):
     uploads = (
-        Upload.objects.filter(user__team=team)  # TODO
+        Upload.objects.filter(
+            user__team_memberships__team=team,
+        )
         .select_related("user", "artifact")
         .prefetch_related(
             "worm_deployments__round",

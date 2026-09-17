@@ -47,6 +47,17 @@ def require_competition(view_func):
     return wrapper
 
 
+def require_competition_registration_active(view_func):
+    @wraps(view_func)
+    def wrapper(request: HttpRequest, competition, *args, **kwargs):
+        if not competition.registration_is_open:
+            return HttpResponse("Registration closed", status=400)
+
+        return view_func(request, *args, **kwargs)
+
+    return wrapper
+
+
 def user_in_team_required(view_func):
     @require_competition
     @wraps(view_func)

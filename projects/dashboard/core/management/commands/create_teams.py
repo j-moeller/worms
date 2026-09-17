@@ -93,9 +93,12 @@ NOUNS = [
     "Forger",
     "Phisher",
     # Infrastructure / systems
-    "Orchestrator" "Breacher",
+    "Orchestrator",
+    "Breacher",
     "Proxy",
     "Logger",
+    "Crawler",
+    "Digger",
 ]
 
 

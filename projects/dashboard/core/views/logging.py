@@ -3,7 +3,7 @@ from core.models.team import Team
 from core.views.decorators import user_in_team_required
 from core.views.util import render_with_base_info
 from django.contrib.auth.decorators import login_required
-from django.http import HttpRequest, HttpResponse, JsonResponse
+from django.http import HttpRequest, JsonResponse
 from django.shortcuts import get_object_or_404, render
 
 

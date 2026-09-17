@@ -52,6 +52,7 @@ class Round(models.Model):
         db_table = "rounds"
         indexes = [
             models.Index(fields=["competition"]),
+            models.Index(fields=["round_start"]),
         ]
         constraints = [
             models.CheckConstraint(

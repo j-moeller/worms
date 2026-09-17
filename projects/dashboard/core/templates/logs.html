@@ -2,50 +2,541 @@
 {% load tz %}
 
 {% block content %}
-<h1>Logging events</h1>
 
-<pre id="log-viewer"><code>Select a logging event to view its JSON.</code></pre>
+<style>
+    /* =========================================================
+       LOGGING PAGE
+       ========================================================= */
 
-<table>
-    <thead>
-        <tr>
-            <th>Round</th>
-            <th>Timestamp</th>
-        </tr>
-    </thead>
+    .logging-page {
+        width: min(1200px, 92%);
+        margin: 0 auto;
+        padding: 70px 0 80px;
+    }
 
-    <tbody>
-        {% for group in rounds %}
-            {% for event in group.events %}
-                <tr
-                    class="logging-event"
-                    data-uuid="{{ event.logging_attempt.uuid }}"
-                    tabindex="0"
-                >
-                    {% if forloop.first %}
-                        <td rowspan="{{ group.events|length }}">
-                            {{ group.round.name }}
-                        </td>
-                    {% endif %}
+    .logging-header {
+        margin-bottom: 35px;
+    }
 
-                    <td>{{ event.created_at }}</td>
-                </tr>
-            {% endfor %}
-        {% empty %}
-            <tr>
-                <td colspan="2">No logging events found.</td>
-            </tr>
-        {% endfor %}
-    </tbody>
-</table>
+    .logging-classification {
+        color: var(--red);
+        font-family: "Share Tech Mono", monospace;
+        font-size: 0.72rem;
+        letter-spacing: 3px;
+        margin-bottom: 12px;
+        text-transform: uppercase;
+    }
+
+    .logging-header h1 {
+        margin: 0;
+
+        color: var(--text);
+
+        font-family: "Share Tech Mono", monospace;
+        font-size: clamp(2.5rem, 6vw, 5rem);
+        font-weight: normal;
+        line-height: 0.9;
+        letter-spacing: -2px;
+        text-transform: uppercase;
+    }
+
+    .logging-header h1 span {
+        color: var(--cyan);
+        text-shadow: 0 0 25px rgba(0, 229, 255, 0.3);
+    }
+
+    .logging-subtitle {
+        max-width: 680px;
+        margin-top: 18px;
+
+        color: var(--muted);
+
+        font-family: "Share Tech Mono", monospace;
+        font-size: 0.8rem;
+        line-height: 1.7;
+    }
+
+
+    /* =========================================================
+       PANEL
+       ========================================================= */
+
+    .logging-panel {
+        position: relative;
+        overflow: hidden;
+
+        margin-bottom: 25px;
+
+        background:
+            linear-gradient(
+                145deg,
+                rgba(13, 17, 24, 0.96),
+                rgba(6, 8, 12, 0.96)
+            );
+
+        border: 1px solid var(--border);
+    }
+
+    .logging-panel::before {
+        content: "";
+
+        position: absolute;
+        top: 0;
+        left: 0;
+
+        width: 45px;
+        height: 1px;
+
+        background: var(--cyan);
+        box-shadow: 0 0 12px var(--cyan);
+    }
+
+    .logging-panel-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+
+        padding: 20px 24px;
+
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .logging-panel-title {
+        color: var(--text);
+
+        font-family: "Share Tech Mono", monospace;
+        font-size: 0.82rem;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+    }
+
+    .logging-panel-status {
+        color: var(--green);
+
+        font-family: "Share Tech Mono", monospace;
+        font-size: 0.65rem;
+        letter-spacing: 1px;
+    }
+
+    .logging-panel-status::before {
+        content: "";
+
+        display: inline-block;
+
+        width: 6px;
+        height: 6px;
+
+        margin-right: 7px;
+
+        border-radius: 50%;
+
+        background: var(--green);
+        box-shadow: 0 0 9px var(--green);
+    }
+
+
+    /* =========================================================
+       JSON VIEWER
+       ========================================================= */
+
+    .log-viewer-wrapper {
+        padding: 20px;
+    }
+
+    #log-viewer {
+        box-sizing: border-box;
+
+        width: 100%;
+        height: 360px;
+        max-height: 500px;
+
+        margin: 0;
+        padding: 20px;
+
+        overflow: auto;
+
+        background:
+            linear-gradient(
+                180deg,
+                rgba(0, 0, 0, 0.42),
+                rgba(0, 0, 0, 0.65)
+            );
+
+        border: 1px solid rgba(57, 255, 136, 0.10);
+
+        color: #72827a;
+
+        font-family: "Share Tech Mono", monospace;
+        font-size: 0.76rem;
+        line-height: 1.7;
+
+        white-space: pre-wrap;
+        word-break: break-word;
+
+        box-shadow:
+            inset 0 0 35px rgba(0, 0, 0, 0.35);
+    }
+
+    #log-viewer code {
+        color: #8d9b94;
+        font-family: inherit;
+    }
+
+
+    /* =========================================================
+       EVENT TABLE
+       ========================================================= */
+
+    .logging-table-wrapper {
+        overflow-x: auto;
+    }
+
+    .logging-table {
+        width: 100%;
+        border-collapse: collapse;
+
+        font-family: "Share Tech Mono", monospace;
+    }
+
+    .logging-table th {
+        padding: 14px 24px;
+
+        background: rgba(0, 229, 255, 0.025);
+
+        color: var(--muted);
+
+        font-size: 0.66rem;
+        font-weight: normal;
+        letter-spacing: 1.5px;
+        text-align: left;
+        text-transform: uppercase;
+    }
+
+    .logging-table td {
+        padding: 17px 24px;
+
+        border-top: 1px solid rgba(255, 255, 255, 0.045);
+
+        color: #b8c3ca;
+
+        font-size: 0.8rem;
+        vertical-align: middle;
+    }
+
+
+    /* =========================================================
+       EVENT ROW
+       ========================================================= */
+
+    .logging-event {
+        cursor: pointer;
+
+        transition:
+            background 0.15s ease,
+            box-shadow 0.15s ease;
+    }
+
+    .logging-event:hover {
+        background: rgba(0, 229, 255, 0.035);
+    }
+
+    .logging-event:focus,
+    .logging-event.selected {
+        background:
+            linear-gradient(
+                90deg,
+                rgba(0, 229, 255, 0.08),
+                rgba(0, 229, 255, 0.015)
+            );
+
+        box-shadow:
+            inset 2px 0 0 var(--cyan);
+
+        outline: none;
+    }
+
+    .logging-event:focus td,
+    .logging-event.selected td {
+        color: var(--text);
+    }
+
+
+    /* =========================================================
+       ROUND
+       ========================================================= */
+
+    .logging-round {
+        width: 180px;
+
+        color: var(--cyan) !important;
+
+        font-size: 0.82rem !important;
+    }
+
+    .logging-round::before {
+        content: "//";
+
+        margin-right: 8px;
+
+        color: var(--muted);
+    }
+
+
+    /* =========================================================
+       TIMESTAMP
+       ========================================================= */
+
+    .logging-timestamp {
+        color: var(--muted) !important;
+
+        white-space: nowrap;
+    }
+
+
+    /* =========================================================
+       EVENT MARKER
+       ========================================================= */
+
+    .event-marker {
+        display: inline-block;
+
+        margin-right: 9px;
+
+        color: var(--cyan);
+
+        font-size: 0.6rem;
+    }
+
+
+    /* =========================================================
+       EMPTY STATES
+       ========================================================= */
+
+    .logging-empty {
+        padding: 55px 25px;
+
+        color: var(--muted);
+
+        font-family: "Share Tech Mono", monospace;
+        font-size: 0.75rem;
+        letter-spacing: 1px;
+        text-align: center;
+        text-transform: uppercase;
+    }
+
+    .logging-empty::before {
+        content: "//";
+
+        display: block;
+
+        margin-bottom: 10px;
+
+        color: var(--cyan);
+    }
+
+
+    /* =========================================================
+       FOOTER NOTE
+       ========================================================= */
+
+    .logging-note {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+
+        margin-top: 20px;
+
+        color: var(--muted);
+
+        font-family: "Share Tech Mono", monospace;
+        font-size: 0.65rem;
+        letter-spacing: 0.5px;
+    }
+
+    .logging-note-mark {
+        color: var(--cyan);
+    }
+
+
+    /* =========================================================
+       MOBILE
+       ========================================================= */
+
+    @media (max-width: 700px) {
+
+        .logging-page {
+            padding-top: 40px;
+        }
+
+        .logging-table th,
+        .logging-table td {
+            padding: 14px 15px;
+        }
+
+        .logging-round {
+            width: 140px;
+        }
+
+        .log-viewer-wrapper {
+            padding: 15px;
+        }
+
+        #log-viewer {
+            height: 320px;
+            padding: 15px;
+        }
+    }
+</style>
+
+
+<div class="logging-page">
+
+    <!-- =====================================================
+         LOG VIEWER
+         ===================================================== -->
+
+    <section class="logging-panel">
+
+        <div class="logging-panel-header">
+
+            <div class="logging-panel-title">
+                // EVENT DATA
+            </div>
+
+            <div class="logging-panel-status">
+                TELEMETRY ACTIVE
+            </div>
+
+        </div>
+
+
+        <div class="log-viewer-wrapper">
+
+            <pre id="log-viewer"><code>Select a logging event to view its JSON.</code></pre>
+
+        </div>
+
+    </section>
+
+
+    <!-- =====================================================
+         EVENT LOG
+         ===================================================== -->
+
+    <section class="logging-panel">
+
+        <div class="logging-panel-header">
+
+            <div class="logging-panel-title">
+                // LOGGING EVENTS
+            </div>
+
+            <div class="logging-panel-status">
+                EVENT STREAM
+            </div>
+
+        </div>
+
+
+        <div class="logging-table-wrapper">
+
+            <table class="logging-table">
+
+                <thead>
+                    <tr>
+                        <th>Round</th>
+                        <th>Timestamp</th>
+                    </tr>
+                </thead>
+
+
+                <tbody>
+
+                    {% for group in rounds %}
+
+                        {% for event in group.events %}
+
+                            <tr
+                                class="logging-event"
+                                data-uuid="{{ event.logging_attempt.uuid }}"
+                                tabindex="0"
+                            >
+
+                                {% if forloop.first %}
+
+                                    <td
+                                        rowspan="{{ group.events|length }}"
+                                        class="logging-round"
+                                    >
+                                        {{ group.round.name }}
+                                    </td>
+
+                                {% endif %}
+
+
+                                <td class="logging-timestamp">
+
+                                    <span class="event-marker">
+                                        [LOG]
+                                    </span>
+
+                                    {{ event.created_at }}
+
+                                </td>
+
+                            </tr>
+
+                        {% endfor %}
+
+                    {% empty %}
+
+                        <tr>
+                            <td
+                                colspan="2"
+                                class="logging-empty"
+                            >
+                                NO LOGGING EVENTS FOUND
+                            </td>
+                        </tr>
+
+                    {% endfor %}
+
+                </tbody>
+
+            </table>
+
+        </div>
+
+    </section>
+
+
+    <!-- =====================================================
+         FOOTER NOTE
+         ===================================================== -->
+
+    <div class="logging-note">
+
+        <span class="logging-note-mark">//</span>
+
+        <span>
+            SELECTED EVENTS ARE RENDERED AS RAW JSON.
+            TELEMETRY IS READ-ONLY.
+        </span>
+
+    </div>
+
+</div>
+
 
 <script>
     const logViewer = document.querySelector("#log-viewer code");
 
     async function showLoggingEvent(row) {
+
         const uuid = row.dataset.uuid;
 
-        logViewer.textContent = "Loading...";
+        logViewer.textContent = "Loading event telemetry...";
+
 
         document
             .querySelectorAll(".logging-event")
@@ -53,69 +544,81 @@
                 eventRow.classList.remove("selected");
             });
 
+
         row.classList.add("selected");
 
+
         try {
+
             const response = await fetch(
                 `/logging/events/${encodeURIComponent(uuid)}/`,
                 {
                     method: "GET",
+
                     credentials: "same-origin",
+
                     headers: {
                         "Accept": "application/json",
                     },
                 }
             );
 
+
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}`);
             }
 
+
             const data = await response.json();
 
-            // IMPORTANT:
-            // textContent is intentional. Never use innerHTML here.
-            logViewer.textContent = JSON.stringify(data, null, 2);
+
+            /*
+             * IMPORTANT:
+             *
+             * textContent is intentional.
+             * Never use innerHTML here because the JSON
+             * originates from the server.
+             */
+
+            logViewer.textContent =
+                JSON.stringify(data, null, 2);
+
         } catch (error) {
-            console.error("Failed to load logging event:", error);
-            logViewer.textContent = "Unable to load logging event.";
+
+            console.error(
+                "Failed to load logging event:",
+                error
+            );
+
+            logViewer.textContent =
+                "Unable to load logging event.";
         }
     }
 
-    document.querySelectorAll(".logging-event").forEach(row => {
-        row.addEventListener("click", () => {
-            showLoggingEvent(row);
-        });
 
-        row.addEventListener("keydown", event => {
-            if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
+    document
+        .querySelectorAll(".logging-event")
+        .forEach(row => {
+
+            row.addEventListener("click", () => {
                 showLoggingEvent(row);
-            }
+            });
+
+
+            row.addEventListener("keydown", event => {
+
+                if (
+                    event.key === "Enter" ||
+                    event.key === " "
+                ) {
+
+                    event.preventDefault();
+
+                    showLoggingEvent(row);
+                }
+            });
+
         });
-    });
 </script>
 
-<style>
-    #log-viewer {
-        max-height: 500px;
-        overflow: auto;
-        white-space: pre-wrap;
-        word-break: break-word;
-    }
-
-    .logging-event {
-        cursor: pointer;
-    }
-
-    .logging-event:hover {
-        background: #f5f5f5;
-    }
-
-    .logging-event:focus,
-    .logging-event.selected {
-        background: #e8f0fe;
-        outline: none;
-    }
-</style>
 {% endblock %}

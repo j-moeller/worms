@@ -1,54 +1,141 @@
 {% extends "base.html" %}
 
 {% block header %}
-<title>Leaderboard</title>
-
-<style>
-.highlight {
-    font-weight: bold;
-}
-</style>
+<title>WORMS//ARENA — Leaderboard</title>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
 {% endblock %}
 
+
 {% block content %}
-<h1>Leaderboard</h1>
 
-<table>
-    <thead>
-        <tr>
-            <th>Rank</th>
-            <th>Team</th>
-            <th>Points</th>
-        </tr>
-    </thead>
+<div class="leaderboard-page">
+    <!-- LEADERBOARD -->
 
-    <tbody>
-        {% for team in teams %}
-            <tr class="{% if team.is_user_team %}highlight{% endif %}">
-                <td>{{ forloop.counter }}</td>
-                <td>{{ team.name }}</td>
-                <td>{{ team.points }}</td>
-            </tr>
-        {% empty %}
-            <tr>
-                <td colspan="3">No teams yet.</td>
-            </tr>
-        {% endfor %}
-    </tbody>
-</table>
+    <section class="panel leaderboard">
 
-<h2>Points over time</h2>
+        <div class="panel-header">
+            <div class="panel-title">
+                // CURRENT RANKINGS
+            </div>
 
-<div style="width: 100%; max-width: 1200px;">
-    <canvas id="pointsChart"></canvas>
+            <div class="panel-status">
+                LIVE
+            </div>
+        </div>
+
+        <div class="table-wrapper">
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Rank</th>
+                        <th>Team</th>
+                        <th>Points</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                    {% for team in teams %}
+
+                        <tr
+                            class="{% if team.is_user_team %}highlight{% endif %}"
+                        >
+                            <td>
+                                {{ forloop.counter|stringformat:"02d" }}
+                            </td>
+
+                            <td>
+                                {{ team.name }}
+
+                                {% if false %}
+                                {% if team.is_current_winner %}
+                                    <span
+                                        class="winner-star"
+                                        title="Current winner"
+                                        aria-label="Current winner"
+                                    >👑</span>
+                                {% endif %}
+                                {% endif %}
+
+                                {% if team.is_current_leader %}
+                                    <span
+                                        class="leader-star"
+                                        title="Current leader — {{ current_round.name }}"
+                                        aria-label="Current leader — {{ current_round.name }}"
+                                    >🔥</span>
+                                {% endif %}
+
+                                {% for round_name in team.round_wins %}
+                                    <span
+                                        class="round-star"
+                                        title="{{ round_name }}"
+                                        aria-label="{{ round_name }}"
+                                    >⭐️</span>
+                                {% endfor %}
+                            </td>
+
+                            <td>
+                                {{ team.points }}
+                            </td>
+                        </tr>
+
+                    {% empty %}
+
+                        <tr>
+                            <td colspan="3" class="empty">
+                                NO ACTIVE TEAMS DETECTED.
+                            </td>
+                        </tr>
+
+                    {% endfor %}
+                </tbody>
+            </table>
+
+        </div>
+
+    </section>
+
+
+    <!-- POINTS GRAPH -->
+
+    <section class="panel graph-panel">
+
+        <div class="panel-header">
+            <div class="panel-title">
+                // POINTS OVER TIME
+            </div>
+
+            <div class="panel-status">
+                HISTORICAL DATA
+            </div>
+        </div>
+
+        <div class="chart-wrapper">
+            <canvas id="pointsChart"></canvas>
+        </div>
+
+    </section>
+
+
+    <footer class="page-footer">
+        <span>
+            WORMS//ARENA — AUTONOMOUS AI COMPETITION
+        </span>
+
+        <span>
+            NO HUMAN OPERATORS DETECTED
+        </span>
+    </footer>
+
 </div>
+
 
 {{ chart_data|json_script:"chart-data" }}
 {{ round_data|json_script:"round-data" }}
+
 
 <script>
     const chartData = JSON.parse(
@@ -59,69 +146,110 @@
         document.getElementById("round-data").textContent
     );
 
-    // Get unique teams.
+
+    /*
+     * Extract unique team names.
+     */
+
     const teamNames = [
         ...new Set(chartData.map(item => item.team))
     ];
 
-    const datasets = teamNames.map(teamName => {
+
+    /*
+     * Generate one stepped line per team.
+     */
+
+    const datasets = teamNames.map((teamName, index) => {
+
         return {
             label: teamName,
+
             data: chartData
                 .filter(item => item.team === teamName)
                 .map(item => ({
                     x: item.time,
                     y: item.points,
                 })),
+
             stepped: true,
             fill: false,
+
+            borderWidth: 2,
+
+            pointRadius: 0,
+            pointHoverRadius: 5,
+
+            tension: 0,
         };
     });
 
-    // Create semi-transparent background areas for each round.
+
+    /*
+     * Background regions for competition rounds.
+     */
+
     const roundColors = [
-        "rgba(54, 162, 235, 0.12)",
-        "rgba(255, 99, 132, 0.12)",
-        "rgba(75, 192, 192, 0.12)",
-        "rgba(255, 159, 64, 0.12)",
-        "rgba(153, 102, 255, 0.12)",
-        "rgba(255, 205, 86, 0.12)",
+        "rgba(0, 229, 255, 0.045)",
+        "rgba(255, 49, 88, 0.045)",
+        "rgba(57, 255, 136, 0.045)",
+        "rgba(255, 159, 64, 0.045)",
+        "rgba(153, 102, 255, 0.045)",
+        "rgba(255, 205, 86, 0.045)",
     ];
+
 
     const annotations = {};
 
+
     roundData.forEach((round, index) => {
+
         annotations[`round-${index}`] = {
+
             type: "box",
 
             xMin: round.start,
             xMax: round.end,
 
-            // Extend the box across the entire chart vertically.
             yMin: "min",
             yMax: "max",
 
-            backgroundColor: roundColors[index % roundColors.length],
+            backgroundColor:
+                roundColors[index % roundColors.length],
+
             borderWidth: 0,
 
             label: {
                 display: true,
+
                 content: round.name,
-                position: "start",
-                color: "rgba(0, 0, 0, 0.7)",
-                font: {
-                    weight: "bold",
+
+                position: {
+                    x: "start",
+                    y: "start",
                 },
-                padding: 4,
+
+                color: "rgba(180, 195, 202, 0.55)",
+
+                font: {
+                    family: "Share Tech Mono",
+                    size: 10,
+                    weight: "normal",
+                },
+
+                padding: 7,
             },
         };
     });
+
 
     const ctx = document
         .getElementById("pointsChart")
         .getContext("2d");
 
+
     new Chart(ctx, {
+
         type: "line",
 
         data: {
@@ -129,38 +257,140 @@
         },
 
         options: {
+
             responsive: true,
+
+            maintainAspectRatio: false,
 
             interaction: {
                 mode: "nearest",
                 intersect: false,
             },
 
+            animation: {
+                duration: 500,
+            },
+
             scales: {
+
                 x: {
+
                     type: "time",
+
+                    grid: {
+                        color: "rgba(255, 255, 255, 0.045)",
+                    },
+
+                    border: {
+                        color: "rgba(255, 255, 255, 0.08)",
+                    },
+
                     title: {
                         display: true,
-                        text: "Time",
+                        text: "TIME",
+                        color: "#68757f",
+
+                        font: {
+                            family: "Share Tech Mono",
+                            size: 10,
+                        },
+                    },
+
+                    ticks: {
+                        color: "#68757f",
+
+                        font: {
+                            family: "Share Tech Mono",
+                            size: 10,
+                        },
                     },
                 },
 
+
                 y: {
+
                     beginAtZero: true,
+
+                    grid: {
+                        color: "rgba(255, 255, 255, 0.045)",
+                    },
+
+                    border: {
+                        color: "rgba(255, 255, 255, 0.08)",
+                    },
+
                     ticks: {
                         precision: 0,
+                        color: "#68757f",
+
+                        font: {
+                            family: "Share Tech Mono",
+                            size: 10,
+                        },
                     },
+
                     title: {
                         display: true,
-                        text: "Points",
+                        text: "POINTS",
+                        color: "#68757f",
+
+                        font: {
+                            family: "Share Tech Mono",
+                            size: 10,
+                        },
                     },
                 },
             },
 
+
             plugins: {
+
                 legend: {
                     display: true,
+
+                    position: "bottom",
+
+                    labels: {
+                        color: "#aebbc2",
+
+                        usePointStyle: true,
+                        pointStyle: "line",
+
+                        padding: 20,
+
+                        font: {
+                            family: "Share Tech Mono",
+                            size: 10,
+                        },
+                    },
                 },
+
+
+                tooltip: {
+
+                    backgroundColor: "#080b10",
+
+                    borderColor:
+                        "rgba(0, 229, 255, 0.25)",
+
+                    borderWidth: 1,
+
+                    titleColor: "#00e5ff",
+                    bodyColor: "#d8e2e8",
+
+                    titleFont: {
+                        family: "Share Tech Mono",
+                    },
+
+                    bodyFont: {
+                        family: "Share Tech Mono",
+                    },
+
+                    padding: 12,
+
+                    displayColors: true,
+                },
+
 
                 annotation: {
                     annotations: annotations,
@@ -169,4 +399,5 @@
         },
     });
 </script>
+
 {% endblock %}

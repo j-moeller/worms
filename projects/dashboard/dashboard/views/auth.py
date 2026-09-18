@@ -1,10 +1,8 @@
+from dashboard.views.util import render_with_base_info
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest
 from django.shortcuts import redirect
-
-from django.shortcuts import redirect
-from core.views.util import render_with_base_info
 
 
 def login_view(request: HttpRequest):

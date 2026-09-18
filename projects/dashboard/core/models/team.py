@@ -1,9 +1,9 @@
 import uuid
 
+from core import clock
 from core.models.competition import Competition
 from core.models.user import User
 from django.db import models
-from django.utils import timezone
 
 
 class Team(models.Model):
@@ -16,7 +16,7 @@ class Team(models.Model):
         related_name="teams",
     )
     max_members = models.PositiveIntegerField(default=2)
-    created_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(default=clock.now)
 
     users = models.ManyToManyField(
         User,
@@ -44,7 +44,7 @@ class AccessTokens(models.Model):
     team = models.ForeignKey(Team, on_delete=models.CASCADE)
     revoked = models.BooleanField(default=False)
     revoked_at = models.DateTimeField(blank=True, null=True)
-    created_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(default=clock.now)
 
 
 class TeamMembership(models.Model):
@@ -58,7 +58,7 @@ class TeamMembership(models.Model):
         on_delete=models.CASCADE,
         related_name="memberships",
     )
-    created_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(default=clock.now)
 
     class Meta:
         db_table = "team_memberships"

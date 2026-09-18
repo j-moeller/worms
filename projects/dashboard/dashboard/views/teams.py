@@ -1,14 +1,13 @@
-from django.db import transaction
-
 from core.models.competition import Competition
 from core.models.team import Team
-from core.views.decorators import (
+from dashboard.views.decorators import (
     get_users_current_team,
     require_competition,
     require_competition_registration_active,
 )
-from core.views.util import render_with_base_info
+from dashboard.views.util import render_with_base_info
 from django.contrib.auth.decorators import login_required
+from django.db import transaction
 from django.http import HttpRequest
 from django.shortcuts import get_object_or_404, redirect
 from django.views.decorators.http import require_POST

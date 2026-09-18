@@ -3,16 +3,21 @@ import random
 import uuid
 from datetime import timedelta
 
+from core import clock
 from core.models.competition import ApplicationSetting, Competition, Round
 from core.models.logging import Logging, LoggingAttempt
 from core.models.scoring import FlagCapture, FlagCaptureAttempt
 from core.models.team import AccessTokens, Team, TeamMembership
 from core.models.user import CompetitionParticipant, User
 from core.models.vm import VirtualMachine
-from core.models.worms import MalwareArtifact, Upload, WormDeployment
+from core.models.worms import (
+    MalwareArtifact,
+    Upload,
+    WormDeployment,
+    WormDeploymentPlan,
+)
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
-from django.utils import timezone
 
 VM_COUNT = 50
 
@@ -81,6 +86,7 @@ class Command(BaseCommand):
         state = options["state"]
         seed = options["seed"]
 
+        print("Validate")
         self._validate(
             n_teams=n_teams,
             n_users=n_users,
@@ -92,10 +98,11 @@ class Command(BaseCommand):
         )
 
         rng = random.Random(seed)
-        now = timezone.now()
+        now = clock.now()
 
         self._clear_database()
 
+        print("Create competition")
         competition = self._create_competition(
             state=state,
             now=now,
@@ -105,6 +112,7 @@ class Command(BaseCommand):
             rng=rng,
         )
 
+        print("Create rounds")
         rounds = self._create_rounds(
             competition=competition,
             state=state,
@@ -116,6 +124,7 @@ class Command(BaseCommand):
             rng=rng,
         )
 
+        print("Create users")
         users = self._create_users(
             competition=competition,
             n_users=n_users,
@@ -123,6 +132,7 @@ class Command(BaseCommand):
             rng=rng,
         )
 
+        print("Create teams")
         teams = self._create_teams(
             competition=competition,
             users=users,
@@ -132,19 +142,15 @@ class Command(BaseCommand):
             rng=rng,
         )
 
+        print("Create application setting")
         ApplicationSetting.objects.create(
             key="current",
             current_competition=competition,
         )
 
-        vm_rounds = self._get_vm_rounds(
-            rounds=rounds,
-            state=state,
-            in_round=in_round,
-        )
-
+        print("Create VMs")
         vms_by_round = self._create_vms(
-            rounds=vm_rounds,
+            rounds=rounds,
             seed=seed,
             rng=rng,
         )
@@ -156,7 +162,7 @@ class Command(BaseCommand):
                 in_round=in_round,
             )
 
-            self._create_access_tokens(
+            access_token_hashes_by_team = self._create_access_tokens(
                 teams=teams,
                 seed=seed,
                 rng=rng,
@@ -167,6 +173,7 @@ class Command(BaseCommand):
                 users=users,
                 rounds=activity_rounds,
                 vms_by_round=vms_by_round,
+                access_token_hashes_by_team=access_token_hashes_by_team,
                 seed=seed,
                 rng=rng,
                 now=now,
@@ -220,20 +227,20 @@ class Command(BaseCommand):
 
         if state == "round":
             if in_round is None:
-                raise CommandError("--in-round is required when " "--state='round'.")
+                raise CommandError("--in-round is required when --state='round'.")
 
             if not 1 <= in_round <= n_rounds:
                 raise CommandError(f"--in-round must be between 1 and {n_rounds}.")
 
         elif in_round is not None:
-            raise CommandError("--in-round can only be used with " "--state='round'.")
+            raise CommandError("--in-round can only be used with --state='round'.")
 
     # ------------------------------------------------------------------
     # Database
     # ------------------------------------------------------------------
 
     def _clear_database(self):
-        WormDeployment.objects.all().delete()
+        WormDeploymentPlan.objects.all().delete()
         Upload.objects.all().delete()
         MalwareArtifact.objects.all().delete()
 
@@ -262,7 +269,12 @@ class Command(BaseCommand):
 
     @staticmethod
     def _hash(seed, *parts):
-        value = ":".join([str(seed), *(str(part) for part in parts)])
+        value = ":".join(
+            [
+                str(seed),
+                *(str(part) for part in parts),
+            ]
+        )
 
         return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -445,8 +457,9 @@ class Command(BaseCommand):
 
         for index in range(n_rounds):
             round_start = first_round_start + timedelta(seconds=index * spacing)
-
             round_end = round_start + timedelta(seconds=round_duration)
+
+            name = f"Round {index + 1}"
 
             round_obj = Round.objects.create(
                 seed=rng.randint(
@@ -455,9 +468,16 @@ class Command(BaseCommand):
                 ),
                 round_start=round_start,
                 round_end=round_end,
-                name=f"Round {index + 1}",
+                name=name,
                 competition=competition,
                 created_at=competition.created_at,
+            )
+
+            print(
+                f"Generated round ({name}): ",
+                round_start,
+                round_end,
+                round_start <= now < round_end,
             )
 
             rounds.append(round_obj)
@@ -630,7 +650,7 @@ class Command(BaseCommand):
             if cycle == 0:
                 team_name = f"{adjective} {noun}"
             else:
-                team_name = f"{adjective} {noun} " f"{cycle + 1}"
+                team_name = f"{adjective} {noun} {cycle + 1}"
 
             team = Team.objects.create(
                 uuid=self._uuid(
@@ -800,6 +820,28 @@ class Command(BaseCommand):
         seed,
         rng,
     ):
+        """
+        Create access tokens and return the hashes of all active tokens
+        grouped by team.
+
+        The returned hashes are the exact values stored in
+        AccessTokens.access_token_hash. Gameplay attempts use these
+        values directly as their team_token_hash.
+
+        This establishes the intended relationship:
+
+            AccessTokens.access_token_hash
+                    ==
+            LoggingAttempt.team_token_hash
+
+        and:
+
+            AccessTokens.access_token_hash
+                    ==
+            FlagCaptureAttempt.team_token_hash
+        """
+        active_token_hashes_by_team = {}
+
         for team_index, team in enumerate(teams):
             token_count = rng.choices(
                 [1, 2, 3],
@@ -811,28 +853,39 @@ class Command(BaseCommand):
                 k=1,
             )[0]
 
+            active_hashes = []
+
             for token_index in range(token_count):
-                revoked = rng.random() < 0.08
+                # Guarantee at least one valid token per team.
+                # The first token is always active.
+                revoked = token_index != 0 and rng.random() < 0.08
+
+                access_token_hash = self._token_hash(
+                    seed,
+                    "access",
+                    team_index,
+                    token_index,
+                )
 
                 AccessTokens.objects.create(
-                    name=(f"token-{token_index + 1}"),
+                    name=f"token-{token_index + 1}",
                     description=(
                         "Competition access token"
                         if not revoked
                         else "Revoked competition access token"
                     ),
-                    access_token_hash=(
-                        self._token_hash(
-                            seed,
-                            "access",
-                            team_index,
-                            token_index,
-                        )
-                    ),
+                    access_token_hash=access_token_hash,
                     team=team,
                     revoked=revoked,
-                    revoked_at=(timezone.now() if revoked else None),
+                    revoked_at=(clock.now() if revoked else None),
                 )
+
+                if not revoked:
+                    active_hashes.append(access_token_hash)
+
+            active_token_hashes_by_team[team.pk] = active_hashes
+
+        return active_token_hashes_by_team
 
     # ------------------------------------------------------------------
     # Gameplay
@@ -860,10 +913,13 @@ class Command(BaseCommand):
         users,
         rounds,
         vms_by_round,
+        access_token_hashes_by_team,
         seed,
         rng,
         now,
     ):
+        deployed_on_vms = set()
+
         for team in teams:
             strength = team._strength
 
@@ -872,14 +928,32 @@ class Command(BaseCommand):
             if not members:
                 continue
 
-            self._create_team_uploads(
+            # Only use hashes belonging to non-revoked access tokens.
+            #
+            # These exact hashes are subsequently written into
+            # LoggingAttempt.team_token_hash and
+            # FlagCaptureAttempt.team_token_hash.
+            access_token_hashes = access_token_hashes_by_team.get(
+                team.pk,
+                [],
+            )
+
+            if not access_token_hashes:
+                continue
+
+            deployed_vms = self._create_team_uploads(
                 team=team,
                 members=members,
                 rounds=rounds,
+                vms_by_round=vms_by_round,
                 seed=seed,
                 strength=strength,
                 rng=rng,
+                deployed_on_vms=deployed_on_vms,
             )
+
+            for deployed_vm in deployed_vms:
+                deployed_on_vms.add(deployed_vm)
 
             for round_obj in rounds:
                 vms = vms_by_round.get(
@@ -894,6 +968,7 @@ class Command(BaseCommand):
                     team=team,
                     round_obj=round_obj,
                     strength=strength,
+                    access_token_hashes=access_token_hashes,
                     seed=seed,
                     rng=rng,
                     now=now,
@@ -904,6 +979,7 @@ class Command(BaseCommand):
                     round_obj=round_obj,
                     vms=vms,
                     strength=strength,
+                    access_token_hashes=access_token_hashes,
                     seed=seed,
                     rng=rng,
                     now=now,
@@ -919,9 +995,11 @@ class Command(BaseCommand):
         team,
         members,
         rounds,
+        vms_by_round,
         seed,
         strength,
         rng,
+        deployed_on_vms,
     ):
         expected = 0.5 + 3.0 * strength
 
@@ -932,6 +1010,7 @@ class Command(BaseCommand):
         )
 
         deployed_rounds = set()
+        new_deployment_vms = set()
 
         for upload_index in range(upload_count):
             content_hash = self._hash(
@@ -966,13 +1045,24 @@ class Command(BaseCommand):
             if round_obj.pk in deployed_rounds:
                 continue
 
-            WormDeployment.objects.create(
-                round=round_obj,
-                team=team,
-                upload=upload,
+            vms = vms_by_round.get(round_obj.pk)
+            if vms is None:
+                continue
+
+            available_vms = list(
+                set(vms) - set(deployed_on_vms) - set(new_deployment_vms)
             )
 
+            vm = rng.choice(available_vms)
+
+            worm_deployment_plan = WormDeploymentPlan.objects.create(
+                team=team, upload=upload, virtual_machine=vm, round=vm.round
+            )
+            WormDeployment.objects.create(worm_deployment_plan=worm_deployment_plan)
+
             deployed_rounds.add(round_obj.pk)
+
+        return new_deployment_vms
 
     # ------------------------------------------------------------------
     # Logging
@@ -984,6 +1074,7 @@ class Command(BaseCommand):
         team,
         round_obj,
         strength,
+        access_token_hashes,
         seed,
         rng,
         now,
@@ -1020,6 +1111,11 @@ class Command(BaseCommand):
                 "success": (rng.random() < (0.55 + 0.25 * strength)),
             }
 
+            # IMPORTANT:
+            # This hash MUST be one of the team's actual,
+            # non-revoked AccessTokens.access_token_hash values.
+            team_token_hash = rng.choice(access_token_hashes)
+
             attempt = LoggingAttempt.objects.create(
                 uuid=self._uuid(
                     seed,
@@ -1028,13 +1124,7 @@ class Command(BaseCommand):
                     round_obj.pk,
                     index,
                 ),
-                team_token_hash=self._hash(
-                    seed,
-                    "logging-team-token",
-                    team.pk,
-                    round_obj.pk,
-                    index,
-                ),
+                team_token_hash=team_token_hash,
                 log_data=log_data,
                 processed=processed,
                 processed_at=(created_at if processed else None),
@@ -1060,6 +1150,7 @@ class Command(BaseCommand):
         round_obj,
         vms,
         strength,
+        access_token_hashes,
         seed,
         rng,
         now,
@@ -1085,14 +1176,13 @@ class Command(BaseCommand):
                 )
             )
 
+            # IMPORTANT:
+            # This hash MUST be one of the team's actual,
+            # non-revoked AccessTokens.access_token_hash values.
+            team_token_hash = rng.choice(access_token_hashes)
+
             attempt = FlagCaptureAttempt.objects.create(
-                team_token_hash=self._hash(
-                    seed,
-                    "capture-team-token",
-                    team.pk,
-                    round_obj.pk,
-                    index,
-                ),
+                team_token_hash=team_token_hash,
                 vm_flag_hash=vm.ctf_flag_hash,
                 processed=processed,
                 processed_at=(created_at if processed else None),

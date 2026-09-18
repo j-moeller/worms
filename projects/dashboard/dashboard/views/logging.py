@@ -1,8 +1,8 @@
 from core.models.competition import Competition
 from core.models.logging import Logging
 from core.models.team import Team
-from core.views.decorators import user_in_team_required
-from core.views.util import render_with_base_info
+from dashboard.views.decorators import user_in_team_required
+from dashboard.views.util import render_with_base_info
 from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest, JsonResponse
 from django.shortcuts import get_object_or_404, render

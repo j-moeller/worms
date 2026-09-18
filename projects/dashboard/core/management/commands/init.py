@@ -1,11 +1,12 @@
 from datetime import timedelta
 
+from django.utils import timezone
+
+from core import clock
 from core.models import User
 from core.models.competition import ApplicationSetting, Competition
 from django.core.management.base import BaseCommand
 from django.db import transaction
-from django.utils import timezone
-from django.db.utils import IntegrityError
 
 
 class Command(BaseCommand):
@@ -32,7 +33,7 @@ class Command(BaseCommand):
             if not name:
                 raise ValueError("Competition name cannot be empty.")
 
-            starts_at = timezone.now()
+            starts_at = clock.now()
             ends_at = starts_at + timedelta(weeks=1)
 
             if timezone.is_naive(starts_at):

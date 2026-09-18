@@ -5,8 +5,8 @@ import tempfile
 from core.models.competition import Competition
 from core.models.team import Team
 from core.models.worms import MalwareArtifact, Upload
-from core.views.decorators import user_in_team_required
-from core.views.util import render_with_base_info
+from dashboard.views.decorators import user_in_team_required
+from dashboard.views.util import render_with_base_info
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.core.files import File
@@ -24,7 +24,7 @@ def upload_get_method(request: HttpRequest, team: Team, *, competition: Competit
         )
         .select_related("user", "artifact")
         .prefetch_related(
-            "worm_deployments__round",
+            "worm_deployment_plans__round",
         )
         .order_by("-created_at")
     )
@@ -33,7 +33,7 @@ def upload_get_method(request: HttpRequest, team: Team, *, competition: Competit
 
     for upload in uploads:
         deployments = sorted(
-            upload.worm_deployments.all(),
+            upload.worm_deployment_plans.all(),
             key=lambda deployment: (
                 deployment.round.round_start,
                 deployment.round.pk,

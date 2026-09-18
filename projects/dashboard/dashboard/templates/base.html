@@ -2,6 +2,11 @@
 <html lang="en">
 <head>
 <style>
+    .ephemeral-points {
+        color: #8d9aa2;
+        font-style: italic;
+    }
+
     .teams-page {
         width: min(1200px, 92%);
         margin: 0 auto;
@@ -3227,6 +3232,13 @@
             font-size: 0.6rem;
         }
     }
+
+    .buttonesque {
+        cursor: pointer;
+        padding-left: 8px;
+        padding-right: 8px;
+        display: block;
+    }
 </style>
 
 <link
@@ -3254,7 +3266,9 @@
 
             <div class="debug-console-header">
                 <span>// DEBUG ACCESS</span>
-                <span class="debug-live">LOCAL</span>
+                <span class="debug-live">{{ time_now|date:"H:i:s" }}</span>
+                <span id="minutes-plus-one" class="buttonesque">+</span>
+                <span id="minutes-minus-one" class="buttonesque">-</span>
             </div>
 
             <div class="debug-console-title">
@@ -3454,13 +3468,27 @@
 
     </main>
 
+{% if debug %}
+<script>
+    function getCurrentTime() {
+        return new Date("{{ time_now|date:'c' }}");
+    }
+</script>
+{% else %}
+<script>
+    function getCurrentTime() {
+        return Date.now();
+    }
+</script>
+{% endif %}
+
 <script>
     function updateCompetitionCountdown() {
         const countdowns = document.querySelectorAll(
             "[data-countdown]"
         );
 
-        const now = Date.now();
+        const now = getCurrentTime()
 
         countdowns.forEach(element => {
             const target = new Date(
@@ -3518,7 +3546,25 @@
         updateCompetitionCountdown,
         1000
     );
+
 </script>
+{% if debug %}
+<script>
+    document.getElementById("minutes-plus-one").addEventListener("click", () => {
+        fetch("/debug/minutes-plus-one", {"method": "POST"}).then(() => {
+            location.reload(); 
+        });
+    });
+</script>
+
+<script>
+    document.getElementById("minutes-minus-one").addEventListener("click", () => {
+        fetch("/debug/minutes-minus-one", {"method": "POST"}).then(() => {
+            location.reload(); 
+        });
+    });
+</script>
+{% endif %}
 </body>
 
 </html>

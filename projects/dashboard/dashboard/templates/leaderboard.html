@@ -62,12 +62,14 @@
                                 {% endif %}
                                 {% endif %}
 
+                                {% if current_round %}
                                 {% if team.is_current_leader %}
                                     <span
                                         class="leader-star"
                                         title="Current leader — {{ current_round.name }}"
                                         aria-label="Current leader — {{ current_round.name }}"
                                     >🔥</span>
+                                {% endif %}
                                 {% endif %}
 
                                 {% for round_name in team.round_wins %}
@@ -79,9 +81,15 @@
                                 {% endfor %}
                             </td>
 
+                            {% if is_round_active %}
                             <td>
-                                {{ team.points }}
+                                {{ team.total_points }} <span class="ephemeral-points">(+{{ team.current_round_points }})</span>
                             </td>
+                            {% else %}
+                            <td>
+                                {{ team.total_points }}
+                            </td>
+                            {% endif %}
                         </tr>
 
                     {% empty %}

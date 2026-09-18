@@ -1,6 +1,6 @@
+from core import clock
 from core.models.competition import Round
 from django.db import models
-from django.utils import timezone
 
 
 class VirtualMachine(models.Model):
@@ -12,7 +12,7 @@ class VirtualMachine(models.Model):
         on_delete=models.CASCADE,
         related_name="virtual_machines",
     )
-    created_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(default=clock.now)
 
     class Meta:
         db_table = "virtual_machines"

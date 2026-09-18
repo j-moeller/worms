@@ -1,20 +1,11 @@
-from django.contrib import admin
-
-from core.models.competition import (
-    ApplicationSetting,
-    Competition,
-    Round,
-)
+from core.models.competition import ApplicationSetting, Competition, Round
 from core.models.logging import Logging, LoggingAttempt
 from core.models.scoring import FlagCapture, FlagCaptureAttempt
 from core.models.team import AccessTokens, Team, TeamMembership
 from core.models.user import CompetitionParticipant, User
 from core.models.vm import VirtualMachine
-from core.models.worms import (
-    MalwareArtifact,
-    Upload,
-    WormDeployment,
-)
+from core.models.worms import MalwareArtifact, Upload, WormDeploymentPlan
+from django.contrib import admin
 
 
 @admin.register(Competition)
@@ -349,28 +340,30 @@ class UploadAdmin(admin.ModelAdmin):
     readonly_fields = ("created_at",)
 
 
-@admin.register(WormDeployment)
-class WormDeploymentAdmin(admin.ModelAdmin):
+@admin.register(WormDeploymentPlan)
+class WormDeploymentPlanAdmin(admin.ModelAdmin):
     list_display = (
         "team",
-        "round",
+        "virtual_machine",
         "upload",
         "created_at",
     )
     list_filter = (
-        "round__competition",
-        "round",
+        "virtual_machine__round__competition",
+        "virtual_machine__round",
+        "virtual_machine",
         "created_at",
     )
     search_fields = (
         "team__name",
         "team__uuid",
-        "round__name",
+        "virtual_machine__vm_identifier",
+        "virtual_machine__round__name",
         "upload__artifact__content_hash",
         "upload__user__username",
     )
     autocomplete_fields = (
-        "round",
+        "virtual_machine",
         "team",
         "upload",
     )

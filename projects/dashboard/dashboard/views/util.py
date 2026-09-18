@@ -6,11 +6,18 @@ from core.models.competition import Competition, Round
 from core.models.team import Team
 from core.models.user import User
 from core.models.worms import Upload
-from core.views.decorators import get_current_competition, get_users_current_team
+from core import clock
+from dashboard.views.decorators import get_current_competition, get_users_current_team
 from django.conf import settings
 from django.http import HttpRequest
 from django.shortcuts import render
-from django.utils import timezone
+
+# Before competition (now < registration_start)
+# Registration open (registration_start <= now < registration_end)
+# Before first round (registration_end <= now < rounds[0].start)
+# During round (rounds[i].start <= now < rounds[i].end)
+# Between round (rounds[i].end <= now < rounds[i+1].end)
+# After last round / after competition (rounds[-1].end <= now)
 
 
 @dataclass
@@ -26,7 +33,7 @@ def get_competition_state(
     competition: Competition,
     team: Optional[Team] = None,
 ) -> CompetitionState:
-    now = timezone.now()
+    now = clock.now()
 
     # ---------------------------------------------------------
     # 1. TEAM REGISTRATION
@@ -65,14 +72,14 @@ def get_competition_state(
     # ---------------------------------------------------------
 
     current_round = next(
-        (round for round in rounds if round.round_start < now < round.round_end),
+        (round for round in rounds if round.round_start <= now < round.round_end),
         None,
     )
 
     if current_round is not None:
         return CompetitionState(
             key="round",
-            label="ROUND IN PROGRESS",
+            label=f"ROUND IN PROGRESS ({current_round.name})",
             detail="Competition round currently running",
             target=current_round.round_end,
             warning=False,
@@ -124,7 +131,7 @@ def get_competition_state(
 
         return CompetitionState(
             key="next_round",
-            label="NEXT ROUND",
+            label=f"NEXT ROUND ({next_round.name})",
             detail="Round about to begin" if needs_upload else "Round about to begin",
             target=next_round.round_start,
             warning=needs_upload,
@@ -163,6 +170,7 @@ def render_with_base_info(
         competition=competition,
         team=team,
     )
+    context["time_now"] = clock.now()
 
     if competition is None:
         context["is_registration_period"] = False

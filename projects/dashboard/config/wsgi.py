@@ -11,6 +11,6 @@ import os
 
 from django.core.wsgi import get_wsgi_application
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'dashboard.settings')
+assert os.environ.get("DJANGO_SETTINGS_MODULE") is not None
 
 application = get_wsgi_application()

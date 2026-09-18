@@ -1,9 +1,9 @@
+from core import clock
 from core.models.competition import Round
 from core.models.team import Team
 from core.models.vm import VirtualMachine
 from django.db import models
 from django.db.models import Q
-from django.utils import timezone
 
 
 class FlagCaptureAttempt(models.Model):
@@ -12,7 +12,7 @@ class FlagCaptureAttempt(models.Model):
 
     processed = models.BooleanField(default=False)
     processed_at = models.DateTimeField(default=None, blank=True, null=True)
-    created_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(default=clock.now)
 
     class Meta:
         db_table = "flag_capture_attempts"
@@ -46,7 +46,7 @@ class FlagCapture(models.Model):
         on_delete=models.CASCADE,
         related_name="flag_captures",
     )
-    created_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(default=clock.now)
 
     class Meta:
         db_table = "flag_captures"

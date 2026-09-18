@@ -1,4 +1,4 @@
-from core.views.util import render_with_base_info
+from dashboard.views.util import render_with_base_info
 from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest
 

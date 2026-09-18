@@ -1,14 +1,14 @@
 import uuid
 
+from core import clock
 from core.models.competition import Competition
 from django.contrib.auth.models import AbstractUser
 from django.db import models
-from django.utils import timezone
 
 
 class User(AbstractUser):
     uuid = models.UUIDField(default=uuid.uuid4, unique=True)
-    created_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(default=clock.now)
 
     def __str__(self):
         if self.is_superuser:
@@ -40,7 +40,7 @@ class CompetitionParticipant(models.Model):
         related_name="competition_participations",
     )
 
-    joined_at = models.DateTimeField(default=timezone.now)
+    joined_at = models.DateTimeField(default=clock.now)
 
     class Meta:
         db_table = "competition_participants"

@@ -1,5 +1,4 @@
 from functools import wraps
-from typing import Optional
 
 from core.models.competition import ApplicationSetting, Competition
 from core.models.team import TeamMembership

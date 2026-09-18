@@ -4,16 +4,16 @@ from typing import Optional
 
 from core.models.competition import Competition
 from core.models.team import AccessTokens, Team
-from core.views.decorators import (
+from core import clock
+from dashboard.views.decorators import (
     require_competition_registration_inactive,
     user_in_team_optional,
     user_in_team_required,
 )
-from core.views.util import render_with_base_info
+from dashboard.views.util import render_with_base_info
 from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest
 from django.shortcuts import get_object_or_404, redirect
-from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 
@@ -88,7 +88,7 @@ def revoke_access_token(
 
     if not access_token.revoked:
         access_token.revoked = True
-        access_token.revoked_at = timezone.now()
+        access_token.revoked_at = clock.now()
         access_token.save(update_fields=["revoked", "revoked_at"])
 
     return redirect("access")

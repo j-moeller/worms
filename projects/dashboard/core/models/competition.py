@@ -1,11 +1,11 @@
+from core import clock
 from django.db import models
 from django.db.models import F, Q
-from django.utils import timezone
 
 
 class Competition(models.Model):
     name = models.TextField()
-    created_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(default=clock.now)
 
     registration_starts_at = models.DateTimeField()
     registration_ends_at = models.DateTimeField()
@@ -15,7 +15,7 @@ class Competition(models.Model):
 
     @property
     def registration_is_open(self):
-        now = timezone.now()
+        now = clock.now()
         return self.registration_starts_at <= now <= self.registration_ends_at
 
 
@@ -46,7 +46,7 @@ class Round(models.Model):
         on_delete=models.CASCADE,
         related_name="rounds",
     )
-    created_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(default=clock.now)
 
     class Meta:
         db_table = "rounds"

@@ -225,3 +225,20 @@ resource "proxmox_virtual_environment_file" "wikipedia_vm_static" {
     file_name = "vm-wikipedia.yml"
   }
 }
+
+resource "proxmox_virtual_environment_file" "egress_proxy_vm_static" {
+  content_type = "snippets"
+  datastore_id = var.datastore_id
+  node_name    = var.node_name
+
+  source_raw {
+    data = templatefile(
+      "${path.module}/templates/vm-egress-proxy.tftpl",
+      {
+        ssh_public_key = trimspace(file("${var.ssh_public_key}")),
+        hostname       = "egress-proxy"
+      }
+    )
+    file_name = "vm-egress-proxy.yml"
+  }
+}

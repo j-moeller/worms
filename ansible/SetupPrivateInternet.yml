@@ -5,6 +5,15 @@
 #
 # DNS is configured separately by SetupDNS.yml (Jonas' setup_dns role).
 
+- hosts: egress_proxy_hosts
+  become: true
+  pre_tasks:
+    - name: Wait for cloud-init completion
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+  roles:
+    - egress_proxy
+
 - hosts: apt_cache_hosts
   become: true
   pre_tasks:

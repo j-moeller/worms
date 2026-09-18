@@ -1,0 +1,6 @@
+---
+egress_proxy_port: 3128
+egress_proxy_allow_network: 10.2.0.0/24
+egress_proxy_allowed_domains:
+  - .debian.org
+  - .ubuntu.org

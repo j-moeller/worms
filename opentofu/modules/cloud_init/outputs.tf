@@ -92,3 +92,11 @@ output "wikipedia" {
     node_name    = var.node_name
   }
 }
+
+output "egress_proxy" {
+  value = {
+    file_id      = proxmox_virtual_environment_file.egress_proxy_vm_static.id
+    datastore_id = var.datastore_id
+    node_name    = var.node_name
+  }
+}

@@ -1,6 +1,0 @@
-acl localhost src 127.0.0.1/32
-acl debian_domains dstdomain .debian.org
-http_access allow localhost debian_domains
-http_access deny all
-http_port {{ apt_cache_proxy_port }}
-cache deny all

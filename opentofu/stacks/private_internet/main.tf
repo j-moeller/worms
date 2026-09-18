@@ -37,6 +37,21 @@ locals {
 # by the service's cloud-init snippet. cpu_type "host" gives cve_search AVX (MongoDB 8).
 locals {
   private_internet = {
+    egress_proxy = {
+      cpu                         = 1
+      cpu_type                    = null
+      ram                         = 512
+      disk_size                   = 5
+      data_disk_size              = 0
+      network_cidr                = "10.2.0.27/24"
+      network_gateway_ip          = "10.2.0.1"
+      maintenance_network_cidr    = "10.3.0.27/24"
+      maintenance_network_gateway = "10.3.0.1"
+      user_data_file_id           = local.platform.cloud_init.egress_proxy.file_id
+      vmbr_network                = local.platform.networks.private_internet.name
+      vmbr_maintenance_network    = local.platform.networks.maintenance.name
+      disk_file_id                = local.platform.os_images.debian.file_id
+    }
     apt_cache = {
       cpu                         = 1
       cpu_type                    = null

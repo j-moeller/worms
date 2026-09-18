@@ -1,0 +1,40 @@
+[Redis]
+Host: localhost
+Port: 6379
+
+[Database]
+Host: 127.0.0.1
+Port: {{ cve_search_mongo_port }}
+DB: cvedb
+Username:
+Password:
+DnsSrvRecord: False
+AuthDB: admin
+PluginName: mongodb
+
+[Download]
+MaxWorkers: 10
+
+[dbmgt]
+Tmpdir: ./tmp
+
+[FulltextIndex]
+Indexdir: ./indexdir
+
+[Webserver]
+Host: {{ cve_search_host }}
+Port: {{ cve_search_port }}
+Debug: False
+LoginRequired: False
+WebInterface: Full
+MountPath: /
+
+[API]
+CVEMaxLimit: 1000
+CORS: False
+
+[Logging]
+Logging: True
+Logfile: ./log/cve-search.log
+MaxSize: 100MB
+Backlog: 5

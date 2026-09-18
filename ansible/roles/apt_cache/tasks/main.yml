@@ -1,0 +1,35 @@
+---
+- name: Configure squid
+  ansible.builtin.template:
+    src: squid.conf.j2
+    dest: /etc/squid/squid.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart squid
+
+- name: Configure apt-cacher-ng port and proxy
+  ansible.builtin.lineinfile:
+    path: /etc/apt-cacher-ng/acng.conf
+    regexp: '^Port:'
+    line: "Port: {{ apt_cache_port }}"
+  notify: Restart apt-cacher-ng
+
+- name: Add upstream proxy to apt-cacher-ng config
+  ansible.builtin.lineinfile:
+    path: /etc/apt-cacher-ng/acng.conf
+    regexp: '^Proxy:'
+    line: "Proxy: http://127.0.0.1:{{ apt_cache_proxy_port }}/"
+  notify: Restart apt-cacher-ng
+
+- name: Enable and start squid
+  ansible.builtin.systemd:
+    name: squid
+    enabled: true
+    state: started
+
+- name: Enable and start apt-cacher-ng
+  ansible.builtin.systemd:
+    name: apt-cacher-ng
+    enabled: true
+    state: started

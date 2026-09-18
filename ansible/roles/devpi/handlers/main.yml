@@ -1,0 +1,9 @@
+---
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart devpi
+  ansible.builtin.systemd:
+    name: devpi
+    state: restarted

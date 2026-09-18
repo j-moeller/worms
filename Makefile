@@ -45,3 +45,10 @@ terminate:
 	qm list | awk '{print $$1}' | tail -n +2 | xargs -I {} qm unlock {}
 	make destroy_all
 	qm list | awk '{print $$1}' | tail -n +2 | xargs -I {} qm destroy {}
+
+private-internet:
+	cd opentofu/stacks/private_internet && make apply
+	cd ansible && ansible-playbook -i inventory.yml SetupPrivateInternet.yml
+
+private-internet-destroy:
+	cd opentofu/stacks/private_internet && make destroy

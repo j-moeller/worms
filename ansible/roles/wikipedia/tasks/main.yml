@@ -1,0 +1,41 @@
+---
+- name: Create kiwix user
+  ansible.builtin.user:
+    name: "{{ wikipedia_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    home: "{{ wikipedia_data_dir }}"
+    create_home: false
+
+- name: Create data directory
+  ansible.builtin.file:
+    path: "{{ wikipedia_data_dir }}"
+    state: directory
+    owner: "{{ wikipedia_user }}"
+    group: "{{ wikipedia_user }}"
+    mode: '0755'
+
+- name: Install kiwix-serve systemd service
+  ansible.builtin.template:
+    src: kiwix-serve.service.j2
+    dest: /etc/systemd/system/kiwix-serve.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - Reload systemd
+    - Restart kiwix-serve
+
+- name: Install download script
+  ansible.builtin.template:
+    src: wikipedia-download.j2
+    dest: /usr/local/bin/wikipedia-download
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Enable kiwix-serve (do not start -- download ZIM first)
+  ansible.builtin.systemd:
+    name: kiwix-serve
+    enabled: true
+    daemon_reload: true

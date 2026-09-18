@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Man Pages</title>
+  <style>
+    body { font-family: monospace; max-width: 600px; margin: 4em auto; }
+    input[type=text] { width: 300px; padding: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Man Pages</h1>
+  <form method="get" action="/cgi-bin/man/man2html">
+    <input type="text" name="query" placeholder="command, e.g. grep">
+    <button type="submit">Show</button>
+  </form>
+  <p><a href="/cgi-bin/man/man2html">Browse index</a></p>
+</body>
+</html>

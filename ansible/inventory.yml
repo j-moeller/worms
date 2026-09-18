@@ -16,6 +16,20 @@ all:
               ip: 10.3.0.14
             - name: logging.worms.internal
               ip: 10.3.0.15
+            - name: apt-cache.worms.internal
+              ip: 10.2.0.20
+            - name: pypi.worms.internal
+              ip: 10.2.0.21
+            - name: docker-registry.worms.internal
+              ip: 10.2.0.22
+            - name: manpages.worms.internal
+              ip: 10.2.0.23
+            - name: ntp.worms.internal
+              ip: 10.2.0.24
+            - name: cve-search.worms.internal
+              ip: 10.2.0.25
+            - name: wikipedia.worms.internal
+              ip: 10.2.0.26
             # - name: database.worms.internal
             #   ip: 10.3.0.16
             # - name: dashboard.worms.internal
@@ -73,3 +87,56 @@ all:
     dashboard:
       hosts:
         dashboard.worms.internal:
+
+    private_internet:
+      children:
+        apt_cache_hosts:
+        devpi_hosts:
+        docker_registry_hosts:
+        manpages_hosts:
+        ntp_hosts:
+        cve_search_hosts:
+        wikipedia_hosts:
+
+    apt_cache_hosts:
+      hosts:
+        apt-cache.worms.internal:
+          ansible_host: 10.3.0.20
+          ansible_user: debian
+
+    devpi_hosts:
+      hosts:
+        pypi.worms.internal:
+          ansible_host: 10.3.0.21
+          ansible_user: debian
+
+    docker_registry_hosts:
+      hosts:
+        docker-registry.worms.internal:
+          ansible_host: 10.3.0.22
+          ansible_user: debian
+
+    manpages_hosts:
+      hosts:
+        manpages.worms.internal:
+          ansible_host: 10.3.0.23
+          ansible_user: debian
+
+    ntp_hosts:
+      hosts:
+        ntp.worms.internal:
+          ansible_host: 10.3.0.24
+          ansible_user: debian
+          ntp_allow_network: 10.2.0.0/24
+
+    cve_search_hosts:
+      hosts:
+        cve-search.worms.internal:
+          ansible_host: 10.3.0.25
+          ansible_user: debian
+
+    wikipedia_hosts:
+      hosts:
+        wikipedia.worms.internal:
+          ansible_host: 10.3.0.26
+          ansible_user: debian

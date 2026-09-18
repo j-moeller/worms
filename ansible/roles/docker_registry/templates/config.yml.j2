@@ -1,0 +1,8 @@
+version: 0.1
+log:
+  level: info
+storage:
+  filesystem:
+    rootdirectory: {{ docker_registry_data_dir }}
+http:
+  addr: 0.0.0.0:{{ docker_registry_port }}

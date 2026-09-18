@@ -1,0 +1,34 @@
+---
+- name: Enable CGI module
+  ansible.builtin.command: a2enmod cgi
+  args:
+    creates: /etc/apache2/mods-enabled/cgi.load
+  notify: Restart apache2
+
+- name: Set Apache listen port
+  ansible.builtin.lineinfile:
+    path: /etc/apache2/ports.conf
+    regexp: '^Listen '
+    line: "Listen {{ manpages_port }}"
+  notify: Restart apache2
+
+- name: Set VirtualHost port in default site
+  ansible.builtin.replace:
+    path: /etc/apache2/sites-available/000-default.conf
+    regexp: '<VirtualHost \*:\d+>'
+    replace: "<VirtualHost *:{{ manpages_port }}>"
+  notify: Restart apache2
+
+- name: Deploy search index page
+  ansible.builtin.template:
+    src: index.html.j2
+    dest: /var/www/html/index.html
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable and start apache2
+  ansible.builtin.systemd:
+    name: apache2
+    enabled: true
+    state: started

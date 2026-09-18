@@ -1,0 +1,43 @@
+#!/bin/bash
+# Download the latest English Wikipedia ZIM file for kiwix-serve.
+# This requires internet access and downloads ~100 GB (full) or ~12 GB (mini).
+# Usage:
+#   wikipedia-download          # download mini (no-pictures) version
+#   wikipedia-download full     # download full version
+set -euo pipefail
+
+DEST="{{ wikipedia_data_dir }}"
+mkdir -p "$DEST"
+
+BASE_URL="https://download.kiwix.org/zim/wikipedia"
+
+if [[ "${1:-mini}" == "full" ]]; then
+    PATTERN="wikipedia_en_all_maxi"
+    echo "Downloading full English Wikipedia (this is ~100 GB) ..."
+else
+    PATTERN="wikipedia_en_all_mini"
+    echo "Downloading mini English Wikipedia (this is ~12 GB) ..."
+fi
+
+# Fetch directory listing, find the latest matching ZIM file
+ZIM=$(curl -fsSL "$BASE_URL/" \
+    | grep -oP "${PATTERN}_[0-9-]+\.zim(?=\")" \
+    | sort -V | tail -1)
+
+if [[ -z "$ZIM" ]]; then
+    echo "ERROR: Could not find ZIM file matching '$PATTERN' at $BASE_URL"
+    exit 1
+fi
+
+if [[ -f "$DEST/$ZIM" ]]; then
+    echo "Already downloaded: $DEST/$ZIM"
+    exit 0
+fi
+
+echo "Downloading $ZIM ..."
+aria2c --dir="$DEST" --out="$ZIM" \
+    --max-connection-per-server=4 --split=4 --continue=true \
+    "$BASE_URL/$ZIM"
+
+chown {{ wikipedia_user }}:{{ wikipedia_user }} "$DEST/$ZIM"
+echo "Done. Start the service with: systemctl start kiwix-serve"

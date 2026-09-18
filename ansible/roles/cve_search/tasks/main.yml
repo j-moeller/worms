@@ -1,0 +1,120 @@
+---
+- name: Create cve-search user
+  ansible.builtin.user:
+    name: "{{ cve_search_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    home: "{{ cve_search_dir }}"
+    create_home: false
+
+- name: Clone cve-search repository
+  ansible.builtin.git:
+    repo: https://github.com/cve-search/cve-search.git
+    dest: "{{ cve_search_dir }}"
+    version: v6.0.1
+    depth: 1
+    update: false
+
+- name: Create virtualenv
+  ansible.builtin.command: python3 -m venv {{ cve_search_venv }}
+  args:
+    creates: "{{ cve_search_venv }}/bin/activate"
+
+- name: Install Python dependencies
+  ansible.builtin.pip:
+    requirements: "{{ cve_search_dir }}/requirements.txt"
+    virtualenv: "{{ cve_search_venv }}"
+
+- name: Install gunicorn
+  ansible.builtin.pip:
+    name: gunicorn
+    virtualenv: "{{ cve_search_venv }}"
+
+- name: Deploy configuration
+  ansible.builtin.template:
+    src: configuration.ini.j2
+    dest: "{{ cve_search_dir }}/etc/configuration.ini"
+    owner: "{{ cve_search_user }}"
+    group: "{{ cve_search_user }}"
+    mode: '0644'
+  notify: Restart cve-search
+
+- name: Set ownership
+  ansible.builtin.file:
+    path: "{{ cve_search_dir }}"
+    owner: "{{ cve_search_user }}"
+    group: "{{ cve_search_user }}"
+    recurse: true
+
+- name: Install cve-search systemd service
+  ansible.builtin.template:
+    src: cve-search.service.j2
+    dest: /etc/systemd/system/cve-search.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - Reload systemd
+    - Restart cve-search
+
+- name: Ensure apt prerequisites for the MongoDB repository
+  ansible.builtin.apt:
+    name:
+      - gnupg
+      - curl
+      - ca-certificates
+    state: present
+    update_cache: true
+
+- name: Create apt keyrings directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+
+- name: Add MongoDB apt signing key
+  ansible.builtin.get_url:
+    url: "https://www.mongodb.org/static/pgp/server-{{ cve_search_mongodb_version }}.asc"
+    dest: "/etc/apt/keyrings/mongodb-server-{{ cve_search_mongodb_version }}.asc"
+    mode: '0644'
+
+- name: Add MongoDB apt repository
+  ansible.builtin.apt_repository:
+    repo: "deb [ signed-by=/etc/apt/keyrings/mongodb-server-{{ cve_search_mongodb_version }}.asc ] https://repo.mongodb.org/apt/debian {{ cve_search_mongodb_apt_release }}/mongodb-org/{{ cve_search_mongodb_version }} main"
+    filename: "mongodb-org-{{ cve_search_mongodb_version }}"
+    state: present
+    update_cache: true
+
+- name: Install MongoDB and Redis
+  ansible.builtin.apt:
+    name:
+      - mongodb-org
+      - redis-server
+    state: present
+    update_cache: true
+
+- name: Enable and start Redis
+  ansible.builtin.systemd:
+    name: redis-server
+    enabled: true
+    state: started
+
+- name: Enable mongodb
+  ansible.builtin.systemd:
+    name: mongod
+    enabled: true
+    state: started
+
+- name: Enable cve-search (do not start -- run populate first)
+  ansible.builtin.systemd:
+    name: cve-search
+    enabled: true
+    daemon_reload: true
+
+- name: Install populate script
+  ansible.builtin.template:
+    src: cve-search-populate.j2
+    dest: /usr/local/bin/cve-search-populate
+    owner: root
+    group: root
+    mode: '0755'

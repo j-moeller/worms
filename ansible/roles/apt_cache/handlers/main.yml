@@ -1,0 +1,10 @@
+---
+- name: Restart squid
+  ansible.builtin.systemd:
+    name: squid
+    state: restarted
+
+- name: Restart apt-cacher-ng
+  ansible.builtin.systemd:
+    name: apt-cacher-ng
+    state: restarted

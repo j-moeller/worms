@@ -1,0 +1,12 @@
+---
+cve_search_port: 5000
+cve_search_host: 0.0.0.0
+cve_search_dir: /opt/cve-search
+cve_search_venv: /opt/cve-search/venv
+cve_search_user: cve-search
+cve_search_mongo_port: 27017
+
+# MongoDB comes from the official mongodb-org repo (not in Debian's repos).
+# Debian 13/trixie has no mongodb-org repo yet, so we use the bookworm build.
+cve_search_mongodb_version: "8.0"
+cve_search_mongodb_apt_release: bookworm

@@ -37,3 +37,58 @@ output "postgresql" {
     node_name    = var.node_name
   }
 }
+output "apt_cache" {
+  value = {
+    file_id      = proxmox_virtual_environment_file.apt_cache_vm_static.id
+    datastore_id = var.datastore_id
+    node_name    = var.node_name
+  }
+}
+
+output "devpi" {
+  value = {
+    file_id      = proxmox_virtual_environment_file.devpi_vm_static.id
+    datastore_id = var.datastore_id
+    node_name    = var.node_name
+  }
+}
+
+output "docker_registry" {
+  value = {
+    file_id      = proxmox_virtual_environment_file.docker_registry_vm_static.id
+    datastore_id = var.datastore_id
+    node_name    = var.node_name
+  }
+}
+
+output "manpages" {
+  value = {
+    file_id      = proxmox_virtual_environment_file.manpages_vm_static.id
+    datastore_id = var.datastore_id
+    node_name    = var.node_name
+  }
+}
+
+output "ntp" {
+  value = {
+    file_id      = proxmox_virtual_environment_file.ntp_vm_static.id
+    datastore_id = var.datastore_id
+    node_name    = var.node_name
+  }
+}
+
+output "cve_search" {
+  value = {
+    file_id      = proxmox_virtual_environment_file.cve_search_vm_static.id
+    datastore_id = var.datastore_id
+    node_name    = var.node_name
+  }
+}
+
+output "wikipedia" {
+  value = {
+    file_id      = proxmox_virtual_environment_file.wikipedia_vm_static.id
+    datastore_id = var.datastore_id
+    node_name    = var.node_name
+  }
+}

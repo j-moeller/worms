@@ -1,0 +1,5 @@
+---
+- name: Restart docker-registry
+  ansible.builtin.systemd:
+    name: docker-registry
+    state: restarted

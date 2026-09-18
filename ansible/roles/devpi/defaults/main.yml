@@ -1,0 +1,6 @@
+---
+devpi_port: 3141
+devpi_host: 0.0.0.0
+devpi_server_dir: /var/lib/devpi
+devpi_venv: /opt/devpi
+devpi_user: devpi

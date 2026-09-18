@@ -1,0 +1,5 @@
+---
+apt_cache_port: 3142
+apt_cache_proxy_port: 3128
+apt_cache_cache_dir: /var/cache/apt-cacher-ng
+apt_cache_log_dir: /var/log/apt-cacher-ng

@@ -1,0 +1,6 @@
+pool {{ ntp_upstream_pool }} iburst
+local stratum {{ ntp_local_stratum }}
+allow {{ ntp_allow_network }}
+driftfile /var/lib/chrony/drift
+logdir /var/log/chrony
+makestep 1.0 3

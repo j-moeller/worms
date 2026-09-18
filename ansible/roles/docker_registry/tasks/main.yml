@@ -1,0 +1,23 @@
+---
+- name: Create registry data directory
+  ansible.builtin.file:
+    path: "{{ docker_registry_data_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Configure docker registry
+  ansible.builtin.template:
+    src: config.yml.j2
+    dest: /etc/docker/registry/config.yml
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart docker-registry
+
+- name: Enable and start docker-registry
+  ansible.builtin.systemd:
+    name: docker-registry
+    enabled: true
+    state: started

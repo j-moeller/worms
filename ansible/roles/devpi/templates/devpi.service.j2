@@ -1,0 +1,17 @@
+[Unit]
+Description=devpi PyPI cache
+After=network.target
+
+[Service]
+Type=simple
+User={{ devpi_user }}
+Group={{ devpi_user }}
+ExecStart={{ devpi_venv }}/bin/devpi-server \
+  --host {{ devpi_host }} \
+  --port {{ devpi_port }} \
+  --serverdir {{ devpi_server_dir }}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

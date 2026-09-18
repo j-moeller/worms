@@ -1,0 +1,4 @@
+---
+ntp_upstream_pool: pool.ntp.org
+ntp_allow_network: 10.0.0.0/24
+ntp_local_stratum: 10

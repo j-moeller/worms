@@ -1,0 +1,9 @@
+---
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart kiwix-serve
+  ansible.builtin.systemd:
+    name: kiwix-serve
+    state: restarted

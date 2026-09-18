@@ -1,0 +1,55 @@
+---
+- name: Create devpi user
+  ansible.builtin.user:
+    name: "{{ devpi_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    home: "{{ devpi_server_dir }}"
+    create_home: true
+
+- name: Ensure devpi server dir ownership
+  # The data disk is mounted here by cloud-init as root; useradd -m does not
+  # chown an existing directory, so devpi-init would fail writing to it.
+  ansible.builtin.file:
+    path: "{{ devpi_server_dir }}"
+    state: directory
+    owner: "{{ devpi_user }}"
+    group: "{{ devpi_user }}"
+    mode: '0755'
+
+- name: Create devpi virtualenv
+  ansible.builtin.command: python3 -m venv {{ devpi_venv }}
+  args:
+    creates: "{{ devpi_venv }}/bin/activate"
+
+- name: Install devpi-server and devpi-web
+  ansible.builtin.pip:
+    name:
+      - devpi-server
+      - devpi-web
+    virtualenv: "{{ devpi_venv }}"
+
+- name: Initialize devpi server directory
+  ansible.builtin.command: "{{ devpi_venv }}/bin/devpi-init --serverdir {{ devpi_server_dir }}"
+  args:
+    creates: "{{ devpi_server_dir }}/.nodeinfo"
+  become: true
+  become_user: "{{ devpi_user }}"
+
+- name: Install devpi systemd service
+  ansible.builtin.template:
+    src: devpi.service.j2
+    dest: /etc/systemd/system/devpi.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - Reload systemd
+    - Restart devpi
+
+- name: Enable and start devpi
+  ansible.builtin.systemd:
+    name: devpi
+    enabled: true
+    state: started
+    daemon_reload: true

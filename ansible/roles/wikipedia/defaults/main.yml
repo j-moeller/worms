@@ -1,0 +1,5 @@
+---
+wikipedia_port: 8888
+wikipedia_host: 0.0.0.0
+wikipedia_data_dir: /var/lib/kiwix
+wikipedia_user: kiwix

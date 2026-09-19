@@ -59,7 +59,7 @@ resource "proxmox_virtual_environment_vm" "service_vm" {
 
   disk {
     datastore_id = var.datastore_id
-    file_id      = var.disk_file_id
+    import_from  = var.disk_file_id
     interface    = "virtio0"
     iothread     = true
     discard      = "on"

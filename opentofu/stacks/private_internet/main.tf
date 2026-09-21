@@ -45,7 +45,7 @@ locals {
       data_disk_size              = 0
       network_cidr                = "10.2.0.27/24"
       network_gateway_ip          = "10.2.0.1"
-      maintenance_network_cidr    = "10.3.0.27/24"
+      maintenance_network_cidr    = "10.3.0.9/24"
       maintenance_network_gateway = "10.3.0.1"
       user_data_file_id           = local.platform.cloud_init.egress_proxy.file_id
       vmbr_network                = local.platform.networks.private_internet.name
@@ -60,7 +60,7 @@ locals {
       data_disk_size              = 20
       network_cidr                = "10.2.0.20/24"
       network_gateway_ip          = "10.2.0.1"
-      maintenance_network_cidr    = "10.3.0.20/24"
+      maintenance_network_cidr    = "10.3.0.2/24"
       maintenance_network_gateway = "10.3.0.1"
       user_data_file_id           = local.platform.cloud_init.apt_cache.file_id
       vmbr_network                = local.platform.networks.private_internet.name
@@ -75,7 +75,7 @@ locals {
       data_disk_size              = 10
       network_cidr                = "10.2.0.21/24"
       network_gateway_ip          = "10.2.0.1"
-      maintenance_network_cidr    = "10.3.0.21/24"
+      maintenance_network_cidr    = "10.3.0.3/24"
       maintenance_network_gateway = "10.3.0.1"
       user_data_file_id           = local.platform.cloud_init.devpi.file_id
       vmbr_network                = local.platform.networks.private_internet.name
@@ -90,7 +90,7 @@ locals {
       data_disk_size              = 20
       network_cidr                = "10.2.0.22/24"
       network_gateway_ip          = "10.2.0.1"
-      maintenance_network_cidr    = "10.3.0.22/24"
+      maintenance_network_cidr    = "10.3.0.4/24"
       maintenance_network_gateway = "10.3.0.1"
       user_data_file_id           = local.platform.cloud_init.docker_registry.file_id
       vmbr_network                = local.platform.networks.private_internet.name
@@ -105,7 +105,7 @@ locals {
       data_disk_size              = 0
       network_cidr                = "10.2.0.23/24"
       network_gateway_ip          = "10.2.0.1"
-      maintenance_network_cidr    = "10.3.0.23/24"
+      maintenance_network_cidr    = "10.3.0.5/24"
       maintenance_network_gateway = "10.3.0.1"
       user_data_file_id           = local.platform.cloud_init.manpages.file_id
       vmbr_network                = local.platform.networks.private_internet.name
@@ -120,7 +120,7 @@ locals {
       data_disk_size              = 0
       network_cidr                = "10.2.0.24/24"
       network_gateway_ip          = "10.2.0.1"
-      maintenance_network_cidr    = "10.3.0.24/24"
+      maintenance_network_cidr    = "10.3.0.6/24"
       maintenance_network_gateway = "10.3.0.1"
       user_data_file_id           = local.platform.cloud_init.ntp.file_id
       vmbr_network                = local.platform.networks.private_internet.name
@@ -135,7 +135,7 @@ locals {
       data_disk_size              = 10
       network_cidr                = "10.2.0.25/24"
       network_gateway_ip          = "10.2.0.1"
-      maintenance_network_cidr    = "10.3.0.25/24"
+      maintenance_network_cidr    = "10.3.0.7/24"
       maintenance_network_gateway = "10.3.0.1"
       user_data_file_id           = local.platform.cloud_init.cve_search.file_id
       vmbr_network                = local.platform.networks.private_internet.name
@@ -150,7 +150,7 @@ locals {
       data_disk_size              = 20
       network_cidr                = "10.2.0.26/24"
       network_gateway_ip          = "10.2.0.1"
-      maintenance_network_cidr    = "10.3.0.26/24"
+      maintenance_network_cidr    = "10.3.0.8/24"
       maintenance_network_gateway = "10.3.0.1"
       user_data_file_id           = local.platform.cloud_init.wikipedia.file_id
       vmbr_network                = local.platform.networks.private_internet.name

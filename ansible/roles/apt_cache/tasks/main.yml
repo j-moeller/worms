@@ -13,6 +13,14 @@
     line: "Proxy: {{ apt_cache_upstream_proxy }}"
   notify: Restart apt-cacher-ng
 
+- name: Ensure apt-cacher-ng owns its cache dir (data disk is mounted root-owned)
+  ansible.builtin.file:
+    path: "{{ apt_cache_cache_dir }}"
+    state: directory
+    owner: apt-cacher-ng
+    group: apt-cacher-ng
+  notify: Restart apt-cacher-ng
+
 - name: Enable and start apt-cacher-ng
   ansible.builtin.systemd:
     name: apt-cacher-ng

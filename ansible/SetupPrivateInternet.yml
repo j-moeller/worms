@@ -8,73 +8,79 @@
 - hosts: egress_proxy_hosts
   become: true
   pre_tasks:
-    - name: Wait for cloud-init completion
+    - name: Wait for cloud-init to finish (tolerate errors; roles ensure packages)
       ansible.builtin.command: cloud-init status --wait
       changed_when: false
+      failed_when: false
   roles:
     - egress_proxy
 
 - hosts: apt_cache_hosts
   become: true
   pre_tasks:
-    - name: Wait for cloud-init completion
+    - name: Wait for cloud-init to finish (tolerate errors; roles ensure packages)
       ansible.builtin.command: cloud-init status --wait
-      register: cloud_init_status
       changed_when: false
-      failed_when: cloud_init_status.rc != 0
+      failed_when: false
   roles:
     - apt_cache
 
 - hosts: devpi_hosts
   become: true
   pre_tasks:
-    - name: Wait for cloud-init completion
+    - name: Wait for cloud-init to finish (tolerate errors; roles ensure packages)
       ansible.builtin.command: cloud-init status --wait
       changed_when: false
+      failed_when: false
   roles:
     - devpi
 
 - hosts: docker_registry_hosts
   become: true
   pre_tasks:
-    - name: Wait for cloud-init completion
+    - name: Wait for cloud-init to finish (tolerate errors; roles ensure packages)
       ansible.builtin.command: cloud-init status --wait
       changed_when: false
+      failed_when: false
   roles:
     - docker_registry
 
 - hosts: manpages_hosts
   become: true
   pre_tasks:
-    - name: Wait for cloud-init completion
+    - name: Wait for cloud-init to finish (tolerate errors; roles ensure packages)
       ansible.builtin.command: cloud-init status --wait
       changed_when: false
+      failed_when: false
   roles:
     - manpages
 
 - hosts: ntp_hosts
   become: true
   pre_tasks:
-    - name: Wait for cloud-init completion
+    - name: Wait for cloud-init to finish (tolerate errors; roles ensure packages)
       ansible.builtin.command: cloud-init status --wait
       changed_when: false
+      failed_when: false
   roles:
     - ntp
 
 - hosts: cve_search_hosts
   become: true
   pre_tasks:
-    - name: Wait for cloud-init completion
+    - name: Wait for cloud-init to finish (tolerate errors; roles ensure packages)
       ansible.builtin.command: cloud-init status --wait
       changed_when: false
+      failed_when: false
   roles:
     - cve_search
 
 - hosts: wikipedia_hosts
   become: true
   pre_tasks:
-    - name: Wait for cloud-init completion
+    - name: Wait for cloud-init to finish (tolerate errors; roles ensure packages)
       ansible.builtin.command: cloud-init status --wait
       changed_when: false
+      failed_when: false
   roles:
     - wikipedia

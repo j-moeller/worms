@@ -99,6 +99,13 @@
     enabled: true
     state: started
 
+- name: Ensure MongoDB owns its data dir (mounted data disk is root-owned)
+  ansible.builtin.file:
+    path: /var/lib/mongodb
+    state: directory
+    owner: mongodb
+    group: mongodb
+
 - name: Enable mongodb
   ansible.builtin.systemd:
     name: mongod

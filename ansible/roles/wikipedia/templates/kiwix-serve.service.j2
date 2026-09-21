@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 User={{ wikipedia_user }}
 Group={{ wikipedia_user }}
-ExecStart=/bin/sh -c '/usr/bin/kiwix-serve --port {{ wikipedia_port }} --address {{ wikipedia_host }} {{ wikipedia_data_dir }}/*.zim'
+ExecStart=/bin/sh -c '/usr/bin/kiwix-serve --port {{ wikipedia_port }} {{ wikipedia_data_dir }}/*.zim'
 Restart=on-failure
 RestartSec=5
 

@@ -104,48 +104,48 @@ all:
     egress_proxy_hosts:
       hosts:
         egress-proxy.worms.internal:
-          ansible_host: 10.3.0.27
+          ansible_host: 10.3.0.9
           ansible_user: debian
 
     apt_cache_hosts:
       hosts:
         apt-cache.worms.internal:
-          ansible_host: 10.3.0.20
+          ansible_host: 10.3.0.2
           ansible_user: debian
 
     devpi_hosts:
       hosts:
         pypi.worms.internal:
-          ansible_host: 10.3.0.21
+          ansible_host: 10.3.0.3
           ansible_user: debian
 
     docker_registry_hosts:
       hosts:
         docker-registry.worms.internal:
-          ansible_host: 10.3.0.22
+          ansible_host: 10.3.0.4
           ansible_user: debian
 
     manpages_hosts:
       hosts:
         manpages.worms.internal:
-          ansible_host: 10.3.0.23
+          ansible_host: 10.3.0.5
           ansible_user: debian
 
     ntp_hosts:
       hosts:
         ntp.worms.internal:
-          ansible_host: 10.3.0.24
+          ansible_host: 10.3.0.6
           ansible_user: debian
           ntp_allow_network: 10.2.0.0/24
 
     cve_search_hosts:
       hosts:
         cve-search.worms.internal:
-          ansible_host: 10.3.0.25
+          ansible_host: 10.3.0.7
           ansible_user: debian
 
     wikipedia_hosts:
       hosts:
         wikipedia.worms.internal:
-          ansible_host: 10.3.0.26
+          ansible_host: 10.3.0.8
           ansible_user: debian

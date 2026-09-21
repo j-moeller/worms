@@ -29,6 +29,11 @@
       - devpi-web
     virtualenv: "{{ devpi_venv }}"
 
+- name: Remove lost+found so devpi-init sees an empty serverdir (dedicated data disk)
+  ansible.builtin.file:
+    path: "{{ devpi_server_dir }}/lost+found"
+    state: absent
+
 - name: Initialize devpi server directory
   ansible.builtin.command: "{{ devpi_venv }}/bin/devpi-init --serverdir {{ devpi_server_dir }}"
   args:

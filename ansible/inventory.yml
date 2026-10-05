@@ -18,8 +18,6 @@ all:
               ip: 10.3.0.15
             - name: apt-cache.worms.internal
               ip: 10.2.0.20
-            - name: egress-proxy.worms.internal
-              ip: 10.2.0.27
             - name: pypi.worms.internal
               ip: 10.2.0.21
             - name: docker-registry.worms.internal
@@ -92,7 +90,6 @@ all:
 
     private_internet:
       children:
-        egress_proxy_hosts:
         apt_cache_hosts:
         devpi_hosts:
         docker_registry_hosts:
@@ -100,12 +97,6 @@ all:
         ntp_hosts:
         cve_search_hosts:
         wikipedia_hosts:
-
-    egress_proxy_hosts:
-      hosts:
-        egress-proxy.worms.internal:
-          ansible_host: 10.3.0.9
-          ansible_user: debian
 
     apt_cache_hosts:
       hosts:

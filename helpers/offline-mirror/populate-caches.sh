@@ -2,9 +2,9 @@
 # Populate the private-internet caches so they can run fully offline.
 #
 # Run on a helper Debian/Ubuntu client INSIDE the private internet during the
-# population phase (INTERNET_ENABLED=true: caches reachable, real internet still
-# available via the egress-proxy). Afterwards run everything with
-# INTERNET_ENABLED=false and redeploy -> the caches serve offline.
+# population phase (INTERNET_ENABLED=true: caches reachable and the subnet still
+# has direct internet). Afterwards run everything with INTERNET_ENABLED=false and
+# redeploy -> the platform firewall seals egress and the caches serve offline.
 #
 # Fills the existing caches by pulling content THROUGH them:
 #   - apt-cacher-ng  <- apt-get --download-only of apt-packages.txt (+deps, incl non-free)

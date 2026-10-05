@@ -2,6 +2,3 @@
 apt_cache_port: 3142
 apt_cache_cache_dir: /var/cache/apt-cacher-ng
 apt_cache_log_dir: /var/log/apt-cacher-ng
-# Upstream egress-whitelist proxy (separate VM). apt-cacher-ng has no direct
-# internet egress; it fetches through this proxy.
-apt_cache_upstream_proxy: "http://10.2.0.27:3128"

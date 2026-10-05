@@ -1,7 +1,7 @@
 # Offline mirror for the private internet
 
-The private internet can run fully offline (`internet_enabled=false`), but the
-caches must be **pre-populated** while internet is still available.
+The private internet can run fully offline, but the caches must be
+**pre-populated** while the internet is still reachable (the prep phase).
 
 ## Package lists
 - `apt-packages.txt` — everything apt-cacher-ng should hold (services, PoC build
@@ -11,8 +11,9 @@ caches must be **pre-populated** while internet is still available.
   dependency closure + useful extras). feedformatter is a GitHub zip, handled apart.
 
 ## Workflow
-1. **Population phase** — deploy with `internet_enabled=true` (egress-proxy up,
-   caches in proxy mode). On a helper client in the private internet, run:
+1. **Population phase** — deploy with `INTERNET_ENABLED=true` (the host egress is
+   open, so the VMs reach the internet directly; caches fetch straight upstream).
+   On a helper client in the private internet, run:
    ```
    ./populate-caches.sh
    ```
@@ -22,6 +23,7 @@ caches must be **pre-populated** while internet is still available.
 2. **Wire the offline sources** (see script output): point
    `cve_search_feedformatter_src` at the local zip and `cve_search_mongodb_repo_url`
    at the local MongoDB repo.
-3. **Go offline** — set `internet_enabled=false` in both
-   `opentofu/stacks/private_internet` (var) and `ansible/group_vars/all.yml`,
-   then redeploy. The egress-proxy VM is destroyed; caches serve from their stores.
+3. **Go offline** — redeploy with `INTERNET_ENABLED=false`. The platform stack
+   activates a proxmox-firewall forward rule that drops the subnet's egress to the
+   WAN (persistent, in `/etc/pve`), and Ansible flips the caches to offline mode,
+   so they serve purely from their local stores.

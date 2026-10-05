@@ -49,9 +49,14 @@ terminate:
 	make destroy_all
 	qm list | awk '{print $$1}' | tail -n +2 | xargs -I {} qm destroy {}
 
+# INTERNET_ENABLED drives the whole private internet from one switch:
+#   - platform stack: host egress seal (true = internet reachable, false = sealed)
+#   - ansible:        caches online vs. offline mode
+# The private_internet stack itself no longer depends on the switch (no egress VM).
 private-internet:
-	$(MAKE) -C opentofu/stacks/private_internet apply INTERNET_ENABLED=$(INTERNET_ENABLED)
+	$(MAKE) -C opentofu/stacks/platform apply INTERNET_ENABLED=$(INTERNET_ENABLED)
+	$(MAKE) -C opentofu/stacks/private_internet apply
 	cd ansible && ansible-playbook -i inventory.yml SetupPrivateInternet.yml -e internet_enabled=$(INTERNET_ENABLED)
 
 private-internet-destroy:
-	$(MAKE) -C opentofu/stacks/private_internet destroy INTERNET_ENABLED=$(INTERNET_ENABLED)
+	$(MAKE) -C opentofu/stacks/private_internet destroy

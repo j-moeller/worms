@@ -4,16 +4,8 @@
 # over the maintenance network (10.3.x.x).
 #
 # DNS is configured separately by SetupDNS.yml (Jonas' setup_dns role).
-
-- hosts: egress_proxy_hosts
-  become: true
-  pre_tasks:
-    - name: Wait for cloud-init to finish (tolerate errors; roles ensure packages)
-      ansible.builtin.command: cloud-init status --wait
-      changed_when: false
-      failed_when: false
-  roles:
-    - egress_proxy
+# There is no egress-proxy: during the prep phase the VMs reach the internet
+# directly; at runtime the platform stack seals egress (internet_enabled=false).
 
 - hosts: apt_cache_hosts
   become: true

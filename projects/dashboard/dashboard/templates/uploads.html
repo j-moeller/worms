@@ -1,0 +1,412 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+
+<div class="uploads-page">
+
+    <!-- =======================================================
+         UPLOAD PANEL
+         ======================================================= -->
+
+    <section class="uploads-panel">
+
+        <div class="uploads-panel-header">
+
+            <div class="uploads-panel-title">
+                // SUBMIT ARTIFACT
+            </div>
+
+        </div>
+
+
+        <form
+            id="upload-form"
+            class="upload-form"
+            method="post"
+            action="{% url 'upload' %}"
+            enctype="application/octet-stream"
+        >
+
+            {% csrf_token %}
+
+
+            <div
+                id="drop-zone"
+                class="upload-drop-zone"
+                tabindex="0"
+                role="button"
+                aria-label="Choose a file to upload"
+            >
+
+                <input
+                    id="file-input"
+                    type="file"
+                    hidden
+                >
+
+                <p
+                    id="drop-zone-text"
+                    class="drop-zone-text"
+                >
+                    DRAG AND DROP ARTIFACT HERE
+                </p>
+
+                <p class="drop-zone-hint">
+                    OR CLICK TO SELECT A FILE
+                </p>
+
+                <p
+                    id="selected-file"
+                    class="selected-file"
+                    hidden
+                ></p>
+
+            </div>
+
+
+            <div class="upload-actions">
+
+                <span
+                    id="upload-status"
+                    class="upload-status"
+                >
+                    NO ARTIFACT SELECTED
+                </span>
+
+                <button
+                    id="upload-button"
+                    class="upload-button"
+                    type="submit"
+                    disabled
+                >
+                    Upload →
+                </button>
+
+            </div>
+
+        </form>
+
+    </section>
+
+
+    <!-- =======================================================
+         UPLOAD HISTORY
+         ======================================================= -->
+
+    <section class="uploads-panel">
+
+        <div class="uploads-panel-header">
+
+            <div class="uploads-panel-title">
+                // UPLOAD HISTORY
+            </div>
+
+            <div class="uploads-panel-status">
+                TELEMETRY ACTIVE
+            </div>
+
+        </div>
+
+
+        <div class="uploads-table-wrapper">
+
+            <table class="uploads-table">
+
+                <thead>
+                    <tr>
+                        <th>Content Hash</th>
+                        <th>Time / Date</th>
+                        <th>Username</th>
+                        <th>Rounds</th>
+                    </tr>
+                </thead>
+
+
+                <tbody>
+
+                    {% for upload in uploads %}
+
+                        <tr
+                            {% if upload.referenced %}
+                                class="referenced"
+                            {% endif %}
+                        >
+
+                            <td class="content-hash">
+                                {{ upload.content_hash }}
+                            </td>
+
+                            <td class="upload-timestamp">
+                                {{ upload.time_date }}
+                            </td>
+
+                            <td class="upload-username">
+                                {{ upload.username }}
+                            </td>
+
+                            <td class="upload-rounds">
+
+                                {% for round in upload.rounds %}
+
+                                    <span class="upload-round">
+                                        {{ round }}
+                                    </span>
+
+                                    {% if not forloop.last %}
+                                        <span> / </span>
+                                    {% endif %}
+
+                                {% endfor %}
+
+                            </td>
+
+                        </tr>
+
+                    {% empty %}
+
+                        <tr>
+                            <td
+                                colspan="4"
+                                class="uploads-empty"
+                            >
+                                NO UPLOADS RECORDED
+                            </td>
+                        </tr>
+
+                    {% endfor %}
+
+                </tbody>
+
+            </table>
+
+        </div>
+
+    </section>
+
+</div>
+
+
+<script>
+    (() => {
+        const form = document.getElementById("upload-form");
+        const dropZone = document.getElementById("drop-zone");
+        const fileInput = document.getElementById("file-input");
+        const uploadButton = document.getElementById("upload-button");
+        const dropZoneText = document.getElementById("drop-zone-text");
+        const selectedFile = document.getElementById("selected-file");
+        const uploadStatus = document.getElementById("upload-status");
+
+        let file = null;
+
+
+        function setFile(selected) {
+            file = selected;
+
+            if (file) {
+
+                dropZoneText.textContent =
+                    "ARTIFACT SELECTED";
+
+                selectedFile.textContent =
+                    `${file.name} (${file.size.toLocaleString()} bytes)`;
+
+                selectedFile.hidden = false;
+
+                uploadStatus.textContent =
+                    "READY FOR TRANSMISSION";
+
+                uploadButton.disabled = false;
+
+            } else {
+
+                dropZoneText.textContent =
+                    "DRAG AND DROP ARTIFACT HERE";
+
+                selectedFile.textContent = "";
+                selectedFile.hidden = true;
+
+                uploadStatus.textContent =
+                    "NO ARTIFACT SELECTED";
+
+                uploadButton.disabled = true;
+            }
+        }
+
+
+        /*
+         * Open the file picker when the drop zone is clicked.
+         */
+
+        dropZone.addEventListener("click", () => {
+            fileInput.click();
+        });
+
+
+        /*
+         * Keyboard accessibility.
+         */
+
+        dropZone.addEventListener("keydown", (event) => {
+
+            if (
+                event.key === "Enter" ||
+                event.key === " "
+            ) {
+                event.preventDefault();
+                fileInput.click();
+            }
+
+        });
+
+
+        /*
+         * File picker.
+         */
+
+        fileInput.addEventListener("change", () => {
+
+            setFile(
+                fileInput.files[0] || null
+            );
+
+        });
+
+
+        /*
+         * Drag over.
+         */
+
+        dropZone.addEventListener("dragover", (event) => {
+
+            event.preventDefault();
+
+            dropZone.classList.add("dragover");
+
+        });
+
+
+        /*
+         * Drag leave.
+         */
+
+        dropZone.addEventListener("dragleave", () => {
+
+            dropZone.classList.remove("dragover");
+
+        });
+
+
+        /*
+         * Drop.
+         */
+
+        dropZone.addEventListener("drop", (event) => {
+
+            event.preventDefault();
+
+            dropZone.classList.remove("dragover");
+
+            const droppedFile =
+                event.dataTransfer.files[0];
+
+            if (droppedFile) {
+                setFile(droppedFile);
+            }
+
+        });
+
+
+        /*
+         * Upload.
+         */
+
+        form.addEventListener("submit", async (event) => {
+
+            event.preventDefault();
+
+            if (!file) {
+                return;
+            }
+
+
+            uploadButton.disabled = true;
+
+            uploadButton.textContent =
+                "Uploading…";
+
+            uploadStatus.textContent =
+                "TRANSMITTING ARTIFACT";
+
+
+            try {
+
+                const response = await fetch(
+                    form.action,
+                    {
+                        method: "POST",
+
+                        headers: {
+                            "X-CSRFToken":
+                                "{{ csrf_token }}",
+
+                            "Content-Type":
+                                "application/octet-stream",
+                        },
+
+                        body: file,
+                    }
+                );
+
+
+                if (!response.ok) {
+
+                    let message =
+                        "Upload failed.";
+
+                    try {
+
+                        const data =
+                            await response.json();
+
+                        if (data.error) {
+                            message = data.error;
+                        }
+
+                    } catch (_) {
+                        // Keep generic error message.
+                    }
+
+                    throw new Error(message);
+                }
+
+
+                uploadStatus.textContent =
+                    "TRANSMISSION COMPLETE";
+
+                /*
+                 * Reload so the new upload appears
+                 * in the history table.
+                 */
+
+                window.location.reload();
+
+            } catch (error) {
+
+                alert(error.message);
+
+                uploadButton.disabled = false;
+
+                uploadButton.textContent =
+                    "Upload →";
+
+                uploadStatus.textContent =
+                    "TRANSMISSION FAILED";
+            }
+
+        });
+
+    })();
+</script>
+
+{% endblock %}

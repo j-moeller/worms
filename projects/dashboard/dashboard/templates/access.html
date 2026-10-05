@@ -1,0 +1,443 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<div class="access-page">
+    {% if show_access_tokens %}
+
+        {% if created_access_token %}
+
+            <!-- =================================================
+                 NEW TOKEN
+                 ================================================= -->
+
+            <section
+                class="access-panel"
+                style="margin-top: 20px;"
+            >
+
+                <div class="access-panel-header">
+
+                    <div class="access-panel-title">
+                        // TOKEN ISSUED
+                    </div>
+
+                    <div
+                        class="access-panel-status"
+                        style="color: var(--red);"
+                    >
+                        ONE-TIME DISPLAY
+                    </div>
+
+                </div>
+
+
+                <div style="padding: 25px;">
+
+                    <div
+                        style="
+                            margin-bottom: 18px;
+                            color: var(--red);
+                            font-family: 'Share Tech Mono', monospace;
+                            font-size: 0.7rem;
+                            letter-spacing: 1px;
+                            text-transform: uppercase;
+                        "
+                    >
+                        [!] COPY THIS TOKEN NOW
+                    </div>
+
+
+                    <p
+                        style="
+                            margin: 0 0 18px;
+                            color: var(--muted);
+                            font-family: 'Share Tech Mono', monospace;
+                            font-size: 0.72rem;
+                            line-height: 1.7;
+                        "
+                    >
+                        This credential will not be displayed again.
+                        Store it securely before leaving this page.
+                    </p>
+
+
+                    <div
+                        style="
+                            display: flex;
+                            gap: 10px;
+                            align-items: stretch;
+                            max-width: 900px;
+                        "
+                    >
+
+                        <code
+                            id="created-access-token"
+                            style="
+                                flex: 1;
+                                min-width: 0;
+                                overflow-x: auto;
+                                padding: 14px;
+                                background: rgba(0, 0, 0, 0.35);
+                                border: 1px solid rgba(57, 255, 136, 0.25);
+                                color: var(--green);
+                                font-family: 'Share Tech Mono', monospace;
+                                font-size: 0.75rem;
+                                white-space: nowrap;
+                            "
+                        >{{ created_access_token }}</code>
+
+
+                        <button
+                            type="button"
+                            id="copy-access-token"
+                            style="
+                                padding: 0 18px;
+                                border: 1px solid var(--green);
+                                background: transparent;
+                                color: var(--green);
+                                cursor: pointer;
+                                font-family: 'Share Tech Mono', monospace;
+                                font-size: 0.7rem;
+                                letter-spacing: 1px;
+                                text-transform: uppercase;
+                                white-space: nowrap;
+                            "
+                        >
+                            Copy
+                        </button>
+
+                    </div>
+
+                </div>
+
+            </section>
+
+
+            <script>
+                document
+                    .getElementById("copy-access-token")
+                    .addEventListener("click", async function () {
+
+                        const token =
+                            document.getElementById(
+                                "created-access-token"
+                            ).textContent;
+
+                        await navigator.clipboard.writeText(token);
+
+                        this.textContent = "Copied!";
+
+                        setTimeout(() => {
+                            this.textContent = "Copy";
+                        }, 2000);
+                    });
+            </script>
+
+        {% endif %}
+
+    <section class="access-panel">
+
+        <div class="access-panel-header">
+
+            <div class="access-panel-title">
+                // API
+            </div>
+
+        </div>
+
+
+        <div class="access-viewer-wrapper">
+
+            <pre class="access-viewer"><code>curl -X POST https://scoring.worms.internal/submit \
+  -H "Content-Type: application/json" \
+  -d '{"team_api_token":"{TEAM_ACCESS_CODE}","vm_flag":"{VM_FLAG}"}'</code></pre>
+        </div>
+
+        <div class="access-viewer-wrapper">
+                        <pre class="access-viewer"><code>curl -X POST https://logging.worms.internal/submit \
+  -H "Content-Type: application/json" \
+  -d '{"team_api_token":"{TEAM_ACCESS_CODE}","log_data":{JSON_OBJECT_LOG_DATA}}'</code></pre>
+
+        </div>
+
+    </section>
+
+        <!-- =====================================================
+             EXISTING TOKENS
+             ===================================================== -->
+
+        <section
+            class="access-panel"
+            style="margin-top: 20px;"
+        >
+
+            <div class="access-panel-header">
+
+                <div class="access-panel-title">
+                    // ISSUED TOKENS
+                </div>
+
+            </div>
+
+
+            <div class="access-table-wrapper">
+
+                <table class="access-table">
+
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Description</th>
+                            <th>Token Hash</th>
+                            <th>Created</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+
+
+                    <tbody>
+
+                        {% for access_token in access_tokens %}
+
+                            <tr class="{% if access_token.revoked %}revoked{% endif %}">
+
+                                <td
+                                    style="
+                                        color: var(--text);
+                                        white-space: nowrap;
+                                    "
+                                >
+                                    <span
+                                        style="
+                                            color: var(--cyan);
+                                            margin-right: 8px;
+                                        "
+                                    >//</span>
+
+                                    {{ access_token.name }}
+                                </td>
+
+
+                                <td>
+                                    {{ access_token.description }}
+                                </td>
+
+
+                                <td
+                                    style="
+                                        color: var(--muted);
+                                        font-size: 0.68rem;
+                                        max-width: 280px;
+                                        overflow: hidden;
+                                        text-overflow: ellipsis;
+                                    "
+                                >
+                                    {{ access_token.access_token_hash }}
+                                </td>
+
+
+                                <td
+                                    class="timestamp"
+                                    style="white-space: nowrap;"
+                                >
+                                    {{ access_token.created_at }}
+                                </td>
+
+
+                                <td>
+
+                                    {% if not access_token.revoked %}
+
+                                        <form
+                                            method="post"
+                                            action="{% url 'revoke_access_token' token_id=access_token.id %}"
+                                        >
+
+                                            {% csrf_token %}
+
+                                            <button
+                                                type="submit"
+                                                style="
+                                                    padding: 7px 11px;
+                                                    border: 1px solid var(--red);
+                                                    background: transparent;
+                                                    color: var(--red);
+                                                    cursor: pointer;
+                                                    font-family: 'Share Tech Mono', monospace;
+                                                    font-size: 0.62rem;
+                                                    letter-spacing: 1px;
+                                                    text-transform: uppercase;
+                                                "
+                                            >
+                                                Revoke
+                                            </button>
+
+                                        </form>
+
+                                    {% endif %}
+
+                                </td>
+
+                            </tr>
+
+                        {% empty %}
+
+                            <tr>
+
+                                <td
+                                    colspan="5"
+                                    class="access-empty"
+                                >
+                                    NO ACCESS TOKENS ISSUED
+                                </td>
+
+                            </tr>
+
+                        {% endfor %}
+
+                    </tbody>
+
+                </table>
+
+            </div>
+
+        </section>
+
+
+        <!-- =====================================================
+             CREATE TOKEN
+             ===================================================== -->
+
+        <section class="access-panel">
+
+            <div style="padding: 25px;">
+
+                <details>
+
+                    <summary
+                        style="
+                            color: var(--cyan);
+                            cursor: pointer;
+                            font-family: 'Share Tech Mono', monospace;
+                            font-size: 0.75rem;
+                            letter-spacing: 1px;
+                            text-transform: uppercase;
+                        "
+                    >
+                        + CREATE ACCESS TOKEN
+                    </summary>
+
+
+                    <form
+                        method="post"
+                        action="{% url 'create_access_token' %}"
+                        style="margin-top: 25px;"
+                    >
+
+                        {% csrf_token %}
+
+
+                        <div style="margin-bottom: 20px;">
+
+                            <label
+                                for="access-token-name"
+                                style="
+                                    display: block;
+                                    margin-bottom: 8px;
+                                    color: var(--muted);
+                                    font-family: 'Share Tech Mono', monospace;
+                                    font-size: 0.68rem;
+                                    letter-spacing: 1px;
+                                    text-transform: uppercase;
+                                "
+                            >
+                                Token Name
+                            </label>
+
+                            <input
+                                type="text"
+                                id="access-token-name"
+                                name="name"
+                                required
+                                style="
+                                    width: 100%;
+                                    max-width: 600px;
+                                    padding: 12px 14px;
+                                    box-sizing: border-box;
+                                    background: rgba(0, 0, 0, 0.25);
+                                    border: 1px solid var(--border);
+                                    color: var(--text);
+                                    font-family: 'Share Tech Mono', monospace;
+                                "
+                            >
+
+                        </div>
+
+
+                        <div style="margin-bottom: 20px;">
+
+                            <label
+                                for="access-token-description"
+                                style="
+                                    display: block;
+                                    margin-bottom: 8px;
+                                    color: var(--muted);
+                                    font-family: 'Share Tech Mono', monospace;
+                                    font-size: 0.68rem;
+                                    letter-spacing: 1px;
+                                    text-transform: uppercase;
+                                "
+                            >
+                                Description
+                            </label>
+
+                            <textarea
+                                id="access-token-description"
+                                name="description"
+                                rows="3"
+                                style="
+                                    width: 100%;
+                                    max-width: 600px;
+                                    padding: 12px 14px;
+                                    box-sizing: border-box;
+                                    resize: vertical;
+                                    background: rgba(0, 0, 0, 0.25);
+                                    border: 1px solid var(--border);
+                                    color: var(--text);
+                                    font-family: 'Share Tech Mono', monospace;
+                                "
+                            ></textarea>
+
+                        </div>
+
+
+                        <button
+                            type="submit"
+                            style="
+                                padding: 12px 18px;
+                                border: 1px solid var(--cyan);
+                                background: transparent;
+                                color: var(--cyan);
+                                cursor: pointer;
+                                font-family: 'Share Tech Mono', monospace;
+                                font-size: 0.7rem;
+                                letter-spacing: 1px;
+                                text-transform: uppercase;
+                            "
+                        >
+                            Issue Token →
+                        </button>
+
+                    </form>
+
+                </details>
+
+            </div>
+
+        </section>
+    {% endif %}
+
+</div>
+
+{% endblock %}

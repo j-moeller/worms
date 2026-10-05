@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Dashboard</h1>
+
+<p>
+    <strong>Username:</strong>
+    {{ request.user.username }}
+</p>
+
+<p>
+    <strong>Email:</strong>
+    {{ request.user.email }}
+</p>
+
+<p>
+    <strong>First name:</strong>
+    {{ request.user.first_name }}
+</p>
+
+<p>
+    <strong>Last name:</strong>
+    {{ request.user.last_name }}
+</p>
+
+<p>
+    <strong>Team:</strong>
+    {{ request.team.name }}
+</p>
+
+{% if show_access_tokens %}
+<h2>Access tokens</h2>
+
+<button type="button" id="add-access-token">
+    Add new token
+</button>
+
+<table>
+    <tr>
+        <td>Name</td>
+        <td>Description</td>
+        <td>Token Hash</td>
+        <td>Created at</td>
+        <td>Action</td>
+    </tr>
+
+    {% for access_token in access_tokens %}
+        <tr>
+            <td>{{ access_token.name }}</td>
+            <td>{{ access_token.description }}</td>
+            <td>{{ access_token.access_token_hash }}</td>
+            <td>{{ access_token.created_at }}</td>
+
+            {% if access_token.revoked %}
+                <td>
+                    Revoked
+                </td>
+            {% else %}
+                <td>
+                    <button
+                        type="button"
+                        class="revoke-access-token"
+                        data-token-id="{{ access_token.id }}"
+                    >
+                        Revoke
+                    </button>
+                </td>
+            {% endif %}
+        </tr>
+    {% empty %}
+        <tr>
+            <td colspan="5">No access tokens.</td>
+        </tr>
+    {% endfor %}
+</table>
+
+<script>
+function getCookie(name) {
+    const cookies = document.cookie.split(";");
+
+    for (const cookie of cookies) {
+        const [key, ...value] = cookie.trim().split("=");
+
+        if (key === name) {
+            return decodeURIComponent(value.join("="));
+        }
+    }
+
+    return null;
+}
+
+const csrfToken = getCookie("csrftoken");
+
+document.getElementById("add-access-token").addEventListener("click", async function () {
+    const name = window.prompt("Token name:");
+
+    if (name === null) {
+        return;
+    }
+
+    if (!name.trim()) {
+        window.alert("Token name is required.");
+        return;
+    }
+
+    const description = window.prompt("Token description:");
+
+    if (description === null) {
+        return;
+    }
+
+    const confirmed = window.confirm(
+        "Create an access token with this name and description?\n\n" +
+        "Name: " + name + "\n" +
+        "Description: " + description
+    );
+
+    if (!confirmed) {
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append("name", name);
+    formData.append("description", description);
+
+    const response = await fetch(
+        "{% url 'create_access_token' %}",
+        {
+            method: "POST",
+            headers: {
+                "X-CSRFToken": csrfToken
+            },
+            body: formData
+        }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+        window.alert(data.error || "Failed to create access token.");
+        return;
+    }
+
+    /*
+     * Do not put the token into the DOM as HTML. textContent prevents
+     * a malicious value from becoming markup.
+     */
+    const message = document.createElement("div");
+
+    const heading = document.createElement("p");
+    heading.textContent = "Access token created.";
+
+    const warning = document.createElement("p");
+    warning.textContent =
+        "Copy this token now. It will not be shown again.";
+
+    const token = document.createElement("pre");
+    token.textContent = data.access_token;
+
+    message.appendChild(heading);
+    message.appendChild(warning);
+    message.appendChild(token);
+
+    window.alert(
+        "Access token created.\n\n" +
+        "Copy it now. It will not be shown again:\n\n" +
+        data.access_token
+    );
+
+    window.location.reload();
+});
+
+
+document.querySelectorAll(".revoke-access-token").forEach(function (button) {
+    button.addEventListener("click", async function () {
+        const tokenId = button.dataset.tokenId;
+
+        if (!window.confirm("Revoke this access token?")) {
+            return;
+        }
+
+        const response = await fetch(
+            "{% url 'revoke_access_token' token_id=0 %}".replace(
+                "/0/",
+                "/" + encodeURIComponent(tokenId) + "/"
+            ),
+            {
+                method: "POST",
+                headers: {
+                    "X-CSRFToken": csrfToken
+                }
+            }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            window.alert(data.error || "Failed to revoke access token.");
+            return;
+        }
+
+        window.location.reload();
+    });
+});
+</script>
+
+{% endif %}
+{% endblock %}

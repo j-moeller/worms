@@ -33,3 +33,7 @@ variable "cpu_type" {
   type        = string
   default     = null
 }
+
+variable "pool_id" {
+  description = "Proxmox pool id (used for permission handling)"
+}

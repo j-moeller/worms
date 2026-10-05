@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block header %}
+<title>WORM//ARENA — Login</title>
+{% endblock %}
+
+
+{% block content %}
+
+
+<div class="login-page">
+
+    <section class="login-panel">
+
+        <form method="post" class="login-form">
+
+            {% csrf_token %}
+
+
+            {% if error %}
+                <div class="login-error">
+                    {{ error }}
+                </div>
+            {% endif %}
+
+
+            <div class="form-field">
+
+                <label for="username">
+                    Username
+                </label>
+
+                <input
+                    type="text"
+                    id="username"
+                    name="username"
+                    placeholder="ENTER USERNAME"
+                    autocomplete="username"
+                    required
+                    autofocus
+                >
+
+            </div>
+
+
+            <div class="form-field">
+
+                <label for="password">
+                    Password
+                </label>
+
+                <input
+                    type="password"
+                    id="password"
+                    name="password"
+                    placeholder="ENTER PASSWORD"
+                    autocomplete="current-password"
+                    required
+                >
+
+            </div>
+
+
+            <button
+                type="submit"
+                class="login-submit"
+            >
+                Authenticate →
+            </button>
+
+
+        </form>
+
+    </section>
+
+</div>
+
+{% endblock %}

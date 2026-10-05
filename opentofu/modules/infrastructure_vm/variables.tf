@@ -10,3 +10,7 @@ variable "disk_file_id" {}
 variable "tag" {
   default = "infrastructure"
 }
+
+variable "pool_id" {
+  description = "Proxmox pool id (used for permission handling)"
+}

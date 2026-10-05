@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+
+<div class="captures-page">
+
+    <section class="captures-panel">
+
+        <div class="captures-panel-header">
+
+            <div class="captures-panel-title">
+                // CAPTURE ATTEMPTS
+            </div>
+
+        </div>
+
+
+        <div class="captures-table-wrapper">
+
+            <table class="captures-table">
+
+                <thead>
+                    <tr>
+                        <th>Round</th>
+                        <th>Timestamp</th>
+                        <th>VM Identifier</th>
+                    </tr>
+                </thead>
+
+
+                <tbody>
+
+                    {% regroup rows by round as round_groups %}
+
+                    {% for group in round_groups %}
+
+                        {% for row in group.list %}
+
+                            <tr
+                                {% if row.invalid %}
+                                    class="invalid-row"
+                                {% endif %}
+                            >
+
+                                {% if forloop.first %}
+
+                                    <td
+                                        rowspan="{{ group.list|length }}"
+                                        class="round-cell"
+                                    >
+                                        {{ group.grouper.name }}
+                                    </td>
+
+                                {% endif %}
+
+
+                                <td class="timestamp">
+                                    {{ row.attempt.created_at }}
+                                </td>
+
+
+                                <td>
+
+                                    {% if row.invalid %}
+
+                                        <span class="invalid-marker">
+                                            [X]
+                                        </span>
+
+                                        <span class="invalid-attempt">
+                                            Invalid attempt
+                                        </span>
+
+                                    {% else %}
+
+                                        <span class="valid-marker">
+                                            [OK]
+                                        </span>
+
+                                        <span class="vm-identifier">
+                                            {{ row.vm_identifier }}
+                                        </span>
+
+                                    {% endif %}
+
+                                </td>
+
+                            </tr>
+
+                        {% endfor %}
+
+                    {% empty %}
+
+                        <tr>
+                            <td
+                                colspan="3"
+                                class="captures-empty"
+                            >
+                                NO FLAG CAPTURE ATTEMPTS RECORDED
+                            </td>
+                        </tr>
+
+                    {% endfor %}
+
+                </tbody>
+
+            </table>
+
+        </div>
+
+    </section>
+</div>
+
+{% endblock %}

@@ -1,10 +1,10 @@
 import uuid
 
+from core import clock
 from core.models.competition import Round
 from core.models.team import Team
 from django.db import models
 from django.db.models import Q
-from django.utils import timezone
 
 
 class LoggingAttempt(models.Model):
@@ -14,7 +14,7 @@ class LoggingAttempt(models.Model):
 
     processed = models.BooleanField(default=False)
     processed_at = models.DateTimeField(default=None, blank=True, null=True)
-    created_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(default=clock.now)
 
     class Meta:
         db_table = "logging_attempts"
@@ -44,7 +44,7 @@ class Logging(models.Model):
         on_delete=models.CASCADE,
         related_name="logging",
     )
-    created_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(default=clock.now)
 
     class Meta:
         db_table = "logging"

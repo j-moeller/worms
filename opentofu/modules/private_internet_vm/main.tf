@@ -11,6 +11,11 @@
  * still removes it (bpg has no standalone disk resource). These VMs live in
  * the long-lived private_internet stack and are not torn down per round.
  */
+resource "proxmox_pool_membership" "pool_membership" {
+  pool_id = var.pool_id
+  vm_id   = proxmox_virtual_environment_vm.service_vm.vm_id
+}
+
 resource "proxmox_virtual_environment_vm" "service_vm" {
   name      = var.name
   node_name = var.proxmox_instance

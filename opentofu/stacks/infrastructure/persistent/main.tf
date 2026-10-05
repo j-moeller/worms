@@ -65,4 +65,5 @@ module "infrastructure_vms" {
   user_data_file_id           = each.value.user_data_file_id
   disk_file_id                = each.value.disk_file_id
   tag                         = each.value.tag
+  pool_id                     = local.platform.pools["persistent"].pool_id
 }

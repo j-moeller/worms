@@ -171,6 +171,7 @@ module "private_internet_vms" {
   for_each = local.private_internet
 
   proxmox_instance         = var.proxmox_instance
+  pool_id                  = local.platform.pools["private_internet"].pool_id
   name                     = replace(each.key, "_", "-")
   cpu                      = each.value.cpu
   cpu_type                 = each.value.cpu_type

@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<div class="teams-page">
+
+    <section class="teams-panel">
+
+        <div class="teams-panel-header">
+
+            <div class="teams-panel-title">
+                // TEAM REGISTRATION
+            </div>
+
+
+            {% if request.active_competition.is_registration_period %}
+
+            <div class="teams-panel-status">
+                REGISTRATION OPEN
+            </div>
+
+            {% else %}
+
+            <div class="teams-panel-status registration-closed">
+                REGISTRATION CLOSED
+            </div>
+
+            {% endif %}
+
+        </div>
+
+
+        <div class="teams-table-wrapper">
+
+            <table class="teams-table">
+
+                <thead>
+                    <tr>
+                        <th>Team</th>
+                        <th>Occupancy</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+
+                    {% for competition_team in request.competition.teams.all %}
+
+                        <tr>
+
+                            <td class="team-name">
+                                {{ competition_team.name }}
+                            </td>
+
+
+                            <td class="occupancy">
+
+                                <div class="occupancy-info">
+
+                                    <span class="occupancy-count">
+                                        {{ competition_team.users.count }}
+                                        /
+                                        {{ competition_team.max_members }}
+                                    </span>
+
+                                    <span class="occupancy-label">
+                                        members
+                                    </span>
+
+                                </div>
+
+
+                                <div class="occupancy-bar">
+
+                                    <div
+                                        class="occupancy-fill {% if competition_team.users.count >= competition_team.max_members %}full{% endif %}"
+                                        style="width: {% widthratio competition_team.users.count competition_team.max_members 100 %}%"
+                                    ></div>
+
+                                </div>
+
+                            </td>
+
+
+                            <td class="team-action">
+
+                                {% if request.active_competition.is_registration_period %}
+                                    {% if user in competition_team.users.all %}
+
+                                        <form
+                                            method="post"
+                                            action="{% url 'leave_team' competition_team.uuid %}"
+                                        >
+                                            {% csrf_token %}
+
+                                            <button
+                                                type="submit"
+                                                class="team-button leave"
+                                            >
+                                                Leave Team
+                                            </button>
+                                        </form>
+
+
+                                    {% elif competition_team.users.count < competition_team.max_members %}
+
+                                        {% if request.team %}
+
+                                            <span class="team-unavailable">
+                                                
+                                            </span>
+
+                                        {% else %}
+
+                                            <form
+                                                method="post"
+                                                action="{% url 'join_team' competition_team.uuid %}"
+                                            >
+                                                {% csrf_token %}
+
+                                                <button
+                                                    type="submit"
+                                                    class="team-button"
+                                                >
+                                                    Join Team →
+                                                </button>
+                                            </form>
+
+                                        {% endif %}
+
+
+                                    {% else %}
+
+                                        <span class="team-full">
+                                            Full
+                                        </span>
+
+                                    {% endif %}
+
+                                {% else %}
+                                    {% if user in competition_team.users.all %}
+                                        <span class="team-unavailable">
+                                            Assigned
+                                        </span>
+                                    {% endif %}
+                                {% endif %}
+
+                            </td>
+
+                        </tr>
+
+                    {% empty %}
+
+                        <tr>
+                            <td
+                                colspan="3"
+                                class="teams-empty"
+                            >
+                                NO TEAMS DETECTED // REGISTRATION UNAVAILABLE
+                            </td>
+                        </tr>
+
+                    {% endfor %}
+
+                </tbody>
+
+            </table>
+
+        </div>
+
+    </section>
+
+</div>
+
+{% endblock %}

@@ -1,9 +1,10 @@
+from core import clock
 from core.models.competition import Round
 from core.models.team import Team
 from core.models.vm import VirtualMachine
 from django.db import models
 from django.db.models import Q
-from django.utils import timezone
+from django.db.models.aggregates import Count
 
 
 class FlagCaptureAttempt(models.Model):
@@ -12,7 +13,7 @@ class FlagCaptureAttempt(models.Model):
 
     processed = models.BooleanField(default=False)
     processed_at = models.DateTimeField(default=None, blank=True, null=True)
-    created_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(default=clock.now)
 
     class Meta:
         db_table = "flag_capture_attempts"
@@ -46,7 +47,7 @@ class FlagCapture(models.Model):
         on_delete=models.CASCADE,
         related_name="flag_captures",
     )
-    created_at = models.DateTimeField(default=timezone.now)
+    created_at = models.DateTimeField(default=clock.now)
 
     class Meta:
         db_table = "flag_captures"
@@ -65,3 +66,14 @@ class FlagCapture(models.Model):
 
     def __str__(self):
         return f"FlagCapture({self.team}, {self.vm}, , {self.round})"
+
+    @staticmethod
+    def get_round_standings(round: Round) -> list[tuple[int, int]]:
+        """Return (team_id, score) pairs for a round."""
+        return list(
+            FlagCapture.objects.filter(round=round)
+            .values("team_id")
+            .annotate(score=Count("id"))
+            .order_by("-score", "team_id")
+            .values_list("team_id", "score")
+        )

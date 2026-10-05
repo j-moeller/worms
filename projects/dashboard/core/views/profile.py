@@ -1,4 +1,3 @@
-from core.views.decorators import get_current_competition, get_users_current_team
 from core.views.util import render_with_base_info
 from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest

@@ -110,7 +110,20 @@ def leaderboard(request: HttpRequest, competition: Competition):
                 for team in teams_in_current_round.filter(round_points=winning_points)
             }
 
-    for team in teams:
+    previous_points = None
+    current_place = 0
+    skip_place = False
+
+    for index, team in enumerate(teams):
+        if team.points != previous_points:
+            current_place = index + 1
+            previous_points = team.points
+            skip_place = False
+        else:
+            skip_place = True
+
+        team.place = current_place
+        team.skip_place = skip_place
         team.round_wins = round_winners.get(team.id, [])
         team.is_current_leader = team.id in current_leader_ids
 

@@ -60,3 +60,6 @@ class Round(models.Model):
                 name="round_end_after_round_start",
             ),
         ]
+
+    def __str__(self):
+        return f"Round({self.name})"

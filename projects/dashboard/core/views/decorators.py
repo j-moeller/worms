@@ -49,11 +49,22 @@ def require_competition(view_func):
 
 def require_competition_registration_active(view_func):
     @wraps(view_func)
-    def wrapper(request: HttpRequest, competition, *args, **kwargs):
+    def wrapper(request: HttpRequest, competition: Competition, *args, **kwargs):
         if not competition.registration_is_open:
             return HttpResponse("Registration closed", status=400)
 
-        return view_func(request, *args, **kwargs)
+        return view_func(request, *args, competition=competition, **kwargs)
+
+    return wrapper
+
+
+def require_competition_registration_inactive(view_func):
+    @wraps(view_func)
+    def wrapper(request: HttpRequest, competition: Competition, *args, **kwargs):
+        if competition.registration_is_open:
+            return HttpResponse("Registration still open", status=400)
+
+        return view_func(request, *args, competition=competition, **kwargs)
 
     return wrapper
 
@@ -66,6 +77,26 @@ def user_in_team_required(view_func):
 
         if team is None:
             return HttpResponse("User not assigned to team yet", status=400)
+
+        return view_func(
+            request,
+            *args,
+            team=team,
+            competition=competition,
+            **kwargs,
+        )
+
+    return wrapper
+
+
+def user_in_team_optional(view_func):
+    @wraps(view_func)
+    def wrapper(request: HttpRequest, *args, **kwargs):
+        competition = get_current_competition()
+        if competition is None or not request.user.is_authenticated:
+            team = None
+        else:
+            team = get_users_current_team(request.user, competition)
 
         return view_func(
             request,

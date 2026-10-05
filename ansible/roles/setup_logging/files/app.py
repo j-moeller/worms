@@ -47,9 +47,7 @@ def make_submission(team_api_token, log_data):
         pool.putconn(conn)
 
 
-# TODO:
-# API: team_api_token: str, log_data: Dict
-@app.route("/submit", methods=["POST"])
+@app.post("/submit")
 def submit():
     # Flask will normally return 405 for non-POST requests because of
     # methods=["POST"], but keep this check for an explicit JSON response.
@@ -59,18 +57,23 @@ def submit():
             405,
         )
 
-    if request.is_json:
-        data = request.get_json(silent=True) or {}
-    else:
-        data = request.form.to_dict()
+    # Accept JSON only
+    data = request.get_json(silent=True)
 
     team_api_token = data.get("team_api_token")
     log_data = data.get("log_data")
 
+    if not isinstance(team_api_token, str):
+        return (
+            jsonify({"status": "error", "message": "team_api_token must be a string."}),
+            400,
+        )
+
+    if not isinstance(log_data, dict):
+        return jsonify({"status": "error", "message": "log_data must be a dict."}), 400
+
     # TODO:
     # Limit size of log_data
-    # Limit size of team_api_token
-    # TODO: Verify team_api_token = str and log = dict
 
     missing = []
     if not team_api_token:
@@ -85,6 +88,17 @@ def submit():
                     "status": "error",
                     "message": "Missing required parameter(s).",
                     "missing": missing,
+                }
+            ),
+            400,
+        )
+
+    if len(team_api_token) > 64:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "team_api_token is longer than 64 characters.",
                 }
             ),
             400,

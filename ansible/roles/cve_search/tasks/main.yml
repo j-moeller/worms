@@ -9,9 +9,9 @@
 
 - name: Clone cve-search repository
   ansible.builtin.git:
-    repo: https://github.com/cve-search/cve-search.git
+    repo: "{{ cve_search_repo_url }}"
     dest: "{{ cve_search_dir }}"
-    version: v6.0.1
+    version: "{{ cve_search_repo_version }}"
     depth: 1
     update: false
 
@@ -19,6 +19,12 @@
   ansible.builtin.command: python3 -m venv {{ cve_search_venv }}
   args:
     creates: "{{ cve_search_venv }}/bin/activate"
+
+- name: Point feedformatter at the configured source (offline-friendly)
+  ansible.builtin.replace:
+    path: "{{ cve_search_dir }}/requirements.txt"
+    regexp: 'https://github\.com/marianoguerra/feedformatter/archive/master\.zip'
+    replace: "{{ cve_search_feedformatter_src }}"
 
 - name: Install Python dependencies
   ansible.builtin.pip:
@@ -74,13 +80,13 @@
 
 - name: Add MongoDB apt signing key
   ansible.builtin.get_url:
-    url: "https://www.mongodb.org/static/pgp/server-{{ cve_search_mongodb_version }}.asc"
+    url: "{{ cve_search_mongodb_key_url }}"
     dest: "/etc/apt/keyrings/mongodb-server-{{ cve_search_mongodb_version }}.asc"
     mode: '0644'
 
 - name: Add MongoDB apt repository
   ansible.builtin.apt_repository:
-    repo: "deb [ signed-by=/etc/apt/keyrings/mongodb-server-{{ cve_search_mongodb_version }}.asc ] https://repo.mongodb.org/apt/debian {{ cve_search_mongodb_apt_release }}/mongodb-org/{{ cve_search_mongodb_version }} main"
+    repo: "deb [ signed-by=/etc/apt/keyrings/mongodb-server-{{ cve_search_mongodb_version }}.asc ] {{ cve_search_mongodb_repo_url }} {{ cve_search_mongodb_apt_release }}/mongodb-org/{{ cve_search_mongodb_version }} main"
     filename: "mongodb-org-{{ cve_search_mongodb_version }}"
     state: present
     update_cache: true

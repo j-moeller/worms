@@ -6,11 +6,28 @@
     line: "Port: {{ apt_cache_port }}"
   notify: Restart apt-cacher-ng
 
-- name: Point apt-cacher-ng upstream at the egress proxy
+- name: Point apt-cacher-ng upstream at the egress proxy (internet mode)
   ansible.builtin.lineinfile:
     path: /etc/apt-cacher-ng/acng.conf
     regexp: '^Proxy:'
     line: "Proxy: {{ apt_cache_upstream_proxy }}"
+    state: present
+  when: internet_enabled | bool
+  notify: Restart apt-cacher-ng
+
+- name: Remove apt-cacher-ng upstream proxy (offline mode)
+  ansible.builtin.lineinfile:
+    path: /etc/apt-cacher-ng/acng.conf
+    regexp: '^Proxy:'
+    state: absent
+  when: not (internet_enabled | bool)
+  notify: Restart apt-cacher-ng
+
+- name: Set apt-cacher-ng offline mode flag
+  ansible.builtin.lineinfile:
+    path: /etc/apt-cacher-ng/acng.conf
+    regexp: '^Offlinemode:'
+    line: "Offlinemode: {{ 0 if (internet_enabled | bool) else 1 }}"
   notify: Restart apt-cacher-ng
 
 - name: Ensure apt-cacher-ng owns its cache dir (data disk is mounted root-owned)

@@ -1,0 +1,89 @@
+# APT packages to pre-mirror into apt-cacher-ng for the offline private internet.
+# Feed to a debmirror/apt-mirror config, or `apt-get download` + dpkg-scanpackages.
+# NOTE: mongodb-org is NOT in Debian (repo.mongodb.org) -> mirror separately.
+# non-free IS mirrored (manpages-posix/-dev included). mongodb-org packages are
+# listed below but come from repo.mongodb.org (mirrored separately by the tooling).
+
+## --- private-internet service VMs (what we install) ---
+apt-cacher-ng
+squid
+dnsmasq
+docker-registry
+chrony
+apache2
+man2html
+man-db
+manpages
+manpages-dev
+manpages-posix
+manpages-posix-dev
+postgresql
+postgresql-client
+kiwix-tools
+redis-server
+git
+build-essential
+python3
+python3-pip
+python3-venv
+python3-dev
+curl
+aria2
+acl
+ca-certificates
+gnupg
+
+## --- PoC build deps (Apache RCE / Shellshock PoCs) ---
+libpcre3-dev
+libssl-dev
+gcc
+default-jdk
+
+## --- generally useful base (CLI / net / dev / debug); trim as needed ---
+vim
+nano
+less
+tmux
+screen
+wget
+net-tools
+iproute2
+bind9-dnsutils
+netcat-openbsd
+socat
+nmap
+tcpdump
+traceroute
+iputils-ping
+jq
+unzip
+zip
+xz-utils
+p7zip-full
+rsync
+tree
+htop
+file
+sudo
+openssh-client
+openssh-server
+software-properties-common
+pkg-config
+make
+cmake
+g++
+gdb
+strace
+ltrace
+binutils
+binwalk
+nginx
+default-mysql-client
+
+## --- MongoDB (from repo.mongodb.org, NOT Debian; mirrored separately) ---
+mongodb-org
+mongodb-org-server
+mongodb-org-mongos
+mongodb-org-tools
+mongodb-org-database
+mongodb-mongosh

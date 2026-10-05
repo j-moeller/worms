@@ -1,4 +1,23 @@
 ---
+- name: Enable contrib/non-free apt components (for POSIX man pages)
+  ansible.builtin.replace:
+    path: /etc/apt/sources.list.d/debian.sources
+    regexp: '^Components:.*$'
+    replace: 'Components: main contrib non-free non-free-firmware'
+  register: manpages_components
+
+- name: Refresh apt cache after enabling non-free
+  ansible.builtin.apt:
+    update_cache: true
+  when: manpages_components is changed
+
+- name: Install POSIX man pages (non-free)
+  ansible.builtin.apt:
+    name:
+      - manpages-posix
+      - manpages-posix-dev
+    state: present
+
 - name: Enable CGI module
   ansible.builtin.command: a2enmod cgi
   args:

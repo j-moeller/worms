@@ -43,3 +43,7 @@ pki_ca_validity: "+3650d"
 
 pki_server_key_size: 3072
 pki_server_validity: "+825d"
+# Global switch for the private internet.
+#   true  = services act as proxies/forwarders with upstream internet (population phase)
+#   false = standalone offline caches, no internet connection
+internet_enabled: true

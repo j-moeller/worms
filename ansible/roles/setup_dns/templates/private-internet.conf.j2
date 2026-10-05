@@ -14,9 +14,11 @@ no-resolv
 address=/{{ entry.name }}/{{ entry.ip }}
 {% endfor %}
 
+{% if internet_enabled | bool %}
 # Forward everything else upstream.
 server=1.1.1.1
 server=1.0.0.1
+{% endif %}
 
 # Don't forward names that are explicitly local.
 domain={{ dns_domain }}

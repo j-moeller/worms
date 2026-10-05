@@ -10,3 +10,12 @@ cve_search_mongo_port: 27017
 # Debian 13/trixie has no mongodb-org repo yet, so we use the bookworm build.
 cve_search_mongodb_version: "8.0"
 cve_search_mongodb_apt_release: bookworm
+
+# Offline-overridable sources (point these at local mirrors when internet_enabled=false)
+cve_search_mongodb_repo_url: "https://repo.mongodb.org/apt/debian"
+cve_search_mongodb_key_url: "https://www.mongodb.org/static/pgp/server-{{ cve_search_mongodb_version }}.asc"
+# feedformatter is a GitHub archive (not on PyPI); override with a local path/URL offline.
+cve_search_feedformatter_src: "https://github.com/marianoguerra/feedformatter/archive/master.zip"
+# cve-search source repo (override with a local mirror for offline rebuilds)
+cve_search_repo_url: "https://github.com/cve-search/cve-search.git"
+cve_search_repo_version: "v6.0.1"

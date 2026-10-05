@@ -1,3 +1,6 @@
+# Single switch for the private internet (propagated to OpenTofu -var and Ansible -e).
+INTERNET_ENABLED ?= true
+
 all: apply
 
 startround:
@@ -47,8 +50,8 @@ terminate:
 	qm list | awk '{print $$1}' | tail -n +2 | xargs -I {} qm destroy {}
 
 private-internet:
-	cd opentofu/stacks/private_internet && make apply
-	cd ansible && ansible-playbook -i inventory.yml SetupPrivateInternet.yml
+	$(MAKE) -C opentofu/stacks/private_internet apply INTERNET_ENABLED=$(INTERNET_ENABLED)
+	cd ansible && ansible-playbook -i inventory.yml SetupPrivateInternet.yml -e internet_enabled=$(INTERNET_ENABLED)
 
 private-internet-destroy:
-	cd opentofu/stacks/private_internet && make destroy
+	$(MAKE) -C opentofu/stacks/private_internet destroy INTERNET_ENABLED=$(INTERNET_ENABLED)

@@ -1,0 +1,97 @@
+# PyPI packages to pre-mirror into devpi for the offline private internet.
+# Feed to: pip download -d <dir> -r pip-packages.txt   (then import into devpi)
+# Grouped by source; trim the "generally useful" block as needed.
+
+## --- cve-tool / our services (authoritative) ---
+django>=4.2
+requests
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+asyncpg==0.30.0
+pydantic==2.11.3
+gunicorn
+# BOOTSTRAP ONLY: devpi itself cannot be served from devpi. Fetch these from
+# upstream PyPI during the population phase (not from the offline devpi mirror):
+devpi-server
+devpi-web
+
+## --- cve-search v6.0.1 resolved deps (pip freeze from the deployed VM) ---
+aiohappyeyeballs==2.7.1
+aiohttp==3.14.3
+aioretry==6.3.1
+aiosignal==1.4.0
+aniso8601==10.0.1
+ansicolors==1.1.8
+attrs==26.1.0
+certifi==2026.7.22
+charset-normalizer==3.5.1
+click==8.1.7
+click-completion==0.5.2
+cloudpickle==3.1.2
+CveXplore==0.3.41
+dicttoxml==1.7.16
+dnspython==2.6.1
+dominate==2.9.1
+# feedformatter: GitHub archive, NOT on PyPI. The mirror tooling downloads the zip
+# and the cve_search role installs it from cve_search_feedformatter_src (local offline).
+Flask==2.2.5
+Flask-Bootstrap4==4.0.2
+Flask-Breadcrumbs==0.5.1
+Flask-Login==0.6.3
+Flask-Menu==0.7.3
+flask-restx==1.3.0
+Flask-WTF==1.2.0
+frozenlist==1.8.0
+idna==3.20
+ijson==3.5.1
+importlib_resources==7.1.0
+itsdangerous==2.2.0
+Jinja2==3.1.6
+joblib==1.6.0
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+MarkupSafe==3.0.3
+multidict==6.9.0
+nested-lookup==0.2.25
+nltk==3.9.4
+numpy==2.5.3
+oauthlib==3.2.2
+packaging==26.3
+pandas==3.0.6
+propcache==0.5.4
+pygelf==0.4.3
+pymongo==4.17.0
+python-dateutil==2.8.2
+python-dotenv==1.2.3
+pytz==2026.3.post1
+redis==4.5.4
+referencing==0.37.0
+regex==2026.9.10
+requests==2.33.0
+rpds-py==2026.6.3
+shellingham==1.5.4
+six==1.17.0
+tabulate==0.10.0
+tqdm==4.66.3
+urllib3==2.8.0
+visitor==0.1.3
+Werkzeug==3.1.6
+Whoosh==2.7.4
+WTForms==3.0.1
+
+## --- generally useful (exploit/CTF/dev); trim as needed ---
+pip
+setuptools
+wheel
+virtualenv
+pwntools
+scapy
+cryptography
+pycryptodome
+paramiko
+impacket
+beautifulsoup4
+lxml
+pyyaml
+ipython
+pytest

@@ -1,0 +1,13 @@
+# Managed by OpenTofu (platform stack -> network module). DO NOT EDIT BY HAND.
+[Unit]
+Description=WORMS private-internet egress policy (iptables-legacy)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/worms-private-internet-egress
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

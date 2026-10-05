@@ -26,9 +26,27 @@ sudo install -d "$MIRROR_DIR"/{mongodb,pip}
 echo "==> prerequisites (dpkg-dev provides dpkg-scanpackages)"
 sudo apt-get install -y dpkg-dev curl ca-certificates || true
 
-echo "==> [apt] point apt at apt-cacher-ng, enable non-free, add mongodb repo"
-echo "Acquire::http::Proxy \"http://${APT_CACHE_HOST}:${APT_CACHE_PORT}\";" | sudo tee /etc/apt/apt.conf.d/01proxy >/dev/null
-sudo sed -i -E 's/^Components:.*$/Components: main contrib non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources || true
+echo "==> [apt] route apt through apt-cacher-ng (path-style; caches HTTPS upstream), enable non-free"
+ACNG="http://${APT_CACHE_HOST}:${APT_CACHE_PORT}"
+# Path-style (http://cache/deb.debian.org/debian) -- apt-cacher-ng does the HTTPS
+# upstream fetch and caches over HTTP. Do NOT use an Acquire CONNECT proxy with
+# https:// sources: apt-cacher-ng refuses the tunnel and nothing gets cached.
+sudo tee /etc/apt/sources.list.d/debian.sources >/dev/null <<SRC
+Types: deb
+URIs: ${ACNG}/deb.debian.org/debian
+Suites: trixie trixie-updates trixie-backports
+Components: main contrib non-free non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb
+URIs: ${ACNG}/deb.debian.org/debian-security
+Suites: trixie-security
+Components: main contrib non-free non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+SRC
+sudo rm -f /etc/apt/apt.conf.d/01proxy
+# MongoDB's HTTPS 3rd-party repo can't be cached by apt-cacher-ng; with no apt proxy
+# set, apt fetches it directly during the prep phase (mirrored to MIRROR_DIR below).
 sudo install -d /etc/apt/keyrings
 curl -fsSL "https://www.mongodb.org/static/pgp/server-${MONGO_VER}.asc" | sudo tee /etc/apt/keyrings/mongodb-server-${MONGO_VER}.asc >/dev/null
 echo "deb [ signed-by=/etc/apt/keyrings/mongodb-server-${MONGO_VER}.asc ] https://repo.mongodb.org/apt/debian ${MONGO_REL}/mongodb-org/${MONGO_VER} main" \

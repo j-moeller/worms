@@ -1,0 +1,13 @@
+---
+- name: Route apt through apt-cacher-ng (path-style; non-free enabled)
+  ansible.builtin.template:
+    src: debian.sources.j2
+    dest: /etc/apt/sources.list.d/debian.sources
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Remove any apt CONNECT proxy (path-style needs none; it breaks HTTPS caching)
+  ansible.builtin.file:
+    path: /etc/apt/apt.conf.d/01proxy
+    state: absent

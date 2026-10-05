@@ -7,6 +7,13 @@
 # There is no egress-proxy: during the prep phase the VMs reach the internet
 # directly; at runtime the platform stack seals egress (internet_enabled=false).
 
+# Point every private-internet VM's apt at the apt-cacher-ng cache (path-style),
+# so package installs work both during prep and offline.
+- hosts: private_internet
+  become: true
+  roles:
+    - apt_client
+
 - hosts: apt_cache_hosts
   become: true
   pre_tasks:

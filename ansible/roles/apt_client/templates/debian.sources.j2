@@ -1,0 +1,17 @@
+# Managed by Ansible (apt_client role). DO NOT EDIT BY HAND.
+# Debian apt routed through apt-cacher-ng in PATH style:
+#   http://<cache>:<port>/deb.debian.org/debian
+# apt-cacher-ng does the (HTTPS) upstream fetch itself and caches over HTTP, so
+# this works offline once the cache is populated. Do NOT use an Acquire proxy with
+# https:// sources -- apt-cacher-ng refuses CONNECT tunnels and nothing gets cached.
+Types: deb
+URIs: http://{{ apt_client_cache_host }}:{{ apt_client_cache_port }}/deb.debian.org/debian
+Suites: {{ apt_client_suites }}
+Components: {{ apt_client_components }}
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb
+URIs: http://{{ apt_client_cache_host }}:{{ apt_client_cache_port }}/deb.debian.org/debian-security
+Suites: {{ apt_client_security_suite }}
+Components: {{ apt_client_components }}
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg

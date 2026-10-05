@@ -13,7 +13,7 @@
             </div>
 
 
-            {% if is_registration_period %}
+            {% if request.active_competition.is_registration_period %}
 
             <div class="teams-panel-status">
                 REGISTRATION OPEN
@@ -44,12 +44,12 @@
 
                 <tbody>
 
-                    {% for team in competition.teams.all %}
+                    {% for competition_team in request.competition.teams.all %}
 
                         <tr>
 
                             <td class="team-name">
-                                {{ team.name }}
+                                {{ competition_team.name }}
                             </td>
 
 
@@ -58,9 +58,9 @@
                                 <div class="occupancy-info">
 
                                     <span class="occupancy-count">
-                                        {{ team.users.count }}
+                                        {{ competition_team.users.count }}
                                         /
-                                        {{ team.max_members }}
+                                        {{ competition_team.max_members }}
                                     </span>
 
                                     <span class="occupancy-label">
@@ -73,8 +73,8 @@
                                 <div class="occupancy-bar">
 
                                     <div
-                                        class="occupancy-fill {% if team.users.count >= team.max_members %}full{% endif %}"
-                                        style="width: {% widthratio team.users.count team.max_members 100 %}%"
+                                        class="occupancy-fill {% if competition_team.users.count >= competition_team.max_members %}full{% endif %}"
+                                        style="width: {% widthratio competition_team.users.count competition_team.max_members 100 %}%"
                                     ></div>
 
                                 </div>
@@ -84,12 +84,12 @@
 
                             <td class="team-action">
 
-                                {% if is_registration_period %}
-                                    {% if user in team.users.all %}
+                                {% if request.active_competition.is_registration_period %}
+                                    {% if user in competition_team.users.all %}
 
                                         <form
                                             method="post"
-                                            action="{% url 'leave_team' team.uuid %}"
+                                            action="{% url 'leave_team' competition_team.uuid %}"
                                         >
                                             {% csrf_token %}
 
@@ -102,9 +102,9 @@
                                         </form>
 
 
-                                    {% elif team.users.count < team.max_members %}
+                                    {% elif competition_team.users.count < competition_team.max_members %}
 
-                                        {% if user_team %}
+                                        {% if request.team %}
 
                                             <span class="team-unavailable">
                                                 
@@ -114,7 +114,7 @@
 
                                             <form
                                                 method="post"
-                                                action="{% url 'join_team' team.uuid %}"
+                                                action="{% url 'join_team' competition_team.uuid %}"
                                             >
                                                 {% csrf_token %}
 
@@ -138,7 +138,7 @@
                                     {% endif %}
 
                                 {% else %}
-                                    {% if user in team.users.all %}
+                                    {% if user in competition_team.users.all %}
                                         <span class="team-unavailable">
                                             Assigned
                                         </span>

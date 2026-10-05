@@ -49,3 +49,9 @@ LOGGING["loggers"]["dashboard"] = {
     "level": LOG_LEVEL,
     "propagate": False,
 }
+
+
+MIDDLEWARE += [
+    "dashboard.middleware.EnvironmentTransitionMiddleware",
+    "dashboard.middleware.UserMetadataMiddleware",
+]

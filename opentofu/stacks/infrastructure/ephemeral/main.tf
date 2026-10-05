@@ -102,6 +102,7 @@ module "private_internet_vms" {
   vmbr_network             = each.value.vmbr_network
   vmbr_maintenance_network = each.value.vmbr_maintenance_network
   disk_file_id             = each.value.disk_file_id
+  pool_id                  = local.platform.pools["private_internet"].pool_id
 }
 
 module "infrastructure_vms" {
@@ -118,6 +119,7 @@ module "infrastructure_vms" {
   user_data_file_id           = each.value.user_data_file_id
   disk_file_id                = each.value.disk_file_id
   tag                         = each.value.tag
+  pool_id                     = local.platform.pools["ephemeral"].pool_id
 }
 /*
 

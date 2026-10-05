@@ -1,13 +1,18 @@
 from collections import defaultdict
 from typing import Callable
 
+from core import clock
 from core.models.competition import Competition, Round
 from core.models.scoring import FlagCapture
-from core.models.team import Team, TeamMembership
-from core import clock
+from core.models.team import Team
 from dashboard.views.decorators import require_competition
-from dashboard.views.util import render_with_base_info
-from django.db.models import BooleanField, Count, Exists, OuterRef, Value
+from dashboard.views.util import (
+    get_current_round,
+    get_flag_captures,
+    get_rounds,
+    get_teams,
+    render_with_base_info,
+)
 from django.http import HttpRequest
 
 SCORING_METHOD = "formula_one"
@@ -17,59 +22,6 @@ SCORING_METHOD_ROUNDS_WON = "rounds_won"
 SCORING_METHOD_FORMULA_ONE = "formula_one"
 
 FORMULA_ONE_POINTS = (25, 18, 15, 12, 10, 8, 6, 4, 2, 1)
-
-
-def get_teams(
-    competition: Competition,
-    request: HttpRequest,
-) -> list[Team]:
-    """Return all teams with their leaderboard metadata."""
-    if request.user.is_authenticated:
-        user_team_membership = TeamMembership.objects.filter(
-            team=OuterRef("pk"),
-            user=request.user,
-        )
-
-        is_user_team = Exists(user_team_membership)
-    else:
-        is_user_team = Value(False, output_field=BooleanField())
-
-    return list(
-        Team.objects.filter(competition=competition)
-        .annotate(
-            is_user_team=is_user_team,
-            flag_capture_count=Count("flag_captures"),
-        )
-        .order_by("name")
-    )
-
-
-def get_rounds(competition: Competition) -> list[Round]:
-    """Return competition rounds ordered chronologically."""
-    return list(Round.objects.filter(competition=competition).order_by("round_start"))
-
-
-def get_current_round(rounds: list[Round], now) -> Round | None:
-    """Return the currently active round, if there is one."""
-    return next(
-        (round for round in rounds if round.round_start <= now <= round.round_end),
-        None,
-    )
-
-
-def get_flag_captures(
-    competition: Competition,
-) -> list[FlagCapture]:
-    """Return all flag captures in chronological order."""
-    return list(
-        FlagCapture.objects.filter(round__competition=competition)
-        .select_related(
-            "team",
-            "flag_capture_attempt",
-            "round",
-        )
-        .order_by("flag_capture_attempt__created_at")
-    )
 
 
 def score_flag_captures(
@@ -92,24 +44,13 @@ def score_flag_captures(
     for capture in captures:
         if current_round and capture.round_id == current_round.id:
             current_points[capture.team_id] += 1
-        elif capture.round.round_end <= clock.now():
+        elif capture.round.is_finished(clock.now()):
             passed_points[capture.team_id] += 1
 
     for team in teams:
         team.passed_round_points = passed_points[team.id]
         team.current_round_points = current_points[team.id]
         team.total_points = team.passed_round_points + team.current_round_points
-
-
-def get_round_standings(round: Round) -> list[tuple[int, int]]:
-    """Return (team_id, score) pairs for a round."""
-    return list(
-        FlagCapture.objects.filter(round=round)
-        .values("team_id")
-        .annotate(score=Count("id"))
-        .order_by("-score", "team_id")
-        .values_list("team_id", "score")
-    )
 
 
 def score_rounds_won(
@@ -127,10 +68,10 @@ def score_rounds_won(
     passed_points = defaultdict(int)
 
     for round in rounds:
-        if round.round_end > clock.now():
+        if round.is_finished(clock.now()):
             continue
 
-        standings = get_round_standings(round)
+        standings = FlagCapture.get_round_standings(round)
 
         if not standings:
             continue
@@ -203,7 +144,7 @@ def score_formula_one(
     current_points = defaultdict(int)
 
     for round in rounds:
-        standings = get_round_standings(round)
+        standings = FlagCapture.get_round_standings(round)
 
         if not standings:
             continue
@@ -272,10 +213,10 @@ def add_round_winners(
     round_winners = defaultdict(list)
 
     for round in rounds:
-        if round.round_end > clock.now():
+        if not round.is_finished(clock.now()):
             continue
 
-        standings = get_round_standings(round)
+        standings = FlagCapture.get_round_standings(round)
 
         if not standings:
             continue
@@ -301,7 +242,7 @@ def add_current_round_leaders(
     if not current_round:
         return
 
-    standings = get_round_standings(current_round)
+    standings = FlagCapture.get_round_standings(current_round)
 
     if not standings:
         return
@@ -313,61 +254,43 @@ def add_current_round_leaders(
         team.is_current_leader = team.id in leader_ids
 
 
-def build_round_data(rounds: list[Round]) -> list[dict]:
-    """Build serializable round data for the template."""
-    return [
-        {
-            "name": round.name,
-            "start": round.round_start.isoformat(),
-            "end": round.round_end.isoformat(),
-        }
-        for round in rounds
-    ]
-
-
 @require_competition
 def leaderboard(request: HttpRequest, competition: Competition):
-    now = clock.now()
-
-    teams = get_teams(competition, request)
-    rounds = get_rounds(competition)
-    captures = get_flag_captures(competition)
-    current_round = get_current_round(rounds, now)
+    team_results = get_teams(request.active_competition, request)
+    rounds = get_rounds(request.active_competition)
+    captures = get_flag_captures(request.active_competition)
+    current_round = get_current_round(rounds, request.time_now)
 
     score_teams(
-        teams=teams,
+        teams=team_results,
         rounds=rounds,
         captures=captures,
         current_round=current_round,
     )
 
     # The leaderboard is always sorted by the configured total score.
-    teams.sort(key=lambda team: (-team.total_points, team.name))
+    team_results.sort(key=lambda team: (-team.total_points, team.name))
 
-    add_places(teams)
-    add_round_winners(teams, rounds, captures)
-    add_current_round_leaders(teams, current_round, captures)
+    add_places(team_results)
+    add_round_winners(team_results, rounds, captures)
+    add_current_round_leaders(team_results, current_round, captures)
 
-    if teams:
-        teams[0].is_current_winner = True
+    if team_results:
+        team_results[0].is_current_winner = True
 
     if current_round:
-        is_round_active = current_round.round_start < now < current_round.round_end
+        is_round_active = current_round.is_active(request.time_now)
     else:
         is_round_active = False
+
+    print(team_results)
 
     return render_with_base_info(
         request,
         "leaderboard.html",
         {
             "current_round": current_round,
-            "competition": competition,
-            "teams": teams,
-            "round_data": build_round_data(rounds),
-            "round_winners": {
-                team.id: team.round_wins for team in teams if team.round_wins
-            },
-            "scoring_method": SCORING_METHOD,
+            "teams": team_results,
             "is_round_active": is_round_active,
         },
     )

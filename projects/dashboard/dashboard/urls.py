@@ -7,13 +7,16 @@ from dashboard.views.profile import profile
 from dashboard.views.scoring import flag_capture_attempts
 from dashboard.views.teams import join_team, leave_team, team_registration
 from dashboard.views.uploads import upload
+from dashboard.views.todos import todos
 from django.conf import settings
 from django.contrib import admin
 from django.urls import path
 
 urlpatterns = [
-    path("admin/", admin.site.urls),
     path("", leaderboard, name="index"),
+    #
+    path("admin/", admin.site.urls),
+    #
     path("captures/", flag_capture_attempts, name="captures"),
     path("logs/", logs, name="logs"),
     path(
@@ -32,6 +35,8 @@ urlpatterns = [
     path("leave_team/<uuid:uuid>", leave_team, name="leave_team"),
     #
     path("profile/", profile, name="profile"),
+    #
+    path("todos/", todos, name="todos"),
     #
     path("access/", access, name="access"),
     path(

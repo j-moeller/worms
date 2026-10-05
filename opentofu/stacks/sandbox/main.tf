@@ -40,6 +40,13 @@ resource "proxmox_network_linux_bridge" "vmbr_sandbox" {
   autostart = true
 }
 
+resource "proxmox_pool_membership" "pool_membership" {
+  for_each = local.sandbox_vms
+
+  pool_id = local.platform.pools["sandbox"].pool_id
+  vm_id   = proxmox_virtual_environment_vm.vm[each.key].vm_id
+}
+
 resource "proxmox_virtual_environment_vm" "vm" {
   for_each = local.sandbox_vms
 

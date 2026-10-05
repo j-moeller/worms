@@ -42,3 +42,15 @@ module "networks" {
   maintenance_cidr      = "10.3.0.1/24"
   monitoring_cidr       = "10.250.0.1/24"
 }
+
+resource "proxmox_virtual_environment_pool" "pools" {
+  for_each = toset([
+    "ephemeral",
+    "persistent",
+    "sandbox",
+    "devbox",
+    "private_internet",
+  ])
+
+  pool_id = each.value
+}

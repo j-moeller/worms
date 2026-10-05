@@ -9,14 +9,10 @@ from django.http import HttpRequest
 
 @login_required
 @user_in_team_required
-def flag_capture_attempts(
-    request: HttpRequest, team: Team, *, competition: Competition
-):
+def flag_capture_attempts(request: HttpRequest, team: Team):
     team_token_hashes = AccessTokens.objects.filter(
         team=team,
     ).values_list("access_token_hash", flat=True)
-
-    print(len(team_token_hashes))
 
     attempts = list(
         FlagCaptureAttempt.objects.filter(
@@ -24,18 +20,15 @@ def flag_capture_attempts(
         ).order_by("-created_at", "-id")
     )
 
-    print(len(attempts))
-
     attempt_ids = [attempt.id for attempt in attempts]
 
+    # FIXME: Competitino ==> active
     captures = FlagCapture.objects.filter(
         flag_capture_attempt_id__in=attempt_ids,
-        team_id=team.id,
-        round__competition_id=team.competition_id,
-        vm__round__competition_id=team.competition_id,
+        team=request.team,
+        round__competition=request.active_competition,
+        vm__round__competition=request.active_competition,
     ).select_related("vm", "round")
-
-    print(len(captures))
 
     capture_by_attempt = {
         capture.flag_capture_attempt_id: capture for capture in captures
@@ -43,7 +36,7 @@ def flag_capture_attempts(
 
     rounds = list(
         Round.objects.filter(
-            competition_id=team.competition_id,
+            competition=request.active_competition,
         ).order_by("-round_start", "-id")
     )
 
@@ -51,7 +44,7 @@ def flag_capture_attempts(
 
     for round_obj in rounds:
         for attempt in attempts:
-            if not (round_obj.round_start <= attempt.created_at < round_obj.round_end):
+            if not round_obj.is_active(attempt.created_at):
                 continue
 
             capture = capture_by_attempt.get(attempt.id)
@@ -67,14 +60,15 @@ def flag_capture_attempts(
                 vm_identifier = None
                 invalid = True
 
-            rows.append(
-                {
-                    "round": round_obj,
-                    "attempt": attempt,
-                    "vm_identifier": vm_identifier,
-                    "invalid": invalid,
-                }
-            )
+            if not invalid:
+                rows.append(
+                    {
+                        "round": round_obj,
+                        "attempt": attempt,
+                        "vm_identifier": vm_identifier,
+                        "invalid": invalid,
+                    }
+                )
 
     return render_with_base_info(
         request,

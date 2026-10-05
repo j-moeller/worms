@@ -1,9 +1,11 @@
 import uuid
+from typing import Optional
 
 from core import clock
 from core.models.competition import Competition
 from core.models.user import User
 from django.db import models
+from django.http import HttpRequest
 
 
 class Team(models.Model):
@@ -14,6 +16,12 @@ class Team(models.Model):
         Competition,
         on_delete=models.CASCADE,
         related_name="teams",
+    )
+    development_competition = models.ForeignKey(
+        Competition,
+        on_delete=models.CASCADE,
+        related_name="development_teams",
+        null=True,
     )
     max_members = models.PositiveIntegerField(default=2)
     created_at = models.DateTimeField(default=clock.now)
@@ -41,10 +49,26 @@ class AccessTokens(models.Model):
     name = models.TextField()
     description = models.TextField(default="")
     access_token_hash = models.TextField(unique=True)
-    team = models.ForeignKey(Team, on_delete=models.CASCADE)
+    team = models.ForeignKey(
+        Team,
+        on_delete=models.CASCADE,
+        related_name="access_tokens",
+    )
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="access_tokens",
+    )
     revoked = models.BooleanField(default=False)
     revoked_at = models.DateTimeField(blank=True, null=True)
     created_at = models.DateTimeField(default=clock.now)
+
+    class Meta:
+        db_table = "access_tokens"
+
+    @staticmethod
+    def get_team_access_codes(team: Team):
+        return AccessTokens.objects.filter(team=team).order_by("-created_at")
 
 
 class TeamMembership(models.Model):
@@ -56,7 +80,7 @@ class TeamMembership(models.Model):
     team = models.ForeignKey(
         Team,
         on_delete=models.CASCADE,
-        related_name="memberships",
+        related_name="team_memberships",
     )
     created_at = models.DateTimeField(default=clock.now)
 
@@ -68,3 +92,20 @@ class TeamMembership(models.Model):
                 name="unique_user_team_membership",
             ),
         ]
+
+    @staticmethod
+    def get_users_team(user: Optional[User], competition: Optional[Competition]):
+        if user is None or competition is None:
+            return None
+
+        if not user.is_authenticated:
+            return None
+
+        try:
+            team_membership = TeamMembership.objects.get(
+                user=user, team__competition=competition
+            )
+        except TeamMembership.DoesNotExist:
+            return None
+
+        return team_membership.team

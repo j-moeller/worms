@@ -4,7 +4,6 @@ from typing import Optional
 
 from core.models.competition import Competition
 from core.models.team import AccessTokens, Team
-from core import clock
 from dashboard.views.decorators import (
     require_competition_registration_inactive,
     user_in_team_optional,
@@ -24,12 +23,15 @@ def hash_access_token(token: str) -> str:
 @login_required
 @user_in_team_optional
 def access(request: HttpRequest, team: Optional[Team]):
-    access_tokens = []
-
-    show_access_tokens = team is not None and not team.competition.registration_is_open
+    if team is None or team.competition.is_registration_period():
+        show_access_tokens = False
+    else:
+        show_access_tokens = True
 
     if show_access_tokens:
-        access_tokens = AccessTokens.objects.filter(team=team).order_by("-created_at")
+        access_tokens = AccessTokens.get_team_access_codes(team)
+    else:
+        access_tokens = []
 
     created_access_token = request.session.pop(
         "created_access_token",
@@ -65,6 +67,7 @@ def create_access_token(request: HttpRequest, team: Team, *, competition: Compet
         description=description,
         access_token_hash=token_hash,
         team=team,
+        created_by=request.user,
     )
 
     # Store the raw token only temporarily so it can be displayed once.
@@ -88,7 +91,7 @@ def revoke_access_token(
 
     if not access_token.revoked:
         access_token.revoked = True
-        access_token.revoked_at = clock.now()
+        access_token.revoked_at = request.time_now
         access_token.save(update_fields=["revoked", "revoked_at"])
 
     return redirect("access")

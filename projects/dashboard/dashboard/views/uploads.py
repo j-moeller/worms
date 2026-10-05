@@ -17,7 +17,7 @@ from django.http import HttpRequest, JsonResponse
 
 @login_required
 @user_in_team_required
-def upload_get_method(request: HttpRequest, team: Team, *, competition: Competition):
+def upload_get_method(request: HttpRequest, team: Team):
     uploads = (
         Upload.objects.filter(
             user__team_memberships__team=team,

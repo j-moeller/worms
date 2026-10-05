@@ -9,3 +9,6 @@ variable "user_data_file_id" {}
 variable "vmbr_network" {}
 variable "vmbr_maintenance_network" {}
 variable "disk_file_id" {}
+variable "pool_id" {
+  description = "Proxmox pool id (used for permission handling)"
+}

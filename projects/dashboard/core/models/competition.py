@@ -1,22 +1,43 @@
+from typing import Optional
+
 from core import clock
 from django.db import models
 from django.db.models import F, Q
+from django.http import HttpRequest
 
 
 class Competition(models.Model):
     name = models.TextField()
     created_at = models.DateTimeField(default=clock.now)
 
-    registration_starts_at = models.DateTimeField()
-    registration_ends_at = models.DateTimeField()
+    is_dev_competition = models.BooleanField(default=False)
+
+    registration_starts_at = models.DateTimeField(null=True, blank=True)
+    registration_ends_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "competitions"
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        registration_starts_at__isnull=True,
+                        registration_ends_at__isnull=True,
+                    )
+                    | models.Q(
+                        registration_starts_at__isnull=False,
+                        registration_ends_at__isnull=False,
+                    )
+                ),
+                name="registration_dates_both_null_or_set",
+            ),
+        ]
 
-    @property
-    def registration_is_open(self):
-        now = clock.now()
-        return self.registration_starts_at <= now <= self.registration_ends_at
+    def is_registration_period(self):
+        if self.is_dev_competition:
+            return False
+
+        return self.registration_starts_at <= clock.now() <= self.registration_ends_at
 
 
 class ApplicationSetting(models.Model):
@@ -35,11 +56,22 @@ class ApplicationSetting(models.Model):
             models.Index(fields=["key"]),
         ]
 
+    @staticmethod
+    def get_current_competition():
+        try:
+            settings = ApplicationSetting.objects.select_related(
+                "current_competition"
+            ).get(key="current")
+        except ApplicationSetting.DoesNotExist:
+            return None
+
+        return settings.current_competition
+
 
 class Round(models.Model):
     seed = models.BigIntegerField()
-    round_start = models.DateTimeField()
-    round_end = models.DateTimeField()
+    round_start = models.DateTimeField(null=True, blank=True)
+    round_end = models.DateTimeField(null=True, blank=True)
     name = models.TextField()
     competition = models.ForeignKey(
         Competition,
@@ -53,13 +85,43 @@ class Round(models.Model):
         indexes = [
             models.Index(fields=["competition"]),
             models.Index(fields=["round_start"]),
+            models.Index(fields=["round_end"]),
         ]
         constraints = [
             models.CheckConstraint(
-                condition=Q(round_end__gt=F("round_start")),
+                condition=(
+                    Q(round_start__isnull=True)
+                    | Q(round_end__isnull=True)
+                    | Q(round_end__gt=F("round_start"))
+                ),
                 name="round_end_after_round_start",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        round_start__isnull=True,
+                        round_end__isnull=True,
+                    )
+                    | Q(
+                        round_start__isnull=False,
+                        round_end__isnull=False,
+                    )
+                ),
+                name="round_dates_both_null_or_set",
             ),
         ]
 
     def __str__(self):
         return f"Round({self.name})"
+
+    def is_active(self, now):
+        if self.round_start is None or self.round_end is None:
+            return True
+
+        return self.round_start <= now < self.round_end
+
+    def is_finished(self, now):
+        if self.round_start is None or self.round_end is None:
+            return False
+
+        return now >= self.round_end

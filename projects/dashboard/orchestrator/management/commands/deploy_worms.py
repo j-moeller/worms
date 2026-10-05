@@ -2,7 +2,7 @@ import random
 
 from core.models.competition import Round
 from core.models.team import Team
-from core.models.vm import VirtualMachine
+from core.models.vm import VirtualMachine, ProductionVirtualMachine
 from core.models.worms import Upload, WormDeployment, WormDeploymentPlan
 from core import clock
 from dashboard.views.decorators import get_current_competition
@@ -20,7 +20,7 @@ class Command(BaseCommand):
     def handle(self, seed, *args, **options):
         rng = random.Random(seed)
 
-        competition = get_current_competition()
+        competition = get_current_competition(None)
 
         now = clock.now()
 
@@ -29,19 +29,15 @@ class Command(BaseCommand):
                 competition=competition, round_start__lt=now, round_end__gt=now
             )
         except Round.DoesNotExist:
+            print(now)
+            print(
+                [
+                    (round.is_active(now))
+                    for round in Round.objects.filter(competition=competition)
+                ]
+            )
             print("No active round")
             return
-
-        print("ROUND: ", round.name)
-        for upload in Upload.objects.all():
-            print(
-                upload.user,
-                upload.created_at,
-                round.round_start,
-                upload.created_at < round.round_start,
-            )
-
-        exit(0)
 
         latest_upload = Upload.objects.filter(
             user__team_memberships__team=OuterRef("pk"),
@@ -57,7 +53,7 @@ class Command(BaseCommand):
         )
 
         virtual_machines = VirtualMachine.objects.filter(
-            round=round,
+            virtual_machine__round=round,
             worm_deployment_plans__isnull=True,
         )
         virtual_machine_ids = list(range(len(virtual_machines)))
@@ -86,7 +82,7 @@ class Command(BaseCommand):
 
             for team in teams:
                 if team.latest_upload_id is None:
-                    print("Skip team: ", team.name)
+                    print("Skip team: ", team.name, team.id)
                     continue
 
                 upload = Upload.objects.get(pk=team.latest_upload_id)
@@ -94,8 +90,8 @@ class Command(BaseCommand):
                 worm_deployment_plan = existing_plans.get(team.id)
 
                 if worm_deployment_plan is None:
-                    vm_id = virtual_machine_ids.pop()
-                    virtual_machine = virtual_machines[vm_id]
+                    prod_vm_id = virtual_machine_ids.pop()
+                    virtual_machine = virtual_machines[prod_vm_id]
 
                     assert round == virtual_machine.round
 
@@ -115,6 +111,8 @@ class Command(BaseCommand):
 
                 elif worm_deployment_plan.pk not in existing_deployments:
                     new_deployments.append(worm_deployment_plan)
+
+            print(new_deployment_plans)
 
             # Create all new plans in one query.
             if False:

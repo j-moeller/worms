@@ -4,6 +4,7 @@ from core.models.team import Team
 from core.models.vm import VirtualMachine
 from django.db import models
 from django.db.models import Q
+from django.db.models.aggregates import Count
 
 
 class FlagCaptureAttempt(models.Model):
@@ -65,3 +66,14 @@ class FlagCapture(models.Model):
 
     def __str__(self):
         return f"FlagCapture({self.team}, {self.vm}, , {self.round})"
+
+    @staticmethod
+    def get_round_standings(round: Round) -> list[tuple[int, int]]:
+        """Return (team_id, score) pairs for a round."""
+        return list(
+            FlagCapture.objects.filter(round=round)
+            .values("team_id")
+            .annotate(score=Count("id"))
+            .order_by("-score", "team_id")
+            .values_list("team_id", "score")
+        )

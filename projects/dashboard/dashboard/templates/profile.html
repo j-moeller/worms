@@ -5,27 +5,27 @@
 
 <p>
     <strong>Username:</strong>
-    {{ user.username }}
+    {{ request.user.username }}
 </p>
 
 <p>
     <strong>Email:</strong>
-    {{ user.email }}
+    {{ request.user.email }}
 </p>
 
 <p>
     <strong>First name:</strong>
-    {{ user.first_name }}
+    {{ request.user.first_name }}
 </p>
 
 <p>
     <strong>Last name:</strong>
-    {{ user.last_name }}
+    {{ request.user.last_name }}
 </p>
 
 <p>
     <strong>Team:</strong>
-    {{ user_team.name }}
+    {{ request.team.name }}
 </p>
 
 {% if show_access_tokens %}

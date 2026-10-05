@@ -10,9 +10,9 @@ from django.shortcuts import get_object_or_404, render
 
 @login_required
 @user_in_team_required
-def logs(request: HttpRequest, team: Team, *, competition: Competition):
+def logs(request: HttpRequest, team: Team):
     events = (
-        Logging.objects.filter(team=team)
+        Logging.objects.filter(team=team, round__competition=request.active_competition)
         .select_related("round", "logging_attempt")
         .order_by("-created_at")
     )

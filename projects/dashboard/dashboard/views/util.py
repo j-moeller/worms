@@ -3,25 +3,20 @@ from datetime import datetime
 from typing import Optional
 
 from core.models.competition import Competition, Round
-from core.models.team import Team
+from core.models.scoring import FlagCapture
+from core.models.team import Team, TeamMembership
 from core.models.user import User
 from core.models.worms import Upload
-from core import clock
-from dashboard.views.decorators import get_current_competition, get_users_current_team
+from dashboard.middleware import CompetitionState
 from django.conf import settings
+from django.db.models import BooleanField, Exists, OuterRef, Value
+from django.db.models.aggregates import Count
 from django.http import HttpRequest
 from django.shortcuts import render
 
-# Before competition (now < registration_start)
-# Registration open (registration_start <= now < registration_end)
-# Before first round (registration_end <= now < rounds[0].start)
-# During round (rounds[i].start <= now < rounds[i].end)
-# Between round (rounds[i].end <= now < rounds[i+1].end)
-# After last round / after competition (rounds[-1].end <= now)
-
 
 @dataclass
-class CompetitionState:
+class CompetitionPresentation:
     key: str
     label: str
     detail: str
@@ -29,19 +24,97 @@ class CompetitionState:
     warning: bool = False
 
 
-def get_competition_state(
+def get_current_round(rounds: list[Round], now) -> Round | None:
+    """Return the currently active round, if there is one."""
+    return next(
+        (round for round in rounds if round.is_active(now)),
+        None,
+    )
+
+
+def get_teams(
+    competition: Competition,
+    request: HttpRequest,
+) -> list[Team]:
+    """Return all teams with their leaderboard metadata."""
+    if request.user.is_authenticated:
+        user_team_membership = TeamMembership.objects.filter(
+            team=OuterRef("pk"),
+            user=request.user,
+        )
+
+        is_user_team = Exists(user_team_membership)
+    else:
+        is_user_team = Value(False, output_field=BooleanField())
+
+    if request.session.get("is_dev_environment"):
+        team_filter = Team.objects.filter(development_competition=competition)
+    else:
+        team_filter = Team.objects.filter(competition=competition)
+
+    return list(
+        team_filter.annotate(
+            is_user_team=is_user_team,
+            flag_capture_count=Count("flag_captures"),
+        ).order_by("name")
+    )
+
+
+def get_rounds(competition: Competition) -> list[Round]:
+    """Return competition rounds ordered chronologically."""
+    return list(Round.objects.filter(competition=competition).order_by("round_start"))
+
+
+def get_flag_captures(
+    competition: Competition,
+) -> list[FlagCapture]:
+    """Return all flag captures in chronological order."""
+    return list(
+        FlagCapture.objects.filter(round__competition=competition)
+        .select_related(
+            "team",
+            "flag_capture_attempt",
+            "round",
+        )
+        .order_by("flag_capture_attempt__created_at")
+    )
+
+
+def get_competition_state_presentation(
+    state: CompetitionState,
     competition: Competition,
     team: Optional[Team] = None,
-) -> CompetitionState:
-    now = clock.now()
+) -> CompetitionPresentation:
+    if state.state == "invalid":
+        return CompetitionPresentation(
+            key="invalid",
+            label="",
+            detail="No competition right now",
+            target=None,
+            warning=False,
+        )
 
-    # ---------------------------------------------------------
-    # 1. TEAM REGISTRATION
-    # ---------------------------------------------------------
+    elif state.state == "dev_round":
+        return CompetitionPresentation(
+            key="round",
+            label=f"ROUND IN PROGRESS (DEV)",
+            detail="Competition round currently running",
+            target=None,
+            warning=False,
+        )
 
-    if competition.registration_is_open:
+    elif state.state == "pre_registration":
+        return CompetitionPresentation(
+            key="pre_registration",
+            label="TEAM REGISTRATION IN",
+            detail="Registration about to begin",
+            target=competition.registration_starts_at,
+            warning=False,
+        )
+
+    elif state.state == "registration":
         if team is None:
-            return CompetitionState(
+            return CompetitionPresentation(
                 key="registration",
                 label="TEAM REGISTRATION",
                 detail="Registration required",
@@ -49,7 +122,7 @@ def get_competition_state(
                 warning=True,
             )
 
-        return CompetitionState(
+        return CompetitionPresentation(
             key="registration",
             label="TEAM REGISTRATION",
             detail=f"Registered as {team.name}",
@@ -57,45 +130,20 @@ def get_competition_state(
             warning=False,
         )
 
-    # ---------------------------------------------------------
-    # 2. COMPETITION ROUNDS
-    # ---------------------------------------------------------
-
-    rounds = list(
-        Round.objects.filter(
-            round_start__gte=competition.registration_ends_at,
-        ).order_by("round_start")
-    )
-
-    # ---------------------------------------------------------
-    # 2a. CURRENT ROUND
-    # ---------------------------------------------------------
-
-    current_round = next(
-        (round for round in rounds if round.round_start <= now < round.round_end),
-        None,
-    )
-
-    if current_round is not None:
-        return CompetitionState(
+    elif state.state == "round":
+        assert state.current_round is not None
+        assert state.current_round_idx is not None
+        return CompetitionPresentation(
             key="round",
-            label=f"ROUND IN PROGRESS ({current_round.name})",
+            label=f"ROUND IN PROGRESS ({state.current_round.name})",
             detail="Competition round currently running",
-            target=current_round.round_end,
+            target=state.current_round.round_end,
             warning=False,
         )
 
-    # ---------------------------------------------------------
-    # 2b. NEXT ROUND
-    # ---------------------------------------------------------
-
-    next_round_index = next(
-        (index for index, round in enumerate(rounds) if now < round.round_start),
-        None,
-    )
-
-    if next_round_index is not None:
-        next_round = rounds[next_round_index]
+    elif state.state == "pre_round":
+        assert state.next_round is not None
+        assert state.next_round_idx is not None
 
         # No team means the user cannot have an upload that
         # belongs to a team yet.
@@ -118,22 +166,21 @@ def get_competition_state(
 
             # For the first round there is no previous round.
             # In that case, an upload must simply exist.
-            if next_round_index == 0:
+            if state.next_round_idx == 0:
                 needs_upload = latest_upload is None
-
             else:
-                previous_round = rounds[next_round_index - 1]
-
+                assert state.prev_round is not None
+                assert state.prev_round_idx is not None
                 needs_upload = (
                     latest_upload is None
-                    or latest_upload.created_at < previous_round.round_start
+                    or latest_upload.created_at < state.prev_round.round_start
                 )
 
-        return CompetitionState(
+        return CompetitionPresentation(
             key="next_round",
-            label=f"NEXT ROUND ({next_round.name})",
-            detail="Round about to begin" if needs_upload else "Round about to begin",
-            target=next_round.round_start,
+            label=f"NEXT ROUND ({state.next_round.name})",
+            detail="Round about to begin",
+            target=state.next_round.round_start,
             warning=needs_upload,
         )
 
@@ -141,44 +188,33 @@ def get_competition_state(
     # 3. COMPETITION FINISHED
     # ---------------------------------------------------------
 
-    return CompetitionState(
-        key="finished",
-        label="COMPETITION FINISHED",
-        detail="All competition rounds completed",
-        target=None,
-        warning=False,
-    )
+    elif state.state == "finished":
+        return CompetitionPresentation(
+            key="finished",
+            label="COMPETITION FINISHED",
+            detail="All competition rounds completed",
+            target=None,
+            warning=False,
+        )
+
+    assert False, f"Unknown competition state: '{state.state}'"
 
 
 def render_with_base_info(
-    request: HttpRequest, template, context=None, *args, **kwargs
+    request: HttpRequest,
+    template,
+    context=None,
+    *args,
+    **kwargs,
 ):
     if context is None:
         context = {}
 
-    user = request.user
-    competition = get_current_competition()
-
-    if not user.is_authenticated or competition is None:
-        team = None
-    else:
-        team = get_users_current_team(user, competition)
-
-    context["user"] = user
-    context["user_team"] = team
-    context["competition_state"] = get_competition_state(
-        competition=competition,
-        team=team,
-    )
-    context["time_now"] = clock.now()
-
-    if competition is None:
-        context["is_registration_period"] = False
-    else:
-        context["is_registration_period"] = competition.registration_is_open
-
-    context["debug"] = settings.DEBUG
     if settings.DEBUG:
-        context["available_users"] = User.objects.order_by("username")
+        request.available_users = User.objects.order_by("username")
+
+    request.state_presentation = get_competition_state_presentation(
+        request.competition_state, request.active_competition, request.team
+    )
 
     return render(request, template, context, *args, **kwargs)

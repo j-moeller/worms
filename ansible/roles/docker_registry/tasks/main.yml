@@ -1,11 +1,12 @@
 ---
-- name: Create registry data directory
+- name: Ensure the registry owns its data directory (mounted data disk is root-owned)
   ansible.builtin.file:
     path: "{{ docker_registry_data_dir }}"
     state: directory
-    owner: root
-    group: root
+    owner: docker-registry
+    group: docker-registry
     mode: '0755'
+  notify: Restart docker-registry
 
 - name: Configure docker registry
   ansible.builtin.template:

@@ -18,6 +18,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 APT_CACHE_HOST="${APT_CACHE_HOST:-10.2.0.20}"; APT_CACHE_PORT="${APT_CACHE_PORT:-3142}"
 DEVPI_HOST="${DEVPI_HOST:-10.2.0.21}";         DEVPI_PORT="${DEVPI_PORT:-3141}"
 MONGO_VER="${MONGO_VER:-8.0}"; MONGO_REL="${MONGO_REL:-bookworm}"
+DOCKER_REGISTRY_HOST="${DOCKER_REGISTRY_HOST:-10.2.0.22}"; DOCKER_REGISTRY_PORT="${DOCKER_REGISTRY_PORT:-5000}"
 MIRROR_DIR="${MIRROR_DIR:-/srv/offline-mirror}"
 DEVPI_INDEX="http://${DEVPI_HOST}:${DEVPI_PORT}/root/pypi/+simple/"
 
@@ -80,6 +81,17 @@ fi
 echo "==> [feedformatter] fetch the github zip (not on PyPI)"
 curl -fsSL "https://github.com/marianoguerra/feedformatter/archive/master.zip" \
   -o "$MIRROR_DIR/feedformatter.zip" || echo "   (feedformatter download failed)"
+
+echo "==> [docker] mirror images into the private registry (skopeo, no docker daemon needed)"
+REGISTRY="${DOCKER_REGISTRY_HOST}:${DOCKER_REGISTRY_PORT}"
+command -v skopeo >/dev/null 2>&1 || sudo apt-get install -y skopeo || echo "   (skopeo unavailable; skipping docker)"
+if command -v skopeo >/dev/null 2>&1; then
+  mapfile -t IMAGES < <(grep -vE '^\s*#|^\s*$' "$HERE/docker-images.txt")
+  for img in "${IMAGES[@]}"; do
+    echo "   -> $img"
+    skopeo copy --dest-tls-verify=false "docker://$img" "docker://$REGISTRY/$img" || echo "   (skip: $img)"
+  done
+fi
 
 echo
 echo "DONE. Next:"

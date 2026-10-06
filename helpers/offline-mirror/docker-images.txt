@@ -1,0 +1,6 @@
+# Container images to mirror into the private docker-registry (10.2.0.22:5000).
+# DERIVED from the PoC Dockerfiles:
+#   grep -rhiE '^FROM ' <cve-tool>/pocs/**/Dockerfile | awk '{print $2}' | sort -u
+# Re-run that when PoCs are added/changed and update this list.
+# One image reference per line (name:tag). Mirrored as <registry>/<name>:<tag>.
+httpd:2.4.49

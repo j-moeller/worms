@@ -7,6 +7,8 @@ The private internet can run fully offline, but the caches must be
 - `apt-packages.txt` — everything apt-cacher-ng should hold (services, PoC build
   deps, non-free POSIX man pages, a useful CLI/dev/net base). MongoDB packages are
   listed but come from repo.mongodb.org (mirrored separately).
+- `docker-images.txt` — container images to mirror into the docker-registry, **derived from the PoC
+  Dockerfiles** (`grep -rhiE '^FROM ' pocs/**/Dockerfile`). Re-derive when PoCs change.
 - `pip-packages.txt` — everything devpi should hold (our apps + full cve-search
   dependency closure + useful extras). feedformatter is a GitHub zip, handled apart.
 

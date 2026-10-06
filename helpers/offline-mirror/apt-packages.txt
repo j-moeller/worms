@@ -87,3 +87,4 @@ mongodb-org-mongos
 mongodb-org-tools
 mongodb-org-database
 mongodb-mongosh
+skopeo

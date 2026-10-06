@@ -24,8 +24,8 @@ DEVPI_INDEX="http://${DEVPI_HOST}:${DEVPI_PORT}/root/pypi/+simple/"
 
 sudo install -d "$MIRROR_DIR"/{mongodb,pip}
 
-echo "==> prerequisites (dpkg-dev provides dpkg-scanpackages)"
-sudo apt-get install -y dpkg-dev curl ca-certificates || true
+echo "==> prerequisites (dpkg-dev for dpkg-scanpackages, pip/venv for devpi fill, skopeo for images)"
+sudo apt-get install -y dpkg-dev curl ca-certificates python3-pip python3-venv skopeo || true
 
 echo "==> [apt] route apt through apt-cacher-ng (path-style; caches HTTPS upstream), enable non-free"
 ACNG="http://${APT_CACHE_HOST}:${APT_CACHE_PORT}"

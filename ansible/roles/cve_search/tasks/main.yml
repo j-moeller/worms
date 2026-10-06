@@ -1,4 +1,11 @@
 ---
+# Build/install tasks that need the internet (git, pip, the MongoDB HTTPS repo)
+# run only during the prep phase (internet_enabled=true). cve-search is built and
+# its DB populated while internet is available; an offline re-run then only
+# (re)deploys config and ensures the services are running -- it must not try to
+# reach PyPI/GitHub/repo.mongodb.org, which are sealed off. feedformatter is a
+# GitHub zip (not on PyPI), so a from-scratch offline build is not supported by
+# design: populate in prep, then seal.
 - name: Create cve-search user
   ansible.builtin.user:
     name: "{{ cve_search_user }}"
@@ -14,6 +21,7 @@
     version: "{{ cve_search_repo_version }}"
     depth: 1
     update: false
+  when: internet_enabled | bool
 
 - name: Create virtualenv
   ansible.builtin.command: python3 -m venv {{ cve_search_venv }}
@@ -25,16 +33,19 @@
     path: "{{ cve_search_dir }}/requirements.txt"
     regexp: 'https://github\.com/marianoguerra/feedformatter/archive/master\.zip'
     replace: "{{ cve_search_feedformatter_src }}"
+  when: internet_enabled | bool
 
 - name: Install Python dependencies
   ansible.builtin.pip:
     requirements: "{{ cve_search_dir }}/requirements.txt"
     virtualenv: "{{ cve_search_venv }}"
+  when: internet_enabled | bool
 
 - name: Install gunicorn
   ansible.builtin.pip:
     name: gunicorn
     virtualenv: "{{ cve_search_venv }}"
+  when: internet_enabled | bool
 
 - name: Deploy configuration
   ansible.builtin.template:
@@ -71,6 +82,7 @@
       - ca-certificates
     state: present
     update_cache: true
+  when: internet_enabled | bool
 
 - name: Create apt keyrings directory
   ansible.builtin.file:
@@ -83,6 +95,7 @@
     url: "{{ cve_search_mongodb_key_url }}"
     dest: "/etc/apt/keyrings/mongodb-server-{{ cve_search_mongodb_version }}.asc"
     mode: '0644'
+  when: internet_enabled | bool
 
 - name: Add MongoDB apt repository
   ansible.builtin.apt_repository:
@@ -90,6 +103,7 @@
     filename: "mongodb-org-{{ cve_search_mongodb_version }}"
     state: present
     update_cache: true
+  when: internet_enabled | bool
 
 - name: Install MongoDB and Redis
   ansible.builtin.apt:
@@ -98,6 +112,7 @@
       - redis-server
     state: present
     update_cache: true
+  when: internet_enabled | bool
 
 - name: Enable and start Redis
   ansible.builtin.systemd:

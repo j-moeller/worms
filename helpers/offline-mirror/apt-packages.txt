@@ -34,7 +34,7 @@ ca-certificates
 gnupg
 
 ## --- PoC build deps (Apache RCE / Shellshock PoCs) ---
-libpcre3-dev
+libpcre2-dev
 libssl-dev
 gcc
 default-jdk
@@ -67,7 +67,7 @@ file
 sudo
 openssh-client
 openssh-server
-software-properties-common
+# software-properties-common  # removed in Debian 13/trixie
 pkg-config
 make
 cmake

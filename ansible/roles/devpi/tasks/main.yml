@@ -28,6 +28,9 @@
       - devpi-server
       - devpi-web
     virtualenv: "{{ devpi_venv }}"
+  # Bootstrap from PyPI during prep only; offline it is already installed (devpi
+  # cannot bootstrap itself before it is running). Offline = config/service only.
+  when: internet_enabled | bool
 
 - name: Remove lost+found so devpi-init sees an empty serverdir (dedicated data disk)
   ansible.builtin.file:

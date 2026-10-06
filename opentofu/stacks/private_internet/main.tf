@@ -55,7 +55,7 @@ locals {
     devpi = {
       cpu                         = 1
       cpu_type                    = null
-      ram                         = 1024
+      ram                         = 2048 # devpi-web (Whoosh indexing) OOMs on 1 GB -> crash-loop, nothing cached
       disk_size                   = 5
       data_disk_size              = 10
       network_cidr                = "10.2.0.21/24"

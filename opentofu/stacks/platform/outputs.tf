@@ -16,3 +16,22 @@ output "platform" {
     }
   }
 }
+
+# Ground truth for the Ansible inventory. scripts/generate_inventory.py reads
+# `tofu output -json infrastructure` from this (always-applied) stack and writes
+# ansible/inventory.generated.yml. Everything here derives from the single
+# source of truth in opentofu/shared/shared-variables.tf.
+output "infrastructure" {
+  description = "Static infrastructure addressing consumed by the Ansible inventory generator."
+  value = {
+    infrastructure_ips   = local.infrastructure_ips
+    dns_maintenance_ip   = local.dns_maintenance_ip
+    private_internet_ips = local.private_internet_ips
+    networks             = local.networks
+    proxmox = {
+      host     = local.proxmox_host_ip
+      api_port = local.proxmox_api_port
+      node     = var.proxmox_instance
+    }
+  }
+}

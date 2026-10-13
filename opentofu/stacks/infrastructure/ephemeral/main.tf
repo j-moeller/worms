@@ -34,9 +34,9 @@ locals {
     dns = {
       cpu                         = 1
       ram                         = 1024
-      network_cidr                = "10.2.0.11/24"
+      network_cidr                = "${local.infrastructure_ips.dns}/24"
       network_gateway_ip          = "10.2.0.1"
-      maintenance_network_cidr    = "10.3.0.11/24"
+      maintenance_network_cidr    = "${local.dns_maintenance_ip}/24"
       maintenance_network_gateway = "10.3.0.1"
       user_data_file_id           = local.platform.cloud_init.dns.file_id
       vmbr_network                = local.platform.networks.private_internet.name
@@ -62,7 +62,7 @@ locals {
       }
       */
       scoring = {
-        maintenance_network_cidr    = "10.3.0.14/24"
+        maintenance_network_cidr    = "${local.infrastructure_ips.scoring}/24"
         maintenance_network_gateway = "10.3.0.1"
         user_data_file_id           = local.platform.cloud_init.flask.file_id
         disk_file_id                = local.platform.os_images.debian.file_id
@@ -73,7 +73,7 @@ locals {
         ]
       }
       logging = {
-        maintenance_network_cidr    = "10.3.0.15/24"
+        maintenance_network_cidr    = "${local.infrastructure_ips.logging}/24"
         maintenance_network_gateway = "10.3.0.1"
         user_data_file_id           = local.platform.cloud_init.flask.file_id
         disk_file_id                = local.platform.os_images.debian.file_id

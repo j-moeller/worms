@@ -1,3 +1,17 @@
+# Static, semantic inventory: groups, roles and per-host application config.
+#
+# Every IP address here is sourced from OpenTofu (the ground truth) via the
+# variables in inventory.generated.yml (written by scripts/generate_inventory.py
+# from `tofu output`). This file never hardcodes an address, so changing an IP
+# in opentofu/shared/shared-variables.tf and re-running `make inventory` is all
+# that is needed — this file is untouched.
+#
+# ALWAYS run with both inventories so the {{ infrastructure_ips.* }} /
+# {{ private_internet_ips.* }} references resolve:
+#     ansible-playbook -i inventory.yml -i inventory.generated.yml <playbook>
+#
+# Dynamic sandbox hosts are not listed here; they come from the generated
+# inventory's `sandbox` group.
 all:
   children:
 
@@ -9,58 +23,58 @@ all:
     dns_hosts:
       hosts:
         dns.worms.internal:
-          ansible_host: 10.2.0.11
+          ansible_host: "{{ infrastructure_ips.dns }}"
           ansible_user: debian
           dns_entries:
             - name: scoring.worms.internal
-              ip: 10.3.0.14
+              ip: "{{ infrastructure_ips.scoring }}"
             - name: logging.worms.internal
-              ip: 10.3.0.15
+              ip: "{{ infrastructure_ips.logging }}"
             - name: database.worms.internal
-              ip: 10.3.0.16
+              ip: "{{ infrastructure_ips.db }}"
             - name: apt-cache.worms.internal
-              ip: 10.2.0.20
+              ip: "{{ private_internet_ips.apt_cache.network }}"
             - name: pypi.worms.internal
-              ip: 10.2.0.21
+              ip: "{{ private_internet_ips.devpi.network }}"
             - name: docker-registry.worms.internal
-              ip: 10.2.0.22
+              ip: "{{ private_internet_ips.docker_registry.network }}"
             - name: manpages.worms.internal
-              ip: 10.2.0.23
+              ip: "{{ private_internet_ips.manpages.network }}"
             - name: ntp.worms.internal
-              ip: 10.2.0.24
+              ip: "{{ private_internet_ips.ntp.network }}"
             - name: cve-search.worms.internal
-              ip: 10.2.0.25
+              ip: "{{ private_internet_ips.cve_search.network }}"
             - name: wikipedia.worms.internal
-              ip: 10.2.0.26
+              ip: "{{ private_internet_ips.wikipedia.network }}"
             - name: dashboard.worms.internal
-              ip: 10.3.0.18
+              ip: "{{ infrastructure_ips.dashboard }}"
             - name: orchestrator.worms.internal
-              ip: 10.3.0.19
+              ip: "{{ infrastructure_ips.orchestrator }}"
 
     tls_hosts:
       hosts:
         scoring.worms.internal:
-          ansible_host: 10.3.0.14
+          ansible_host: "{{ infrastructure_ips.scoring }}"
           ansible_user: debian
           tls_dns_name: scoring.worms.internal
 
         logging.worms.internal:
-          ansible_host: 10.3.0.15
+          ansible_host: "{{ infrastructure_ips.logging }}"
           ansible_user: debian
           tls_dns_name: logging.worms.internal
 
         database.worms.internal:
-          ansible_host: 10.3.0.16
+          ansible_host: "{{ infrastructure_ips.db }}"
           ansible_user: debian
           tls_dns_name: database.worms.internal
 
         dashboard.worms.internal:
-          ansible_host: 10.3.0.18
+          ansible_host: "{{ infrastructure_ips.dashboard }}"
           ansible_user: debian
           tls_dns_name: dashboard.worms.internal
 
         orchestrator.worms.internal:
-          ansible_host: 10.3.0.19
+          ansible_host: "{{ infrastructure_ips.orchestrator }}"
           ansible_user: debian
           tls_dns_name: orchestrator.worms.internal
 
@@ -78,7 +92,7 @@ all:
 
     # Django application hosts. Per-host vars select the settings module, the
     # least-privilege DB user and (for the orchestrator) the Proxmox credentials.
-    # All secret values are vault references, resolved from group_vars/vault.yml.
+    # IPs come from the ground truth; secrets are vault references.
     django_hosts:
       hosts:
         dashboard.worms.internal:
@@ -87,7 +101,7 @@ all:
           django_db_user: django_dashboard
           django_db_password: "{{ vault_django_dashboard_password }}"
           django_secret_key: "{{ vault_dashboard_secret_key }}"
-          django_allowed_hosts: "dashboard.worms.internal,10.3.0.18"
+          django_allowed_hosts: "dashboard.worms.internal,{{ infrastructure_ips.dashboard }}"
 
         orchestrator.worms.internal:
           django_variant: orchestrator
@@ -95,15 +109,15 @@ all:
           django_db_user: django_orchestrator
           django_db_password: "{{ vault_django_orchestrator_password }}"
           django_secret_key: "{{ vault_orchestrator_secret_key }}"
-          django_allowed_hosts: "orchestrator.worms.internal,10.3.0.19"
+          django_allowed_hosts: "orchestrator.worms.internal,{{ infrastructure_ips.orchestrator }}"
           django_extra_pip_packages:
             - proxmoxer
             - requests
           # Proxmox credentials delivered securely into the env file (0600 root).
           django_extra_env:
-            PROXMOX_HOST: "{{ proxmox_host }}"
-            PROXMOX_PORT: "{{ proxmox_api_port }}"
-            PROXMOX_NODE: "{{ proxmox_node }}"
+            PROXMOX_HOST: "{{ proxmox.host }}"
+            PROXMOX_PORT: "{{ proxmox.api_port }}"
+            PROXMOX_NODE: "{{ proxmox.node }}"
             PROXMOX_USER: "{{ proxmox_api_user }}"
             PROXMOX_TOKEN_NAME: "{{ proxmox_api_token_name }}"
             PROXMOX_TOKEN_VALUE: "{{ proxmox_api_token_value }}"
@@ -141,42 +155,42 @@ all:
     apt_cache_hosts:
       hosts:
         apt-cache.worms.internal:
-          ansible_host: 10.3.0.2
+          ansible_host: "{{ private_internet_ips.apt_cache.maintenance }}"
           ansible_user: debian
 
     devpi_hosts:
       hosts:
         pypi.worms.internal:
-          ansible_host: 10.3.0.3
+          ansible_host: "{{ private_internet_ips.devpi.maintenance }}"
           ansible_user: debian
 
     docker_registry_hosts:
       hosts:
         docker-registry.worms.internal:
-          ansible_host: 10.3.0.4
+          ansible_host: "{{ private_internet_ips.docker_registry.maintenance }}"
           ansible_user: debian
 
     manpages_hosts:
       hosts:
         manpages.worms.internal:
-          ansible_host: 10.3.0.5
+          ansible_host: "{{ private_internet_ips.manpages.maintenance }}"
           ansible_user: debian
 
     ntp_hosts:
       hosts:
         ntp.worms.internal:
-          ansible_host: 10.3.0.6
+          ansible_host: "{{ private_internet_ips.ntp.maintenance }}"
           ansible_user: debian
-          ntp_allow_network: 10.2.0.0/24
+          ntp_allow_network: "{{ networks.private_internet }}"
 
     cve_search_hosts:
       hosts:
         cve-search.worms.internal:
-          ansible_host: 10.3.0.7
+          ansible_host: "{{ private_internet_ips.cve_search.maintenance }}"
           ansible_user: debian
 
     wikipedia_hosts:
       hosts:
         wikipedia.worms.internal:
-          ansible_host: 10.3.0.8
+          ansible_host: "{{ private_internet_ips.wikipedia.maintenance }}"
           ansible_user: debian

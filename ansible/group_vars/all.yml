@@ -7,15 +7,12 @@
 # "Secrets" section of the README for how to create the encrypted vault.
 # -----------------------------------------------------------------------------
 
-# Canonical maintenance-network addresses (keep in sync with
-# opentofu/shared/shared-variables.tf -> locals.infrastructure_ips).
-infrastructure_ips:
-  scoring: 10.3.0.14
-  logging: 10.3.0.15
-  db: 10.3.0.16
-  dashboard: 10.3.0.18
-  orchestrator: 10.3.0.19
-  network_monitor: 10.3.0.100
+# Addressing is the OpenTofu ground truth. `infrastructure_ips`,
+# `private_internet_ips`, `networks` and `proxmox` are provided by
+# inventory.generated.yml (written by scripts/generate_inventory.py from
+# `tofu output`). Nothing here hardcodes an IP; run playbooks with
+#   -i inventory.yml -i inventory.generated.yml
+# so these references resolve.
 
 # --- PostgreSQL -------------------------------------------------------------
 postgres_db: mydb
@@ -72,10 +69,9 @@ pki_server_key_size: 3072
 pki_server_validity: "+825d"
 
 # --- Proxmox (consumed by the orchestrator via proxmoxer) -------------------
-# API token, passed securely to the orchestrator VM at initialization time.
-proxmox_host: "10.3.0.1"
-proxmox_api_port: 8006
-proxmox_node: "worms-pve"
+# Host / port / node come from the OpenTofu ground truth as `proxmox`
+# (inventory.generated.yml). Only the identity + API token live here; the
+# token value is a vault secret, passed securely to the orchestrator at init.
 proxmox_api_user: "orchestrator@pam"
 proxmox_api_token_name: "orchestrator-prov"
 proxmox_api_token_value: "{{ vault_proxmox_api_token_value }}"

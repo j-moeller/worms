@@ -32,6 +32,10 @@ if not DEBUG:
             "PASSWORD": "test",  # TODO # PASSWORD
             "HOST": "10.3.0.16",  # TODO
             "PORT": "5432",
+            "OPTIONS": {
+                "sslmode": "verify-full",
+                "sslrootcert": "/etc/ssl/certs/ca-certificates.crt",
+            },
         },
         "migrator": {
             "ENGINE": "django.db.backends.postgresql",
@@ -40,9 +44,12 @@ if not DEBUG:
             "PASSWORD": "test",  # TODO # PASSWORD
             "HOST": "10.3.0.16",  # TODO
             "PORT": "5432",
+            "OPTIONS": {
+                "sslmode": "verify-full",
+                "sslrootcert": "/etc/ssl/certs/ca-certificates.crt",
+            },
         },
     }
-
 
 LOGGING["loggers"]["dashboard"] = {
     "handlers": ["console"],

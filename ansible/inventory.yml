@@ -16,6 +16,8 @@ all:
               ip: 10.3.0.14
             - name: logging.worms.internal
               ip: 10.3.0.15
+            - name: database.worms.internal
+              ip: 10.3.0.16
             - name: apt-cache.worms.internal
               ip: 10.2.0.20
             - name: pypi.worms.internal
@@ -30,8 +32,6 @@ all:
               ip: 10.2.0.25
             - name: wikipedia.worms.internal
               ip: 10.2.0.26
-            # - name: database.worms.internal
-            #   ip: 10.3.0.16
             # - name: dashboard.worms.internal
             #   ip: 10.3.0.18
 

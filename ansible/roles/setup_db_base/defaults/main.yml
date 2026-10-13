@@ -1,2 +1,9 @@
 postgresql_listen_addresses: "*" # TODO
-# TODO: Add TLS
+postgresql_tls_hostname: database.worms.internal
+postgresql_tls_extra_sans: []        # e.g. ["IP:10.0.0.5"]
+postgresql_tls_validity: "+365d"
+postgresql_tls_min_protocol: "TLSv1.2"
+
+# Controller-side path to the CA private key (add passphrase via vault if it has one)
+pki_ca_key_path: "{{ playbook_dir }}/pki/ca.key"
+# pki_ca_key_passphrase: "{{ vault_pki_ca_key_passphrase }}"

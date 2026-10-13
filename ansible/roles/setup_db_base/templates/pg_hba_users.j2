@@ -1,5 +1,5 @@
 {% for user in postgresql_users %}
-host    {{ postgres_db }}    {{ user.name }}    {{ user.cidr }}    scram-sha-256
+hostssl    {{ postgres_db }}    {{ user.name }}    {{ user.cidr }}    scram-sha-256
 {% endfor %}
-host    {{ postgres_db }}    {{ postgres_admin_name }}    {{ postgres_admin_cidr }}    scram-sha-256
-host    {{ postgres_db }}    {{ postgres_migrator_name }}    {{ postgres_migrator_cidr }}    scram-sha-256
+hostssl    {{ postgres_db }}    {{ postgres_admin_name }}    {{ postgres_admin_cidr }}    scram-sha-256
+hostssl    {{ postgres_db }}    {{ postgres_migrator_name }}    {{ postgres_migrator_cidr }}    scram-sha-256

@@ -1,0 +1,84 @@
+---
+- name: Set TLS paths
+  ansible.builtin.set_fact:
+    postgresql_tls_dir: "{{ postgresql_conf.stdout | dirname }}/tls"
+
+- name: Create TLS directory
+  ansible.builtin.file:
+    path: "{{ postgresql_tls_dir }}"
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: "0700"
+
+- name: Generate server private key
+  community.crypto.openssl_privatekey:
+    path: "{{ postgresql_tls_dir }}/server.key"
+    type: RSA
+    size: 4096
+    owner: postgres
+    group: postgres
+    mode: "0600"
+  notify: Restart PostgreSQL
+
+- name: Generate CSR (in memory)
+  community.crypto.openssl_csr_pipe:
+    privatekey_path: "{{ postgresql_tls_dir }}/server.key"
+    common_name: "{{ postgresql_tls_hostname }}"
+    subject_alt_name: "{{ ['DNS:' + postgresql_tls_hostname] + postgresql_tls_extra_sans }}"
+    basic_constraints:
+      - "CA:FALSE"
+    key_usage:
+      - digitalSignature
+      - keyEncipherment
+    extended_key_usage:
+      - serverAuth
+  register: postgresql_csr
+
+- name: Check for existing server certificate
+  ansible.builtin.stat:
+    path: "{{ postgresql_tls_dir }}/server.crt"
+  register: postgresql_cert_stat
+
+- name: Read existing server certificate
+  ansible.builtin.slurp:
+    src: "{{ postgresql_tls_dir }}/server.crt"
+  register: postgresql_cert_existing
+  when: postgresql_cert_stat.stat.exists
+
+# Runs on the controller; only re-signs if missing, expiring, or SANs/key changed
+- name: Sign server certificate with internal CA
+  community.crypto.x509_certificate_pipe:
+    content: "{{ (postgresql_cert_existing.content | b64decode) if postgresql_cert_stat.stat.exists else omit }}"
+    csr_content: "{{ postgresql_csr.csr }}"
+    provider: ownca
+    ownca_path: "{{ pki_ca_cert_path }}"
+    ownca_privatekey_path: "{{ pki_ca_key_path }}"
+    ownca_privatekey_passphrase: "{{ pki_ca_key_passphrase | default(omit) }}"
+    ownca_not_after: "{{ postgresql_tls_validity }}"
+    ownca_not_before: "-1d"
+  delegate_to: localhost
+  become: false
+  register: postgresql_cert
+
+- name: Install server certificate
+  ansible.builtin.copy:
+    dest: "{{ postgresql_tls_dir }}/server.crt"
+    content: "{{ postgresql_cert.certificate }}"
+    owner: postgres
+    group: postgres
+    mode: "0644"
+  when: postgresql_cert is changed
+  notify: Reload PostgreSQL
+
+- name: Enable TLS in postgresql.conf
+  ansible.builtin.lineinfile:
+    path: "{{ postgresql_conf.stdout }}"
+    regexp: '^#?\s*{{ item.key }}\s*='
+    line: "{{ item.key }} = '{{ item.value }}'"
+  loop:
+    - { key: ssl, value: "on" }
+    - { key: ssl_cert_file, value: "{{ postgresql_tls_dir }}/server.crt" }
+    - { key: ssl_key_file, value: "{{ postgresql_tls_dir }}/server.key" }
+    - { key: ssl_min_protocol_version, value: "{{ postgresql_tls_min_protocol }}" }
+  notify: Restart PostgreSQL

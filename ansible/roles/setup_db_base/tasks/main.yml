@@ -49,6 +49,8 @@
     line: "listen_addresses = '{{ postgresql_listen_addresses }}'"
   notify: Restart PostgreSQL
 
+- name: Configure TLS
+  ansible.builtin.include_tasks: tls.yml
 
 - name: Allow database users remote access
   blockinfile:

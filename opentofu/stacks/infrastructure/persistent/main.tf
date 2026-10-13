@@ -38,6 +38,10 @@ locals {
         user_data_file_id           = local.platform.cloud_init.postgresql.file_id
         disk_file_id                = local.platform.os_images.debian.file_id
         tag                         = "persistent"
+        security_groups = [
+          local.platform.security_group_names.ssh,
+          local.platform.security_group_names.database
+        ]
       }
 
       dashboard = {
@@ -46,6 +50,10 @@ locals {
         user_data_file_id           = local.platform.cloud_init.nginx.file_id
         disk_file_id                = local.platform.os_images.debian.file_id
         tag                         = "persistent"
+        security_groups = [
+          local.platform.security_group_names.ssh,
+          local.platform.security_group_names.dashboard
+        ]
       }
     }
   }
@@ -66,4 +74,5 @@ module "infrastructure_vms" {
   disk_file_id                = each.value.disk_file_id
   tag                         = each.value.tag
   pool_id                     = local.platform.pools["persistent"].pool_id
+  security_groups             = each.value.security_groups
 }

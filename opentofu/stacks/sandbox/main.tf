@@ -47,6 +47,17 @@ resource "proxmox_pool_membership" "pool_membership" {
   vm_id   = proxmox_virtual_environment_vm.vm[each.key].vm_id
 }
 
+resource "proxmox_virtual_environment_firewall_options" "vm" {
+  for_each = local.sandbox_vms
+
+  node_name = var.proxmox_instance
+  vm_id     = proxmox_virtual_environment_vm.vm[each.key].vm_id
+
+  enabled       = true
+  input_policy  = "DROP"
+  output_policy = "DROP"
+}
+
 resource "proxmox_virtual_environment_vm" "vm" {
   for_each = local.sandbox_vms
 
@@ -101,22 +112,23 @@ resource "proxmox_virtual_environment_vm" "vm" {
     for_each = each.value.network_devices
 
     content {
-      bridge = network_device.value.bridge
-      model  = "virtio"
+      bridge   = network_device.value.bridge
+      model    = "virtio"
+      firewall = true
     }
   }
 
   network_device {
-    bridge = local.platform.networks.maintenance.name
-    model  = "virtio"
+    bridge   = local.platform.networks.maintenance.name
+    model    = "virtio"
+    firewall = true
   }
 
   serial_device {}
 
   disk {
     datastore_id = "local-zfs"
-    import_from  = (each.value.os_image.content_type == "import") ? each.value.os_image.file_id : null
-    file_id      = (each.value.os_image.content_type == "import") ? null : each.value.os_image.file_id
+    file_id      = each.value.disk_file_id
 
     interface = "virtio0"
     iothread  = true

@@ -1,3 +1,28 @@
+resource "proxmox_virtual_environment_firewall_options" "monitor_server" {
+  node_name = var.proxmox_instance
+  vm_id     = proxmox_virtual_environment_vm.monitor_server.vm_id
+
+  enabled       = true
+  input_policy  = "DROP"
+  output_policy = "DROP"
+}
+
+/*
+resource "proxmox_virtual_environment_firewall_rules" "monitor_server_ssh" {
+  node_name = var.proxmox_instance
+  vm_id     = proxmox_virtual_environment_vm.monitor_server.vm_id
+
+  rule {
+    type    = "in"
+    action  = "ACCEPT"
+    proto   = "tcp"
+    dport   = "22"
+    source  = "10.3.0.1"
+    comment = "Allow SSH from Proxmox host"
+  }
+}
+*/
+
 resource "proxmox_virtual_environment_vm" "monitor_server" {
   name      = "monitor-server"
   node_name = var.proxmox_instance
@@ -24,13 +49,15 @@ resource "proxmox_virtual_environment_vm" "monitor_server" {
   }
 
   network_device {
-    bridge = var.vmbr_maintenance_network
-    model  = "virtio"
+    bridge   = var.vmbr_maintenance_network
+    model    = "virtio"
+    firewall = true
   }
 
   network_device {
-    bridge = var.vmbr_monitor_network
-    model  = "virtio"
+    bridge   = var.vmbr_monitor_network
+    model    = "virtio"
+    firewall = true
   }
 
   serial_device {}

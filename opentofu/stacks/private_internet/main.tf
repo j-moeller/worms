@@ -51,6 +51,10 @@ locals {
       vmbr_network                = local.platform.networks.private_internet.name
       vmbr_maintenance_network    = local.platform.networks.maintenance.name
       disk_file_id                = local.platform.os_images.debian.file_id
+      security_groups = [
+        local.platform.security_group_names.ssh,
+        local.platform.security_group_names.private_internet
+      ]
     }
     devpi = {
       cpu                         = 1
@@ -66,6 +70,10 @@ locals {
       vmbr_network                = local.platform.networks.private_internet.name
       vmbr_maintenance_network    = local.platform.networks.maintenance.name
       disk_file_id                = local.platform.os_images.debian.file_id
+      security_groups = [
+        local.platform.security_group_names.ssh,
+        local.platform.security_group_names.private_internet
+      ]
     }
     docker_registry = {
       cpu                         = 1
@@ -81,6 +89,10 @@ locals {
       vmbr_network                = local.platform.networks.private_internet.name
       vmbr_maintenance_network    = local.platform.networks.maintenance.name
       disk_file_id                = local.platform.os_images.debian.file_id
+      security_groups = [
+        local.platform.security_group_names.ssh,
+        local.platform.security_group_names.private_internet
+      ]
     }
     manpages = {
       cpu                         = 1
@@ -96,6 +108,10 @@ locals {
       vmbr_network                = local.platform.networks.private_internet.name
       vmbr_maintenance_network    = local.platform.networks.maintenance.name
       disk_file_id                = local.platform.os_images.debian.file_id
+      security_groups = [
+        local.platform.security_group_names.ssh,
+        local.platform.security_group_names.private_internet
+      ]
     }
     ntp = {
       cpu                         = 1
@@ -111,6 +127,10 @@ locals {
       vmbr_network                = local.platform.networks.private_internet.name
       vmbr_maintenance_network    = local.platform.networks.maintenance.name
       disk_file_id                = local.platform.os_images.debian.file_id
+      security_groups = [
+        local.platform.security_group_names.ssh,
+        local.platform.security_group_names.private_internet
+      ]
     }
     cve_search = {
       cpu                         = 2
@@ -126,6 +146,10 @@ locals {
       vmbr_network                = local.platform.networks.private_internet.name
       vmbr_maintenance_network    = local.platform.networks.maintenance.name
       disk_file_id                = local.platform.os_images.debian.file_id
+      security_groups = [
+        local.platform.security_group_names.ssh,
+        local.platform.security_group_names.private_internet
+      ]
     }
     wikipedia = {
       cpu                         = 1
@@ -141,6 +165,10 @@ locals {
       vmbr_network                = local.platform.networks.private_internet.name
       vmbr_maintenance_network    = local.platform.networks.maintenance.name
       disk_file_id                = local.platform.os_images.debian.file_id
+      security_groups = [
+        local.platform.security_group_names.ssh,
+        local.platform.security_group_names.private_internet
+      ]
     }
   }
 
@@ -172,4 +200,5 @@ module "private_internet_vms" {
   vmbr_network             = each.value.vmbr_network
   vmbr_maintenance_network = each.value.vmbr_maintenance_network
   disk_file_id             = each.value.disk_file_id
+  security_groups          = each.value.security_groups
 }

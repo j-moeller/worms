@@ -42,6 +42,10 @@ locals {
       vmbr_network                = local.platform.networks.private_internet.name
       vmbr_maintenance_network    = local.platform.networks.maintenance.name
       disk_file_id                = local.platform.os_images.debian.file_id
+      security_groups = [
+        local.platform.security_group_names.ssh,
+        local.platform.security_group_names.dns
+      ]
     }
   }
 }
@@ -63,6 +67,10 @@ locals {
         user_data_file_id           = local.platform.cloud_init.flask.file_id
         disk_file_id                = local.platform.os_images.debian.file_id
         tag                         = "ephemeral"
+        security_groups = [
+          local.platform.security_group_names.ssh,
+          local.platform.security_group_names.sandbox_rest_api
+        ]
       }
       logging = {
         maintenance_network_cidr    = "10.3.0.15/24"
@@ -70,6 +78,10 @@ locals {
         user_data_file_id           = local.platform.cloud_init.flask.file_id
         disk_file_id                = local.platform.os_images.debian.file_id
         tag                         = "ephemeral"
+        security_groups = [
+          local.platform.security_group_names.ssh,
+          local.platform.security_group_names.sandbox_rest_api
+        ]
       }
     }
     /*
@@ -103,6 +115,7 @@ module "private_internet_vms" {
   vmbr_maintenance_network = each.value.vmbr_maintenance_network
   disk_file_id             = each.value.disk_file_id
   pool_id                  = local.platform.pools["private_internet"].pool_id
+  security_groups          = each.value.security_groups
 }
 
 module "infrastructure_vms" {
@@ -120,9 +133,10 @@ module "infrastructure_vms" {
   disk_file_id                = each.value.disk_file_id
   tag                         = each.value.tag
   pool_id                     = local.platform.pools["ephemeral"].pool_id
+  security_groups             = each.value.security_groups
 }
-/*
 
+/*
 module "network_monitor_vm" {
   source = "../../../modules/network_monitor_vm"
 

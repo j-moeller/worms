@@ -16,6 +16,29 @@ resource "proxmox_pool_membership" "pool_membership" {
   vm_id   = proxmox_virtual_environment_vm.service_vm.vm_id
 }
 
+resource "proxmox_virtual_environment_firewall_options" "service_vm" {
+  node_name = var.proxmox_instance
+  vm_id     = proxmox_virtual_environment_vm.service_vm.vm_id
+
+  enabled       = true
+  input_policy  = "DROP"
+  output_policy = "DROP"
+}
+
+resource "proxmox_virtual_environment_firewall_rules" "service_vm_ssh" {
+  node_name = var.proxmox_instance
+  vm_id     = proxmox_virtual_environment_vm.service_vm.vm_id
+
+  dynamic "rule" {
+    for_each = var.security_groups
+
+    content {
+      security_group = rule.value.name
+      comment        = "Apply security group: ${rule.value.name}"
+    }
+  }
+}
+
 resource "proxmox_virtual_environment_vm" "service_vm" {
   name      = var.name
   node_name = var.proxmox_instance
@@ -51,13 +74,15 @@ resource "proxmox_virtual_environment_vm" "service_vm" {
   }
 
   network_device {
-    bridge = var.vmbr_network
-    model  = "virtio"
+    bridge   = var.vmbr_network
+    model    = "virtio"
+    firewall = true
   }
 
   network_device {
-    bridge = var.vmbr_maintenance_network
-    model  = "virtio"
+    bridge   = var.vmbr_maintenance_network
+    model    = "virtio"
+    firewall = true
   }
 
   serial_device {}

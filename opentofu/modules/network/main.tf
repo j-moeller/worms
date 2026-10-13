@@ -42,6 +42,7 @@ resource "proxmox_network_linux_bridge" "vmbr_monitoring" {
 # applied, same assumption as the local state backend). Changing internet_enabled
 # replaces this resource, re-running the provisioner. Covers both NICs of the
 # private-internet VMs (private subnet + maintenance IP range).
+
 resource "null_resource" "private_internet_egress" {
   triggers = {
     sealed      = var.internet_enabled ? "0" : "1"

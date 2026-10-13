@@ -1,4 +1,3 @@
-/*
 locals {
   seed = "1000"
 
@@ -14,7 +13,7 @@ locals {
   }
 
   sandbox_vms = {
-    sandbox_vm01 = {
+    sandbox-vm01 = {
       cpu               = 1
       ram               = 256
       disk_file_id      = local.platform.os_images.debian.file_id
@@ -35,7 +34,7 @@ locals {
         }
       ]
     }
-    sandbox_vm02 = {
+    sandbox-vm02 = {
       cpu               = 1
       ram               = 256
       disk_file_id      = local.platform.os_images.debian.file_id
@@ -56,7 +55,7 @@ locals {
         }
       ]
     }
-    sandbox_vm03 = {
+    sandbox-vm03 = {
       cpu               = 1
       ram               = 256
       disk_file_id      = local.platform.os_images.debian.file_id
@@ -79,4 +78,3 @@ locals {
     }
   }
 }
-*/

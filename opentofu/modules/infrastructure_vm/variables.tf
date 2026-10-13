@@ -14,3 +14,7 @@ variable "tag" {
 variable "pool_id" {
   description = "Proxmox pool id (used for permission handling)"
 }
+
+variable "security_groups" {
+  description = "Firewall security groups the VM belongs to"
+}

@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block header %}
+<title>WORMS//ARENA — Todo</title>
+{% endblock %}
+
+
+{% block content %}
+
+
+{% if user.is_staff and round_staff_information %}
+<section class="panel">
+    <div class="panel-header">
+        <div class="panel-title">
+            // TODOs
+        </div>
+    </div>
+
+    <div class="table-wrapper">
+        <table>
+            <tr>
+                <td>Round</td>
+                <td>Number of VMs</td>
+                <td>Number of Worm Deployments</td>
+            </tr>
+        {% for round in round_staff_information %}
+        {% if round.state == "passed" %}
+
+        {% else %}
+        <tr>
+            <td
+                {% if round.state == 'in_progress' %}
+                    {% if round.virtual_machine_count == 0 or round.worm_deployment_count == 0 %}
+                    class="nav-status nav-status-death"
+                    {% else %}
+                    class="nav-status nav-status-finished"
+                    {% endif %}
+                {% elif round.state == 'incoming' %}
+                    {% if round.virtual_machine_count == 0 or round.worm_deployment_count == 0 %}
+                    class="nav-status nav-status-warning"
+                    {% else %}
+                    class="nav-status nav-status-finished"
+                    {% endif %}
+                {% elif round.state == 'scheduled' %}
+                
+                {% endif %}
+            >
+                <span {% if round.state == 'passed' %}class="strike"{% endif %}>{{round.name}}</span>
+                <span class="status-indicator"></span>
+            </td>
+            <td>
+                <span {% if round.state == 'passed' %}class="strike"{% endif %}>{{round.virtual_machine_count}}</span>
+            </td>
+            <td>
+                <span {% if round.state == 'passed' %}class="strike"{% endif %}>{{round.worm_deployment_count}}</span>
+            </td>
+        </tr>
+        {% endif %}
+        {% endfor %}
+        </table>
+    </div>
+</section>
+{% endif %}
+{% endblock %}

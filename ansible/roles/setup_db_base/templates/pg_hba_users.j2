@@ -1,5 +1,11 @@
+{# TLS-only, scram-sha-256. Each application user may connect only from its own
+   VM (/32); admin and migrator only from the maintenance network / Django hosts. #}
 {% for user in postgresql_users %}
 hostssl    {{ postgres_db }}    {{ user.name }}    {{ user.cidr }}    scram-sha-256
 {% endfor %}
-hostssl    {{ postgres_db }}    {{ postgres_admin_name }}    {{ postgres_admin_cidr }}    scram-sha-256
-hostssl    {{ postgres_db }}    {{ postgres_migrator_name }}    {{ postgres_migrator_cidr }}    scram-sha-256
+{% for cidr in postgres_admin_cidrs %}
+hostssl    {{ postgres_db }}    {{ postgres_admin_name }}    {{ cidr }}    scram-sha-256
+{% endfor %}
+{% for cidr in postgres_migrator_cidrs %}
+hostssl    {{ postgres_db }}    {{ postgres_migrator_name }}    {{ cidr }}    scram-sha-256
+{% endfor %}

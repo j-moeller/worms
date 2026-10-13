@@ -35,12 +35,18 @@ locals {
   }
 
   infrastructure_ips = {
-    dns       = "10.2.0.11"
-    heartbeat = "10.3.0.13"
-    scoring   = "10.3.0.14"
-    logging   = "10.3.0.15"
-    db        = "10.3.0.16"
-    dashboard = "10.3.0.18"
-    monitor   = "10.3.0.100"
+    dns          = "10.2.0.11"
+    heartbeat    = "10.3.0.13"
+    scoring      = "10.3.0.14"
+    logging      = "10.3.0.15"
+    db           = "10.3.0.16"
+    dashboard    = "10.3.0.18"
+    orchestrator = "10.3.0.19"
+    monitor      = "10.3.0.100"
   }
+
+  # Proxmox host, reachable by the orchestrator on the maintenance bridge
+  # (vmbr2 gateway address). The Proxmox API listens on 8006.
+  proxmox_host_ip  = "10.3.0.1"
+  proxmox_api_port = 8006
 }

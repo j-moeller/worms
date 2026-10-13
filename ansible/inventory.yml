@@ -32,8 +32,10 @@ all:
               ip: 10.2.0.25
             - name: wikipedia.worms.internal
               ip: 10.2.0.26
-            # - name: dashboard.worms.internal
-            #   ip: 10.3.0.18
+            - name: dashboard.worms.internal
+              ip: 10.3.0.18
+            - name: orchestrator.worms.internal
+              ip: 10.3.0.19
 
     tls_hosts:
       hosts:
@@ -57,20 +59,58 @@ all:
           ansible_user: debian
           tls_dns_name: dashboard.worms.internal
 
+        orchestrator.worms.internal:
+          ansible_host: 10.3.0.19
+          ansible_user: debian
+          tls_dns_name: orchestrator.worms.internal
+
     nginx_hosts:
       hosts:
         scoring.worms.internal:
         logging.worms.internal:
         dashboard.worms.internal:
+        orchestrator.worms.internal:
 
     flask_hosts:
       hosts:
         scoring.worms.internal:
         logging.worms.internal:
 
+    # Django application hosts. Per-host vars select the settings module, the
+    # least-privilege DB user and (for the orchestrator) the Proxmox credentials.
+    # All secret values are vault references, resolved from group_vars/vault.yml.
     django_hosts:
       hosts:
         dashboard.worms.internal:
+          django_variant: dashboard
+          django_settings_module: config.settings.dashboard
+          django_db_user: django_dashboard
+          django_db_password: "{{ vault_django_dashboard_password }}"
+          django_secret_key: "{{ vault_dashboard_secret_key }}"
+          django_allowed_hosts: "dashboard.worms.internal,10.3.0.18"
+
+        orchestrator.worms.internal:
+          django_variant: orchestrator
+          django_settings_module: config.settings.orchestrator
+          django_db_user: django_orchestrator
+          django_db_password: "{{ vault_django_orchestrator_password }}"
+          django_secret_key: "{{ vault_orchestrator_secret_key }}"
+          django_allowed_hosts: "orchestrator.worms.internal,10.3.0.19"
+          django_extra_pip_packages:
+            - proxmoxer
+            - requests
+          # Proxmox credentials delivered securely into the env file (0600 root).
+          django_extra_env:
+            PROXMOX_HOST: "{{ proxmox_host }}"
+            PROXMOX_PORT: "{{ proxmox_api_port }}"
+            PROXMOX_NODE: "{{ proxmox_node }}"
+            PROXMOX_USER: "{{ proxmox_api_user }}"
+            PROXMOX_TOKEN_NAME: "{{ proxmox_api_token_name }}"
+            PROXMOX_TOKEN_VALUE: "{{ proxmox_api_token_value }}"
+
+    orchestrator:
+      hosts:
+        orchestrator.worms.internal:
 
     scoring:
       hosts:

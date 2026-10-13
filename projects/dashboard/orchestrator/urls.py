@@ -1,13 +1,13 @@
+from django.conf import settings
 from django.http import HttpRequest, JsonResponse
 from django.urls import path
 from django.views.decorators.http import require_POST
 from proxmoxer import ProxmoxAPI
 
-PROXMOX_HOST = "localhost"  # TODO
-USERNAME = "orchestrator@pam"  # TODO
-TOKEN_NAME = "orchestrator-prov"  # TODO
-TOKEN_VALUE = "de2d1953-33a2-49e3-924a-9d040a7e6f1e"  # TODO # PASSWORD
-PROXMOX_NODE = "worms-pve"
+# Proxmox connection details come from settings.PROXMOX, which is populated from
+# the environment (systemd EnvironmentFile rendered from the encrypted vault).
+# No credentials are hardcoded here.
+PROXMOX_NODE = settings.PROXMOX["node"]
 
 # IDEA:
 # - The rounds in the database are pre-scheduled, i.e., they exist and have
@@ -24,12 +24,14 @@ PROXMOX_NODE = "worms-pve"
 
 
 def proxmox():
+    config = settings.PROXMOX
     return ProxmoxAPI(
-        PROXMOX_HOST,
-        user=USERNAME,
-        token_name=TOKEN_NAME,
-        token_value=TOKEN_VALUE,
-        verify_ssl=False,
+        config["host"],
+        port=config["port"],
+        user=config["user"],
+        token_name=config["token_name"],
+        token_value=config["token_value"],
+        verify_ssl=config["verify_ssl"],
     )
 
 

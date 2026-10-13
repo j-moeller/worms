@@ -1,0 +1,50 @@
+# Generic Django application host role (used by both the dashboard and the
+# orchestrator). Per-host values are supplied from inventory host_vars:
+#
+#   django_variant            dashboard | orchestrator   (names paths/service)
+#   django_settings_module    config.settings.dashboard | config.settings.orchestrator
+#   django_db_user            least-privilege DB role for this app
+#   django_db_password        {{ vault_* }} (secret, via vault)
+#   django_secret_key         {{ vault_* }} (secret, via vault)
+#   django_allowed_hosts      comma-separated ALLOWED_HOSTS
+#   django_extra_pip_packages extra wheels (e.g. ["proxmoxer"] for orchestrator)
+#   django_extra_env          dict of extra KEY: value lines for the env file
+---
+django_app_name: "{{ django_variant }}"
+django_app_user: django
+django_app_group: www-data # shared with nginx so it can reach the gunicorn socket
+
+django_app_dir: "/opt/{{ django_app_name }}"
+django_source_dir: "/opt/{{ django_app_name }}/src"
+django_venv_dir: "/opt/{{ django_app_name }}/venv"
+django_env_file: "/etc/{{ django_app_name }}/django.env"
+
+# The two apps live in the same Django project; the settings module selects the role.
+django_local_source: "../projects/dashboard"
+django_wsgi_module: "config.wsgi:application"
+
+gunicorn_workers: 2
+
+django_db_name: "{{ postgres_db }}"
+django_db_host: "{{ postgres_host }}"
+django_db_port: 5432
+django_db_sslmode: "verify-full"
+django_db_sslrootcert: "/etc/ssl/certs/ca-certificates.crt"
+
+django_extra_pip_packages: []
+django_extra_env: {}
+
+required_packages:
+  - python3
+  - python3-venv
+  - python3-pip
+  - git
+  - build-essential
+  - rsync
+  - acl
+  - libpq-dev
+
+pip_packages:
+  - django
+  - gunicorn
+  - psycopg2-binary

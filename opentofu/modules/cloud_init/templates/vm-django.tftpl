@@ -1,0 +1,28 @@
+#cloud-config
+
+hostname: ${hostname}
+
+ssh_authorized_keys:
+  - ${ssh_public_key}
+
+# Django application host (dashboard, orchestrator). nginx terminates TLS and
+# reverse-proxies to gunicorn over a UNIX socket. Python toolchain is present so
+# the Ansible django_app role can build the virtualenv; application secrets are
+# NOT baked into the image, they are delivered later by Ansible (see
+# roles/django_app) into a root-owned 0600 environment file.
+packages:
+  - nginx
+  - python3
+  - python3-venv
+  - python3-pip
+  - build-essential
+  - fail2ban
+  - openssl
+  - ca-certificates
+  - acl
+
+runcmd:
+  - systemctl enable nginx
+  - systemctl enable fail2ban
+  - systemctl start fail2ban
+  - echo "done" > /tmp/cloud-config.done

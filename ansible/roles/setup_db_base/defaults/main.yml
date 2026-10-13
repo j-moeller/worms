@@ -1,4 +1,5 @@
-postgresql_listen_addresses: "*" # TODO
+# Bind only to the maintenance NIC and loopback, not every interface.
+postgresql_listen_addresses: "{{ infrastructure_ips.db }},127.0.0.1"
 postgresql_tls_hostname: database.worms.internal
 postgresql_tls_extra_sans: []        # e.g. ["IP:10.0.0.5"]
 postgresql_tls_validity: "+365d"

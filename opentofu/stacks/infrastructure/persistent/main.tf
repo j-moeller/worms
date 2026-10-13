@@ -45,14 +45,26 @@ locals {
       }
 
       dashboard = {
-        maintenance_network_cidr    = "10.3.0.18/24"
+        maintenance_network_cidr    = "${local.infrastructure_ips.dashboard}/24"
         maintenance_network_gateway = "10.3.0.1"
-        user_data_file_id           = local.platform.cloud_init.nginx.file_id
+        user_data_file_id           = local.platform.cloud_init.django.file_id
         disk_file_id                = local.platform.os_images.debian.file_id
         tag                         = "persistent"
         security_groups = [
           local.platform.security_group_names.ssh,
           local.platform.security_group_names.dashboard
+        ]
+      }
+
+      orchestrator = {
+        maintenance_network_cidr    = "${local.infrastructure_ips.orchestrator}/24"
+        maintenance_network_gateway = "10.3.0.1"
+        user_data_file_id           = local.platform.cloud_init.django.file_id
+        disk_file_id                = local.platform.os_images.debian.file_id
+        tag                         = "persistent"
+        security_groups = [
+          local.platform.security_group_names.ssh,
+          local.platform.security_group_names.orchestrator
         ]
       }
     }

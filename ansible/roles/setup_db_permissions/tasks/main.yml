@@ -111,3 +111,48 @@
     privs: USAGE
     state: present
   become_user: postgres
+
+
+# django_orchestrator
+# - reads competition/round/team/upload/vm state
+# - writes virtual_machines, worm_deployment_plans, worm_deployments
+- name: Grant SELECT on all tables to django_orchestrator
+  community.postgresql.postgresql_privs:
+    database: "{{ postgres_db }}"
+    roles: django_orchestrator
+    objs: ALL_IN_SCHEMA
+    schema: public
+    type: table
+    privs: SELECT
+    state: present
+  become_user: postgres
+
+
+- name: Grant INSERT/UPDATE on orchestrator-owned tables
+  community.postgresql.postgresql_privs:
+    database: "{{ postgres_db }}"
+    roles: django_orchestrator
+    objs: "{{ item }}"
+    type: table
+    privs: SELECT,INSERT,UPDATE
+    state: present
+  loop:
+    - virtual_machines
+    - worm_deployment_plans
+    - worm_deployments
+  become_user: postgres
+
+
+- name: Grant USAGE on orchestrator sequences
+  community.postgresql.postgresql_privs:
+    database: "{{ postgres_db }}"
+    roles: django_orchestrator
+    objs: "{{ item }}"
+    type: sequence
+    privs: USAGE
+    state: present
+  loop:
+    - virtual_machines_id_seq
+    - worm_deployment_plans_id_seq
+    - worm_deployments_id_seq
+  become_user: postgres

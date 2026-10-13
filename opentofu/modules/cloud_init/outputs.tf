@@ -30,6 +30,14 @@ output "nginx" {
   }
 }
 
+output "django" {
+  value = {
+    file_id      = proxmox_virtual_environment_file.django_vm_static.id
+    datastore_id = var.datastore_id
+    node_name    = var.node_name
+  }
+}
+
 output "postgresql" {
   value = {
     file_id      = proxmox_virtual_environment_file.postgresql_vm_static.id

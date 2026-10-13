@@ -2,8 +2,43 @@ import os
 import socket
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+
+def env(name, default=None, *, required=False):
+    """Read a configuration value from the environment.
+
+    Secrets (SECRET_KEY, DB passwords, Proxmox token, ...) are injected into the
+    service environment by systemd from a root-owned 0600 EnvironmentFile that
+    Ansible renders from the encrypted vault. Nothing sensitive is hardcoded.
+    """
+    value = os.environ.get(name, default)
+    if required and (value is None or value == ""):
+        raise ImproperlyConfigured(
+            f"Missing required environment variable: {name}"
+        )
+    return value
+
+
+def postgres_database(user, password):
+    """Build a TLS-verified PostgreSQL connection dict for the given role."""
+    options = {"sslmode": env("DB_SSLMODE", "verify-full")}
+    sslrootcert = env("DB_SSLROOTCERT")
+    if sslrootcert:
+        options["sslrootcert"] = sslrootcert
+
+    return {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": env("DB_NAME", required=True),
+        "USER": user,
+        "PASSWORD": password,
+        "HOST": env("DB_HOST", required=True),
+        "PORT": env("DB_PORT", "5432"),
+        "OPTIONS": options,
+    }
 
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 MiB
 CHUNK_SIZE = 1024 * 1024  # 1 MiB
@@ -20,6 +55,33 @@ if DEBUG:
     print("[DEBUG] We are running in DEBUG mode")
 else:
     print("[PRODUCTION] We are running in PRODUCTION mode")
+
+# SECRET_KEY and ALLOWED_HOSTS: a throwaway value for local development, and
+# strictly environment-provided values in production (no hardcoded secrets).
+if DEBUG:
+    SECRET_KEY = "django-insecure-@@iayl=pwga9ptu0rjh476a#jhfs#274vkky#avp80b5auytf$"
+    ALLOWED_HOSTS = ["worms-pve.mlsec.tu-berlin.de", "localhost", "127.0.0.1"]
+else:
+    SECRET_KEY = env("DJANGO_SECRET_KEY", required=True)
+    ALLOWED_HOSTS = [
+        host.strip()
+        for host in env("DJANGO_ALLOWED_HOSTS", "").split(",")
+        if host.strip()
+    ]
+    if not ALLOWED_HOSTS:
+        raise ImproperlyConfigured("DJANGO_ALLOWED_HOSTS must be set in production")
+
+    # nginx terminates TLS and forwards X-Forwarded-Proto.
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    X_FRAME_OPTIONS = "DENY"
+    CSRF_TRUSTED_ORIGINS = [
+        f"https://{host}" for host in ALLOWED_HOSTS if not host[0].isdigit()
+    ]
 
 INSTALLED_APPS = [
     "core",

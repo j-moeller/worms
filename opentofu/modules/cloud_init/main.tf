@@ -66,6 +66,23 @@ resource "proxmox_virtual_environment_file" "flask_vm_static" {
   }
 }
 
+resource "proxmox_virtual_environment_file" "django_vm_static" {
+  content_type = "snippets"
+  datastore_id = var.datastore_id
+  node_name    = var.node_name
+
+  source_raw {
+    data = templatefile(
+      "${path.module}/templates/vm-django.tftpl",
+      {
+        ssh_public_key = trimspace(file("${var.ssh_public_key}")),
+        hostname       = "django"
+      }
+    )
+    file_name = "vm-django.yml"
+  }
+}
+
 /**
  * VMs (= VMs that can be hacked by users)
  */

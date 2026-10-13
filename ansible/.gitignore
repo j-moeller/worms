@@ -67,6 +67,12 @@ docs/docsite/_static/websupport.js
 *.swo
 [._]*.un~
 credentials.yml
+# Encrypted secrets vault (never commit, even encrypted, unless policy allows).
+group_vars/vault.yml
+host_vars/**/vault.yml
+vault.yml
+# Rendered PKI material
+pki/
 # test output
 *.retry
 *.out

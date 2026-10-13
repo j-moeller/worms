@@ -1,47 +1,41 @@
-from config.settings.base import *
-
-if DEBUG:
-    SECRET_KEY = "django-insecure-@@iayl=pwga9ptu0rjh476a#jhfs#274vkky#avp80b5auytf$"
-    ALLOWED_HOSTS = ["worms-pve.mlsec.tu-berlin.de"]
-else:
-    print("WARNING: HARDCODED SECRET")
-    # TODO
-    # PASSWORD
-    SECRET_KEY = "INSECURE-e3dcb93337060fe3646cfefd60ac25131698c1fc9d89ce54b4a3fea81c21523c5d9d3fe63e91baa336ab35d4ed9434d91854f52c98cf6bc1f8c1be0e83d19889"
-
-    # TODO
-    print("WARNING: worms-pve.mlsec.tu-berlin.de as allowed host")
-    ALLOWED_HOSTS = [
-        "worms-pve.mlsec.tu-berlin.de",  # TODO
-        "orchestrator.worms.internal",
-        "10.3.0.18",
-    ]
+from config.settings.base import *  # noqa: F401,F403
+from config.settings.base import DEBUG, LOG_LEVEL, LOGGING, env, postgres_database
 
 # Application definition
 
 INSTALLED_APPS += ["orchestrator"]
 ROOT_URLCONF = "orchestrator.urls"
 
-# TODO # PASSWORD
+# Database: least-privilege orchestrator role for normal operation, migrator
+# role only for migrations. Credentials come from the environment.
 if not DEBUG:
     DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": "mydb",  # TODO
-            "USER": "django_orchestrator",  # TODO # PASSWORD
-            "PASSWORD": "test",  # TODO # PASSWORD
-            "HOST": "10.3.0.16",  # TODO
-            "PORT": "5432",
-        },
-        "migrator": {
-            "ENGINE": "django.db.backends.postgresql",
-            "NAME": "mydb",  # TODO
-            "USER": "django_migrator",  # TODO # PASSWORD
-            "PASSWORD": "test",  # TODO # PASSWORD
-            "HOST": "10.3.0.16",  # TODO
-            "PORT": "5432",
-        },
+        "default": postgres_database(
+            env("DB_USER", required=True),
+            env("DB_PASSWORD", required=True),
+        ),
+        "migrator": postgres_database(
+            env("DB_MIGRATOR_USER", required=True),
+            env("DB_MIGRATOR_PASSWORD", required=True),
+        ),
     }
+
+# Proxmox API access (proxmoxer). Host, port and token are injected from the
+# environment; the API token value is a secret delivered via the vault. The
+# token should be scoped to the least privilege the orchestrator needs
+# (VM.Audit + VM.PowerMgmt on the relevant pool).
+PROXMOX = {
+    "host": env("PROXMOX_HOST", required=not DEBUG),
+    "port": int(env("PROXMOX_PORT", "8006")),
+    "node": env("PROXMOX_NODE", "worms-pve"),
+    "user": env("PROXMOX_USER", required=not DEBUG),
+    "token_name": env("PROXMOX_TOKEN_NAME", required=not DEBUG),
+    "token_value": env("PROXMOX_TOKEN_VALUE", required=not DEBUG),
+    # Verify the Proxmox API certificate against the system trust store (the
+    # internal CA is installed on the VM). Set PROXMOX_VERIFY_SSL=0 only for
+    # local experimentation.
+    "verify_ssl": env("PROXMOX_VERIFY_SSL", "1") == "1",
+}
 
 LOGGING["loggers"]["orchestrator"] = {
     "handlers": ["console"],

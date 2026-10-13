@@ -110,38 +110,77 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "sandbox_
     action = "ACCEPT"
     proto  = "tcp"
     dport  = "5432"
-    dest   = "10.3.0.16"
+    dest   = local.infrastructure_ips.db
   }
 }
 
 resource "proxmox_virtual_environment_cluster_firewall_security_group" "dashboard" {
   name = "dashboard"
 
-  # Allow incoming HTTP traffic from a specific IP
-  # rule {
-  #   type   = "in"
-  #   action = "ACCEPT"
-  #   proto  = "tcp"
-  #   dport  = "80"
-  #   source = "REPLACE_WITH_ALLOWED_IP"
-  # }
+  # Dashboard is reachable from the public internet (enabled later by adding an
+  # inbound 443 rule here, or on the WAN-facing bridge). The egress rules below
+  # are the least-privilege set the dashboard needs to function.
 
-  # Allow incoming HTTPS traffic from a specific IP
+  # Allow incoming HTTPS traffic from the public internet (uncomment to expose).
   # rule {
   #   type   = "in"
   #   action = "ACCEPT"
   #   proto  = "tcp"
   #   dport  = "443"
-  #   source = "REPLACE_WITH_ALLOWED_IP"
   # }
 
-  # Allow outgoing PostgreSQL traffic to the database
+  # Dashboard -> database (PostgreSQL, read-only least-privilege DB user).
   rule {
-    type   = "out"
-    action = "ACCEPT"
-    proto  = "tcp"
-    dport  = "5432"
-    dest   = "10.3.0.16"
+    type    = "out"
+    action  = "ACCEPT"
+    proto   = "tcp"
+    dport   = "5432"
+    dest    = local.infrastructure_ips.db
+    comment = "Dashboard -> database:5432"
+  }
+
+  # Dashboard -> orchestrator (HTTPS control API).
+  rule {
+    type    = "out"
+    action  = "ACCEPT"
+    proto   = "tcp"
+    dport   = "443"
+    dest    = local.infrastructure_ips.orchestrator
+    comment = "Dashboard -> orchestrator:443"
+  }
+}
+
+resource "proxmox_virtual_environment_cluster_firewall_security_group" "orchestrator" {
+  name = "orchestrator"
+
+  # Orchestrator exposes an HTTPS control API consumed by the dashboard only.
+  rule {
+    type    = "in"
+    action  = "ACCEPT"
+    proto   = "tcp"
+    dport   = "443"
+    source  = local.infrastructure_ips.dashboard
+    comment = "Dashboard -> orchestrator:443"
+  }
+
+  # Orchestrator -> Proxmox API (proxmoxer).
+  rule {
+    type    = "out"
+    action  = "ACCEPT"
+    proto   = "tcp"
+    dport   = tostring(local.proxmox_api_port)
+    dest    = local.proxmox_host_ip
+    comment = "Orchestrator -> proxmox:8006"
+  }
+
+  # Orchestrator -> database (PostgreSQL, least-privilege DB user).
+  rule {
+    type    = "out"
+    action  = "ACCEPT"
+    proto   = "tcp"
+    dport   = "5432"
+    dest    = local.infrastructure_ips.db
+    comment = "Orchestrator -> database:5432"
   }
 }
 
@@ -153,7 +192,7 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "database
     action  = "ACCEPT"
     proto   = "tcp"
     dport   = "5432"
-    source  = "10.3.0.14"
+    source  = local.infrastructure_ips.scoring
     comment = "Allow scoring"
   }
 
@@ -162,7 +201,7 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "database
     action  = "ACCEPT"
     proto   = "tcp"
     dport   = "5432"
-    source  = "10.3.0.15"
+    source  = local.infrastructure_ips.logging
     comment = "Allow logging"
   }
 
@@ -171,8 +210,17 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "database
     action  = "ACCEPT"
     proto   = "tcp"
     dport   = "5432"
-    source  = "10.3.0.18"
+    source  = local.infrastructure_ips.dashboard
     comment = "Allow dashboard"
+  }
+
+  rule {
+    type    = "in"
+    action  = "ACCEPT"
+    proto   = "tcp"
+    dport   = "5432"
+    source  = local.infrastructure_ips.orchestrator
+    comment = "Allow orchestrator"
   }
 }
 

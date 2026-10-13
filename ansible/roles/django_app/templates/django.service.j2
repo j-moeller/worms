@@ -1,0 +1,41 @@
+[Unit]
+Description=Gunicorn {{ django_app_name }} (Django)
+After=network.target
+
+[Service]
+User={{ django_app_user }}
+Group={{ django_app_group }}
+WorkingDirectory={{ django_source_dir }}
+
+# Secrets are delivered here (root-owned 0600); systemd reads it as root and
+# exports the variables into the service environment before dropping privileges.
+EnvironmentFile={{ django_env_file }}
+
+ExecStart={{ django_venv_dir }}/bin/gunicorn \
+    --bind unix:/run/django/django.sock \
+    --workers {{ gunicorn_workers }} \
+    --access-logfile - \
+    --error-logfile - \
+    {{ django_wsgi_module }}
+
+Restart=always
+RestartSec=5
+
+# --- Hardening ---
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# gunicorn only needs to write its runtime dir; keep the source tree read-only.
+RuntimeDirectory=django
+RuntimeDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target

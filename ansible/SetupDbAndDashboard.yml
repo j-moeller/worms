@@ -1,4 +1,13 @@
 ---
+# Database + Django application hosts (dashboard and orchestrator).
+#
+# Order matters:
+#   1. Configure PostgreSQL and create the least-privilege roles.
+#   2. Deploy the Django apps and run migrations (as django_migrator).
+#   3. Grant the per-app table/sequence privileges (tables now exist).
+#
+# Secrets are provided by group_vars/vault.yml; run with --ask-vault-pass.
+
 - name: Configure database server
   hosts: database
   become: true
@@ -15,8 +24,8 @@
     - setup_db_base
 
 
-- name: Configure Django server
-  hosts: dashboard
+- name: Configure Django application servers (dashboard + orchestrator)
+  hosts: django_hosts
   become: true
 
   pre_tasks:
@@ -28,7 +37,7 @@
       failed_when: cloud_init_status.rc != 0
 
   roles:
-    - setup_db_dashboard
+    - django_app
 
 
 - name: Configure database permissions

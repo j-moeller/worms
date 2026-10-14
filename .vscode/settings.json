@@ -1,0 +1,19 @@
+{
+    "files.exclude": {
+        "**/.git": true,
+        "**/.svn": true,
+        "**/.hg": true,
+        "**/.jj": true,
+        "**/.DS_Store": true,
+        "**/Thumbs.db": true,
+        "**/.terraform": true
+    },
+    "files.watcherExclude": {
+        "*/venv/**": true
+    },
+    "search.exclude": {
+        "**/venv/": true,
+        "**/*.tfstate": true,
+        "**/*.tfstate.backup": true
+    }
+}

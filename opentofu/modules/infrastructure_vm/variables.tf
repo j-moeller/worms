@@ -33,7 +33,7 @@ variable "cpu" {
 
 variable "ram" {
   type    = number
-  default = 1024
+  default = 2048
 }
 
 variable "tag" {

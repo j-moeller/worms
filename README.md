@@ -2,12 +2,15 @@
 
 ```
 export PROXMOX_API_TOKEN=<the value of your Proxmox API token>   # the one external secret
-make init secrets apply          # OpenTofu stacks + host firewall (Ansible)
-host/allow-internet.sh           # packages / cache population need the internet
-make                             # idempotent: ... -> inventory -> provision
-host/deny-internet.sh            # required before any sandbox round
-make private_internet            # caches switch to offline mode
+make                             # idempotent, end to end (as root on the Proxmox node)
 ```
+
+`make` applies the platform stack and the host firewall, then **allows internet
+access**, creates the infrastructure VMs (cloud-init installs packages) and
+configures them with Ansible (the private-internet caches populate in online
+mode). Afterwards it **denies internet access again** — always, also when a step
+fails or you interrupt it — and switches DNS and the caches to offline mode.
+`make provision` does the same for the Ansible part only.
 
 `make` prints the VM names and IP addresses it is configuring, and is safe to
 re-run: once everything is in place it changes nothing. `make show-config`
@@ -132,11 +135,12 @@ host nftables FORWARD chain):
   port-isolated, so VMs cannot reach each other there; no VM can open a
   connection to the host except orchestrator → API).
 
-No VM has internet access unless `host/allow-internet.sh` allows it (package
-installs and cache population for the dmz/core/ingest/mgmt-exposed VMs through
-host NAT); `host/deny-internet.sh` revokes it. Allowing is refused while sandbox
-VMs exist; while it is allowed, the sandbox stack (and `make startround`)
-refuses to deploy. The state lives in
+No VM has internet access unless it is allowed (package installs and cache
+population for the dmz/core/ingest/mgmt-exposed VMs through host NAT): `make`
+allows it only while provisioning, and `make internet-allow` /
+`make internet-deny` toggle it by hand (`ansible/Internet.yml`). Allowing is
+refused while sandbox VMs exist; while it is allowed, the sandbox stack refuses
+to deploy. The state lives in
 `/run/worms/internet-allowed` and runtime-only nftables rules, so a reboot
 always comes back denied.
 
@@ -154,9 +158,9 @@ orchestrator).
 - **Ansible**: VM configuration, and the Proxmox host's own OS settings
   (`SetupHostNetwork.yml`, role `host_network`, runs locally on the node):
   sysctls, the nftables zone firewall + boot unit (`/etc/worms/worms.nft`),
-  and the Proxmox host firewall rule orchestrator → API.
-- **Scripts** (runtime state only): `host/allow-internet.sh` /
-  `host/deny-internet.sh`.
+  and the Proxmox host firewall rule orchestrator → API. Internet access is
+  runtime state toggled by `Internet.yml` (same role, `tasks/internet.yml`).
+- **Makefile**: the order, and the internet window around provisioning.
 
 # Containment of rogue sandbox VMs
 

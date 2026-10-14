@@ -22,14 +22,11 @@
     validate: nft -c -f %s
   notify: Reload host firewall
 
-# Read by host/allow-internet.sh.
-- name: Install host network environment
-  ansible.builtin.copy:
-    dest: /etc/worms/host.env
-    mode: "0644"
-    content: |
-      # Managed by Ansible (role host_network).
-      WAN_IF={{ host_wan_interface }}
+# Read by the former host/allow-internet.sh (now tasks/internet.yml).
+- name: Remove legacy host network environment
+  ansible.builtin.file:
+    path: /etc/worms/host.env
+    state: absent
 
 - name: Install host firewall unit
   ansible.builtin.template:

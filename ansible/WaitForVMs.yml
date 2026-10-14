@@ -1,0 +1,19 @@
+---
+# Wait until freshly created VMs are reachable and cloud-init has finished
+# (it installs base packages such as nginx at first boot), so the following
+# playbooks never race the first boot.
+
+- name: Wait for the infrastructure VMs
+  hosts: all:!proxmox_host:!ca:!sandbox
+  gather_facts: false
+  tasks:
+    - name: Wait for SSH
+      ansible.builtin.wait_for_connection:
+        timeout: 600
+
+    - name: Wait for cloud-init
+      ansible.builtin.command: cloud-init status --wait
+      register: cloud_init
+      changed_when: false
+      # rc 2: finished with recoverable errors (degraded); reported, not fatal.
+      failed_when: cloud_init.rc not in [0, 2]

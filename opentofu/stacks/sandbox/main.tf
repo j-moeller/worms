@@ -61,13 +61,19 @@ locals {
 }
 
 # Guard rails: a sandbox must never coexist with internet access (the flag is
-# written by host/allow-internet.sh; tofu runs on the Proxmox node), and the
+# written by ansible/Internet.yml; tofu runs on the Proxmox node), and the
 # router can carry at most 32 NICs (sandbox legs + services + management).
+locals {
+  internet_allowed = fileexists("/run/worms/internet-allowed")
+}
+
 resource "terraform_data" "guard" {
+  input = local.internet_allowed
+
   lifecycle {
     precondition {
-      condition     = !fileexists("/run/worms/internet-allowed")
-      error_message = "Internet access is allowed (/run/worms/internet-allowed). Run host/deny-internet.sh before deploying a sandbox."
+      condition     = !local.internet_allowed
+      error_message = "Internet access is allowed (/run/worms/internet-allowed). Run make internet-deny before deploying a sandbox."
     }
 
     precondition {
@@ -249,7 +255,7 @@ resource "proxmox_virtual_environment_firewall_options" "gw" {
 # services bridge); the services and management legs only their own address.
 resource "proxmox_virtual_environment_firewall_ipset" "gw" {
   for_each = merge(
-    { for i, nic in local.gw_sandbox_nics : "ipfilter-net${i}" = [local.networks.sandbox_vms, local.networks.services] },
+    { for i, nic in local.gw_sandbox_nics : "ipfilter-net${i}" => [local.networks.sandbox_vms, local.networks.services] },
     {
       "ipfilter-${local.gw_services_iface}" = [local.services_ips.sandbox_gw]
       "ipfilter-${local.gw_mgmt_iface}"     = [local.management_ips.sandbox_gw]

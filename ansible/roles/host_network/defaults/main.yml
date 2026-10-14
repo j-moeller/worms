@@ -11,8 +11,14 @@ host_publish_dashboard: false
 
 host_nft_file: /etc/worms/worms.nft
 
-# Present while host/allow-internet.sh allows internet access (tmpfs).
+# Internet access for the VMs (tasks/internet.yml, playbook Internet.yml).
+# The flag exists while access is allowed (tmpfs); the sandbox stack checks it.
 host_internet_flag: /run/worms/internet-allowed
+host_internet_group: /cluster/firewall/groups/provisioning
+host_internet_rules:
+  - {proto: tcp, dport: "80,443", comment: "internet allowed: HTTP(S)"}
+  - {proto: udp, dport: "53", comment: "internet allowed: DNS"}
+  - {proto: tcp, dport: "53", comment: "internet allowed: DNS"}
 
 host_sysctls:
   net.ipv4.ip_forward: 1                 # routing between dmz/core/ingest

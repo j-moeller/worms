@@ -32,7 +32,7 @@ locals {
 # Private-internet services. Each VM gets two NICs:
 #   - net0 services     (10.2.0.x, no gateway)  -> what sandbox VMs reach (via sandbox-gw)
 #   - net1 mgmt-exposed (10.5.0.x, gw = host)   -> SSH from the host; routed to the
-#     internet ONLY while host/allow-internet.sh allows it, which cannot coexist
+#     internet ONLY while internet access is allowed (Internet.yml), which cannot coexist
 #     with sandbox VMs. Otherwise these VMs have no path out.
 # Same last octet in both nets per service (see opentofu/shared: private_internet_ips).
 # data_disk_size > 0 attaches a dedicated data disk (virtio1 -> /dev/vdb), mounted
@@ -41,7 +41,7 @@ locals {
   sg = local.platform.security_groups
 
   # net0: serve the services bridge, and use apt-cache/DNS there (apt_client).
-  # net1: SSH from the host; internet egress while host/allow-internet.sh allows it.
+  # net1: SSH from the host; internet egress while internet access is allowed (Internet.yml).
   firewall_rules = [
     { group = local.sg.private_internet, iface = "net0" },
     { group = local.sg.services_client, iface = "net0" },

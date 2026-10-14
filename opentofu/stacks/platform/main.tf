@@ -107,11 +107,11 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "ssh" {
 
 # Internet access for package installs / cache population. Every infrastructure
 # VM attaches this group on its default-route NIC. It is EMPTY: only
-# host/allow-internet.sh adds rules (and host/deny-internet.sh removes them),
+# ansible/Internet.yml adds rules while internet access is allowed (and removes them),
 # together with the host NAT, so OpenTofu ignores its rules.
 resource "proxmox_virtual_environment_cluster_firewall_security_group" "provisioning" {
   name    = "provisioning"
-  comment = "Managed by host/allow-internet.sh / host/deny-internet.sh"
+  comment = "Managed by ansible/Internet.yml"
 
   lifecycle {
     ignore_changes = [rule]

@@ -36,7 +36,7 @@ locals {
 
 # DNS for the services bridge (sandbox VMs resolve through sandbox-gw).
 # net0 = services (no gateway), net1 = mgmt-exposed (gateway = host, only
-# forwarded to the internet while host/allow-internet.sh allows it, for
+# forwarded to the internet while internet access is allowed (Internet.yml), for
 # upstream DNS while populating).
 module "dns" {
   source = "../../../modules/private_internet_vm"

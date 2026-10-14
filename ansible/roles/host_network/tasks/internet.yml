@@ -1,0 +1,110 @@
+---
+# Internet access for the infrastructure VMs (Internet.yml, -e internet=allowed
+# or -e internet=denied). Runtime state only, two layers:
+#   * Proxmox firewall: rules in the security group `provisioning`, attached by
+#     every infrastructure VM on its default-route NIC (empty = denied).
+#   * Host nftables: the WAN interface in the set `internet_wan`, which gates
+#     the forward/masquerade rules (empty = denied).
+# While allowed, host_internet_flag exists (tmpfs, gone after a reboot) and the
+# sandbox stack refuses to deploy. Allowing is refused while sandbox VMs exist.
+
+- name: Validate the requested state
+  ansible.builtin.assert:
+    that: internet in ["allowed", "denied"]
+    fail_msg: "Pass -e internet=allowed or -e internet=denied"
+    quiet: true
+
+- name: Read the provisioning group rules
+  ansible.builtin.command: pvesh get {{ host_internet_group }} --output-format json
+  register: internet_group_rules
+  changed_when: false
+  # The group does not exist before the platform stack: nothing to remove.
+  failed_when: internet_group_rules.rc != 0 and internet == "allowed"
+
+# ---- allow ---------------------------------------------------------------------
+- name: Allow internet access
+  when: internet == "allowed"
+  block:
+    - name: Check that the host firewall is loaded
+      ansible.builtin.command: nft list set inet worms internet_wan
+      changed_when: false
+
+    - name: List sandbox VMs
+      ansible.builtin.command: pvesh get /cluster/resources --type vm --output-format json
+      register: internet_vms
+      changed_when: false
+
+    - name: Refuse while sandbox VMs exist
+      ansible.builtin.assert:
+        that: sandbox_vms | length == 0
+        fail_msg: "Refusing: VM(s) {{ sandbox_vms | join(', ') }} in the sandbox pool"
+        quiet: true
+      vars:
+        sandbox_vms: "{{ internet_vms.stdout | from_json | selectattr('pool', 'defined') | selectattr('pool', 'eq', 'sandbox') | map(attribute='vmid') | list }}"
+
+    # Flag first: from now on no sandbox can be deployed.
+    - name: Create the flag directory
+      ansible.builtin.file:
+        path: "{{ host_internet_flag | dirname }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write the internet flag
+      ansible.builtin.copy:
+        dest: "{{ host_internet_flag }}"
+        content: "allowed\n"
+        mode: "0644"
+
+    - name: Open the Proxmox firewall
+      # pvesh create inserts at the top, so compare regardless of order.
+      when: (internet_group_rules.stdout | from_json | map(attribute='comment', default='') | sort) != (host_internet_rules | map(attribute='comment') | sort)
+      block:
+        - name: Remove stale provisioning rules
+          ansible.builtin.command: pvesh delete {{ host_internet_group }}/{{ item }}
+          loop: "{{ internet_group_rules.stdout | from_json | map(attribute='pos') | sort | reverse | list }}"
+
+        - name: Add provisioning rules
+          ansible.builtin.command: >-
+            pvesh create {{ host_internet_group }} --type out --action ACCEPT --enable 1
+            --proto {{ item.proto }} --dport {{ item.dport }} --comment "{{ item.comment }}"
+          loop: "{{ host_internet_rules }}"
+
+    - name: Open the host gate
+      ansible.builtin.command: nft add element inet worms internet_wan '{ "{{ host_wan_interface }}" }'
+      changed_when: true
+
+# ---- deny ----------------------------------------------------------------------
+# Host side first (cuts access immediately); the flag is removed only after
+# both layers are verified closed.
+- name: Deny internet access
+  when: internet == "denied"
+  block:
+    - name: Close the host gate
+      ansible.builtin.command: nft flush set inet worms internet_wan
+      register: internet_flush
+      changed_when: true
+      # No table yet (before SetupHostNetwork.yml): nothing is forwarded.
+      failed_when: internet_flush.rc != 0 and 'No such file' not in internet_flush.stderr
+
+    - name: Close the Proxmox firewall
+      ansible.builtin.command: pvesh delete {{ host_internet_group }}/{{ item }}
+      loop: "{{ (internet_group_rules.stdout | from_json | map(attribute='pos') | sort | reverse | list) if internet_group_rules.rc == 0 else [] }}"
+
+    - name: Verify the host gate is closed
+      ansible.builtin.command: nft --json list set inet worms internet_wan
+      register: internet_gate
+      changed_when: false
+      failed_when: >-
+        internet_gate.rc == 0 and
+        (internet_gate.stdout | from_json).nftables | selectattr('set', 'defined') | map(attribute='set') | selectattr('elem', 'defined') | list | length > 0
+
+    - name: Verify the provisioning group is empty
+      ansible.builtin.command: pvesh get {{ host_internet_group }} --output-format json
+      register: internet_group_after
+      changed_when: false
+      failed_when: internet_group_after.rc == 0 and (internet_group_after.stdout | from_json | length) > 0
+
+    - name: Remove the internet flag
+      ansible.builtin.file:
+        path: "{{ host_internet_flag }}"
+        state: absent

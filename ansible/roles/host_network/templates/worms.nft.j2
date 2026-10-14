@@ -12,7 +12,7 @@
 # * INPUT from VM bridges: replies to host-initiated connections (SSH) and
 #   orchestrator -> Proxmox API only.
 # * Internet access for VMs: the rules exist but are gated by the set
-#   `internet_wan`, which is empty here. Only host/allow-internet.sh fills it,
+#   `internet_wan`, which is empty here. Only Internet.yml (internet=allowed) fills it,
 #   at runtime (a reboot or a reload empties it again).
 {% set b = bridges %}
 {% set same_bridge = [b.services, b.mirror, b.dmz, b.core, b.ingest, b.mgmt_trusted, b.mgmt_exposed, b.mgmt_sandbox] %}
@@ -40,8 +40,8 @@ table inet worms {
     elements = { "{{ b.dmz }}", "{{ b.core }}", "{{ b.ingest }}", "{{ b.mgmt_exposed }}" }
   }
 
-  # The gate: empty = internet denied. host/allow-internet.sh adds the WAN
-  # interface, host/deny-internet.sh flushes it.
+  # The gate: empty = internet denied. Internet.yml adds the WAN
+  # interface while allowed and flushes it again.
   set internet_wan {
     type ifname
   }

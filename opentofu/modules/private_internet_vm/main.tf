@@ -4,7 +4,7 @@
  *
  * Two NICs: services bridge (net0, what sandbox VMs reach, no gateway) and
  * mgmt-exposed (net1, SSH from the host; its gateway is the host, which only
- * forwards it to the internet while host/allow-internet.sh allows it).
+ * forwards it to the internet while internet access is allowed (Internet.yml)).
  * Optional dedicated data disk (virtio1) so a service's payload (Mongo CVE db,
  * Kiwix ZIM, caches) lives on its own volume, separate from the OS/root disk.
  *

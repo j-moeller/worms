@@ -7,7 +7,7 @@
       - manpages-posix
       - manpages-posix-dev
     state: present
-    update_cache: true
+    update_cache: "{{ internet_enabled | bool }}"  # offline re-runs: no index refresh
 
 - name: Enable CGI module
   ansible.builtin.command: a2enmod cgi

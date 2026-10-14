@@ -5,8 +5,7 @@
 # platform stack and `make inventory`. Proxmox-level resources (bridges, VM
 # firewall, port-isolation hookscript) are managed by OpenTofu.
 #
-# Internet access for VMs is runtime state, toggled by host/allow-internet.sh
-# and host/deny-internet.sh.
+# Internet access for VMs is runtime state, toggled by Internet.yml.
 
 - name: Configure the Proxmox host network
   hosts: proxmox_host

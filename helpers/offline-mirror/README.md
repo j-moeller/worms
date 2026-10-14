@@ -13,8 +13,10 @@ The private internet can run fully offline, but the caches must be
   dependency closure + useful extras). feedformatter is a GitHub zip, handled apart.
 
 ## Workflow
-1. **Population phase** — `host/allow-internet.sh` (as root on the Proxmox node)
-   and `make private_internet`: the caches run in online mode and fetch upstream.
+1. **Population phase** — `make internet-allow`, then
+   `cd ansible && ansible-playbook -e @group_vars/vault.yml SetupPrivateInternet.yml`
+   (as root on the Proxmox node): the caches run in online mode and fetch upstream.
+   (A plain `make` populates them too, but denies internet access when it ends.)
    On a helper client in the private internet, run:
    ```
    ./populate-caches.sh
@@ -25,6 +27,6 @@ The private internet can run fully offline, but the caches must be
 2. **Wire the offline sources** (see script output): point
    `cve_search_feedformatter_src` at the local zip and `cve_search_mongodb_repo_url`
    at the local MongoDB repo.
-3. **Go offline** — `host/deny-internet.sh`, then `make private_internet`:
+3. **Go offline** — `make internet-deny offline`:
    Ansible flips the caches to offline mode (it follows the host state), so
    they serve purely from their local stores.

@@ -55,7 +55,7 @@ variable "ssh_public_key" {
 # The host routes ONLY between dmz/core/ingest (allow-listed in host nftables,
 # ansible role host_network). It has no address on any bridge a sandbox VM can reach,
 # and never forwards traffic arriving on a management bridge (except mgmt-exposed
-# while host/allow-internet.sh allows internet access, which is refused while
+# while internet access is allowed (Internet.yml), which is refused while
 # sandbox VMs exist).
 #
 # Sandbox VM addressing is NOT here: it is dynamic, owned entirely by

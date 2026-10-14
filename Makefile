@@ -84,11 +84,15 @@ platform:
 	cd ansible && $(ANSIBLE) SetupHostNetwork.yml
 
 # Base infrastructure VMs (NOT the per-round sandbox). Internet access must be
-# allowed: cloud-init installs packages at first boot.
+# allowed: cloud-init installs packages at first boot. The inventory is
+# regenerated afterwards, also when an apply fails, so it always matches the
+# state (show-config then lists what was actually created).
 infrastructure:
-	cd opentofu/stacks/private_internet && $(MAKE) apply
-	cd opentofu/stacks/infrastructure/persistent && $(MAKE) apply
-	cd opentofu/stacks/infrastructure/ephemeral && $(MAKE) apply
+	@trap '$(MAKE) --no-print-directory -C $(CURDIR) inventory' EXIT; \
+	set -e; \
+	cd opentofu/stacks/private_internet && $(MAKE) apply; \
+	cd $(CURDIR)/opentofu/stacks/infrastructure/persistent && $(MAKE) apply; \
+	cd $(CURDIR)/opentofu/stacks/infrastructure/ephemeral && $(MAKE) apply
 
 # Regenerate the Ansible inventory from the OpenTofu state: hosts = the VMs
 # the stacks actually contain (prints them, and the VMs Ansible skips).

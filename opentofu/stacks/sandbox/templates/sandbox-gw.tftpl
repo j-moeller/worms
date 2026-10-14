@@ -1,0 +1,68 @@
+#cloud-config
+# sandbox-gw: router between the generated sandbox networks and the services
+# bridge. Assumed compromised once worms run; the authoritative restrictions
+# are the Proxmox firewall rules on its NICs (host side). The rules below are
+# defense in depth and keep the default behaviour sane.
+
+hostname: sandbox-gw
+
+ssh_authorized_keys:
+%{ for key in ssh_public_keys ~}
+  - ${key}
+%{ endfor ~}
+
+write_files:
+  - path: /etc/sysctl.d/90-sandbox-gw.conf
+    content: |
+      net.ipv4.ip_forward = 1
+      net.ipv6.conf.all.disable_ipv6 = 1
+      net.ipv4.conf.all.rp_filter = 1
+      net.ipv4.conf.default.rp_filter = 1
+
+  - path: /etc/nftables.conf
+    permissions: "0644"
+    content: |
+      #!/usr/sbin/nft -f
+      flush ruleset
+
+      define SANDBOX = ${sandbox_networks}
+      define SERVICES = ${services_network}
+      define MGMT_HOST = ${mgmt_host_ip}
+
+      table inet sandbox_gw {
+        chain input {
+          type filter hook input priority filter; policy drop;
+          iif lo accept
+          ct state established,related accept
+          ip saddr $MGMT_HOST tcp dport 22 accept
+          icmp type echo-request accept
+        }
+
+        chain forward {
+          type filter hook forward priority filter; policy drop;
+          ct state invalid drop
+          ct state established,related accept
+          # The experiment: free routing between the generated networks.
+          ip saddr $SANDBOX ip daddr $SANDBOX accept
+          # Services bridge on the allowed ports only.
+          ip saddr $SANDBOX ip daddr $SERVICES tcp dport { ${services_tcp_ports} } accept
+          ip saddr $SANDBOX ip daddr $SERVICES udp dport { ${services_udp_ports} } accept
+        }
+
+        chain output {
+          type filter hook output priority filter; policy accept;
+        }
+      }
+
+      table ip sandbox_gw_nat {
+        # Services see sandbox-gw as the only source (its NIC is ipfilter-pinned).
+        chain postrouting {
+          type nat hook postrouting priority srcnat;
+          ip saddr $SANDBOX ip daddr $SERVICES masquerade
+        }
+      }
+
+runcmd:
+  - sysctl --system
+  - systemctl enable --now nftables
+  - nft -f /etc/nftables.conf

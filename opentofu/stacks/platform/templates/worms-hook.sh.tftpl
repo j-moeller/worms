@@ -1,0 +1,29 @@
+#!/bin/bash
+# Proxmox hookscript (managed by OpenTofu, platform stack). Attached to every VM.
+# Sets the bridge port of every NIC on a management bridge to "isolated":
+# isolated ports only exchange frames with non-isolated ports (the host's own
+# bridge interface), so VMs on a management bridge cannot reach each other at
+# layer 2, independently of the Proxmox firewall.
+vmid="$1"
+phase="$2"
+MGMT_BRIDGES="${mgmt_bridges}"
+
+[ "$phase" = "post-start" ] || exit 0
+
+for tap in /sys/class/net/tap$${vmid}i*; do
+  [ -e "$tap" ] || continue
+  dev=$(basename "$tap")
+  port="$dev"
+  master=$(basename "$(readlink -f "$tap/master")" 2>/dev/null || true)
+  # iptables-based firewall: tap -> fwbr<vmid>i<n> -> fwpr<vmid>p<n> -> vmbrX
+  if [[ "$master" == fwbr* ]]; then
+    port="fwpr$${vmid}p$${dev#tap$${vmid}i}"
+    master=$(basename "$(readlink -f "/sys/class/net/$port/master")" 2>/dev/null || true)
+  fi
+  for bridge in $MGMT_BRIDGES; do
+    if [ "$master" = "$bridge" ]; then
+      bridge link set dev "$port" isolated on && echo "worms-hook: VM $vmid: isolated $port on $bridge"
+    fi
+  done
+done
+exit 0

@@ -28,6 +28,9 @@ vault_pki_ca_passphrase: "CHANGE_ME"
 vault_dashboard_secret_key: "CHANGE_ME"
 vault_orchestrator_secret_key: "CHANGE_ME"
 
+# Orchestrator REST API bearer token (dashboard -> sandbox VM power control).
+vault_orchestrator_dashboard_token: "CHANGE_ME"
+
 # Proxmox API token secret (the value half of a Proxmox API token).
 vault_proxmox_api_token_value: "CHANGE_ME"
 

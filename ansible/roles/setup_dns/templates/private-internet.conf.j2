@@ -1,6 +1,6 @@
-# Listen only on the internal interface/address.
-listen-address=10.2.0.11
-listen-address=10.3.0.11
+# Listen only on the services-bridge address (never on the management NIC).
+listen-address={{ dns_listen_address }}
+listen-address=127.0.0.1
 bind-interfaces
 
 # Don't read /etc/hosts unless you explicitly want that.
@@ -15,7 +15,7 @@ address=/{{ entry.name }}/{{ entry.ip }}
 {% endfor %}
 
 {% if internet_enabled | bool %}
-# Forward everything else upstream.
+# Only while internet access is allowed: forward everything else upstream.
 server=1.1.1.1
 server=1.0.0.1
 {% endif %}

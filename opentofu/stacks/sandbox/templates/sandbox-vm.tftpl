@@ -1,0 +1,11 @@
+#cloud-config
+# Sandbox VM. Authorised key: the operator key (Ansible), usable only from the
+# host on vmbr4.
+
+ssh_authorized_keys:
+%{ for key in ssh_public_keys ~}
+  - ${key}
+%{ endfor ~}
+
+runcmd:
+  - echo "done" > /tmp/cloud-config.done

@@ -23,7 +23,7 @@ if not DEBUG:
 # Proxmox API access (proxmoxer). Host, port and token are injected from the
 # environment; the API token value is a secret delivered via the vault. The
 # token should be scoped to the least privilege the orchestrator needs
-# (VM.Audit + VM.PowerMgmt on the relevant pool).
+# (VM.Audit + VM.PowerMgmt on the `sandbox` pool).
 PROXMOX = {
     "host": env("PROXMOX_HOST", required=not DEBUG),
     "port": int(env("PROXMOX_PORT", "8006")),
@@ -55,6 +55,13 @@ PROXMOX_READONLY = {
     "token_value": env("PROXMOX_READONLY_TOKEN_VALUE", ""),
     "verify_ssl": env("PROXMOX_CA_BUNDLE") or PROXMOX["verify_ssl"],
     "timeout": int(env("PROXMOX_TIMEOUT", "10")),
+}
+
+# Bearer tokens for the orchestrator REST API, one per caller (scope). Empty =
+# that caller is disabled. See orchestrator/api.py.
+ORCHESTRATOR_TOKENS = {
+    # Dashboard: VM power control for sandbox VMs.
+    "dashboard": env("ORCHESTRATOR_DASHBOARD_TOKEN", ""),
 }
 
 LOGGING["loggers"]["orchestrator"] = {

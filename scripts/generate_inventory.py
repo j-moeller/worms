@@ -85,9 +85,12 @@ def build_inventory(infrastructure: dict, sandbox: dict) -> dict:
 
     group_vars = {
         "infrastructure_ips": infrastructure.get("infrastructure_ips", {}),
-        "dns_maintenance_ip": infrastructure.get("dns_maintenance_ip"),
+        "management_ips": infrastructure.get("management_ips", {}),
+        "services_ips": infrastructure.get("services_ips", {}),
+        "host_ips": infrastructure.get("host_ips", {}),
         "private_internet_ips": infrastructure.get("private_internet_ips", {}),
         "networks": infrastructure.get("networks", {}),
+        "bridges": infrastructure.get("bridges", {}),
         "proxmox": proxmox,
     }
 
@@ -182,6 +185,7 @@ def summarize(inventory: dict) -> None:
     allv = inventory.get("all", {})
     gv = allv.get("vars", {})
     infra = gv.get("infrastructure_ips", {}) or {}
+    mgmt = gv.get("management_ips", {}) or {}
     pi = gv.get("private_internet_ips", {}) or {}
     proxmox = gv.get("proxmox", {}) or {}
     sandbox = (
@@ -200,9 +204,9 @@ def summarize(inventory: dict) -> None:
         )
         print("-" * 64)
 
-    print("Infrastructure VMs           maintenance IP")
-    for name in sorted(infra):
-        print(f"  {name:<26} {infra[name]}")
+    print("Infrastructure VMs           data IP           management IP")
+    for name in sorted(set(infra) | set(mgmt)):
+        print(f"  {name:<26} {infra.get(name, '-'):<17} {mgmt.get(name, '-')}")
 
     if pi:
         print("-" * 64)

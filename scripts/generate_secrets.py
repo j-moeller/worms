@@ -47,6 +47,10 @@ GENERATED_SECRET_KEYS = {
     "vault_dashboard_secret_key": 64,  # Django SECRET_KEY
     "vault_orchestrator_secret_key": 64,
 }
+# Bearer tokens for the orchestrator REST API (orchestrator/api.py), one per caller.
+GENERATED_TOKENS = {
+    "vault_orchestrator_dashboard_token": 32,  # dashboard -> sandbox VM power control
+}
 # External secret we cannot invent (must match what Proxmox issued).
 PROXMOX_TOKEN_KEY = "vault_proxmox_api_token_value"
 PROXMOX_TOKEN_ENV = "PROXMOX_API_TOKEN"
@@ -82,6 +86,9 @@ def render_vault(proxmox_token: str, proxmox_readonly_token: str) -> str:
     ]
     for key in GENERATED_SECRET_KEYS:
         lines.append(f'{key}: "{token(GENERATED_SECRET_KEYS[key])}"')
+    lines += ["", "# --- Orchestrator API tokens (auto-generated) ---"]
+    for key in GENERATED_TOKENS:
+        lines.append(f'{key}: "{token(GENERATED_TOKENS[key])}"')
     lines += [
         "",
         "# --- Proxmox API token (EXTERNAL: must match the token Proxmox issued) ---",
@@ -92,6 +99,43 @@ def render_vault(proxmox_token: str, proxmox_readonly_token: str) -> str:
         "",
     ]
     return "\n".join(lines)
+
+
+def add_missing_keys(vault_file: Path, vault_pass_file: Path) -> None:
+    """Append generated secrets that an older vault does not have yet."""
+    encrypted = vault_file.read_text().startswith("$ANSIBLE_VAULT")
+    if encrypted:
+        if not shutil.which("ansible-vault"):
+            print(f"secrets: {vault_file} is encrypted but ansible-vault is missing; skipping.")
+            return
+        content = subprocess.run(
+            ["ansible-vault", "view", "--vault-password-file", str(vault_pass_file), str(vault_file)],
+            check=True, capture_output=True, text=True,
+        ).stdout
+    else:
+        content = vault_file.read_text()
+
+    present = {line.split(":", 1)[0].strip() for line in content.splitlines() if ":" in line}
+    generated = {**GENERATED_PASSWORDS, **GENERATED_SECRET_KEYS, **GENERATED_TOKENS}
+    missing = [key for key in generated if key not in present]
+    if not missing:
+        print(f"secrets: {vault_file} already complete — leaving it unchanged.")
+        return
+
+    content = content.rstrip("\n") + "\n\n# --- Added by generate_secrets.py (new keys) ---\n"
+    content += "".join(f'{key}: "{token(generated[key])}"\n' for key in missing)
+
+    if encrypted:
+        # Re-encrypt from stdin: the plaintext never touches the disk.
+        subprocess.run(
+            ["ansible-vault", "encrypt", "--vault-password-file", str(vault_pass_file),
+             "--output", str(vault_file)],
+            input=content, check=True, text=True, capture_output=True,
+        )
+    else:
+        vault_file.write_text(content)
+    vault_file.chmod(0o600)
+    print(f"secrets: added {len(missing)} new generated key(s) to {vault_file} (never printed).")
 
 
 def main() -> None:
@@ -111,9 +155,10 @@ def main() -> None:
     vault_file = args.vault_file or (root / "ansible" / "group_vars" / "vault.yml")
     vault_pass_file = args.vault_pass_file or (root / "ansible" / ".vault_pass")
 
-    # Idempotent: if the vault is already there, leave it (and its passwords) alone.
+    # Idempotent: if the vault is already there, keep every existing secret and
+    # only add generated keys introduced since it was created.
     if vault_file.exists() and not args.force:
-        print(f"secrets: {vault_file} already present — leaving it unchanged.")
+        add_missing_keys(vault_file, vault_pass_file)
         return
 
     # Vault password file (so Ansible never prompts). Generate once.
@@ -143,7 +188,7 @@ def main() -> None:
         print(f"secrets: wrote {vault_file} (ansible-vault not found; left PLAINTEXT — "
               "it is git-ignored, but install Ansible to encrypt it)")
 
-    n = len(GENERATED_PASSWORDS) + len(GENERATED_SECRET_KEYS)
+    n = len(GENERATED_PASSWORDS) + len(GENERATED_SECRET_KEYS) + len(GENERATED_TOKENS)
     print(f"secrets: generated {n} internal credentials (never printed).")
 
     if proxmox_token == PROXMOX_PLACEHOLDER:

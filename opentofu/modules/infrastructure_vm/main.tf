@@ -3,6 +3,8 @@ resource "proxmox_pool_membership" "pool_membership" {
   vm_id   = proxmox_virtual_environment_vm.infrastructure.vm_id
 }
 
+# Default deny in both directions; ipfilter pins every NIC to its configured
+# address (ipsets below), so the VM cannot impersonate another VM or the host.
 resource "proxmox_virtual_environment_firewall_options" "infrastructure" {
   node_name = var.proxmox_instance
   vm_id     = proxmox_virtual_environment_vm.infrastructure.vm_id
@@ -10,18 +12,35 @@ resource "proxmox_virtual_environment_firewall_options" "infrastructure" {
   enabled       = true
   input_policy  = "DROP"
   output_policy = "DROP"
+  ipfilter      = true
+  macfilter     = true
 }
 
+resource "proxmox_virtual_environment_firewall_ipset" "ipfilter" {
+  count = length(var.nics)
+
+  node_name = var.proxmox_instance
+  vm_id     = proxmox_virtual_environment_vm.infrastructure.vm_id
+  name      = "ipfilter-net${count.index}"
+  comment   = "Only the configured address may be sent from net${count.index}"
+
+  cidr {
+    name = split("/", var.nics[count.index].cidr)[0]
+  }
+}
+
+# Security groups, each optionally pinned to one NIC (iface = "netN").
 resource "proxmox_virtual_environment_firewall_rules" "infrastructure" {
   node_name = var.proxmox_instance
   vm_id     = proxmox_virtual_environment_vm.infrastructure.vm_id
 
   dynamic "rule" {
-    for_each = var.security_groups
+    for_each = var.firewall_rules
 
     content {
-      security_group = rule.value.name
-      comment        = "Apply security group: ${rule.value.name}"
+      security_group = rule.value.group
+      iface          = rule.value.iface
+      comment        = "Apply security group: ${rule.value.group}${rule.value.iface == null ? "" : " on ${rule.value.iface}"}"
     }
   }
 }
@@ -30,29 +49,40 @@ resource "proxmox_virtual_environment_vm" "infrastructure" {
   name      = var.name
   node_name = var.proxmox_instance
 
-  cpu { cores = 2 }
-  memory { dedicated = 1024 }
+  cpu { cores = var.cpu }
+  memory { dedicated = var.ram }
   agent { enabled = true }
 
   tags = ["infrastructure", var.tag]
 
+  # Isolates the ports on management bridges (platform stack: hookscript).
+  hook_script_file_id = var.hookscript_file_id
+
   initialization {
     datastore_id = "local-zfs"
 
-    ip_config {
-      ipv4 {
-        address = var.maintenance_network_cidr
-        gateway = var.maintenance_network_gateway
+    dynamic "ip_config" {
+      for_each = var.nics
+
+      content {
+        ipv4 {
+          address = ip_config.value.cidr
+          gateway = ip_config.value.gateway
+        }
       }
     }
 
     user_data_file_id = var.user_data_file_id
   }
 
-  network_device {
-    bridge   = var.vmbr_maintenance_network
-    model    = "virtio"
-    firewall = true
+  dynamic "network_device" {
+    for_each = var.nics
+
+    content {
+      bridge   = network_device.value.bridge
+      model    = "virtio"
+      firewall = true
+    }
   }
 
   serial_device {}

@@ -13,6 +13,12 @@ import jinja2
 # (the Proxmox host is .1).
 SANDBOX_MAINTENANCE_NETWORK = ipaddress.ip_network("10.4.0.0/16")
 
+# Generated sandbox networks. Must match networks.sandbox_vms in
+# opentofu/shared/shared-variables.tf: the VM/router firewall rules and the host
+# nftables ruleset treat exactly this range as "the sandbox". Each network's .1
+# is taken by sandbox-gw (the sandbox VMs' gateway).
+SANDBOX_NETWORK = ipaddress.ip_network("10.64.0.0/10")
+
 TEMPLATE = """
 locals {
   seed = "{{ seed }}"
@@ -31,8 +37,7 @@ locals {
     {{ vm.key }} = {
       cpu               = {{ vm.cpu }}
       ram               = {{ vm.ram }}
-      os_image          = local.platform.os_images.debian
-      user_data_file_id = local.platform.cloud_init.blank.file_id
+      disk_file_id      = local.platform.os_images.debian.file_id
 
       maintenance_network_cidr = "{{ vm.maintenance_cidr }}"
 
@@ -441,19 +446,16 @@ class ArchitectureGenerator:
 
     def _network_cidr(self, index: int) -> str:
         """
-        Allocate a deterministic /24 from 10.0.0.0/8.
-
-        The layout leaves enough room for large generated topologies.
+        Allocate a deterministic /24 from SANDBOX_NETWORK.
         """
 
-        start = 5
-        end = 200
-        span = end - start
+        subnets = SANDBOX_NETWORK.subnets(new_prefix=24)
+        try:
+            subnet = next(s for i, s in enumerate(subnets) if i == index)
+        except StopIteration:
+            raise ValueError(f"Too many sandbox networks for {SANDBOX_NETWORK}")
 
-        second = (index // 256) % span + start
-        third = index % 256
-
-        return f"10.{second}.{third}.0/24"
+        return str(subnet)
 
     # ------------------------------------------------------------------
     # Endpoint generation
@@ -607,7 +609,7 @@ class ArchitectureGenerator:
             set(),
         )
 
-        # Host addresses 1-9 are reserved for infrastructure.
+        # Host addresses 1-9 are reserved (.1 is sandbox-gw, the gateway).
         available = list(range(10, 250))
 
         # Deterministically shuffle the candidate addresses.

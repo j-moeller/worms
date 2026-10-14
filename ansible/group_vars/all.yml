@@ -22,7 +22,7 @@ postgres_host: "{{ infrastructure_ips.db }}"
 # (/32, from the OpenTofu ground truth), never from other VMs on the maintenance
 # network. Ansible itself never needs it: it administers PostgreSQL as `postgres`
 # over the local socket. Set to [] to disable remote superuser logins entirely.
-# Migrator: Django hosts only. Application users: their own VM (/32), per user.
+# Migrator: the orchestrator only. Application users: their own VM (/32).
 postgres_admin_name: admin
 postgres_admin_password: "{{ vault_postgres_admin_password }}"
 postgres_admin_cidrs:
@@ -30,9 +30,9 @@ postgres_admin_cidrs:
 
 postgres_migrator_name: django_migrator
 postgres_migrator_password: "{{ vault_postgres_migrator_password }}"
-# Migrations run from the Django hosts (dashboard, orchestrator).
+# Migrations run only on the orchestrator. The public-facing dashboard never
+# holds the migrator credentials (the migrator owns the tables).
 postgres_migrator_cidrs:
-  - "{{ infrastructure_ips.dashboard }}/32"
   - "{{ infrastructure_ips.orchestrator }}/32"
 
 # Least-privilege application DB users. Each may connect only from its own VM.
@@ -48,7 +48,7 @@ postgresql_users:
     cidr: "{{ infrastructure_ips.logging }}/32"
   - name: dbuser_network_monitor
     password: "{{ vault_dbuser_network_monitor_password }}"
-    cidr: "{{ infrastructure_ips.network_monitor }}/32"
+    cidr: "{{ infrastructure_ips.monitor }}/32"
   - name: dbuser_scoring
     password: "{{ vault_dbuser_scoring_password }}"
     cidr: "{{ infrastructure_ips.scoring }}/32"
@@ -88,7 +88,9 @@ proxmox_readonly_api_user: "topology@pve"
 proxmox_readonly_api_token_name: "readonly"
 proxmox_readonly_api_token_value: "{{ vault_proxmox_readonly_api_token_value | default('') }}"
 
-# Global switch for the private internet.
-#   true  = services act as proxies/forwarders with upstream internet (population phase)
-#   false = standalone offline caches, no internet connection
-internet_enabled: true
+# Whether internet access is currently allowed (host/allow-internet.sh writes
+# this flag on the Proxmox node, which is also the Ansible controller; the
+# `exists` test runs on the controller). Not a switch: it follows the host.
+#   true  = caches proxy/forward upstream (population), DNS forwards upstream
+#   false = standalone offline caches, no internet anywhere
+internet_enabled: "{{ '/run/worms/internet-allowed' is exists }}"

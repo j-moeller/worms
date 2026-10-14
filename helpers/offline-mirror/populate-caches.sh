@@ -2,8 +2,8 @@
 # Populate the private-internet caches so they can run fully offline.
 #
 # Run on a helper Debian/Ubuntu client INSIDE the private internet during the
-# population phase (INTERNET_ENABLED=true: caches reachable and the subnet still
-# has direct internet). Afterwards run everything with INTERNET_ENABLED=false and
+# population phase (host/allow-internet.sh: caches in online mode). Afterwards
+# run host/deny-internet.sh and `make private_internet`, and
 # redeploy -> the platform firewall seals egress and the caches serve offline.
 #
 # Fills the existing caches by pulling content THROUGH them:
@@ -98,4 +98,4 @@ echo
 echo "DONE. Next:"
 echo "  1) copy $MIRROR_DIR/feedformatter.zip to the cve-search VM; set cve_search_feedformatter_src to it."
 echo "  2) serve $MIRROR_DIR/mongodb as a local apt repo; set cve_search_mongodb_repo_url to it."
-echo "  3) redeploy with INTERNET_ENABLED=false."
+echo "  3) host/deny-internet.sh && make private_internet"

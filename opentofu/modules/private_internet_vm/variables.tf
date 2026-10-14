@@ -3,7 +3,7 @@ variable "proxmox_instance" {}
 variable "cpu" {}
 variable "ram" {}
 variable "network_cidr" {}
-variable "network_gateway_ip" {}
+variable "maintenance_network_gateway" {}
 variable "maintenance_network_cidr" {}
 variable "user_data_file_id" {}
 variable "vmbr_network" {}
@@ -38,6 +38,15 @@ variable "pool_id" {
   description = "Proxmox pool id (used for permission handling)"
 }
 
-variable "security_groups" {
-  description = "Firewall security groups the VM belongs to"
+variable "firewall_rules" {
+  description = "Security groups to apply, optionally limited to one NIC (net0 = services, net1 = management)."
+  type = list(object({
+    group = string
+    iface = optional(string)
+  }))
+}
+
+variable "hookscript_file_id" {
+  description = "Proxmox hookscript (port isolation on management bridges)."
+  type        = string
 }

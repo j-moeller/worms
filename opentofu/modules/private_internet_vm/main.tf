@@ -2,7 +2,9 @@
 /**
  * Private-internet service VM.
  *
- * Two NICs: private_internet (10.2, with gateway) + maintenance (10.3).
+ * Two NICs: services bridge (net0, what sandbox VMs reach, no gateway) and
+ * mgmt-exposed (net1, SSH from the host; its gateway is the host, which only
+ * forwards it to the internet while host/allow-internet.sh allows it).
  * Optional dedicated data disk (virtio1) so a service's payload (Mongo CVE db,
  * Kiwix ZIM, caches) lives on its own volume, separate from the OS/root disk.
  *
@@ -23,18 +25,37 @@ resource "proxmox_virtual_environment_firewall_options" "service_vm" {
   enabled       = true
   input_policy  = "DROP"
   output_policy = "DROP"
+  ipfilter      = true
+  macfilter     = true
 }
 
-resource "proxmox_virtual_environment_firewall_rules" "service_vm_ssh" {
+resource "proxmox_virtual_environment_firewall_ipset" "ipfilter" {
+  for_each = {
+    "ipfilter-net0" = var.network_cidr
+    "ipfilter-net1" = var.maintenance_network_cidr
+  }
+
+  node_name = var.proxmox_instance
+  vm_id     = proxmox_virtual_environment_vm.service_vm.vm_id
+  name      = each.key
+  comment   = "Only the configured address may be sent from this NIC"
+
+  cidr {
+    name = split("/", each.value)[0]
+  }
+}
+
+resource "proxmox_virtual_environment_firewall_rules" "service_vm" {
   node_name = var.proxmox_instance
   vm_id     = proxmox_virtual_environment_vm.service_vm.vm_id
 
   dynamic "rule" {
-    for_each = var.security_groups
+    for_each = var.firewall_rules
 
     content {
-      security_group = rule.value.name
-      comment        = "Apply security group: ${rule.value.name}"
+      security_group = rule.value.group
+      iface          = rule.value.iface
+      comment        = "Apply security group: ${rule.value.group}${rule.value.iface == null ? "" : " on ${rule.value.iface}"}"
     }
   }
 }
@@ -54,19 +75,22 @@ resource "proxmox_virtual_environment_vm" "service_vm" {
     "private_internet"
   ]
 
+  # Isolates the ports on management bridges (platform stack: hookscript).
+  hook_script_file_id = var.hookscript_file_id
+
   initialization {
     datastore_id = var.datastore_id
 
     ip_config {
       ipv4 {
         address = var.network_cidr
-        gateway = var.network_gateway_ip
       }
     }
 
     ip_config {
       ipv4 {
         address = var.maintenance_network_cidr
+        gateway = var.maintenance_network_gateway
       }
     }
 
@@ -106,4 +130,9 @@ resource "proxmox_virtual_environment_vm" "service_vm" {
       size         = var.data_disk_size
     }
   }
+}
+
+moved {
+  from = proxmox_virtual_environment_firewall_rules.service_vm_ssh
+  to   = proxmox_virtual_environment_firewall_rules.service_vm
 }

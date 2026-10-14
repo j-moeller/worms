@@ -4,11 +4,11 @@ locals {
   sandbox_bridges = {
     net1 = {
       name         = "vmbr1000"
-      network_cidr = "10.1.0.1/24"
+      network_cidr = "10.64.0.0/24"
     }
     net2 = {
       name         = "vmbr1001"
-      network_cidr = "10.1.0.1/24"
+      network_cidr = "10.64.1.0/24"
     }
   }
 
@@ -17,7 +17,6 @@ locals {
       cpu               = 1
       ram               = 256
       disk_file_id      = local.platform.os_images.debian.file_id
-      user_data_file_id = local.platform.cloud_init.blank.file_id
 
       maintenance_network_cidr = "10.4.0.111/16"
 
@@ -29,8 +28,8 @@ locals {
 
       ip_configs = [
         {
-          network_cidr = "10.1.0.11/24"
-          gateway      = null
+          network_cidr = "10.64.0.11/24"
+          gateway      = "10.64.0.1"
         }
       ]
     }
@@ -38,7 +37,6 @@ locals {
       cpu               = 1
       ram               = 256
       disk_file_id      = local.platform.os_images.debian.file_id
-      user_data_file_id = local.platform.cloud_init.blank.file_id
 
       maintenance_network_cidr = "10.4.0.112/16"
 
@@ -50,8 +48,8 @@ locals {
 
       ip_configs = [
         {
-          network_cidr = "10.1.0.12/24"
-          gateway      = null
+          network_cidr = "10.64.0.12/24"
+          gateway      = "10.64.0.1"
         }
       ]
     }
@@ -59,7 +57,6 @@ locals {
       cpu               = 1
       ram               = 256
       disk_file_id      = local.platform.os_images.debian.file_id
-      user_data_file_id = local.platform.cloud_init.blank.file_id
 
       maintenance_network_cidr = "10.4.0.113/16"
 
@@ -71,8 +68,8 @@ locals {
 
       ip_configs = [
         {
-          network_cidr = "10.1.0.13/24"
-          gateway      = null
+          network_cidr = "10.64.0.13/24"
+          gateway      = "10.64.0.1"
         }
       ]
     }

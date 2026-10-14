@@ -7,7 +7,9 @@
 # that is needed — this file is untouched.
 #
 # ALWAYS run with both inventories so the {{ infrastructure_ips.* }} /
-# {{ private_internet_ips.* }} references resolve:
+# {{ management_ips.* }} / {{ services_ips.* }} / {{ private_internet_ips.* }}
+# references resolve. Ansible always connects to the management address
+# (management_ips / private_internet_ips.*.maintenance):
 #     ansible-playbook -i inventory.yml -i inventory.generated.yml <playbook>
 #
 # Dynamic sandbox hosts are not listed here; they come from the generated
@@ -20,18 +22,30 @@ all:
         pki_ca_host:
           ansible_host: 127.0.0.1
 
+    # The Proxmox node itself (also the Ansible controller). See
+    # SetupHostNetwork.yml; set host_publish_dashboard: true here to expose the
+    # dashboard on <WAN>:443.
+    proxmox_host:
+      hosts:
+        proxmox.local:
+          ansible_host: 127.0.0.1
+          ansible_connection: local
+
     dns_hosts:
       hosts:
         dns.worms.internal:
-          ansible_host: "{{ infrastructure_ips.dns }}"
+          ansible_host: "{{ management_ips.dns }}"
           ansible_user: debian
+          # Serves the services bridge only (sandbox VMs via sandbox-gw, the
+          # private-internet VMs). Only names the sandbox needs: internal
+          # infrastructure (database, dashboard, orchestrator) is deliberately
+          # not resolvable from the sandbox side.
+          dns_listen_address: "{{ services_ips.dns }}"
           dns_entries:
             - name: scoring.worms.internal
-              ip: "{{ infrastructure_ips.scoring }}"
+              ip: "{{ services_ips.scoring }}"
             - name: logging.worms.internal
-              ip: "{{ infrastructure_ips.logging }}"
-            - name: database.worms.internal
-              ip: "{{ infrastructure_ips.db }}"
+              ip: "{{ services_ips.logging }}"
             - name: apt-cache.worms.internal
               ip: "{{ private_internet_ips.apt_cache.network }}"
             - name: pypi.worms.internal
@@ -46,35 +60,34 @@ all:
               ip: "{{ private_internet_ips.cve_search.network }}"
             - name: wikipedia.worms.internal
               ip: "{{ private_internet_ips.wikipedia.network }}"
-            - name: dashboard.worms.internal
-              ip: "{{ infrastructure_ips.dashboard }}"
-            - name: orchestrator.worms.internal
-              ip: "{{ infrastructure_ips.orchestrator }}"
 
     tls_hosts:
       hosts:
         scoring.worms.internal:
-          ansible_host: "{{ infrastructure_ips.scoring }}"
+          ansible_host: "{{ management_ips.scoring }}"
           ansible_user: debian
           tls_dns_name: scoring.worms.internal
 
         logging.worms.internal:
-          ansible_host: "{{ infrastructure_ips.logging }}"
+          ansible_host: "{{ management_ips.logging }}"
           ansible_user: debian
           tls_dns_name: logging.worms.internal
 
         database.worms.internal:
-          ansible_host: "{{ infrastructure_ips.db }}"
+          ansible_host: "{{ management_ips.db }}"
           ansible_user: debian
           tls_dns_name: database.worms.internal
+          # Django connects by IP with sslmode=verify-full.
+          postgresql_tls_extra_sans:
+            - "IP:{{ infrastructure_ips.db }}"
 
         dashboard.worms.internal:
-          ansible_host: "{{ infrastructure_ips.dashboard }}"
+          ansible_host: "{{ management_ips.dashboard }}"
           ansible_user: debian
           tls_dns_name: dashboard.worms.internal
 
         orchestrator.worms.internal:
-          ansible_host: "{{ infrastructure_ips.orchestrator }}"
+          ansible_host: "{{ management_ips.orchestrator }}"
           ansible_user: debian
           tls_dns_name: orchestrator.worms.internal
 
@@ -102,6 +115,13 @@ all:
           django_db_password: "{{ vault_django_dashboard_password }}"
           django_secret_key: "{{ vault_dashboard_secret_key }}"
           django_allowed_hosts: "dashboard.worms.internal,{{ infrastructure_ips.dashboard }}"
+          # Public facing: no migrator credentials, migrations run on the orchestrator.
+          django_run_migrations: false
+          django_extra_env:
+            # No DNS on the infrastructure side: connect by IP, verify the name.
+            ORCHESTRATOR_URL: "https://{{ infrastructure_ips.orchestrator }}"
+            ORCHESTRATOR_TLS_NAME: orchestrator.worms.internal
+            ORCHESTRATOR_API_TOKEN: "{{ vault_orchestrator_dashboard_token }}"
 
         orchestrator.worms.internal:
           django_variant: orchestrator
@@ -110,6 +130,7 @@ all:
           django_db_password: "{{ vault_django_orchestrator_password }}"
           django_secret_key: "{{ vault_orchestrator_secret_key }}"
           django_allowed_hosts: "orchestrator.worms.internal,{{ infrastructure_ips.orchestrator }}"
+          django_run_migrations: true
           django_extra_pip_packages:
             - proxmoxer
             - requests
@@ -125,6 +146,8 @@ all:
             PROXMOX_READONLY_USER: "{{ proxmox_readonly_api_user }}"
             PROXMOX_READONLY_TOKEN_NAME: "{{ proxmox_readonly_api_token_name }}"
             PROXMOX_READONLY_TOKEN_VALUE: "{{ proxmox_readonly_api_token_value }}"
+            # REST API callers (orchestrator/api.py).
+            ORCHESTRATOR_DASHBOARD_TOKEN: "{{ vault_orchestrator_dashboard_token }}"
           # Periodic management commands (systemd timers, same env file).
           django_timers:
             - name: collect-topology
@@ -191,7 +214,7 @@ all:
         ntp.worms.internal:
           ansible_host: "{{ private_internet_ips.ntp.maintenance }}"
           ansible_user: debian
-          ntp_allow_network: "{{ networks.private_internet }}"
+          ntp_allow_network: "{{ networks.services }}"
 
     cve_search_hosts:
       hosts:

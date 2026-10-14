@@ -29,44 +29,50 @@ locals {
   platform = data.terraform_remote_state.platform.outputs.platform
 }
 
+# net0 = data-plane NIC in the VM's zone (default route via the host),
+# net1 = management NIC (SSH from the host only).
 locals {
-  infrastructure = {
-    persistent = {
-      db = {
-        maintenance_network_cidr    = "10.3.0.16/24"
-        maintenance_network_gateway = "10.3.0.1"
-        user_data_file_id           = local.platform.cloud_init.postgresql.file_id
-        disk_file_id                = local.platform.os_images.debian.file_id
-        tag                         = "persistent"
-        security_groups = [
-          local.platform.security_group_names.ssh,
-          local.platform.security_group_names.database
-        ]
-      }
+  sg = local.platform.security_groups
+  nw = local.platform.networks
 
-      dashboard = {
-        maintenance_network_cidr    = "${local.infrastructure_ips.dashboard}/24"
-        maintenance_network_gateway = "10.3.0.1"
-        user_data_file_id           = local.platform.cloud_init.django.file_id
-        disk_file_id                = local.platform.os_images.debian.file_id
-        tag                         = "persistent"
-        security_groups = [
-          local.platform.security_group_names.ssh,
-          local.platform.security_group_names.dashboard
-        ]
-      }
+  persistent = {
+    db = {
+      user_data_file_id = local.platform.cloud_init.postgresql.file_id
+      nics = [
+        { bridge = local.nw.core.name, cidr = "${local.infrastructure_ips.db}/24", gateway = local.host_ips.core },
+        { bridge = local.nw.mgmt_trusted.name, cidr = "${local.management_ips.db}/24" },
+      ]
+      firewall_rules = [
+        { group = local.sg.database, iface = "net0" },
+        { group = local.sg.provisioning, iface = "net0" },
+        { group = local.sg.ssh, iface = "net1" },
+      ]
+    }
 
-      orchestrator = {
-        maintenance_network_cidr    = "${local.infrastructure_ips.orchestrator}/24"
-        maintenance_network_gateway = "10.3.0.1"
-        user_data_file_id           = local.platform.cloud_init.django.file_id
-        disk_file_id                = local.platform.os_images.debian.file_id
-        tag                         = "persistent"
-        security_groups = [
-          local.platform.security_group_names.ssh,
-          local.platform.security_group_names.orchestrator
-        ]
-      }
+    dashboard = {
+      user_data_file_id = local.platform.cloud_init.django.file_id
+      nics = [
+        { bridge = local.nw.dmz.name, cidr = "${local.infrastructure_ips.dashboard}/24", gateway = local.host_ips.dmz },
+        { bridge = local.nw.mgmt_exposed.name, cidr = "${local.management_ips.dashboard}/24" },
+      ]
+      firewall_rules = [
+        { group = local.sg.dashboard, iface = "net0" },
+        { group = local.sg.provisioning, iface = "net0" },
+        { group = local.sg.ssh, iface = "net1" },
+      ]
+    }
+
+    orchestrator = {
+      user_data_file_id = local.platform.cloud_init.django.file_id
+      nics = [
+        { bridge = local.nw.core.name, cidr = "${local.infrastructure_ips.orchestrator}/24", gateway = local.host_ips.core },
+        { bridge = local.nw.mgmt_trusted.name, cidr = "${local.management_ips.orchestrator}/24" },
+      ]
+      firewall_rules = [
+        { group = local.sg.orchestrator, iface = "net0" },
+        { group = local.sg.provisioning, iface = "net0" },
+        { group = local.sg.ssh, iface = "net1" },
+      ]
     }
   }
 }
@@ -74,17 +80,15 @@ locals {
 module "infrastructure_vms" {
   source = "../../../modules/infrastructure_vm"
 
-  for_each = local.infrastructure.persistent
+  for_each = local.persistent
 
-  proxmox_instance         = var.proxmox_instance
-  vmbr_maintenance_network = local.platform.networks.maintenance.name
-
-  name                        = each.key
-  maintenance_network_cidr    = each.value.maintenance_network_cidr
-  maintenance_network_gateway = each.value.maintenance_network_gateway
-  user_data_file_id           = each.value.user_data_file_id
-  disk_file_id                = each.value.disk_file_id
-  tag                         = each.value.tag
-  pool_id                     = local.platform.pools["persistent"].pool_id
-  security_groups             = each.value.security_groups
+  proxmox_instance   = var.proxmox_instance
+  name               = each.key
+  nics               = each.value.nics
+  firewall_rules     = each.value.firewall_rules
+  user_data_file_id  = each.value.user_data_file_id
+  disk_file_id       = local.platform.os_images.debian.file_id
+  hookscript_file_id = local.platform.hookscript_file_id
+  tag                = "persistent"
+  pool_id            = local.platform.pools["persistent"].pool_id
 }

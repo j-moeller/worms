@@ -1,86 +1,58 @@
-resource "proxmox_network_linux_bridge" "vmbr_private_internet" {
-  node_name = var.node_name
-  name      = "vmbr1"
-
-  address   = var.private_internet_cidr
-  ports     = []
-  autostart = true
-}
-
-resource "proxmox_network_linux_bridge" "vmbr_maintenance" {
-  node_name = var.node_name
-  name      = "vmbr2"
-
-  address   = var.maintenance_cidr
-  ports     = []
-  autostart = true
-  comment   = "Every infrastructure and private-internet VM is connected to this network. The network is used to connect to VMs via SSH."
-}
-
-resource "proxmox_network_linux_bridge" "vmbr_sandbox_maintenance" {
-  node_name = var.node_name
-  name      = "vmbr4"
-
-  address   = var.sandbox_maintenance_cidr
-  ports     = []
-  autostart = true
-  comment   = "Management (SSH) network of the untrusted sandbox VMs. Separate from vmbr2 so sandbox VMs share no network with the infrastructure; the Proxmox host is the only other peer."
-}
-
-resource "proxmox_network_linux_bridge" "vmbr_monitoring" {
-  node_name = var.node_name
-  name      = "vmbr3"
-
-  address   = var.monitoring_cidr
-  ports     = []
-  autostart = true
-  comment   = "This network is a mirror of the network(s) the sandbox VMs are communicating over."
-}
-
-# Host-level egress policy for the private internet.
+# One Linux bridge per network zone (see opentofu/shared/shared-variables.tf).
 #
-# vmbr1 has no physical uplink; its VMs only reach the WAN because the host
-# forwards + masquerades out the WAN bridge. OpenTofu cannot express host
-# iptables declaratively, so this installs a version-controlled, idempotent
-# script + systemd unit (see files/) that toggles the egress:
-#   internet_enabled = true  -> prep:    masquerade on, forwarding allowed
-#   internet_enabled = false -> runtime: forwarding to the WAN dropped (sealed)
+# Only the routed zones (dmz, core, ingest) and the management bridges get a
+# host address. The services, sandbox and mirror bridges are pure layer 2 for
+# the host: it has no IP there, so nothing a sandbox VM can reach terminates on
+# (or is routed by) the hypervisor's IP stack.
 #
-# Enforced in iptables-legacy, which is what actually governs routed traffic on
-# this node (the nftables proxmox-firewall is empty/dormant and only filters
-# firewall=1 NICs; ours are firewall=0). Runs on the Proxmox node (where tofu is
-# applied, same assumption as the local state backend). Changing internet_enabled
-# replaces this resource, re-running the provisioner. Covers both NICs of the
-# private-internet VMs (private subnet + maintenance IP range).
+# Routing and filtering between zones is done by the host nftables ruleset
+# (ansible role host_network), which OpenTofu cannot express declaratively.
 
-resource "null_resource" "private_internet_egress" {
-  triggers = {
-    sealed      = var.internet_enabled ? "0" : "1"
-    net         = var.private_internet_network
-    wan         = var.wan_bridge
-    maint_range = var.private_internet_maint_range
+locals {
+  zones = {
+    dmz = {
+      address = "${var.host_ips.dmz}/${split("/", var.networks.dmz)[1]}"
+      comment = "DMZ: dashboard (published to the internet by host DNAT on 443)."
+    }
+    core = {
+      address = "${var.host_ips.core}/${split("/", var.networks.core)[1]}"
+      comment = "Core: database and orchestrator."
+    }
+    ingest = {
+      address = "${var.host_ips.ingest}/${split("/", var.networks.ingest)[1]}"
+      comment = "Ingest: database leg of scoring/logging (routed to database:5432 only)."
+    }
+    services = {
+      address = null
+      comment = "Sandbox services: scoring/logging (sandbox leg), private internet, DNS, sandbox-gw. No host IP, no uplink."
+    }
+    mirror = {
+      address = null
+      comment = "Mirror of the sandbox networks for the monitor VM. No host IP."
+    }
+    mgmt_trusted = {
+      address = "${var.host_ips.mgmt_trusted}/${split("/", var.networks.mgmt_trusted)[1]}"
+      comment = "Management (SSH host -> VM) for database and orchestrator. Ports isolated."
+    }
+    mgmt_exposed = {
+      address = "${var.host_ips.mgmt_exposed}/${split("/", var.networks.mgmt_exposed)[1]}"
+      comment = "Management (SSH host -> VM) for dashboard, scoring, logging, DNS, private internet. Ports isolated."
+    }
+    mgmt_sandbox = {
+      address = "${var.host_ips.mgmt_sandbox}/${split("/", var.networks.mgmt_sandbox)[1]}"
+      comment = "Management (SSH host -> VM) for sandbox VMs and sandbox-gw. Ports isolated."
+    }
   }
+}
 
-  provisioner "local-exec" {
-    command = <<-EOT
-      set -eu
-      install -m 0755 '${path.module}/files/worms-private-internet-egress.sh' /usr/local/sbin/worms-private-internet-egress
-      sed -i 's|@NET@|${var.private_internet_network}|; s|@WAN@|${var.wan_bridge}|; s|@MAINT_RANGE@|${var.private_internet_maint_range}|; s|@SEALED@|${var.internet_enabled ? "0" : "1"}|' /usr/local/sbin/worms-private-internet-egress
-      install -m 0644 '${path.module}/files/worms-private-internet-egress.service' /etc/systemd/system/worms-private-internet-egress.service
-      systemctl daemon-reload
-      systemctl enable worms-private-internet-egress.service
-      systemctl restart worms-private-internet-egress.service
-    EOT
-  }
+resource "proxmox_network_linux_bridge" "zone" {
+  for_each = local.zones
 
-  provisioner "local-exec" {
-    when    = destroy
-    command = <<-EOT
-      systemctl disable --now worms-private-internet-egress.service 2>/dev/null || true
-      rm -f /etc/systemd/system/worms-private-internet-egress.service /usr/local/sbin/worms-private-internet-egress
-      systemctl daemon-reload 2>/dev/null || true
-      while iptables-legacy -C FORWARD -s '${self.triggers.net}' -o '${self.triggers.wan}' -j DROP 2>/dev/null; do iptables-legacy -D FORWARD -s '${self.triggers.net}' -o '${self.triggers.wan}' -j DROP; done
-      while iptables-legacy -C FORWARD -m iprange --src-range '${self.triggers.maint_range}' -o '${self.triggers.wan}' -j DROP 2>/dev/null; do iptables-legacy -D FORWARD -m iprange --src-range '${self.triggers.maint_range}' -o '${self.triggers.wan}' -j DROP; done
-    EOT
-  }
+  node_name = var.node_name
+  name      = var.bridges[each.key]
+
+  address   = each.value.address
+  ports     = []
+  autostart = true
+  comment   = each.value.comment
 }

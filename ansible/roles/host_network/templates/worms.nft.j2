@@ -1,0 +1,105 @@
+#!/usr/sbin/nft -f
+# Managed by Ansible (role host_network). DO NOT EDIT.
+#
+# Host-side zone firewall of the Proxmox node: the second layer, independent of
+# the per-VM Proxmox firewall. Coexists with the Proxmox firewall's own tables:
+# a packet must pass every base chain, so this table can only restrict further.
+#
+# * FORWARD default drop. The host routes only dashboard -> database/
+#   orchestrator and scoring/logging/monitor -> database (+ internet ->
+#   dashboard:443 if published). Nothing is forwarded from the sandbox,
+#   services or mirror bridges; the host has no address on them.
+# * INPUT from VM bridges: replies to host-initiated connections (SSH) and
+#   orchestrator -> Proxmox API only.
+# * Internet access for VMs: the rules exist but are gated by the set
+#   `internet_wan`, which is empty here. Only host/allow-internet.sh fills it,
+#   at runtime (a reboot or a reload empties it again).
+{% set b = bridges %}
+{% set same_bridge = [b.services, b.mirror, b.dmz, b.core, b.ingest, b.mgmt_trusted, b.mgmt_exposed, b.mgmt_sandbox] %}
+
+table inet worms
+delete table inet worms
+
+table inet worms {
+  # Bridges on which the host has an address (routed zones, management).
+  set vm_bridges {
+    type ifname
+    elements = { "{{ b.dmz }}", "{{ b.core }}", "{{ b.ingest }}", "{{ b.mgmt_trusted }}", "{{ b.mgmt_exposed }}", "{{ b.mgmt_sandbox }}" }
+  }
+
+  # Bridges on which the host has NO address and never accepts anything.
+  set dark_bridges {
+    type ifname
+    elements = { "{{ b.services }}", "{{ b.mirror }}" }
+  }
+
+  # Zones whose VMs may use the internet while it is allowed (each has a host
+  # gateway). Never the sandbox, services or mirror bridges.
+  set internet_zones {
+    type ifname
+    elements = { "{{ b.dmz }}", "{{ b.core }}", "{{ b.ingest }}", "{{ b.mgmt_exposed }}" }
+  }
+
+  # The gate: empty = internet denied. host/allow-internet.sh adds the WAN
+  # interface, host/deny-internet.sh flushes it.
+  set internet_wan {
+    type ifname
+  }
+
+  chain input {
+    type filter hook input priority filter - 5; policy accept;
+    iifname "{{ b.sandbox_glob }}" counter drop comment "sandbox bridges: never"
+    iifname @dark_bridges counter drop comment "services/mirror: never"
+    iifname @vm_bridges jump from_vms
+  }
+
+  chain from_vms {
+    ct state established,related accept comment "replies to host-initiated connections"
+    ct state invalid drop
+    iifname "{{ b.core }}" ip saddr {{ infrastructure_ips.orchestrator }} ip daddr {{ host_ips.core }} tcp dport {{ proxmox.api_port }} accept comment "orchestrator -> Proxmox API"
+    icmp type { destination-unreachable, time-exceeded } accept
+    limit rate 10/minute log prefix "worms-in-drop " level info
+    counter drop
+  }
+
+  chain forward {
+    type filter hook forward priority filter - 5; policy drop;
+    ct state invalid drop
+    ct state established,related accept
+
+    # Bridged traffic that stays on its bridge (only visible here with
+    # br_netfilter); the Proxmox VM firewall filters it. The host has no route
+    # between two sandbox bridges, so this never permits routing.
+    iifname "{{ b.sandbox_glob }}" oifname "{{ b.sandbox_glob }}" accept
+{% for bridge in same_bridge %}
+    iifname "{{ bridge }}" oifname "{{ bridge }}" accept
+{% endfor %}
+
+    # Routed zone allow-list.
+    iifname "{{ b.dmz }}" oifname "{{ b.core }}" ip saddr {{ infrastructure_ips.dashboard }} ip daddr {{ infrastructure_ips.db }} tcp dport 5432 accept comment "dashboard -> database"
+    iifname "{{ b.dmz }}" oifname "{{ b.core }}" ip saddr {{ infrastructure_ips.dashboard }} ip daddr {{ infrastructure_ips.orchestrator }} tcp dport 443 accept comment "dashboard -> orchestrator"
+    iifname "{{ b.ingest }}" oifname "{{ b.core }}" ip saddr { {{ infrastructure_ips.scoring }}, {{ infrastructure_ips.logging }}, {{ infrastructure_ips.monitor }} } ip daddr {{ infrastructure_ips.db }} tcp dport 5432 accept comment "ingest -> database"
+{% if host_publish_dashboard %}
+    iifname "{{ host_wan_interface }}" oifname "{{ b.dmz }}" ip daddr {{ infrastructure_ips.dashboard }} tcp dport 443 ct status dnat accept comment "internet -> dashboard"
+{% endif %}
+
+    # Internet access (gated, see internet_wan).
+    iifname @internet_zones oifname @internet_wan tcp dport { 80, 443, 53 } accept comment "internet allowed"
+    iifname @internet_zones oifname @internet_wan udp dport 53 accept comment "internet allowed"
+
+    limit rate 10/minute log prefix "worms-fwd-drop " level info
+    counter drop
+  }
+
+  chain prerouting {
+    type nat hook prerouting priority dstnat;
+{% if host_publish_dashboard %}
+    iifname "{{ host_wan_interface }}" fib daddr type local tcp dport 443 dnat ip to {{ infrastructure_ips.dashboard }}:443 comment "publish dashboard"
+{% endif %}
+  }
+
+  chain postrouting {
+    type nat hook postrouting priority srcnat;
+    iifname @internet_zones oifname @internet_wan masquerade comment "internet allowed"
+  }
+}

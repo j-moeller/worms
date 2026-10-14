@@ -1,0 +1,6 @@
+---
+- name: Reload host firewall
+  ansible.builtin.systemd:
+    name: worms-host-firewall
+    state: restarted
+    daemon_reload: true

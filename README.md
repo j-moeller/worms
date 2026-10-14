@@ -2,7 +2,11 @@
 
 ```
 export PROXMOX_API_TOKEN=<the value of your Proxmox API token>   # the one external secret
-make            # idempotent: init -> secrets -> tofu apply -> inventory -> provision
+make init secrets apply          # OpenTofu stacks + host firewall (Ansible)
+host/allow-internet.sh           # packages / cache population need the internet
+make                             # idempotent: ... -> inventory -> provision
+host/deny-internet.sh            # required before any sandbox round
+make private_internet            # caches switch to offline mode
 ```
 
 `make` prints the VM names and IP addresses it is configuring, and is safe to
@@ -36,10 +40,12 @@ reference.
 # Addressing: OpenTofu is the single source of truth
 
 All non-sandbox IP addresses, subnets and the Proxmox host are defined in **one
-place**: `opentofu/shared/shared-variables.tf` (`infrastructure_ips`,
-`private_internet_ips`, `networks`, proxmox host). That file is symlinked into
-every stack, so OpenTofu, the firewall rules and the VM definitions all consume
-the same values — nothing is hardcoded twice.
+place**: `opentofu/shared/shared-variables.tf` (`bridges`, `networks`,
+`host_ips`, `infrastructure_ips` (data plane), `management_ips` (SSH),
+`services_ips`, `private_internet_ips`). That file is symlinked into every
+stack, so OpenTofu, the firewall rules, the VM definitions, the Ansible
+inventory (and through it the host firewall) all consume the same values — nothing is
+hardcoded twice.
 
 Sandbox VM addresses are **not** here: they are dynamic and owned entirely by
 `opentofu/stacks/sandbox` (the generated `generated_vms*.tf`).
@@ -64,7 +70,8 @@ cd ansible && ansible-playbook -e @group_vars/vault.yml <playbook>.yml
 
 `inventory.yml` keeps the semantic groups/roles (which host is a Django vs Flask
 host, its settings module, DNS entries, TLS names); every IP in it is a
-`{{ infrastructure_ips.* }}` / `{{ private_internet_ips.* }}` reference resolved
+`{{ infrastructure_ips.* }}` / `{{ management_ips.* }}` / `{{ services_ips.* }}` /
+`{{ private_internet_ips.* }}` reference resolved
 from the generated file. So changing an address in OpenTofu + `make inventory`
 reconfigures Ansible with no edits to `inventory.yml`.
 
@@ -76,9 +83,9 @@ reconfigures Ansible with no edits to `inventory.yml`.
 - `tofu apply` the base stacks (platform, private_internet, persistent,
   ephemeral). Addressing comes from `opentofu/shared/shared-variables.tf` (the
   single source of truth); the platform stack emits the `infrastructure` output.
-    - persistent: database, dashboard, orchestrator (each on its own
-      maintenance IP, defined in shared-variables.tf)
-    - ephemeral: scoring, logging
+    - `SetupHostNetwork.yml` (host sysctls + nftables) right after the platform stack
+    - persistent: database, dashboard, orchestrator
+    - ephemeral: DNS, scoring, logging
 - `make inventory` — generate `ansible/inventory.generated.yml` from OpenTofu
   and print the VM/IP configuration.
 - `make provision` — Ansible sets up:
@@ -93,29 +100,63 @@ reconfigures Ansible with no edits to `inventory.yml`.
 - Ansible sets up:
     - DB (sets per-user least-privilege table permissions)
 
-# Components & least-privilege communication
+# Network design
 
-- Dashboard (public-facing later) → database:5432 (read-only role +
-  INSERT on uploads), and → orchestrator:443.
-- Orchestrator → Proxmox API:8006 (proxmoxer, scoped API token) and
-  → database:5432 (writes virtual_machines / worm_deployment_plans /
-  worm_deployments, reads the rest).
-- Database accepts :5432 only from the named service IPs; each DB role may
-  connect only from its own VM (`/32` in `pg_hba`, `scram-sha-256`, TLS).
+Risk zones, each on its own bridge (addresses: `opentofu/shared/shared-variables.tf`):
 
-- Orchestrator → Proxmox API:8006 with a second, **read-only** token
-  (PVEAuditor) to collect the topology; it writes it to `topology_snapshots`,
-  which the dashboard reads. The dashboard never talks to Proxmox (its egress
-  policy is DROP with only db:5432 and orchestrator:443 allowed).
+| Bridge | Zone | Members | Host IP |
+|---|---|---|---|
+| vmbr20 | dmz | dashboard (internet via host DNAT :443) | 10.10.0.1 (gateway) |
+| vmbr21 | core | database, orchestrator | 10.11.0.1 (gateway) |
+| vmbr22 | ingest | scoring/logging database leg | 10.12.0.1 (gateway) |
+| vmbr23 | services | scoring/logging sandbox leg, private internet, DNS, sandbox-gw | none |
+| vmbr1xxx | sandbox | generated networks (10.64.0.0/10), sandbox VMs, sandbox-gw | none |
+| vmbr3 | mirror | traffic mirror for the monitor | none |
+| vmbr2 | mgmt-trusted | SSH: database, orchestrator | 10.3.0.1 |
+| vmbr5 | mgmt-exposed | SSH: dashboard, scoring, logging, DNS, private internet | 10.5.0.1 |
+| vmbr4 | mgmt-sandbox | SSH: sandbox VMs, sandbox-gw | 10.4.0.1 |
 
-- Management/SSH: infrastructure VMs on `vmbr2` (10.3.0.0/24), sandbox VMs on
-  their own `vmbr4` (10.4.0.0/16), so untrusted VMs share no network with the
-  infrastructure. The `ssh` group accepts port 22 only from the Proxmox host
-  (10.3.0.1 / 10.4.0.1); sandbox VMs only on their management NIC.
+Allowed flows (everything else is dropped twice: by the per-VM Proxmox firewall,
+input and output policy DROP with `ipfilter`, and for routed traffic by the
+host nftables FORWARD chain):
 
-The firewall security groups in `opentofu/stacks/platform/main.tf` enforce the
-network side; the PostgreSQL roles/grants in the `setup_db_*` roles enforce the
-data side.
+- internet → dashboard:443 (host DNAT, `host_publish_dashboard: true` on `proxmox_host`)
+- dashboard → database:5432, orchestrator:443
+- scoring/logging → database:5432 (INSERT into one table each)
+- orchestrator → Proxmox API:8006 (scoped tokens)
+- sandbox VMs ↔ sandbox VMs (the experiment), routed by **sandbox-gw**, a
+  router VM: sandbox → services bridge on the scoring/logging/private-internet
+  ports only, SNATed to sandbox-gw's address. The host has no IP on any bridge
+  a sandbox VM can reach and never routes their traffic.
+- host → every VM:22 on its management NIC (management bridges are
+  port-isolated, so VMs cannot reach each other there; no VM can open a
+  connection to the host except orchestrator → API).
+
+No VM has internet access unless `host/allow-internet.sh` allows it (package
+installs and cache population for the dmz/core/ingest/mgmt-exposed VMs through
+host NAT); `host/deny-internet.sh` revokes it. Allowing is refused while sandbox
+VMs exist; while it is allowed, the sandbox stack (and `make startround`)
+refuses to deploy. The state lives in
+`/run/worms/internet-allowed` and runtime-only nftables rules, so a reboot
+always comes back denied.
+
+The database is the choke point between the sandbox side and the
+infrastructure; rows written by scoring/logging are attacker-controlled data.
+The dashboard never holds the migrator credentials (migrations run on the
+orchestrator).
+
+# Where things are configured
+
+- **OpenTofu**: everything Proxmox-level — bridges, VMs, the per-VM firewall
+  (security groups, `ipfilter`), and the hookscript every VM carries
+  (`worms-hook.sh`: isolates VM ports on the management bridges, so VMs there
+  can only reach the host).
+- **Ansible**: VM configuration, and the Proxmox host's own OS settings
+  (`SetupHostNetwork.yml`, role `host_network`, runs locally on the node):
+  sysctls, the nftables zone firewall + boot unit (`/etc/worms/worms.nft`),
+  and the Proxmox host firewall rule orchestrator → API.
+- **Scripts** (runtime state only): `host/allow-internet.sh` /
+  `host/deny-internet.sh`.
 
 # Round start
 

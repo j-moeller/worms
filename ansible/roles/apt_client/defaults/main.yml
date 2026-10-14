@@ -1,6 +1,6 @@
 ---
 # apt-cacher-ng endpoint (the apt_cache service VM) on the private network.
-apt_client_cache_host: 10.2.0.20
+apt_client_cache_host: "{{ private_internet_ips.apt_cache.network }}"
 apt_client_cache_port: 3142
 # Debian release layout.
 apt_client_suites: "trixie trixie-updates trixie-backports"

@@ -1,37 +1,42 @@
 # =============================================================================
 # worms-platform
 #
-#   make            Idempotent, end-to-end setup of the base infrastructure:
-#                     init -> secrets -> tofu apply -> inventory -> provision.
-#                   Re-running it changes nothing once everything is in place.
+#   make              Idempotent, end-to-end setup of the base infrastructure:
+#                       init -> secrets -> apply -> inventory -> provision
+#                     Provisioning installs packages: allow internet first.
 #   make show-config  Print the VM names + IP addresses that are configured.
+#   make private_internet  Re-apply the private-internet VMs and caches (online
+#                     or offline mode follows the current internet state).
 #   make startround   Bring up the per-round sandbox (generate it first).
 #   make endround     Tear the sandbox back down.
+#
+# Internet access for VMs is never implicit (as root on the Proxmox node):
+#   host/allow-internet.sh   refused while sandbox VMs exist
+#   host/deny-internet.sh    required before `make startround`
+#
+# The Proxmox host's own network security (sysctls, nftables) is configured by
+# Ansible (SetupHostNetwork.yml, runs locally on the node).
 #
 # Addressing is owned by OpenTofu (opentofu/shared/shared-variables.tf); the
 # Ansible inventory is generated from it. Management passwords are generated
 # once into the encrypted vault and reused, so you never handle them.
 # =============================================================================
 
-# Single switch for the private internet (propagated to OpenTofu -var and Ansible -e).
-INTERNET_ENABLED ?= true
+INTERNET_FLAG = /run/worms/internet-allowed
 
 # Ansible invocation. Inventory and the vault key come from ansible/ansible.cfg;
 # -e @group_vars/vault.yml loads the (auto-decrypted) secrets. Run from ansible/.
 ANSIBLE = ansible-playbook -e @group_vars/vault.yml
 
 .PHONY: all setup init secrets apply inventory show-config provision \
-        startround endround destroy destroy_all terminate private_internet
+        private_internet startround endround destroy destroy_all terminate
 
 all: setup
 
 # ---- Idempotent base setup --------------------------------------------------
-# Each step is safe to re-run: tofu converges, secrets are only generated once,
-# the inventory is regenerated deterministically, and the Ansible roles are
-# idempotent. So `make` can be run repeatedly and only drifts the system toward
-# the declared state.
 setup: init secrets apply inventory show-config provision
 	@echo "== setup complete =="
+	@test ! -e $(INTERNET_FLAG) || echo "Internet access is still allowed: host/deny-internet.sh && make private_internet"
 
 init:
 	cd opentofu/stacks/platform && tofu init -input=false
@@ -40,13 +45,17 @@ init:
 	cd opentofu/stacks/sandbox && tofu init -input=false
 	cd opentofu/stacks/private_internet && tofu init -input=false
 
-# Generate management secrets ONCE into the encrypted vault (no-op if present).
+# Generate management secrets into the encrypted vault (adds only missing keys).
 secrets:
 	python3 scripts/generate_secrets.py
 
-# Apply the base infrastructure stacks (NOT the per-round sandbox).
+# Base infrastructure stacks (NOT the per-round sandbox). The platform stack
+# creates the bridges, VM firewall and hookscript; the host firewall is then
+# configured from the generated inventory before any VM stack is applied.
 apply:
-	cd opentofu/stacks/platform && $(MAKE) apply INTERNET_ENABLED=$(INTERNET_ENABLED)
+	cd opentofu/stacks/platform && $(MAKE) apply
+	$(MAKE) inventory
+	cd ansible && $(ANSIBLE) SetupHostNetwork.yml
 	cd opentofu/stacks/private_internet && $(MAKE) apply
 	cd opentofu/stacks/infrastructure/persistent && $(MAKE) apply
 	cd opentofu/stacks/infrastructure/ephemeral && $(MAKE) apply
@@ -61,6 +70,7 @@ show-config:
 
 # Idempotent Ansible provisioning of the base infrastructure.
 provision:
+	@test -e $(INTERNET_FLAG) || echo "WARNING: internet access is denied; package installs will fail (host/allow-internet.sh)"
 	cd ansible && $(ANSIBLE) SetupDNS.yml
 	cd ansible && $(ANSIBLE) CreateCA.yml
 	cd ansible && $(ANSIBLE) DistributeCA.yml
@@ -70,29 +80,24 @@ provision:
 	cd ansible && $(ANSIBLE) SetupDbAndDashboard.yml
 	cd ansible && $(ANSIBLE) SetupLogging.yml
 	cd ansible && $(ANSIBLE) SetupScoring.yml
-	cd ansible && $(ANSIBLE) SetupPrivateInternet.yml -e internet_enabled=$(INTERNET_ENABLED)
+	cd ansible && $(ANSIBLE) SetupPrivateInternet.yml
+
+# Private-internet VMs + caches (online/offline follows the internet state).
+private_internet:
+	cd opentofu/stacks/private_internet && $(MAKE) apply
+	$(MAKE) inventory
+	cd ansible && $(ANSIBLE) SetupPrivateInternet.yml
 
 # ---- Per-round sandbox ------------------------------------------------------
 # Generate the sandbox config first (scripts/generate_sandbox.py), then:
 startround:
+	@test ! -e $(INTERNET_FLAG) || (echo "Internet access is allowed: run host/deny-internet.sh first" && false)
 	cd opentofu/stacks/sandbox && $(MAKE) apply
 	$(MAKE) inventory          # pick up the new sandbox VMs' IPs
 	$(MAKE) show-config
-	# Provision the sandboxes (certificates, /etc/flags for the CTF, ...), e.g.:
-	#   cd ansible && $(ANSIBLE) SetupSandbox.yml
-	# then deliver files via the orchestrator.
 
 endround:
 	cd opentofu/stacks/sandbox && $(MAKE) destroy
-
-# INTERNET_ENABLED drives the whole private internet from one switch:
-#   - platform stack: host egress seal (true = internet reachable, false = sealed)
-#   - ansible:        caches online vs. offline mode
-private_internet:
-	$(MAKE) -C opentofu/stacks/platform apply INTERNET_ENABLED=$(INTERNET_ENABLED)
-	$(MAKE) -C opentofu/stacks/private_internet apply
-	$(MAKE) inventory
-	cd ansible && $(ANSIBLE) SetupPrivateInternet.yml -e internet_enabled=$(INTERNET_ENABLED)
 
 # ---- Teardown ---------------------------------------------------------------
 destroy_all:

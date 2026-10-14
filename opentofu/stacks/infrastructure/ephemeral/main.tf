@@ -30,123 +30,81 @@ locals {
 }
 
 locals {
-  private_internet = {
-    dns = {
-      cpu                         = 1
-      ram                         = 1024
-      network_cidr                = "${local.infrastructure_ips.dns}/24"
-      network_gateway_ip          = "10.2.0.1"
-      maintenance_network_cidr    = "${local.dns_maintenance_ip}/24"
-      maintenance_network_gateway = "10.3.0.1"
-      user_data_file_id           = local.platform.cloud_init.dns.file_id
-      vmbr_network                = local.platform.networks.private_internet.name
-      vmbr_maintenance_network    = local.platform.networks.maintenance.name
-      disk_file_id                = local.platform.os_images.debian.file_id
-      security_groups = [
-        local.platform.security_group_names.ssh,
-        local.platform.security_group_names.dns
-      ]
-    }
-  }
+  sg = local.platform.security_groups
+  nw = local.platform.networks
 }
 
-locals {
-  infrastructure = {
-    generic = {
-      /*
-      heartbeat = {
-        maintenance_network_cidr = "10.3.0.13/24"
-        maintenance_network_gateway = "10.3.0.1"
-        user_data_file_id        = local.platform.cloud_init.nginx_vm_static.id
-        disk_file_id             = proxmox_virtual_environment_file.debian_image.id
-      }
-      */
-      scoring = {
-        maintenance_network_cidr    = "${local.infrastructure_ips.scoring}/24"
-        maintenance_network_gateway = "10.3.0.1"
-        user_data_file_id           = local.platform.cloud_init.flask.file_id
-        disk_file_id                = local.platform.os_images.debian.file_id
-        tag                         = "ephemeral"
-        security_groups = [
-          local.platform.security_group_names.ssh,
-          local.platform.security_group_names.sandbox_rest_api
-        ]
-      }
-      logging = {
-        maintenance_network_cidr    = "${local.infrastructure_ips.logging}/24"
-        maintenance_network_gateway = "10.3.0.1"
-        user_data_file_id           = local.platform.cloud_init.flask.file_id
-        disk_file_id                = local.platform.os_images.debian.file_id
-        tag                         = "ephemeral"
-        security_groups = [
-          local.platform.security_group_names.ssh,
-          local.platform.security_group_names.sandbox_rest_api
-        ]
-      }
-    }
-    /*
-    specific = {
-      monitor = {
-        maintenance_network_cidr    = "10.3.0.100/24"
-        maintenance_network_gateway = "10.3.0.1"
-        user_data_file_id           = local.platform.cloud_init.network_monitor_vm_static.id
-        disk_file_id                = proxmox_virtual_environment_file.debian_image.id
-        tag                         = "ephemeral"
-      }
-    }
-    */
-  }
-}
-
-module "private_internet_vms" {
+# DNS for the services bridge (sandbox VMs resolve through sandbox-gw).
+# net0 = services (no gateway), net1 = mgmt-exposed (gateway = host, only
+# forwarded to the internet while host/allow-internet.sh allows it, for
+# upstream DNS while populating).
+module "dns" {
   source = "../../../modules/private_internet_vm"
 
-  for_each = local.private_internet
-
-  proxmox_instance         = var.proxmox_instance
-  name                     = each.key
-  cpu                      = each.value.cpu
-  ram                      = each.value.ram
-  network_cidr             = each.value.network_cidr
-  network_gateway_ip       = each.value.network_gateway_ip
-  maintenance_network_cidr = each.value.maintenance_network_cidr
-  user_data_file_id        = each.value.user_data_file_id
-  vmbr_network             = each.value.vmbr_network
-  vmbr_maintenance_network = each.value.vmbr_maintenance_network
-  disk_file_id             = each.value.disk_file_id
-  pool_id                  = local.platform.pools["private_internet"].pool_id
-  security_groups          = each.value.security_groups
+  proxmox_instance            = var.proxmox_instance
+  name                        = "dns"
+  cpu                         = 1
+  ram                         = 1024
+  network_cidr                = "${local.services_ips.dns}/24"
+  maintenance_network_cidr    = "${local.management_ips.dns}/24"
+  maintenance_network_gateway = local.host_ips.mgmt_exposed
+  user_data_file_id           = local.platform.cloud_init.dns.file_id
+  vmbr_network                = local.nw.services.name
+  vmbr_maintenance_network    = local.nw.mgmt_exposed.name
+  disk_file_id                = local.platform.os_images.debian.file_id
+  hookscript_file_id          = local.platform.hookscript_file_id
+  pool_id                     = local.platform.pools["private_internet"].pool_id
+  firewall_rules = [
+    { group = local.sg.dns, iface = "net0" },
+    { group = local.sg.ssh, iface = "net1" },
+    { group = local.sg.provisioning, iface = "net1" },
+  ]
 }
 
-module "infrastructure_vms" {
+# Scoring and logging: the only dual-homed VMs between the sandbox side and the
+# database. net0 = services (sandbox API, inbound 443 from sandbox-gw only),
+# net1 = ingest (default route; outbound database:5432 only), net2 = mgmt-exposed.
+module "sandbox_apis" {
   source = "../../../modules/infrastructure_vm"
 
-  for_each = local.infrastructure.generic
+  for_each = toset(["scoring", "logging"])
 
-  proxmox_instance         = var.proxmox_instance
-  vmbr_maintenance_network = local.platform.networks.maintenance.name
-
-  name                        = each.key
-  maintenance_network_cidr    = each.value.maintenance_network_cidr
-  maintenance_network_gateway = each.value.maintenance_network_gateway
-  user_data_file_id           = each.value.user_data_file_id
-  disk_file_id                = each.value.disk_file_id
-  tag                         = each.value.tag
-  pool_id                     = local.platform.pools["ephemeral"].pool_id
-  security_groups             = each.value.security_groups
+  proxmox_instance = var.proxmox_instance
+  name             = each.key
+  nics = [
+    { bridge = local.nw.services.name, cidr = "${local.services_ips[each.key]}/24" },
+    { bridge = local.nw.ingest.name, cidr = "${local.infrastructure_ips[each.key]}/24", gateway = local.host_ips.ingest },
+    { bridge = local.nw.mgmt_exposed.name, cidr = "${local.management_ips[each.key]}/24" },
+  ]
+  firewall_rules = [
+    { group = local.sg.sandbox_api, iface = "net0" },
+    { group = local.sg.db_client, iface = "net1" },
+    { group = local.sg.provisioning, iface = "net1" },
+    { group = local.sg.ssh, iface = "net2" },
+  ]
+  user_data_file_id  = local.platform.cloud_init.flask.file_id
+  disk_file_id       = local.platform.os_images.debian.file_id
+  hookscript_file_id = local.platform.hookscript_file_id
+  tag                = "ephemeral"
+  pool_id            = local.platform.pools["ephemeral"].pool_id
 }
 
-/*
-module "network_monitor_vm" {
-  source = "../../../modules/network_monitor_vm"
+# The network monitor (modules/network_monitor_vm) is not deployed yet. When it
+# is: data NIC on ingest (db_client), mirror NIC on vmbr3, management on
+# mgmt-exposed (it parses attacker traffic, so it is high risk).
 
-  proxmox_instance         = var.proxmox_instance
-  vmbr_maintenance_network = proxmox_network_linux_bridge.vmbr_maintenance_network.name
-  vmbr_monitor_network     = proxmox_network_linux_bridge.vmbr_monitoring_network.name
-
-  maintenance_network_cidr    = local.infrastructure.specific.monitor.maintenance_network_cidr
-  maintenance_network_gateway = local.infrastructure.specific.monitor.maintenance_network_gateway
-  user_data_file_id           = local.infrastructure.specific.monitor.user_data_file_id
-  disk_file_id                = local.infrastructure.specific.monitor.disk_file_id
+# Renamed module instances (keep the existing VMs; only their NICs change).
+moved {
+  from = module.private_internet_vms["dns"]
+  to   = module.dns
 }
-*/
+
+moved {
+  from = module.infrastructure_vms["scoring"]
+  to   = module.sandbox_apis["scoring"]
+}
+
+moved {
+  from = module.infrastructure_vms["logging"]
+  to   = module.sandbox_apis["logging"]
+}

@@ -1,0 +1,95 @@
+---
+- name: Kernel network settings
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/90-worms.conf
+    state: present
+    reload: true
+  loop: "{{ host_sysctls | dict2items }}"
+
+- name: Create configuration directory
+  ansible.builtin.file:
+    path: "{{ host_nft_file | dirname }}"
+    state: directory
+    mode: "0755"
+
+- name: Install nftables ruleset
+  ansible.builtin.template:
+    src: worms.nft.j2
+    dest: "{{ host_nft_file }}"
+    mode: "0644"
+    validate: nft -c -f %s
+  notify: Reload host firewall
+
+# Read by host/allow-internet.sh.
+- name: Install host network environment
+  ansible.builtin.copy:
+    dest: /etc/worms/host.env
+    mode: "0644"
+    content: |
+      # Managed by Ansible (role host_network).
+      WAN_IF={{ host_wan_interface }}
+
+- name: Install host firewall unit
+  ansible.builtin.template:
+    src: worms-host-firewall.service.j2
+    dest: /etc/systemd/system/worms-host-firewall.service
+    mode: "0644"
+  notify: Reload host firewall
+
+- name: Enable host firewall
+  ansible.builtin.systemd:
+    name: worms-host-firewall
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Apply ruleset changes now
+  ansible.builtin.meta: flush_handlers
+
+# Reloading the ruleset empties the runtime internet gate; keep it consistent
+# with the flag if internet access is currently allowed.
+- name: Check whether internet access is allowed
+  ansible.builtin.stat:
+    path: "{{ host_internet_flag }}"
+  register: internet_flag
+
+- name: Restore internet gate
+  ansible.builtin.command: nft add element inet worms internet_wan '{ "{{ host_wan_interface }}" }'
+  when: internet_flag.stat.exists
+  changed_when: true
+
+# The Proxmox host firewall (input policy DROP) must also let the orchestrator
+# reach the API. Kept here rather than in OpenTofu: managing node-level rules
+# there risks taking over the datacenter rule list.
+- name: Read Proxmox host firewall rules
+  ansible.builtin.command: pvesh get /nodes/{{ proxmox.node }}/firewall/rules --output-format json
+  register: node_rules
+  changed_when: false
+
+- name: Allow orchestrator -> Proxmox API in the Proxmox host firewall
+  ansible.builtin.command: >-
+    pvesh create /nodes/{{ proxmox.node }}/firewall/rules
+    --type in --action ACCEPT --proto tcp --dport {{ proxmox.api_port }}
+    --source {{ infrastructure_ips.orchestrator }} --dest {{ host_ips.core }}
+    --enable 1 --comment "worms: orchestrator -> Proxmox API"
+  when: >-
+    node_rules.stdout | from_json | selectattr('comment', 'defined')
+    | selectattr('comment', 'equalto', 'worms: orchestrator -> Proxmox API') | list | length == 0
+
+# Earlier versions sealed egress with an iptables-legacy service.
+- name: Remove legacy egress service
+  ansible.builtin.systemd:
+    name: worms-private-internet-egress
+    state: stopped
+    enabled: false
+  failed_when: false
+
+- name: Remove legacy egress files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/worms-private-internet-egress.service
+    - /usr/local/sbin/worms-private-internet-egress

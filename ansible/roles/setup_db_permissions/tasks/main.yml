@@ -29,7 +29,7 @@
 
 # django_dashboard:
 # - query all tables
-# - insert into uploads table
+# - insert uploads (uploads, malware_artifacts)
 - name: Grant SELECT on all tables to django_dashboard
   community.postgresql.postgresql_privs:
     database: "{{ postgres_db }}"
@@ -54,14 +54,32 @@
   become_user: postgres
 
 
-- name: Grant INSERT on uploads table to django_dashboard
+# Uploads: the artifact row and the upload record.
+- name: Grant INSERT on upload tables to django_dashboard
   community.postgresql.postgresql_privs:
     database: "{{ postgres_db }}"
     roles: django_dashboard
-    objs: uploads
+    objs: "{{ item }}"
     type: table
     privs: INSERT
     state: present
+  loop:
+    - uploads
+    - malware_artifacts
+  become_user: postgres
+
+
+- name: Grant USAGE on upload sequences to django_dashboard
+  community.postgresql.postgresql_privs:
+    database: "{{ postgres_db }}"
+    roles: django_dashboard
+    objs: "{{ item }}"
+    type: sequence
+    privs: USAGE
+    state: present
+  loop:
+    - uploads_id_seq
+    - malware_artifacts_id_seq
   become_user: postgres
 
 

@@ -9,6 +9,8 @@
 #   django_allowed_hosts      comma-separated ALLOWED_HOSTS
 #   django_extra_pip_packages extra wheels (e.g. ["proxmoxer"] for orchestrator)
 #   django_extra_env          dict of extra KEY: value lines for the env file
+#   django_run_migrations     true only where `migrate` runs (orchestrator); the
+#                             migrator credentials are only rendered there
 #   django_timers             list of {name, command, on_calendar, description}:
 #                             `manage.py <command>` run by a systemd timer
 ---
@@ -36,6 +38,7 @@ django_db_sslrootcert: "/etc/ssl/certs/ca-certificates.crt"
 django_extra_pip_packages: []
 django_extra_env: {}
 django_timers: []
+django_run_migrations: false
 
 required_packages:
   - python3

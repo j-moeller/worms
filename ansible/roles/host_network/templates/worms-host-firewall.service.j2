@@ -1,0 +1,14 @@
+# Managed by Ansible (role host_network). DO NOT EDIT.
+[Unit]
+Description=worms-platform host firewall (zone routing allow-list)
+After=network-pre.target proxmox-firewall.service pve-firewall.service
+Before=network-online.target pve-guests.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f {{ host_nft_file }}
+
+[Install]
+WantedBy=multi-user.target

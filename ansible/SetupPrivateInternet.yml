@@ -1,11 +1,13 @@
 ---
 # Private-internet services. VMs are spun up by opentofu/stacks/private_internet
 # with base packages installed via cloud-init; this playbook configures them
-# over the maintenance network (10.3.x.x).
+# over the mgmt-exposed management network (management addresses).
 #
-# DNS is configured separately by SetupDNS.yml (Jonas' setup_dns role).
-# There is no egress-proxy: during the prep phase the VMs reach the internet
-# directly; at runtime the platform stack seals egress (internet_enabled=false).
+# DNS is configured separately by SetupDNS.yml (setup_dns role).
+# Run it after host/allow-internet.sh to populate the caches (online mode), and
+# again after host/deny-internet.sh to switch them to offline mode: the mode
+# follows the host state (internet_enabled in group_vars/all.yml). Internet
+# access is refused while sandbox VMs exist.
 
 # Point every private-internet VM's apt at the apt-cacher-ng cache (path-style),
 # so package installs work both during prep and offline.

@@ -1,0 +1,28 @@
+---
+# Host-side network security of the Proxmox node (applied to localhost: the
+# node is also the Ansible controller). Addresses come from the generated
+# inventory (bridges, networks, host_ips, infrastructure_ips, proxmox).
+
+# The host's internet-facing interface.
+host_wan_interface: vmbr0
+
+# DNAT <WAN>:443 -> dashboard:443 (expose the dashboard to the internet).
+host_publish_dashboard: false
+
+host_nft_file: /etc/worms/worms.nft
+
+# Present while host/allow-internet.sh allows internet access (tmpfs).
+host_internet_flag: /run/worms/internet-allowed
+
+host_sysctls:
+  net.ipv4.ip_forward: 1                 # routing between dmz/core/ingest
+  net.ipv6.conf.all.forwarding: 0
+  net.ipv4.conf.all.rp_filter: 1         # no spoofing across zones
+  net.ipv4.conf.default.rp_filter: 1
+  net.ipv4.conf.all.arp_ignore: 1        # no ARP answers for addresses the host
+  net.ipv4.conf.all.arp_announce: 2      # does not have on that bridge
+  net.ipv4.conf.all.send_redirects: 0
+  net.ipv4.conf.default.send_redirects: 0
+  net.ipv4.conf.all.accept_redirects: 0
+  net.ipv4.conf.default.accept_redirects: 0
+  net.ipv4.conf.all.accept_source_route: 0

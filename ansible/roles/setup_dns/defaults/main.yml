@@ -1,3 +1,4 @@
 ---
 dns_domain: worms.internal
 dns_entries: [] # Set in inventory.yml
+dns_listen_address: "{{ services_ips.dns }}"

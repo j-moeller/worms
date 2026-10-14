@@ -107,7 +107,10 @@
   notify:
     - Restart Django
 
+# Only the orchestrator migrates; the public-facing dashboard has no migrator
+# credentials at all (they are not in its env file either).
 - name: Run Django migrations
+  when: django_run_migrations | bool
   ansible.builtin.command:
     cmd: "{{ django_venv_dir }}/bin/python manage.py migrate --noinput --database=migrator"
     chdir: "{{ django_source_dir }}"

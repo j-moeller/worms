@@ -99,13 +99,19 @@ host-network:
 
 # One-time state migration for deployments made before the firewall stack:
 # moves the firewall resources from the platform state into the firewall state
-# (state only, no API calls; backups are written next to both states). No-op
-# on fresh installs and once migrated.
+# (state only; backups are written next to both states). A moved state has no
+# outputs yet, which the VM stacks read (also on destroy), so they are written
+# with a refresh-only apply (changes nothing in Proxmox). No-op on fresh
+# installs and once migrated.
 firewall-migrate:
 	@cd opentofu/stacks/firewall && \
 	for r in $$(tofu -chdir=../platform state list 2>/dev/null | grep -E '^proxmox_(virtual_environment_cluster_firewall|node_firewall)'); do \
 	  tofu state mv -state=../platform/terraform.tfstate -state-out=terraform.tfstate "$$r" "$$r" || exit 1; \
-	done
+	done; \
+	if [ -n "$$(tofu state list 2>/dev/null)" ] && ! tofu output -json security_groups >/dev/null 2>&1; then \
+	  echo "firewall: writing outputs (refresh-only)"; \
+	  tofu apply -refresh-only -auto-approve -input=false || exit 1; \
+	fi
 
 # Base infrastructure VMs (NOT the per-round sandbox). Internet access must be
 # allowed: cloud-init installs packages at first boot. The inventory is
@@ -169,7 +175,8 @@ destroy_all: destroy
 	cd opentofu/stacks/firewall && $(MAKE) destroy
 	cd opentofu/stacks/platform && $(MAKE) destroy
 
-destroy:
+# The VM stacks read the firewall outputs even when destroying.
+destroy: firewall-migrate
 	cd opentofu/stacks/sandbox && $(MAKE) destroy
 	cd opentofu/stacks/infrastructure/ephemeral && $(MAKE) destroy
 	cd opentofu/stacks/infrastructure/persistent && $(MAKE) destroy

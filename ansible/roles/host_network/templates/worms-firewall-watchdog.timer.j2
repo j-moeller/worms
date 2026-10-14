@@ -1,0 +1,11 @@
+# Managed by Ansible (role host_network). DO NOT EDIT.
+[Unit]
+Description=Run the worms-platform firewall watchdog every {{ host_fw_watchdog_interval }}
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec={{ host_fw_watchdog_interval }}
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

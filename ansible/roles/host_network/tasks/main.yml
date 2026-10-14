@@ -60,6 +60,30 @@
   when: internet_flag.stat.exists
   changed_when: true
 
+# Fail-safe: hard-stop all sandbox VMs whenever the Proxmox firewall is not
+# enforcing (see the script header). Logs to syslog (auth.crit).
+- name: Install firewall watchdog
+  ansible.builtin.template:
+    src: worms-firewall-watchdog.sh.j2
+    dest: /usr/local/sbin/worms-firewall-watchdog
+    mode: "0755"
+
+- name: Install firewall watchdog units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    mode: "0644"
+  loop:
+    - worms-firewall-watchdog.service
+    - worms-firewall-watchdog.timer
+
+- name: Enable firewall watchdog
+  ansible.builtin.systemd:
+    name: worms-firewall-watchdog.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+
 # The Proxmox host firewall (input policy DROP) must also let the orchestrator
 # reach the API. Kept here rather than in OpenTofu: managing node-level rules
 # there risks taking over the datacenter rule list.

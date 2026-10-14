@@ -27,7 +27,14 @@ resource "proxmox_virtual_environment_vm" "monitor_server" {
   name      = "monitor-server"
   node_name = var.proxmox_instance
 
-  agent { enabled = true }
+  # Only SSH is used: no guest agent (the host never parses guest-controlled
+  # agent replies; stop/kill works without it), no serial console, no display,
+  # no USB tablet. A VM that ignores the ACPI shutdown is hard-stopped on
+  # destroy.
+  agent { enabled = false }
+  tablet_device   = false
+  stop_on_destroy = true
+  vga { type = "none" }
   cpu { cores = 2 }
   memory { dedicated = 1024 }
 
@@ -59,8 +66,6 @@ resource "proxmox_virtual_environment_vm" "monitor_server" {
     model    = "virtio"
     firewall = true
   }
-
-  serial_device {}
 
   disk {
     datastore_id = "local-zfs"

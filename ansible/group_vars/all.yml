@@ -46,12 +46,14 @@ postgresql_users:
   - name: dbuser_logging
     password: "{{ vault_dbuser_logging_password }}"
     cidr: "{{ infrastructure_ips.logging }}/32"
+    conn_limit: 8   # sandbox-facing: bounded (app pool: 4)
   - name: dbuser_network_monitor
     password: "{{ vault_dbuser_network_monitor_password }}"
     cidr: "{{ infrastructure_ips.monitor }}/32"
   - name: dbuser_scoring
     password: "{{ vault_dbuser_scoring_password }}"
     cidr: "{{ infrastructure_ips.scoring }}/32"
+    conn_limit: 8   # sandbox-facing: bounded (app pool: 4)
 
 # --- PKI / internal CA ------------------------------------------------------
 pki_domain: worms.internal

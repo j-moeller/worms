@@ -1,0 +1,58 @@
+# Managed by Ansible (role sandbox_api). DO NOT EDIT.
+#
+# Sandbox-facing: assume every client is hostile. Only POST /submit, small
+# bodies, short timeouts, global rate and connection limits. All sandbox
+# traffic arrives SNATed from sandbox-gw, so these limits cap the sandbox as a
+# whole; per-VM limits are enforced on the Proxmox host, per-team limits in the
+# application.
+
+limit_req_zone $server_name zone=sandbox_api_req:1m rate={{ sandbox_api_nginx_rate_per_second }}r/s;
+limit_conn_zone $server_name zone=sandbox_api_conn:1m;
+
+server {
+    listen 443 ssl;
+    server_name {{ tls_dns_name }};
+
+    ssl_certificate {{ tls_cert_path }};
+    ssl_certificate_key {{ tls_key_path }};
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_tickets off;
+
+    server_tokens off;
+
+    # No per-request logs: under a flood they would fill the disk. Accepted
+    # submissions are recorded in the database; the app logs rejections at a
+    # bounded rate; limit violations are only logged at crit (i.e. not).
+    access_log off;
+    error_log /var/log/nginx/sandbox-api.error.log crit;
+
+    client_max_body_size {{ sandbox_api_max_body_bytes }};
+    client_body_buffer_size {{ sandbox_api_max_body_bytes }};
+    client_header_buffer_size 1k;
+    large_client_header_buffers 4 2k;
+    client_body_timeout 5s;
+    client_header_timeout 5s;
+    send_timeout 5s;
+    keepalive_timeout 10s;
+    keepalive_requests 100;
+
+    limit_conn sandbox_api_conn {{ sandbox_api_nginx_max_connections }};
+    limit_conn_status 429;
+    limit_req_status 429;
+
+    location = /submit {
+        limit_except POST { deny all; }
+        limit_req zone=sandbox_api_req burst={{ sandbox_api_nginx_burst }} nodelay;
+
+        proxy_pass http://unix:/run/sandbox-api/sandbox-api.sock;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_connect_timeout 2s;
+        proxy_send_timeout 10s;
+        proxy_read_timeout 10s;
+    }
+
+    location / {
+        return 404;
+    }
+}

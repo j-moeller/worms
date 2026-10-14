@@ -1,3 +1,0 @@
-tls_key_path: /etc/nginx/tls/server.key
-tls_cert_path: /etc/nginx/tls/server.crt
-tls_ca_path: /etc/nginx/tls/ca.crt

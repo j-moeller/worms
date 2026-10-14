@@ -1,0 +1,18 @@
+---
+# Sandbox-facing REST APIs (scoring, logging): role sandbox_api. Run after
+# ConfigureNginx.yml (TLS certificates) and SetupDbAndDashboard.yml (database
+# roles and grants).
+- name: Configure the sandbox-facing APIs
+  hosts: sandbox_api_hosts
+  become: true
+
+  pre_tasks:
+    - name: Wait for cloud-init completion
+      ansible.builtin.command:
+        cmd: cloud-init status --wait
+      register: cloud_init_status
+      changed_when: false
+      failed_when: cloud_init_status.rc != 0
+
+  roles:
+    - sandbox_api

@@ -96,11 +96,11 @@
   become_user: postgres
 
 
-- name: Grant USAGE on logging_id_seq
+- name: Grant USAGE on logging_attempts_id_seq
   community.postgresql.postgresql_privs:
     database: "{{ postgres_db }}"
     roles: dbuser_logging
-    objs: logging_id_seq
+    objs: logging_attempts_id_seq
     type: sequence
     privs: USAGE
     state: present
@@ -129,6 +129,18 @@
     privs: USAGE
     state: present
   become_user: postgres
+
+
+# dbuser_scoring / dbuser_logging (sandbox-facing APIs)
+# - validate team tokens: only the hash, team and revoked flag of access_tokens
+- name: Grant column-level SELECT on access_tokens to the sandbox APIs
+  community.postgresql.postgresql_query:
+    db: "{{ postgres_db }}"
+    query: >-
+      GRANT SELECT (access_token_hash, team_id, revoked) ON access_tokens
+      TO dbuser_scoring, dbuser_logging
+  become_user: postgres
+  changed_when: false
 
 
 # django_orchestrator

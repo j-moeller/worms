@@ -75,11 +75,9 @@ provision:
 	cd ansible && $(ANSIBLE) CreateCA.yml
 	cd ansible && $(ANSIBLE) DistributeCA.yml
 	cd ansible && $(ANSIBLE) ConfigureNginx.yml
-	cd ansible && $(ANSIBLE) ConfigureNginxFlask.yml
 	cd ansible && $(ANSIBLE) ConfigureNginxDjango.yml
 	cd ansible && $(ANSIBLE) SetupDbAndDashboard.yml
-	cd ansible && $(ANSIBLE) SetupLogging.yml
-	cd ansible && $(ANSIBLE) SetupScoring.yml
+	cd ansible && $(ANSIBLE) SetupSandboxApi.yml
 	cd ansible && $(ANSIBLE) SetupPrivateInternet.yml
 
 # Private-internet VMs + caches (online/offline follows the internet state).

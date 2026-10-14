@@ -98,10 +98,20 @@ all:
         dashboard.worms.internal:
         orchestrator.worms.internal:
 
-    flask_hosts:
+    # Sandbox-facing REST APIs (role sandbox_api). Each uses an INSERT-only
+    # database role (+ SELECT on the access token hashes for validation).
+    sandbox_api_hosts:
       hosts:
         scoring.worms.internal:
+          sandbox_api_kind: scoring
+          sandbox_api_db_user: dbuser_scoring
+          sandbox_api_db_password: "{{ vault_dbuser_scoring_password }}"
+          sandbox_api_max_body_bytes: 2048
         logging.worms.internal:
+          sandbox_api_kind: logging
+          sandbox_api_db_user: dbuser_logging
+          sandbox_api_db_password: "{{ vault_dbuser_logging_password }}"
+          sandbox_api_max_body_bytes: 16384
 
     # Django application hosts. Per-host vars select the settings module, the
     # least-privilege DB user and (for the orchestrator) the Proxmox credentials.

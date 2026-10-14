@@ -1,8 +1,0 @@
-flask_app_dir: /opt/flaskapp
-flask_user: flask
-flask_group: www-data
-
-db_user: dbuser_scoring
-db_password: test # TODO # PASSWORD
-
-gunicorn_workers: 2

@@ -1,0 +1,37 @@
+#!/bin/bash
+# Managed by Ansible (role host_network). DO NOT EDIT.
+#
+# Fail-safe for the sandbox: the Proxmox firewall (proxmox-firewall) is the main
+# enforcement between sandbox VMs and everything else. If it is not running, or
+# a running sandbox VM has no rules in the guest ruleset, hard-stop ALL sandbox
+# VMs (qm stop kills the QEMU process; no guest cooperation needed).
+# Run every {{ host_fw_watchdog_interval }} by worms-firewall-watchdog.timer.
+set -u
+
+GUEST_TABLE="{{ host_fw_guest_table }}"
+
+running_sandbox_vms() {
+  pvesh get /cluster/resources --type vm --output-format json \
+    | python3 -c "import json,sys; print(*(r['vmid'] for r in json.load(sys.stdin) if r.get('pool') == 'sandbox' and r.get('status') == 'running'))"
+}
+
+fail() {
+  local vms
+  vms=$(running_sandbox_vms)
+  logger -t worms-firewall-watchdog -p auth.crit "$1; stopping sandbox VMs: ${vms:-none}"
+  for vmid in $vms; do
+    qm stop "$vmid" --skiplock 1 &
+  done
+  wait
+  exit 1
+}
+
+systemctl is-active --quiet proxmox-firewall || fail "proxmox-firewall is not active"
+nft list table inet worms >/dev/null 2>&1 || fail "host table inet worms missing"
+nft list table bridge worms_bridge >/dev/null 2>&1 || fail "host table bridge worms_bridge missing"
+ruleset=$(nft list table $GUEST_TABLE 2>/dev/null) || fail "guest firewall table ($GUEST_TABLE) missing"
+
+for vmid in $(running_sandbox_vms); do
+  grep -q "tap${vmid}i" <<<"$ruleset" || fail "no firewall rules for sandbox VM $vmid"
+done
+exit 0

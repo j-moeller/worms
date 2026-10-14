@@ -89,6 +89,7 @@ def build_inventory(infrastructure: dict, sandbox: dict) -> dict:
         "services_ips": infrastructure.get("services_ips", {}),
         "host_ips": infrastructure.get("host_ips", {}),
         "private_internet_ips": infrastructure.get("private_internet_ips", {}),
+        "services_ports": infrastructure.get("services_ports", {}),
         "networks": infrastructure.get("networks", {}),
         "bridges": infrastructure.get("bridges", {}),
         "proxmox": proxmox,

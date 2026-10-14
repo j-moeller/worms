@@ -1,6 +1,0 @@
-- name: Configures TLS on nginx servers for flask
-  hosts: flask_hosts
-  become: true
-
-  roles:
-    - role: nginx_tls_flask

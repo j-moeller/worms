@@ -103,3 +103,75 @@ table inet worms {
     iifname @internet_zones oifname @internet_wan masquerade comment "internet allowed"
   }
 }
+
+# -----------------------------------------------------------------------------
+# Bridge layer: the sandbox and services bridges.
+#
+# Backstop for the sandbox -> services boundary that does not depend on the
+# Proxmox firewall (proxmox-firewall), and per sandbox VM rate limits. They have
+# to live here: sandbox-gw SNATs everything, so behind it all sandbox traffic
+# looks alike. Stateless on purpose (no dependency on bridge conntrack).
+# -----------------------------------------------------------------------------
+{% set tcp_ports = services_ports.tcp %}
+{% set udp_ports = services_ports.udp %}
+{% set l = host_sandbox_limits %}
+
+table bridge worms_bridge
+delete table bridge worms_bridge
+
+table bridge worms_bridge {
+  set sandbox_services_syn {
+    type ipv4_addr
+    size 65535
+    flags dynamic,timeout
+    timeout 1m
+  }
+
+  set sandbox_syn {
+    type ipv4_addr
+    size 65535
+    flags dynamic,timeout
+    timeout 1m
+  }
+
+  set sandbox_udp {
+    type ipv4_addr
+    size 65535
+    flags dynamic,timeout
+    timeout 1m
+  }
+
+  chain forward {
+    type filter hook forward priority filter; policy accept;
+    meta ibrname "{{ b.services }}" jump services
+    meta ibrname "{{ b.sandbox_glob }}" jump sandbox
+  }
+
+  # Only the services protocol (allowed ports, both directions) within the
+  # services subnet; everything else on this bridge is dropped.
+  chain services {
+    ether type arp accept
+    ether type ip6 drop
+    ip saddr != {{ networks.services }} counter drop
+    ip daddr != {{ networks.services }} counter drop
+    icmp type { echo-request, echo-reply, destination-unreachable, time-exceeded } accept
+    tcp dport { {{ tcp_ports }} } accept
+    tcp sport { {{ tcp_ports }} } accept
+    udp dport { {{ udp_ports }} } accept
+    udp sport { {{ udp_ports }} } accept
+    counter drop
+  }
+
+  chain sandbox {
+    ether type arp accept
+    ether type ip6 drop
+    # Only sandbox addresses and replies from the services bridge exist here.
+    ip saddr != { {{ networks.sandbox_vms }}, {{ networks.services }} } counter drop
+    ip daddr != { {{ networks.sandbox_vms }}, {{ networks.services }} } counter drop
+    # Per-VM limits (keyed by the VM's own address, before the SNAT).
+    ip saddr {{ networks.sandbox_vms }} ip daddr {{ networks.services }} tcp flags & (syn | ack) == syn update @sandbox_services_syn { ip saddr limit rate over {{ l.services_syn_per_second }}/second burst {{ l.services_syn_burst }} packets } counter drop
+    ip saddr {{ networks.sandbox_vms }} tcp flags & (syn | ack) == syn update @sandbox_syn { ip saddr limit rate over {{ l.syn_per_second }}/second burst {{ l.syn_burst }} packets } counter drop
+    ip saddr {{ networks.sandbox_vms }} meta l4proto udp update @sandbox_udp { ip saddr limit rate over {{ l.udp_pps }}/second burst {{ l.udp_burst }} packets } counter drop
+    accept
+  }
+}

@@ -1,0 +1,314 @@
+"""Sandbox-facing REST API: flag submissions (scoring) or log events (logging).
+
+The only infrastructure service reachable from the (assumed compromised)
+sandbox. Every request is hostile until proven otherwise, so the API is small
+and strict:
+
+- POST /submit only (nginx rejects everything else), JSON object only, size
+  capped by nginx and by Flask (MAX_BODY_BYTES).
+- The team token must be a valid, non-revoked access token. Tokens are checked
+  against a cached set of hashes from `access_tokens` (column-level SELECT), so
+  invalid tokens never reach the INSERT, and rate limiting is keyed by team: a
+  bounded key space that attackers cannot inflate with random tokens.
+- Per-team token bucket; teams that keep hammering past the limit are banned
+  for a while (429). IP-based blocking is pointless here: sandbox-gw SNATs all
+  sandbox traffic, so per-VM limits are enforced on the Proxmox host instead.
+- Payload validation (scoring: printable flag <= 64 chars; logging: JSON object
+  with bounded size, depth and item count).
+- The database role may only INSERT into one table; statements are time-limited.
+
+State (token cache, buckets, bans) is in memory, so gunicorn runs ONE worker
+process with threads (see the systemd unit).
+"""
+
+import hashlib
+import json
+import logging
+import os
+import threading
+import time
+
+import psycopg2
+from flask import Flask, jsonify, request
+from psycopg2.extras import Json
+from psycopg2.pool import ThreadedConnectionPool
+
+
+def env_int(name, default):
+    return int(os.environ.get(name, default))
+
+
+KIND = os.environ["SANDBOX_API_KIND"]
+if KIND not in ("scoring", "logging"):
+    raise RuntimeError(f"SANDBOX_API_KIND must be scoring or logging, not {KIND!r}")
+
+MAX_BODY_BYTES = env_int("MAX_BODY_BYTES", 4096)
+MAX_TOKEN_LENGTH = 128
+MAX_FLAG_LENGTH = 64
+LOG_MAX_BYTES = env_int("LOG_MAX_BYTES", 8192)
+LOG_MAX_DEPTH = env_int("LOG_MAX_DEPTH", 8)
+LOG_MAX_ITEMS = env_int("LOG_MAX_ITEMS", 256)
+
+TEAM_RATE_PER_MINUTE = env_int("TEAM_RATE_PER_MINUTE", 30)
+TEAM_BURST = env_int("TEAM_BURST", 10)
+TEAM_BAN_AFTER = env_int("TEAM_BAN_AFTER", 100)  # rejected requests per minute
+TEAM_BAN_SECONDS = env_int("TEAM_BAN_SECONDS", 300)
+TOKEN_REFRESH_SECONDS = env_int("TOKEN_REFRESH_SECONDS", 60)
+
+INSERT = {
+    "scoring": "INSERT INTO flag_capture_attempts (team_token_hash, vm_flag_hash) VALUES (%s, %s)",
+    "logging": "INSERT INTO logging_attempts (team_token_hash, log_data) VALUES (%s, %s)",
+}[KIND]
+
+app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = MAX_BODY_BYTES
+log = logging.getLogger("sandbox-api")
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+
+
+# ---------------------------------------------------------------------------
+# Database
+# ---------------------------------------------------------------------------
+
+_pool = None
+_pool_lock = threading.Lock()
+
+
+def pool():
+    """Lazily created, so the service starts even while the database is down."""
+    global _pool
+    with _pool_lock:
+        if _pool is None:
+            _pool = ThreadedConnectionPool(
+                minconn=1,
+                maxconn=env_int("DB_POOL_SIZE", 4),
+                host=os.environ["DB_HOST"],
+                port=env_int("DB_PORT", 5432),
+                dbname=os.environ["DB_NAME"],
+                user=os.environ["DB_USER"],
+                password=os.environ["DB_PASSWORD"],
+                sslmode=os.environ.get("DB_SSLMODE", "verify-full"),
+                sslrootcert=os.environ.get("DB_SSLROOTCERT", "/etc/ssl/certs/ca-certificates.crt"),
+                connect_timeout=5,
+                options="-c statement_timeout=2000",
+                application_name=f"sandbox-api-{KIND}",
+            )
+        return _pool
+
+
+def execute(query, params=()):
+    conn = pool().getconn()
+    try:
+        with conn, conn.cursor() as cur:
+            cur.execute(query, params)
+            return cur.fetchall() if cur.description else None
+    except psycopg2.OperationalError:
+        pool().putconn(conn, close=True)
+        conn = None
+        raise
+    finally:
+        if conn is not None:
+            pool().putconn(conn)
+
+
+# ---------------------------------------------------------------------------
+# Teams (valid tokens) and rate limiting
+# ---------------------------------------------------------------------------
+
+
+class Teams:
+    """Cache of valid token hashes -> team id, refreshed periodically."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._teams = {}
+        self._loaded_at = 0.0
+
+    def team_for(self, token_hash):
+        stale = time.monotonic() - self._loaded_at > TOKEN_REFRESH_SECONDS
+        # Block only for the very first load; later refreshes never stall requests.
+        if stale and self._lock.acquire(blocking=self._loaded_at == 0):
+            try:
+                rows = execute("SELECT access_token_hash, team_id FROM access_tokens WHERE NOT revoked")
+                self._teams = dict(rows)
+            except Exception:
+                log.exception("token refresh failed; keeping the previous set")
+            finally:
+                self._loaded_at = time.monotonic()
+                self._lock.release()
+        return self._teams.get(token_hash)
+
+
+class TeamLimiter:
+    """Token bucket per team, plus a temporary ban for teams that keep pushing."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._buckets = {}  # team -> (tokens, last refill)
+        self._rejects = {}  # team -> (count, window start)
+        self._banned_until = {}
+
+    def allow(self, team):
+        now = time.monotonic()
+        with self._lock:
+            if self._banned_until.get(team, 0) > now:
+                return False, int(self._banned_until[team] - now)
+
+            tokens, last = self._buckets.get(team, (TEAM_BURST, now))
+            tokens = min(TEAM_BURST, tokens + (now - last) * TEAM_RATE_PER_MINUTE / 60)
+            if tokens >= 1:
+                self._buckets[team] = (tokens - 1, now)
+                return True, 0
+            self._buckets[team] = (tokens, now)
+
+            count, start = self._rejects.get(team, (0, now))
+            if now - start > 60:
+                count, start = 0, now
+            count += 1
+            self._rejects[team] = (count, start)
+            if count >= TEAM_BAN_AFTER:
+                self._banned_until[team] = now + TEAM_BAN_SECONDS
+                self._rejects.pop(team, None)
+                log.warning("team %s banned for %ss (rate limit exceeded %s times)", team, TEAM_BAN_SECONDS, count)
+                return False, TEAM_BAN_SECONDS
+            return False, int(60 / max(TEAM_RATE_PER_MINUTE, 1)) + 1
+
+
+class LimitedLog:
+    """At most `per_minute` log lines, so a flood cannot fill the disk."""
+
+    def __init__(self, per_minute=30):
+        self._lock = threading.Lock()
+        self._per_minute = per_minute
+        self._count, self._start = 0, time.monotonic()
+
+    def warning(self, message, *args):
+        with self._lock:
+            now = time.monotonic()
+            if now - self._start > 60:
+                if self._count > self._per_minute:
+                    log.warning("suppressed %s rejected-request messages", self._count - self._per_minute)
+                self._count, self._start = 0, now
+            self._count += 1
+            if self._count <= self._per_minute:
+                log.warning(message, *args)
+
+
+TEAMS = Teams()
+LIMITER = TeamLimiter()
+REJECTS = LimitedLog()
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+
+def error(status, message, **headers):
+    response = jsonify({"status": "error", "message": message})
+    response.status_code = status
+    for key, value in headers.items():
+        response.headers[key.replace("_", "-")] = str(value)
+    return response
+
+
+def bounded_json(value, depth=0, budget=None):
+    """True if `value` stays within the depth and item limits."""
+    budget = budget if budget is not None else [LOG_MAX_ITEMS]
+    if depth > LOG_MAX_DEPTH:
+        return False
+    if isinstance(value, dict):
+        items = list(value.items())
+    elif isinstance(value, list):
+        items = list(enumerate(value))
+    else:
+        return True
+    budget[0] -= len(items)
+    if budget[0] < 0:
+        return False
+    return all(bounded_json(v, depth + 1, budget) for _, v in items)
+
+
+def validate_payload(data):
+    """Return (value to insert, None) or (None, error message)."""
+    if KIND == "scoring":
+        flag = data.get("vm_flag")
+        if not isinstance(flag, str) or not 0 < len(flag) <= MAX_FLAG_LENGTH or not flag.isprintable():
+            return None, f"vm_flag must be a printable string of 1-{MAX_FLAG_LENGTH} characters."
+        return hashlib.sha256(flag.encode()).hexdigest(), None
+
+    log_data = data.get("log_data")
+    if not isinstance(log_data, dict) or not log_data:
+        return None, "log_data must be a non-empty JSON object."
+    if len(json.dumps(log_data, separators=(",", ":"))) > LOG_MAX_BYTES:
+        return None, f"log_data exceeds {LOG_MAX_BYTES} bytes."
+    if not bounded_json(log_data):
+        return None, f"log_data exceeds depth {LOG_MAX_DEPTH} or {LOG_MAX_ITEMS} items."
+    return Json(log_data), None
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+
+@app.post("/submit")
+def submit():
+    if not request.is_json:
+        return error(415, "Content-Type must be application/json.")
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return error(400, "Body must be a JSON object.")
+
+    token = data.get("team_api_token")
+    if not isinstance(token, str) or not 0 < len(token) <= MAX_TOKEN_LENGTH:
+        return error(400, f"team_api_token must be a string of 1-{MAX_TOKEN_LENGTH} characters.")
+
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    team = TEAMS.team_for(token_hash)
+    if team is None:
+        REJECTS.warning("rejected: unknown or revoked token")
+        return error(401, "Invalid team_api_token.")
+
+    allowed, retry_after = LIMITER.allow(team)
+    if not allowed:
+        REJECTS.warning("rejected: team %s rate limited", team)
+        return error(429, "Rate limit exceeded.", Retry_After=retry_after)
+
+    value, problem = validate_payload(data)
+    if problem:
+        return error(400, problem)
+
+    try:
+        execute(INSERT, (token_hash, value))
+    except Exception:
+        log.exception("insert failed")
+        return error(503, "Temporarily unavailable.")
+
+    return jsonify({"status": "success", "message": "Submission stored."}), 201
+
+
+@app.errorhandler(400)
+def bad_request(_):
+    return error(400, "Bad request.")
+
+
+@app.errorhandler(404)
+def not_found(_):
+    return error(404, "Not found.")
+
+
+@app.errorhandler(405)
+def method_not_allowed(_):
+    return error(405, "Method not allowed.")
+
+
+@app.errorhandler(413)
+def too_large(_):
+    return error(413, f"Request body exceeds {MAX_BODY_BYTES} bytes.")
+
+
+@app.errorhandler(Exception)
+def unexpected(e):
+    log.exception("unhandled error")
+    return error(500, "Internal server error.")

@@ -158,6 +158,31 @@ orchestrator).
 - **Scripts** (runtime state only): `host/allow-internet.sh` /
   `host/deny-internet.sh`.
 
+# Containment of rogue sandbox VMs
+
+- **Resources** (OpenTofu, `stacks/sandbox`): sandbox VMs and sandbox-gw live on
+  the separate Proxmox storage `local-zfs-sandbox` (must exist), with CPU limit
+  and lower CPU weight, NIC rate limits and disk IOPS/bandwidth limits
+  (`local.limits`).
+- **Per-VM network limits** (Ansible `host_network`, bridge table in
+  `/etc/worms/worms.nft`): new TCP connections and UDP packet rates per sandbox
+  VM address, enforced on the host before sandbox-gw SNATs everything; plus a
+  stateless allow-list on the services bridge that holds even if the Proxmox
+  firewall is down. Conntrack capacity and timeouts are tuned via sysctls.
+- **Firewall watchdog** (`worms-firewall-watchdog.timer`, every 15 s): if
+  `proxmox-firewall` is not active, a host table is missing, or a running
+  sandbox VM has no rules in the guest ruleset, all sandbox VMs are hard-stopped
+  (`qm stop`) and the event is logged to syslog (`auth.crit`).
+  Check with `journalctl -t worms-firewall-watchdog`.
+- **Sandbox APIs** (Ansible `sandbox_api`, scoring + logging): only `POST
+  /submit`; body limits in nginx and Flask; global nginx rate/connection caps;
+  team tokens validated against `access_tokens` (column-level SELECT), per-team
+  token buckets with temporary bans; payload size/depth/item limits; INSERT-only
+  DB roles with connection limits, TLS-verified, statement timeout.
+- **Devices** (all VMs): no QEMU guest agent, no serial console, no display, no
+  USB tablet; access is SSH only. `qm stop` (and `stop_on_destroy` in
+  OpenTofu) kills a VM without guest cooperation.
+
 # Round start
 
 - Python generates sandbox, secrets

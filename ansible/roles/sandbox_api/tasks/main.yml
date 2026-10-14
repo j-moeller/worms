@@ -1,0 +1,112 @@
+---
+- name: Assert per-host variables
+  ansible.builtin.assert:
+    that:
+      - sandbox_api_kind in ["scoring", "logging"]
+      - sandbox_api_db_user is defined
+      - sandbox_api_db_password is defined
+    fail_msg: sandbox_api needs sandbox_api_kind, sandbox_api_db_user and sandbox_api_db_password (inventory).
+
+- name: Install system packages
+  ansible.builtin.apt:
+    name: [python3, python3-venv, nginx]
+    state: present
+    update_cache: true
+
+# Earlier versions ran the apps as flask.service.
+- name: Remove the old flask service
+  ansible.builtin.systemd:
+    name: flask
+    state: stopped
+    enabled: false
+  failed_when: false
+
+- name: Create service user
+  ansible.builtin.user:
+    name: "{{ sandbox_api_user }}"
+    group: "{{ sandbox_api_group }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: Create application directory
+  ansible.builtin.file:
+    path: "{{ sandbox_api_dir }}"
+    state: directory
+    owner: root
+    group: "{{ sandbox_api_group }}"
+    mode: "0750"
+
+- name: Create virtual environment
+  ansible.builtin.command:
+    cmd: python3 -m venv {{ sandbox_api_dir }}/venv
+    creates: "{{ sandbox_api_dir }}/venv/bin/python"
+
+- name: Install Python packages
+  ansible.builtin.pip:
+    virtualenv: "{{ sandbox_api_dir }}/venv"
+    name: [flask, gunicorn, psycopg2-binary]
+  notify: Restart sandbox-api
+
+# Root-owned and read-only for the service: a compromised app cannot modify itself.
+- name: Deploy application
+  ansible.builtin.copy:
+    src: app.py
+    dest: "{{ sandbox_api_dir }}/app.py"
+    owner: root
+    group: "{{ sandbox_api_group }}"
+    mode: "0644"
+  notify: Restart sandbox-api
+
+- name: Create configuration directory
+  ansible.builtin.file:
+    path: "{{ sandbox_api_env_file | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Install environment file (secrets)
+  ansible.builtin.template:
+    src: sandbox-api.env.j2
+    dest: "{{ sandbox_api_env_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: Restart sandbox-api
+
+- name: Install systemd unit
+  ansible.builtin.template:
+    src: sandbox-api.service.j2
+    dest: /etc/systemd/system/sandbox-api.service
+    mode: "0644"
+  notify: Restart sandbox-api
+
+- name: Enable sandbox-api
+  ansible.builtin.systemd:
+    name: sandbox-api
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Configure nginx
+  ansible.builtin.template:
+    src: nginx-site.j2
+    dest: /etc/nginx/sites-available/sandbox-api
+    mode: "0644"
+  notify: Reload nginx
+
+- name: Enable nginx site
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/sandbox-api
+    dest: /etc/nginx/sites-enabled/sandbox-api
+    state: link
+  notify: Reload nginx
+
+- name: Disable other nginx sites
+  ansible.builtin.file:
+    path: "/etc/nginx/sites-enabled/{{ item }}"
+    state: absent
+  loop: [default, worms-tls]
+  notify: Reload nginx

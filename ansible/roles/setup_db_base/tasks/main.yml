@@ -98,8 +98,10 @@
     name: "{{ item.name }}"
     password: "{{ item.password }}"
     role_attr_flags: LOGIN
+    conn_limit: "{{ item.conn_limit | default(omit) }}"
     encrypted: true
   loop: "{{ postgresql_users }}"
+  no_log: true
 
 # Migrator (django_migrator)
 - name: Create PostgreSQL migrator user

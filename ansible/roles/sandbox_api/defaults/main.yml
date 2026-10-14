@@ -1,0 +1,41 @@
+# Sandbox-facing REST API (scoring or logging): nginx (TLS, limits) in front of
+# a single gunicorn worker running files/app.py. Per-host values in inventory:
+#
+#   sandbox_api_kind         scoring | logging
+#   sandbox_api_db_user      INSERT-only database role
+#   sandbox_api_db_password  {{ vault_* }}
+---
+sandbox_api_dir: /opt/sandbox-api
+sandbox_api_user: sandbox-api
+sandbox_api_group: www-data         # shared with nginx (socket access)
+sandbox_api_env_file: /etc/sandbox-api/sandbox-api.env
+
+# Requests larger than this are rejected by nginx (413) before they reach Python.
+sandbox_api_max_body_bytes: 4096
+
+# Application limits (see files/app.py).
+sandbox_api_team_rate_per_minute: 30
+sandbox_api_team_burst: 10
+sandbox_api_team_ban_after: 100     # rate-limited requests within a minute
+sandbox_api_team_ban_seconds: 300
+sandbox_api_log_max_bytes: 8192
+sandbox_api_log_max_depth: 8
+sandbox_api_log_max_items: 256
+
+# Global cap in nginx: all sandbox traffic arrives SNATed from sandbox-gw, so
+# this is the ceiling for the whole sandbox (per-VM limits are on the host).
+sandbox_api_nginx_rate_per_second: 50
+sandbox_api_nginx_burst: 100
+sandbox_api_nginx_max_connections: 200
+
+# One process (the limiter state is in memory), several threads.
+sandbox_api_threads: 8
+sandbox_api_db_pool_size: 4
+
+sandbox_api_db_name: "{{ postgres_db }}"
+sandbox_api_db_host: "{{ postgres_host }}"
+sandbox_api_db_port: 5432
+sandbox_api_db_sslrootcert: /etc/ssl/certs/ca-certificates.crt
+
+tls_key_path: /etc/nginx/tls/server.key
+tls_cert_path: /etc/nginx/tls/server.crt

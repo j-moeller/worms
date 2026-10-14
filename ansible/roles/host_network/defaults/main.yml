@@ -26,3 +26,22 @@ host_sysctls:
   net.ipv4.conf.all.accept_redirects: 0
   net.ipv4.conf.default.accept_redirects: 0
   net.ipv4.conf.all.accept_source_route: 0
+  # Connection tracking is shared by every VM (the Proxmox firewall tracks each
+  # tap): room for floods, and idle entries expire in an hour, not 5 days.
+  net.netfilter.nf_conntrack_max: 1048576
+  net.netfilter.nf_conntrack_tcp_timeout_established: 3600
+  net.netfilter.nf_conntrack_udp_timeout_stream: 60
+
+# Per sandbox VM limits, enforced on the host bridges before sandbox-gw SNATs
+# the traffic (bridge table in worms.nft). Over the limit = dropped.
+host_sandbox_limits:
+  services_syn_per_second: 20      # new TCP connections to the services bridge
+  services_syn_burst: 40
+  syn_per_second: 500              # new TCP connections anywhere
+  syn_burst: 1000
+  udp_pps: 5000                    # UDP packets
+  udp_burst: 10000
+
+# Watchdog: if the Proxmox firewall is not enforcing, hard-stop all sandbox VMs.
+host_fw_watchdog_interval: 15s
+host_fw_guest_table: "bridge proxmox-firewall-guests"

@@ -1,0 +1,66 @@
+# Managed by Ansible (role sandbox_api). DO NOT EDIT.
+[Unit]
+Description=Sandbox-facing REST API ({{ sandbox_api_kind }})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ sandbox_api_user }}
+Group={{ sandbox_api_group }}
+WorkingDirectory={{ sandbox_api_dir }}
+EnvironmentFile={{ sandbox_api_env_file }}
+
+# One worker process (the token cache, rate limits and bans live in memory),
+# several threads; strict request limits; no automatic worker recycling (it
+# would reset the bans).
+ExecStart={{ sandbox_api_dir }}/venv/bin/gunicorn \
+    --workers 1 \
+    --worker-class gthread \
+    --threads {{ sandbox_api_threads }} \
+    --timeout 15 \
+    --graceful-timeout 10 \
+    --keep-alive 5 \
+    --limit-request-line 1024 \
+    --limit-request-fields 32 \
+    --limit-request-field_size 2048 \
+    --bind unix:/run/sandbox-api/sandbox-api.sock \
+    --umask 007 \
+    app:app
+
+Restart=always
+RestartSec=2
+RuntimeDirectory=sandbox-api
+RuntimeDirectoryMode=0750
+
+# Resource ceiling: a flood degrades this service, not the VM.
+MemoryMax=512M
+TasksMax=64
+LimitNOFILE=1024
+
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+RestrictAddressFamilies=AF_UNIX AF_INET
+# Network: the database only.
+IPAddressDeny=any
+IPAddressAllow={{ sandbox_api_db_host }}/32
+
+[Install]
+WantedBy=multi-user.target

@@ -39,6 +39,7 @@ output "infrastructure" {
     services_ips         = local.services_ips
     management_ips       = local.management_ips
     private_internet_ips = local.private_internet_ips
+    services_ports       = local.private_internet_ports
     proxmox = {
       host     = local.proxmox_host_ip
       api_port = local.proxmox_api_port

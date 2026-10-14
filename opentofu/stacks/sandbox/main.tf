@@ -38,7 +38,7 @@ locals {
   bridge_keys = sort(keys(local.sandbox_bridges))
   gw_sandbox_nics = [
     for key in local.bridge_keys : {
-      bridge = local.sandbox_bridges[key].name
+      bridge     = local.sandbox_bridges[key].name
       cidr   = "${cidrhost(local.sandbox_bridges[key].network_cidr, 1)}/${split("/", local.sandbox_bridges[key].network_cidr)[1]}"
     }
   ]
@@ -46,6 +46,18 @@ locals {
   gw_mgmt_iface     = "net${length(local.gw_sandbox_nics) + 1}"
 
   ssh_public_keys = [trimspace(file(pathexpand(var.ssh_public_key)))]
+
+  # Untrusted VMs live on their own storage (a full or saturated disk cannot
+  # take down the database & co. on local-zfs) and get hard resource limits,
+  # so one rogue VM cannot starve the host or its neighbours.
+  sandbox_datastore = "local-zfs-sandbox"
+  limits = {
+    cpu_units      = 50   # half the scheduling weight of infrastructure VMs (100)
+    nic_rate_mbps  = 10   # MB/s per NIC
+    disk_iops      = 200  # per direction
+    disk_rate_mbps = 20   # MB/s per direction
+    gw_nic_mbps    = 50   # MB/s per sandbox-gw NIC (aggregate of all sandbox -> services)
+  }
 }
 
 # Guard rails: a sandbox must never coexist with internet access (the flag is
@@ -125,16 +137,28 @@ resource "proxmox_virtual_environment_vm" "gw" {
   name      = "sandbox-gw"
   node_name = var.proxmox_instance
 
-  cpu { cores = 1 }
+  cpu {
+    cores = 1
+    limit = 1
+    units = local.limits.cpu_units
+  }
   memory { dedicated = 512 }
-  agent { enabled = true }
+
+  # Only SSH is used: no guest agent (the host never parses guest-controlled
+  # agent replies; stop/kill works without it), no serial console, no display,
+  # no USB tablet. A VM that ignores the ACPI shutdown is hard-stopped on
+  # destroy.
+  agent { enabled = false }
+  tablet_device   = false
+  stop_on_destroy = true
+  vga { type = "none" }
 
   tags = ["untrusted", "sandbox-gw"]
 
   hook_script_file_id = local.platform.hookscript_file_id
 
   initialization {
-    datastore_id = "local-zfs"
+    datastore_id = local.sandbox_datastore
 
     dynamic "ip_config" {
       for_each = local.gw_sandbox_nics
@@ -166,33 +190,40 @@ resource "proxmox_virtual_environment_vm" "gw" {
     for_each = local.gw_sandbox_nics
 
     content {
-      bridge   = network_device.value.bridge
-      model    = "virtio"
-      firewall = true
+      bridge     = network_device.value.bridge
+      model      = "virtio"
+      firewall   = true
+      rate_limit = local.limits.gw_nic_mbps
     }
   }
 
   network_device {
-    bridge   = local.nw.services.name
-    model    = "virtio"
-    firewall = true
+    bridge     = local.nw.services.name
+    model      = "virtio"
+    firewall   = true
+    rate_limit = local.limits.gw_nic_mbps
   }
 
   network_device {
-    bridge   = local.nw.mgmt_sandbox.name
-    model    = "virtio"
-    firewall = true
+    bridge     = local.nw.mgmt_sandbox.name
+    model      = "virtio"
+    firewall   = true
+    rate_limit = local.limits.gw_nic_mbps
   }
 
-  serial_device {}
-
   disk {
-    datastore_id = "local-zfs"
+    datastore_id = local.sandbox_datastore
     file_id      = local.platform.os_images.debian.file_id
     interface    = "virtio0"
     iothread     = true
     discard      = "on"
     size         = 5
+    speed {
+      iops_read  = local.limits.disk_iops
+      iops_write = local.limits.disk_iops
+      read       = local.limits.disk_rate_mbps
+      write      = local.limits.disk_rate_mbps
+    }
   }
 
   depends_on = [proxmox_network_linux_bridge.vmbr_sandbox]
@@ -332,15 +363,22 @@ resource "proxmox_virtual_environment_vm" "vm" {
 
   cpu {
     cores = each.value.cpu
+    limit = each.value.cpu
+    units = local.limits.cpu_units
   }
 
   memory {
     dedicated = each.value.ram
   }
 
-  agent {
-    enabled = true
-  }
+  # Only SSH is used: no guest agent (the host never parses guest-controlled
+  # agent replies; stop/kill works without it), no serial console, no display,
+  # no USB tablet. A VM that ignores the ACPI shutdown is hard-stopped on
+  # destroy.
+  agent { enabled = false }
+  tablet_device   = false
+  stop_on_destroy = true
+  vga { type = "none" }
 
   tags = [
     "untrusted"
@@ -349,7 +387,7 @@ resource "proxmox_virtual_environment_vm" "vm" {
   hook_script_file_id = local.platform.hookscript_file_id
 
   initialization {
-    datastore_id = "local-zfs"
+    datastore_id = local.sandbox_datastore
 
     dynamic "ip_config" {
       for_each = each.value.ip_configs
@@ -380,29 +418,35 @@ resource "proxmox_virtual_environment_vm" "vm" {
     for_each = each.value.network_devices
 
     content {
-      bridge   = network_device.value.bridge
-      model    = "virtio"
-      firewall = true
+      bridge     = network_device.value.bridge
+      model      = "virtio"
+      firewall   = true
+      rate_limit = local.limits.nic_rate_mbps
     }
   }
 
   # Management NIC on the sandbox-only management bridge (vmbr4).
   network_device {
-    bridge   = local.nw.mgmt_sandbox.name
-    model    = "virtio"
-    firewall = true
+    bridge     = local.nw.mgmt_sandbox.name
+    model      = "virtio"
+    firewall   = true
+    rate_limit = local.limits.nic_rate_mbps
   }
 
-  serial_device {}
-
   disk {
-    datastore_id = "local-zfs"
+    datastore_id = local.sandbox_datastore
     file_id      = each.value.disk_file_id
 
     interface = "virtio0"
     iothread  = true
     discard   = "on"
     size      = 5
+    speed {
+      iops_read  = local.limits.disk_iops
+      iops_write = local.limits.disk_iops
+      read       = local.limits.disk_rate_mbps
+      write      = local.limits.disk_rate_mbps
+    }
   }
 
   depends_on = [proxmox_network_linux_bridge.vmbr_sandbox, terraform_data.guard]

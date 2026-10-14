@@ -1,0 +1,77 @@
+---
+# Table privileges per database role, applied AFTER the Django migrations
+# (the migrator creates and owns every table). Least privilege: each role gets
+# exactly these grants; anything else it holds on tables or sequences in the
+# public schema is revoked (one transaction, so there is no window without
+# privileges). Connecting (CONNECT, schema USAGE) is set up by setup_db_base.
+#
+# privs: a privilege list, optionally per column, e.g. "UPDATE (last_login)".
+# tables: table names, or ALL for every table in the schema.
+# Sequences of tables with INSERT are granted automatically (USAGE).
+postgresql_table_privileges:
+  # Public facing: read-only, except what a logged-in user does.
+  django_dashboard:
+    - privs: SELECT
+      tables: ALL
+    # Upload a worm (dashboard/views/uploads.py).
+    - privs: INSERT
+      tables: [uploads, malware_artifacts]
+    # Create and revoke team access tokens (dashboard/views/access.py).
+    - privs: INSERT
+      tables: [access_tokens]
+    - privs: UPDATE (revoked, revoked_at)
+      tables: [access_tokens]
+    # Login and sessions (django.contrib.auth / sessions).
+    - privs: UPDATE (last_login)
+      tables: [users]
+    - privs: INSERT, UPDATE, DELETE
+      tables: [django_session]
+
+  # Reads competition/round/team/upload/VM state; writes only its own results.
+  django_orchestrator:
+    - privs: SELECT
+      tables: ALL
+    # manage.py collect_topology (update_or_create).
+    - privs: INSERT, UPDATE
+      tables: [topology_snapshots]
+    # manage.py deploy_worms (bulk_create).
+    - privs: INSERT
+      tables: [worm_deployment_plans, worm_deployments]
+
+  # Sandbox-facing APIs (roles/applications/sandbox_api): append one attempt,
+  # validate team tokens. No other table, not even the attempts they wrote.
+  # Only the columns sandbox_api/files/app.py inserts (INSERT constant).
+  dbuser_scoring:
+    - privs: INSERT (team_token_hash, vm_flag_hash)
+      tables: [flag_capture_attempts]
+    - privs: SELECT (access_token_hash, team_id, revoked)
+      tables: [access_tokens]
+
+  dbuser_logging:
+    - privs: INSERT (team_token_hash, log_data)
+      tables: [logging_attempts]
+    - privs: SELECT (access_token_hash, team_id, revoked)
+      tables: [access_tokens]
+
+  # The network monitor is not deployed yet: no table access.
+  dbuser_network_monitor: []
+
+# The roles' table, column and sequence privileges as one sorted list; compared
+# before and after the grants to report "changed" only on a real change.
+db_privileges_query: >-
+  SELECT coalesce(string_agg(p, ',' ORDER BY p), '') AS privileges FROM (
+    SELECT grantee || ':' || table_name || ':' || privilege_type AS p
+      FROM information_schema.role_table_grants
+      WHERE table_schema = 'public' AND grantee::text = ANY(%(roles)s::text[])
+    UNION ALL
+    SELECT grantee || ':' || table_name || '.' || column_name || ':' || privilege_type
+      FROM information_schema.column_privileges
+      WHERE table_schema = 'public' AND grantee::text = ANY(%(roles)s::text[])
+    UNION ALL
+    SELECT r.rolname || ':' || c.relname || ':' || a.privilege_type
+      FROM pg_class c
+      CROSS JOIN LATERAL aclexplode(c.relacl) a
+      JOIN pg_roles r ON r.oid = a.grantee
+      WHERE c.relkind = 'S' AND c.relnamespace = 'public'::regnamespace
+        AND r.rolname::text = ANY(%(roles)s::text[])
+  ) privileges

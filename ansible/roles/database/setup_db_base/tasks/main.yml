@@ -137,3 +137,58 @@
     objs: public
     privs: USAGE,CREATE
     state: present
+
+#
+# Connection rights. PostgreSQL grants CONNECT and TEMPORARY on every database
+# to PUBLIC by default; here only the listed roles may connect, and only the
+# migrator may create objects. Table privileges follow after the migrations
+# (setup_db_permissions).
+#
+
+- name: Revoke the default database privileges from PUBLIC
+  become: true
+  become_user: postgres
+  community.postgresql.postgresql_privs:
+    database: "{{ postgres_db }}"
+    roles: PUBLIC
+    type: database
+    privs: CONNECT,TEMPORARY
+    state: absent
+
+- name: Revoke CREATE in the public schema from PUBLIC
+  become: true
+  become_user: postgres
+  community.postgresql.postgresql_privs:
+    database: "{{ postgres_db }}"
+    roles: PUBLIC
+    type: schema
+    objs: public
+    privs: CREATE
+    state: absent
+
+- name: Allow the application users to connect
+  become: true
+  become_user: postgres
+  community.postgresql.postgresql_privs:
+    database: "{{ postgres_db }}"
+    roles: "{{ item.name }}"
+    type: database
+    privs: CONNECT
+    state: present
+  loop: "{{ postgresql_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Allow the application users to use the public schema
+  become: true
+  become_user: postgres
+  community.postgresql.postgresql_privs:
+    database: "{{ postgres_db }}"
+    roles: "{{ item.name }}"
+    type: schema
+    objs: public
+    privs: USAGE
+    state: present
+  loop: "{{ postgresql_users }}"
+  loop_control:
+    label: "{{ item.name }}"

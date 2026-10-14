@@ -1,0 +1,41 @@
+{# One transaction (postgresql_query, autocommit off): revoke everything the
+   roles hold in the schema, then grant exactly postgresql_table_privileges. #}
+{% for role, grants in postgresql_table_privileges.items() %}
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM "{{ role }}";
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM "{{ role }}";
+{% for grant in grants %}
+{% if grant.tables == 'ALL' %}
+GRANT {{ grant.privs }} ON ALL TABLES IN SCHEMA public TO "{{ role }}";
+{% else %}
+GRANT {{ grant.privs }} ON {{ grant.tables | map('regex_replace', '^(.*)$', 'public."\\1"') | join(', ') }} TO "{{ role }}";
+{% endif %}
+{% endfor %}
+{% endfor %}
+{# Sequences behind the id columns of tables with INSERT (serial or identity). #}
+DO $$
+DECLARE
+  grant_row record;
+  seq text;
+BEGIN
+  FOR grant_row IN SELECT * FROM (VALUES
+{% set rows = [] %}
+{% for role, grants in postgresql_table_privileges.items() %}
+{% for grant in grants if grant.tables != 'ALL' and 'INSERT' in grant.privs %}
+{% for table in grant.tables %}
+{% set _ = rows.append("('" ~ role ~ "', '" ~ table ~ "')") %}
+{% endfor %}
+{% endfor %}
+{% endfor %}
+    {{ rows | join(',\n    ') if rows else "(NULL, NULL)" }}
+  ) AS t(role_name, table_name) WHERE role_name IS NOT NULL LOOP
+    -- Only tables with an id column (django_session has none).
+    CONTINUE WHEN NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = grant_row.table_name AND column_name = 'id');
+    seq := pg_get_serial_sequence(format('public.%I', grant_row.table_name), 'id');
+    IF seq IS NOT NULL THEN
+      EXECUTE format('GRANT USAGE ON SEQUENCE %s TO %I', seq, grant_row.role_name);
+    END IF;
+  END LOOP;
+END
+$$;

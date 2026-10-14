@@ -1,191 +1,55 @@
 ---
+# Table privileges (defaults/main.yml: postgresql_table_privileges). Runs after
+# the Django migrations, which create the tables; CONNECT and schema USAGE are
+# granted by setup_db_base.
 
-#
-# Database permissions
-#
-
-- name: Grant database CONNECT
-  community.postgresql.postgresql_privs:
-    database: "{{ postgres_db }}"
-    roles: "{{ item.name }}"
-    type: database
-    privs: CONNECT
-    state: present
-  loop: "{{ postgresql_users }}"
-  become_user: postgres
-
-
-- name: Grant schema usage
-  community.postgresql.postgresql_privs:
-    database: "{{ postgres_db }}"
-    roles: "{{ item.name }}"
-    objs: public
-    type: schema
-    privs: USAGE
-    state: present
-  loop: "{{ postgresql_users }}"
-  become_user: postgres
-
-
-# django_dashboard:
-# - query all tables
-# - insert uploads (uploads, malware_artifacts)
-- name: Grant SELECT on all tables to django_dashboard
-  community.postgresql.postgresql_privs:
-    database: "{{ postgres_db }}"
-    roles: django_dashboard
-    objs: ALL_IN_SCHEMA
-    schema: public
-    type: table
-    privs: SELECT
-    state: present
-  become_user: postgres
-
-
-- name: Grant SELECT on all sequences to django_dashboard
-  community.postgresql.postgresql_privs:
-    database: "{{ postgres_db }}"
-    roles: django_dashboard
-    objs: ALL_IN_SCHEMA
-    schema: public
-    type: sequence
-    privs: SELECT
-    state: present
-  become_user: postgres
-
-
-# Uploads: the artifact row and the upload record.
-- name: Grant INSERT on upload tables to django_dashboard
-  community.postgresql.postgresql_privs:
-    database: "{{ postgres_db }}"
-    roles: django_dashboard
-    objs: "{{ item }}"
-    type: table
-    privs: INSERT
-    state: present
-  loop:
-    - uploads
-    - malware_artifacts
-  become_user: postgres
-
-
-- name: Grant USAGE on upload sequences to django_dashboard
-  community.postgresql.postgresql_privs:
-    database: "{{ postgres_db }}"
-    roles: django_dashboard
-    objs: "{{ item }}"
-    type: sequence
-    privs: USAGE
-    state: present
-  loop:
-    - uploads_id_seq
-    - malware_artifacts_id_seq
-  become_user: postgres
-
-
-# dbuser_logging
-# - insert into logging table
-- name: Grant INSERT on logging_attempts table
-  community.postgresql.postgresql_privs:
-    database: "{{ postgres_db }}"
-    roles: dbuser_logging
-    objs: logging_attempts
-    type: table
-    privs: INSERT
-    state: present
-  become_user: postgres
-
-
-- name: Grant USAGE on logging_attempts_id_seq
-  community.postgresql.postgresql_privs:
-    database: "{{ postgres_db }}"
-    roles: dbuser_logging
-    objs: logging_attempts_id_seq
-    type: sequence
-    privs: USAGE
-    state: present
-  become_user: postgres
-
-
-# dbuser_scoring
-# - insert into scoring table
-- name: Grant INSERT on flag_capture_attempts table
-  community.postgresql.postgresql_privs:
-    database: "{{ postgres_db }}"
-    roles: dbuser_scoring
-    objs: flag_capture_attempts
-    type: table
-    privs: INSERT
-    state: present
-  become_user: postgres
-
-
-- name: Grant USAGE on flag_capture_attempts_id_seq
-  community.postgresql.postgresql_privs:
-    database: "{{ postgres_db }}"
-    roles: dbuser_scoring
-    objs: flag_capture_attempts_id_seq
-    type: sequence
-    privs: USAGE
-    state: present
-  become_user: postgres
-
-
-# dbuser_scoring / dbuser_logging (sandbox-facing APIs)
-# - validate team tokens: only the hash, team and revoked flag of access_tokens
-- name: Grant column-level SELECT on access_tokens to the sandbox APIs
+- name: List the tables in the public schema
   community.postgresql.postgresql_query:
     db: "{{ postgres_db }}"
-    query: >-
-      GRANT SELECT (access_token_hash, team_id, revoked) ON access_tokens
-      TO dbuser_scoring, dbuser_logging
-  become_user: postgres
+    query: SELECT tablename FROM pg_tables WHERE schemaname = 'public'
+  register: db_tables
   changed_when: false
-
-
-# django_orchestrator
-# - reads competition/round/team/upload/vm state
-# - writes virtual_machines, worm_deployment_plans, worm_deployments
-# - writes topology_snapshots (Proxmox topology, read by the dashboard)
-- name: Grant SELECT on all tables to django_orchestrator
-  community.postgresql.postgresql_privs:
-    database: "{{ postgres_db }}"
-    roles: django_orchestrator
-    objs: ALL_IN_SCHEMA
-    schema: public
-    type: table
-    privs: SELECT
-    state: present
   become_user: postgres
 
+- name: Require the tables the privileges refer to
+  ansible.builtin.assert:
+    that: db_missing_tables | length == 0
+    fail_msg: >-
+      Tables missing: {{ db_missing_tables | join(', ') }}. The Django
+      migrations have not run (or failed): they run on the orchestrator in
+      SetupDbAndDashboard.yml (role django_app).
+    quiet: true
+  vars:
+    db_missing_tables: >-
+      {{ postgresql_table_privileges.values() | flatten
+         | rejectattr('tables', 'equalto', 'ALL') | map(attribute='tables') | flatten | unique
+         | difference(db_tables.query_result | map(attribute='tablename')) }}
 
-- name: Grant INSERT/UPDATE on orchestrator-owned tables
-  community.postgresql.postgresql_privs:
-    database: "{{ postgres_db }}"
-    roles: django_orchestrator
-    objs: "{{ item }}"
-    type: table
-    privs: SELECT,INSERT,UPDATE
-    state: present
-  loop:
-    - virtual_machines
-    - worm_deployment_plans
-    - worm_deployments
-    - topology_snapshots
+# The roles' privileges before and after, to report "changed" only when the
+# grants below actually change something.
+- name: Read the current privileges
+  community.postgresql.postgresql_query:
+    db: "{{ postgres_db }}"
+    query: "{{ db_privileges_query }}"
+    named_args:
+      roles: "{{ postgresql_table_privileges.keys() | list }}"
+  register: db_privileges_before
+  changed_when: false
   become_user: postgres
 
+- name: Apply the table privileges (revoke all, grant exactly these)
+  community.postgresql.postgresql_query:
+    db: "{{ postgres_db }}"
+    query: "{{ lookup('ansible.builtin.template', 'privileges.sql.j2') }}"
+  changed_when: false
+  become_user: postgres
 
-- name: Grant USAGE on orchestrator sequences
-  community.postgresql.postgresql_privs:
-    database: "{{ postgres_db }}"
-    roles: django_orchestrator
-    objs: "{{ item }}"
-    type: sequence
-    privs: USAGE
-    state: present
-  loop:
-    - virtual_machines_id_seq
-    - worm_deployment_plans_id_seq
-    - worm_deployments_id_seq
-    - topology_snapshots_id_seq
+- name: Read the new privileges
+  community.postgresql.postgresql_query:
+    db: "{{ postgres_db }}"
+    query: "{{ db_privileges_query }}"
+    named_args:
+      roles: "{{ postgresql_table_privileges.keys() | list }}"
+  register: db_privileges_after
+  changed_when: db_privileges_after.query_result != db_privileges_before.query_result
   become_user: postgres

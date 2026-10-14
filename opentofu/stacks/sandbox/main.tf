@@ -38,7 +38,7 @@ locals {
   bridge_keys = sort(keys(local.sandbox_bridges))
   gw_sandbox_nics = [
     for key in local.bridge_keys : {
-      bridge     = local.sandbox_bridges[key].name
+      bridge = local.sandbox_bridges[key].name
       cidr   = "${cidrhost(local.sandbox_bridges[key].network_cidr, 1)}/${split("/", local.sandbox_bridges[key].network_cidr)[1]}"
     }
   ]
@@ -52,11 +52,11 @@ locals {
   # so one rogue VM cannot starve the host or its neighbours.
   sandbox_datastore = "local-zfs-sandbox"
   limits = {
-    cpu_units      = 50   # half the scheduling weight of infrastructure VMs (100)
-    nic_rate_mbps  = 10   # MB/s per NIC
-    disk_iops      = 200  # per direction
-    disk_rate_mbps = 20   # MB/s per direction
-    gw_nic_mbps    = 50   # MB/s per sandbox-gw NIC (aggregate of all sandbox -> services)
+    cpu_units      = 50  # half the scheduling weight of infrastructure VMs (100)
+    nic_rate_mbps  = 10  # MB/s per NIC
+    disk_iops      = 200 # per direction
+    disk_rate_mbps = 20  # MB/s per direction
+    gw_nic_mbps    = 50  # MB/s per sandbox-gw NIC (aggregate of all sandbox -> services)
   }
 }
 
@@ -161,7 +161,9 @@ resource "proxmox_virtual_environment_vm" "gw" {
 
   tags = ["untrusted", "sandbox-gw"]
 
-  hook_script_file_id = local.platform.hookscript_file_id
+  # TODO:
+  # HOOK:
+  # hook_script_file_id = local.platform.hookscript_file_id
 
   initialization {
     datastore_id = local.sandbox_datastore
@@ -390,7 +392,9 @@ resource "proxmox_virtual_environment_vm" "vm" {
     "untrusted"
   ]
 
-  hook_script_file_id = local.platform.hookscript_file_id
+  # TODO:
+  # HOOK:
+  # hook_script_file_id = local.platform.hookscript_file_id
 
   initialization {
     datastore_id = local.sandbox_datastore

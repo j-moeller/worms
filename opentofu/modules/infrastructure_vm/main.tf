@@ -64,7 +64,9 @@ resource "proxmox_virtual_environment_vm" "infrastructure" {
   tags = ["infrastructure", var.tag]
 
   # Isolates the ports on management bridges (platform stack: hookscript).
-  hook_script_file_id = var.hookscript_file_id
+  # TODO:
+  # HOOK:
+  # hook_script_file_id = var.hookscript_file_id
 
   initialization {
     datastore_id = "local-zfs"

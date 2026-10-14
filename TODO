@@ -63,11 +63,13 @@
 
 [ ] HTTPS
  - [x] Services
- - [ ] DB connection
+ - [ ] DB connection !!
 
 [ ] SSH only login
 [ ] Firewall rules
 [ ] Remove root users
 [ ] Remove hardcoded passwords
 
-[ ] Limit request size, limit request frequency
+[x] Limit request size, limit request frequency
+
+[ ] Watch dog, failsafe, killswitch

@@ -50,6 +50,7 @@ locals {
   ]
 
   services = {
+    /*
     apt_cache = {
       cpu               = 1
       cpu_type          = null
@@ -98,6 +99,7 @@ locals {
       data_disk_size    = 10
       user_data_file_id = local.platform.cloud_init.cve_search.file_id
     }
+    */
     wikipedia = {
       cpu               = 1
       cpu_type          = null

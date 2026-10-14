@@ -7,13 +7,13 @@
   hosts: all:!proxmox_host:!sandbox:!sandbox_gw
   gather_facts: false
   tasks:
-    - name: Wait for SSH
-      ansible.builtin.wait_for_connection:
-        timeout: 600
-
     - name: Wait for cloud-init
       ansible.builtin.command: cloud-init status --wait
       register: cloud_init
       changed_when: false
       # rc 2: finished with recoverable errors (degraded); reported, not fatal.
       failed_when: cloud_init.rc not in [0, 2]
+
+    - name: Wait for SSH
+      ansible.builtin.wait_for_connection:
+        timeout: 10

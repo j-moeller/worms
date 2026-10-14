@@ -116,6 +116,7 @@
 # django_orchestrator
 # - reads competition/round/team/upload/vm state
 # - writes virtual_machines, worm_deployment_plans, worm_deployments
+# - writes topology_snapshots (Proxmox topology, read by the dashboard)
 - name: Grant SELECT on all tables to django_orchestrator
   community.postgresql.postgresql_privs:
     database: "{{ postgres_db }}"
@@ -140,6 +141,7 @@
     - virtual_machines
     - worm_deployment_plans
     - worm_deployments
+    - topology_snapshots
   become_user: postgres
 
 
@@ -155,4 +157,5 @@
     - virtual_machines_id_seq
     - worm_deployment_plans_id_seq
     - worm_deployments_id_seq
+    - topology_snapshots_id_seq
   become_user: postgres

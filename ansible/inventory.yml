@@ -121,6 +121,16 @@ all:
             PROXMOX_USER: "{{ proxmox_api_user }}"
             PROXMOX_TOKEN_NAME: "{{ proxmox_api_token_name }}"
             PROXMOX_TOKEN_VALUE: "{{ proxmox_api_token_value }}"
+            # Read-only token for the topology collector (PVEAuditor).
+            PROXMOX_READONLY_USER: "{{ proxmox_readonly_api_user }}"
+            PROXMOX_READONLY_TOKEN_NAME: "{{ proxmox_readonly_api_token_name }}"
+            PROXMOX_READONLY_TOKEN_VALUE: "{{ proxmox_readonly_api_token_value }}"
+          # Periodic management commands (systemd timers, same env file).
+          django_timers:
+            - name: collect-topology
+              command: collect_topology
+              description: Collect Proxmox topology for the dashboard (read-only)
+              on_calendar: "*:0/2"
 
     orchestrator:
       hosts:

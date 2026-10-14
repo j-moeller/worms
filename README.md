@@ -103,6 +103,16 @@ reconfigures Ansible with no edits to `inventory.yml`.
 - Database accepts :5432 only from the named service IPs; each DB role may
   connect only from its own VM (`/32` in `pg_hba`, `scram-sha-256`, TLS).
 
+- Orchestrator → Proxmox API:8006 with a second, **read-only** token
+  (PVEAuditor) to collect the topology; it writes it to `topology_snapshots`,
+  which the dashboard reads. The dashboard never talks to Proxmox (its egress
+  policy is DROP with only db:5432 and orchestrator:443 allowed).
+
+- Management/SSH: infrastructure VMs on `vmbr2` (10.3.0.0/24), sandbox VMs on
+  their own `vmbr4` (10.4.0.0/16), so untrusted VMs share no network with the
+  infrastructure. The `ssh` group accepts port 22 only from the Proxmox host
+  (10.3.0.1 / 10.4.0.1); sandbox VMs only on their management NIC.
+
 The firewall security groups in `opentofu/stacks/platform/main.tf` enforce the
 network side; the PostgreSQL roles/grants in the `setup_db_*` roles enforce the
 data side.
@@ -126,3 +136,32 @@ data side.
 # Round end
 
 - cd opentofu/stacks/sandbox && tofu destroy
+
+# Topology view (dashboard → TOPOLOGY, staff only)
+
+Shows every VM, bridge, NIC and the connections the Proxmox firewall actually
+permits (security groups expanded, first-match evaluation, egress of the source
+AND ingress of the target), with toggles for bridges, pools, services/ports and
+security groups. It also states explicitly who can reach the Proxmox API.
+
+Data flow: `orchestrator` runs `manage.py collect_topology` every 2 minutes
+(systemd timer `orchestrator-collect-topology.timer`), reads Proxmox with a
+read-only token (GET only, config fields whitelisted, no cloud-init secrets),
+and upserts one row in `topology_snapshots`. The dashboard analyses that row
+(`dashboard/topology.py`) and serves it at `/topology/data/`.
+
+Credentials (the user/token are assumed to exist, role `PVEAuditor` on `/`
+for the user and, with privilege separation, for the token):
+
+- user + token id: `proxmox_readonly_api_user` / `proxmox_readonly_api_token_name`
+  in `ansible/group_vars/all.yml` (default `topology@pve` / `readonly`)
+- token secret: `vault_proxmox_readonly_api_token_value` in the vault:
+
+  ```
+  cd ansible && ansible-vault edit --vault-password-file .vault_pass group_vars/vault.yml
+  ```
+
+  (or export `PROXMOX_READONLY_API_TOKEN` before the very first `make`).
+
+Then `make provision` (or `ansible-playbook -e @group_vars/vault.yml
+SetupDbAndDashboard.yml`) delivers it to the orchestrator's 0600 env file.

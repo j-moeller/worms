@@ -1,5 +1,5 @@
 {# TLS-only, scram-sha-256. Each application user may connect only from its own
-   VM (/32); admin and migrator only from the maintenance network / Django hosts. #}
+   VM (/32); admin only from the Proxmox host, migrator only from the Django hosts. #}
 {% for user in postgresql_users %}
 hostssl    {{ postgres_db }}    {{ user.name }}    {{ user.cidr }}    scram-sha-256
 {% endfor %}

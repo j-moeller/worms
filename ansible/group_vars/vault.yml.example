@@ -30,3 +30,8 @@ vault_orchestrator_secret_key: "CHANGE_ME"
 
 # Proxmox API token secret (the value half of a Proxmox API token).
 vault_proxmox_api_token_value: "CHANGE_ME"
+
+# Secret of the READ-ONLY Proxmox API token (PVEAuditor) the orchestrator uses
+# to collect the topology for the dashboard (topology@pve!readonly by default,
+# see proxmox_readonly_api_* in group_vars/all.yml).
+vault_proxmox_readonly_api_token_value: "CHANGE_ME"

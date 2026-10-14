@@ -44,9 +44,13 @@ variable "ssh_public_key" {
 # =============================================================================
 locals {
   networks = {
-    sandbox_vms      = "10.1.0.0/24"
-    private_internet = "10.2.0.0/24"
-    maintenance      = "10.3.0.0/24"
+    sandbox_vms         = "10.1.0.0/24"
+    private_internet    = "10.2.0.0/24"
+    maintenance         = "10.3.0.0/24"
+    # Sandbox VMs' management NICs live on their own bridge (vmbr4), never on
+    # the infrastructure maintenance network: the only peer they share is the
+    # Proxmox host. /16 so large generated rounds fit.
+    sandbox_maintenance = "10.4.0.0/16"
   }
 
   # Static infrastructure VMs. `maintenance` is the address Ansible connects to.
@@ -83,4 +87,11 @@ locals {
   # (vmbr2 gateway address). The Proxmox API listens on 8006.
   proxmox_host_ip  = "10.3.0.1"
   proxmox_api_port = 8006
+
+  # Proxmox host address on the sandbox management bridge (vmbr4).
+  sandbox_maintenance_host_ip = "10.4.0.1"
+
+  # Addresses the host uses to SSH into VMs (Ansible). The `ssh` security group
+  # accepts port 22 from these only.
+  ssh_sources = [local.proxmox_host_ip, local.sandbox_maintenance_host_ip]
 }

@@ -40,6 +40,7 @@ module "networks" {
   node_name                = var.proxmox_instance
   private_internet_cidr    = "10.2.0.1/24"
   maintenance_cidr         = "10.3.0.1/24"
+  sandbox_maintenance_cidr = "${local.sandbox_maintenance_host_ip}/${split("/", local.networks.sandbox_maintenance)[1]}"
   monitoring_cidr          = "10.250.0.1/24"
   internet_enabled         = var.internet_enabled
   private_internet_network = local.networks.private_internet
@@ -68,13 +69,17 @@ resource "proxmox_node_firewall" "worms_pve" {
   nftables = true
 }
 
+# SSH is only ever initiated by the Proxmox host (Ansible), on vmbr2 for the
+# infrastructure and on vmbr4 for the sandbox VMs. No VM may SSH into another.
 resource "proxmox_virtual_environment_cluster_firewall_security_group" "ssh" {
   name = "ssh"
 
   rule {
-    type   = "in"
-    action = "ACCEPT"
-    macro  = "SSH"
+    type    = "in"
+    action  = "ACCEPT"
+    macro   = "SSH"
+    source  = join(",", local.ssh_sources)
+    comment = "SSH from the Proxmox host only"
   }
 }
 

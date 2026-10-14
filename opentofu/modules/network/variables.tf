@@ -10,6 +10,11 @@ variable "maintenance_cidr" {
   type = string
 }
 
+variable "sandbox_maintenance_cidr" {
+  description = "Host address on the sandbox management bridge (vmbr4), e.g. 10.4.0.1/16."
+  type        = string
+}
+
 variable "monitoring_cidr" {
   type = string
 }

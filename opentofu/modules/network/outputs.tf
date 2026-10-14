@@ -14,6 +14,14 @@ output "maintenance" {
   }
 }
 
+output "sandbox_maintenance" {
+  value = {
+    node_name = var.node_name
+    name      = proxmox_network_linux_bridge.vmbr_sandbox_maintenance.name
+    address   = proxmox_network_linux_bridge.vmbr_sandbox_maintenance.address
+  }
+}
+
 output "monitor" {
   value = {
     node_name = var.node_name

@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+
+{% block header %}
+<title>WORMS//ARENA — Topology</title>
+<style>
+    .topo {
+        --bg: #f6f7f9;
+        --panel: #ffffff;
+        --ink: #1b1f24;
+        --muted: #5f6b7a;
+        --line: #d5dae1;
+        --edge: #9aa5b4;
+        --accent: #2a78d6;
+        --ok: #1a8a5a;
+        --warn: #b7791f;
+        --bad: #c53030;
+        --host: #22303f;
+        --host-ink: #ffffff;
+        --halo: #f6f7f9;
+        font-family: "Space Grotesk", system-ui, sans-serif;
+        color: var(--ink);
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px;
+    }
+    @media (prefers-color-scheme: dark) {
+        .topo {
+            --bg: #12161b;
+            --panel: #1a2027;
+            --ink: #e6ebf0;
+            --muted: #94a1b2;
+            --line: #2e3742;
+            --edge: #5b6878;
+            --accent: #5aa0f0;
+            --ok: #3cc58a;
+            --warn: #e0a640;
+            --bad: #f06060;
+            --host: #dfe7ef;
+            --host-ink: #12161b;
+            --halo: #12161b;
+        }
+    }
+    .topo * { box-sizing: border-box; }
+    .topo button, .topo input {
+        font: inherit;
+        color: var(--ink);
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 4px 10px;
+    }
+    .topo button { cursor: pointer; }
+    .topo button:hover { border-color: var(--accent); }
+    .topo-mono { font-family: "Share Tech Mono", ui-monospace, monospace; }
+
+    .topo-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 10px; }
+    .topo-title { font-family: "Share Tech Mono", monospace; font-size: 18px; font-weight: 700; }
+    .topo-meta { color: var(--muted); font-size: 13px; flex: 1; min-width: 200px; }
+    .topo-meta .stale { color: var(--warn); font-weight: 600; }
+    .topo-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .topo-actions input { width: 180px; }
+
+    .topo-checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 8px; margin-bottom: 10px; }
+    .topo-card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+    .topo-card h3 { margin: 0 0 4px; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+    .topo-card.bad { border-left: 4px solid var(--bad); }
+    .topo-card.ok { border-left: 4px solid var(--ok); }
+    .topo-card.warn { border-left: 4px solid var(--warn); }
+    .topo-card ul { margin: 2px 0 0; padding-left: 18px; }
+    .topo-card details summary { cursor: pointer; color: var(--muted); }
+
+    .topo-body { display: grid; grid-template-columns: 230px minmax(0, 1fr) 330px; gap: 10px; height: max(560px, calc(100vh - 260px)); }
+    .topo-filters, .topo-detail { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; overflow: auto; padding: 8px 10px; font-size: 13px; }
+    .topo-filters h4, .topo-detail h4 { margin: 10px 0 4px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); display: flex; justify-content: space-between; align-items: center; }
+    .topo-filters h4 button { font-size: 10px; padding: 0 6px; }
+    .topo-filters label { display: flex; align-items: center; gap: 6px; padding: 1px 0; cursor: pointer; }
+    .topo-filters label .count { margin-left: auto; color: var(--muted); font-size: 11px; }
+    .topo-filters label .sub { color: var(--muted); font-size: 11px; }
+    .topo-swatch { display: inline-block; width: 14px; height: 4px; border-radius: 2px; flex: none; }
+
+    .topo-canvas { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+    .topo-canvas svg { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; user-select: none; }
+    .topo-canvas svg.panning { cursor: grabbing; }
+    .topo-legend { position: absolute; left: 8px; bottom: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font-size: 11px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 12px; max-width: calc(100% - 16px); }
+    .topo-legend span { display: inline-flex; align-items: center; gap: 4px; }
+    .topo-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; color: var(--muted); }
+
+    .topo-detail table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .topo-detail td, .topo-detail th { text-align: left; padding: 2px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    .topo-detail th { color: var(--muted); font-weight: 600; }
+    .topo-detail .kv td:first-child { color: var(--muted); width: 38%; }
+    .topo-detail .title { font-size: 16px; font-weight: 700; margin: 0; }
+    .topo-detail .subtitle { color: var(--muted); margin: 0 0 6px; }
+    .topo-detail a { color: var(--accent); cursor: pointer; text-decoration: none; }
+    .topo-detail a:hover { text-decoration: underline; }
+    .topo-pill { display: inline-block; padding: 0 6px; border-radius: 9px; font-size: 11px; font-weight: 600; border: 1px solid currentColor; }
+    .v-allow { color: var(--ok); }
+    .v-deny { color: var(--bad); }
+    .v-unknown { color: var(--warn); }
+
+    /* SVG */
+    .topo svg text { font-family: "Space Grotesk", system-ui, sans-serif; fill: var(--ink); }
+    .topo svg .mono { font-family: "Share Tech Mono", ui-monospace, monospace; }
+    .topo svg .muted { fill: var(--muted); }
+    .topo svg .halo { paint-order: stroke; stroke: var(--halo); stroke-width: 3px; stroke-linejoin: round; }
+    .topo svg .ep rect.card { fill: var(--panel); stroke: var(--edge); stroke-width: 1.2; }
+    .topo svg .ep.host rect.card { fill: var(--host); stroke: var(--host); }
+    .topo svg .ep.host text { fill: var(--host-ink); }
+    .topo svg .ep.stopped rect.card { stroke-dasharray: 4 3; }
+    .topo svg .br rect { fill: var(--bg); stroke: var(--ink); stroke-width: 1.6; }
+    .topo svg .br.missing rect { stroke: var(--bad); stroke-dasharray: 4 3; }
+    .topo svg .node { cursor: pointer; }
+    .topo svg .node.selected rect.card, .topo svg .node.selected.br rect { stroke: var(--accent); stroke-width: 3; }
+    .topo svg .node.match rect.card, .topo svg .node.match.br rect { stroke: var(--warn); stroke-width: 3; }
+    .topo svg .nic { stroke: var(--edge); stroke-width: 1.4; }
+    .topo svg .nic.unfiltered { stroke: var(--bad); stroke-dasharray: 5 4; stroke-width: 2; }
+    .topo svg .flow { fill: none; stroke-width: 2; cursor: pointer; }
+    .topo svg .flow.unknown { stroke-dasharray: 6 4; }
+    .topo svg .flow-hit { fill: none; stroke: transparent; stroke-width: 12; cursor: pointer; }
+    .topo svg .flow.selected { stroke-width: 4; }
+    .topo svg .dim { opacity: .12; }
+    .topo svg .fw-ok { fill: var(--ok); }
+    .topo svg .fw-warn { fill: var(--warn); }
+    .topo svg .fw-bad { fill: var(--bad); }
+    .topo svg .status-running { fill: var(--ok); }
+    .topo svg .status-stopped { fill: var(--muted); }
+
+    @media (max-width: 1100px) {
+        .topo-body { grid-template-columns: 1fr; height: auto; }
+        .topo-canvas { height: 70vh; min-height: 420px; }
+        .topo-filters, .topo-detail { max-height: 50vh; }
+    }
+</style>
+{% endblock %}
+
+
+{% block content %}
+<div class="topo" id="topo" data-src="{% url 'topology_data' %}">
+
+    <header class="topo-bar">
+        <div class="topo-title">// NETWORK TOPOLOGY</div>
+        <div class="topo-meta" id="topo-meta">Loading snapshot…</div>
+        <div class="topo-actions">
+            <input id="topo-search" type="search" placeholder="Find VM, IP, VMID…" aria-label="Find VM, IP or VMID">
+            <button id="topo-fit" type="button">Fit</button>
+            <button id="topo-relayout" type="button">Re-layout</button>
+            <button id="topo-reload" type="button">Reload</button>
+        </div>
+    </header>
+
+    <section class="topo-checks" id="topo-checks" aria-live="polite"></section>
+
+    <div class="topo-body">
+        <aside class="topo-filters" id="topo-filters" aria-label="Filters"></aside>
+
+        <div class="topo-canvas">
+            <svg id="topo-svg" role="img" aria-label="Network topology graph"></svg>
+            <div class="topo-empty" id="topo-empty" hidden></div>
+            <div class="topo-legend" id="topo-legend"></div>
+        </div>
+
+        <aside class="topo-detail" id="topo-detail" aria-label="Details"></aside>
+    </div>
+</div>
+
+<script>
+{% include "topology/topology.js" %}
+</script>
+{% endblock %}

@@ -14,7 +14,17 @@ resource "proxmox_network_linux_bridge" "vmbr_maintenance" {
   address   = var.maintenance_cidr
   ports     = []
   autostart = true
-  comment   = "Every VM (sandbox, infrastructure, ...) is connected to this network. The network is used to connect to VMs via SSH."
+  comment   = "Every infrastructure and private-internet VM is connected to this network. The network is used to connect to VMs via SSH."
+}
+
+resource "proxmox_network_linux_bridge" "vmbr_sandbox_maintenance" {
+  node_name = var.node_name
+  name      = "vmbr4"
+
+  address   = var.sandbox_maintenance_cidr
+  ports     = []
+  autostart = true
+  comment   = "Management (SSH) network of the untrusted sandbox VMs. Separate from vmbr2 so sandbox VMs share no network with the infrastructure; the Proxmox host is the only other peer."
 }
 
 resource "proxmox_network_linux_bridge" "vmbr_monitoring" {

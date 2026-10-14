@@ -1,0 +1,28 @@
+[Unit]
+Description={{ item.description | default(item.name) }} ({{ django_app_name }})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User={{ django_app_user }}
+Group={{ django_app_group }}
+WorkingDirectory={{ django_source_dir }}
+
+# Same root-owned 0600 secrets file as the web service.
+EnvironmentFile={{ django_env_file }}
+
+ExecStart={{ django_venv_dir }}/bin/python manage.py {{ item.command }}
+
+# --- Hardening ---
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

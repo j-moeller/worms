@@ -18,12 +18,15 @@
 postgres_db: mydb
 postgres_host: "{{ infrastructure_ips.db }}"
 
-# Admin (DBA) and migrator connect only from the maintenance network, never the
-# world. Application users connect only from their own VM (/32), set per user.
+# The admin (SUPERUSER) role may log in remotely only from the Proxmox host
+# (/32, from the OpenTofu ground truth), never from other VMs on the maintenance
+# network. Ansible itself never needs it: it administers PostgreSQL as `postgres`
+# over the local socket. Set to [] to disable remote superuser logins entirely.
+# Migrator: Django hosts only. Application users: their own VM (/32), per user.
 postgres_admin_name: admin
 postgres_admin_password: "{{ vault_postgres_admin_password }}"
 postgres_admin_cidrs:
-  - 10.3.0.0/24
+  - "{{ proxmox.host }}/32"
 
 postgres_migrator_name: django_migrator
 postgres_migrator_password: "{{ vault_postgres_migrator_password }}"
@@ -75,6 +78,15 @@ pki_server_validity: "+825d"
 proxmox_api_user: "orchestrator@pam"
 proxmox_api_token_name: "orchestrator-prov"
 proxmox_api_token_value: "{{ vault_proxmox_api_token_value }}"
+
+# Separate READ-ONLY identity used by the orchestrator to collect the topology
+# (VMs, bridges, firewall) for the dashboard's TOPOLOGY page. It needs the
+# PVEAuditor role on `/` (for the user AND, with privilege separation, the
+# token). The token secret lives in the vault; until it is set the collector
+# simply reports "not configured".
+proxmox_readonly_api_user: "topology@pve"
+proxmox_readonly_api_token_name: "readonly"
+proxmox_readonly_api_token_value: "{{ vault_proxmox_readonly_api_token_value | default('') }}"
 
 # Global switch for the private internet.
 #   true  = services act as proxies/forwarders with upstream internet (population phase)

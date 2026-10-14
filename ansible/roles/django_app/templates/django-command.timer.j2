@@ -1,0 +1,10 @@
+[Unit]
+Description=Run {{ item.description | default(item.name) }} periodically
+
+[Timer]
+OnBootSec=1min
+OnCalendar={{ item.on_calendar }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

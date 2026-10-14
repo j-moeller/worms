@@ -24,7 +24,7 @@ locals {
       os_image          = local.platform.os_images.debian
       user_data_file_id = local.platform.cloud_init.blank.file_id
 
-      maintenance_network_cidr = "10.3.0.10/24"
+      maintenance_network_cidr = "10.4.0.10/16"
 
       network_devices = [
         {
@@ -45,7 +45,7 @@ locals {
       os_image          = local.platform.os_images.debian
       user_data_file_id = local.platform.cloud_init.blank.file_id
 
-      maintenance_network_cidr = "10.3.0.11/24"
+      maintenance_network_cidr = "10.4.0.11/16"
 
       network_devices = [
         {
@@ -62,7 +62,7 @@ locals {
       os_image          = local.platform.os_images.debian
       user_data_file_id = local.platform.cloud_init.blank.file_id
 
-      maintenance_network_cidr = "10.3.0.12/24"
+      maintenance_network_cidr = "10.4.0.12/16"
 
       network_devices = [
         {
@@ -83,7 +83,7 @@ locals {
       os_image          = local.platform.os_images.debian
       user_data_file_id = local.platform.cloud_init.blank.file_id
 
-      maintenance_network_cidr = "10.3.0.13/24"
+      maintenance_network_cidr = "10.4.0.13/16"
 
       network_devices = [
         {
@@ -100,7 +100,7 @@ locals {
       os_image          = local.platform.os_images.debian
       user_data_file_id = local.platform.cloud_init.blank.file_id
 
-      maintenance_network_cidr = "10.3.0.14/24"
+      maintenance_network_cidr = "10.4.0.14/16"
 
       network_devices = [
         {
@@ -121,7 +121,7 @@ locals {
       os_image          = local.platform.os_images.debian
       user_data_file_id = local.platform.cloud_init.blank.file_id
 
-      maintenance_network_cidr = "10.3.0.15/24"
+      maintenance_network_cidr = "10.4.0.15/16"
 
       network_devices = [
         {
@@ -142,7 +142,7 @@ locals {
       os_image          = local.platform.os_images.debian
       user_data_file_id = local.platform.cloud_init.blank.file_id
 
-      maintenance_network_cidr = "10.3.0.16/24"
+      maintenance_network_cidr = "10.4.0.16/16"
 
       network_devices = [
         {
@@ -163,7 +163,7 @@ locals {
       os_image          = local.platform.os_images.debian
       user_data_file_id = local.platform.cloud_init.blank.file_id
 
-      maintenance_network_cidr = "10.3.0.17/24"
+      maintenance_network_cidr = "10.4.0.17/16"
 
       network_devices = [
         {
@@ -180,7 +180,7 @@ locals {
       os_image          = local.platform.os_images.debian
       user_data_file_id = local.platform.cloud_init.blank.file_id
 
-      maintenance_network_cidr = "10.3.0.18/24"
+      maintenance_network_cidr = "10.4.0.18/16"
 
       network_devices = [
         {
@@ -201,7 +201,7 @@ locals {
       os_image          = local.platform.os_images.debian
       user_data_file_id = local.platform.cloud_init.blank.file_id
 
-      maintenance_network_cidr = "10.3.0.19/24"
+      maintenance_network_cidr = "10.4.0.19/16"
 
       network_devices = [
         {
@@ -222,7 +222,7 @@ locals {
       os_image          = local.platform.os_images.debian
       user_data_file_id = local.platform.cloud_init.blank.file_id
 
-      maintenance_network_cidr = "10.3.0.20/24"
+      maintenance_network_cidr = "10.4.0.20/16"
 
       network_devices = [
         {
@@ -239,7 +239,7 @@ locals {
       os_image          = local.platform.os_images.debian
       user_data_file_id = local.platform.cloud_init.blank.file_id
 
-      maintenance_network_cidr = "10.3.0.21/24"
+      maintenance_network_cidr = "10.4.0.21/16"
 
       network_devices = [
         {
@@ -260,7 +260,7 @@ locals {
       os_image          = local.platform.os_images.debian
       user_data_file_id = local.platform.cloud_init.blank.file_id
 
-      maintenance_network_cidr = "10.3.0.22/24"
+      maintenance_network_cidr = "10.4.0.22/16"
 
       network_devices = [
         {
@@ -281,7 +281,7 @@ locals {
       os_image          = local.platform.os_images.debian
       user_data_file_id = local.platform.cloud_init.blank.file_id
 
-      maintenance_network_cidr = "10.3.0.23/24"
+      maintenance_network_cidr = "10.4.0.23/16"
 
       network_devices = [
         {
@@ -302,7 +302,7 @@ locals {
       os_image          = local.platform.os_images.debian
       user_data_file_id = local.platform.cloud_init.blank.file_id
 
-      maintenance_network_cidr = "10.3.0.24/24"
+      maintenance_network_cidr = "10.4.0.24/16"
 
       network_devices = [
         {
@@ -323,7 +323,7 @@ locals {
       os_image          = local.platform.os_images.debian
       user_data_file_id = local.platform.cloud_init.blank.file_id
 
-      maintenance_network_cidr = "10.3.0.25/24"
+      maintenance_network_cidr = "10.4.0.25/16"
 
       network_devices = [
         {
@@ -340,7 +340,7 @@ locals {
       os_image          = local.platform.os_images.debian
       user_data_file_id = local.platform.cloud_init.blank.file_id
 
-      maintenance_network_cidr = "10.3.0.26/24"
+      maintenance_network_cidr = "10.4.0.26/16"
 
       network_devices = [
         {
@@ -357,7 +357,7 @@ locals {
       os_image          = local.platform.os_images.debian
       user_data_file_id = local.platform.cloud_init.blank.file_id
 
-      maintenance_network_cidr = "10.3.0.27/24"
+      maintenance_network_cidr = "10.4.0.27/16"
 
       network_devices = [
         {
@@ -378,7 +378,7 @@ locals {
       os_image          = local.platform.os_images.debian
       user_data_file_id = local.platform.cloud_init.blank.file_id
 
-      maintenance_network_cidr = "10.3.0.28/24"
+      maintenance_network_cidr = "10.4.0.28/16"
 
       network_devices = [
         {
@@ -395,7 +395,7 @@ locals {
       os_image          = local.platform.os_images.debian
       user_data_file_id = local.platform.cloud_init.blank.file_id
 
-      maintenance_network_cidr = "10.3.0.29/24"
+      maintenance_network_cidr = "10.4.0.29/16"
 
       network_devices = [
         {

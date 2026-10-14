@@ -145,3 +145,42 @@
     enabled: true
     state: started
     daemon_reload: true
+
+# Periodic management commands (e.g. the orchestrator's collect_topology).
+# The first runs may fail until SetupDbAndDashboard.yml has granted the table
+# privileges (setup_db_permissions); the timer simply retries.
+- name: Install management command services
+  ansible.builtin.template:
+    src: django-command.service.j2
+    dest: "/etc/systemd/system/{{ django_app_name }}-{{ item.name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ django_timers }}"
+  loop_control:
+    label: "{{ item.name }}"
+  notify:
+    - Reload systemd
+
+- name: Install management command timers
+  ansible.builtin.template:
+    src: django-command.timer.j2
+    dest: "/etc/systemd/system/{{ django_app_name }}-{{ item.name }}.timer"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ django_timers }}"
+  loop_control:
+    label: "{{ item.name }}"
+  notify:
+    - Reload systemd
+
+- name: Enable management command timers
+  ansible.builtin.systemd:
+    name: "{{ django_app_name }}-{{ item.name }}.timer"
+    enabled: true
+    state: started
+    daemon_reload: true
+  loop: "{{ django_timers }}"
+  loop_control:
+    label: "{{ item.name }}"

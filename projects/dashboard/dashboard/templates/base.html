@@ -152,6 +152,13 @@
                             <span>TODOS</span>
                         </a>
 
+                        <a
+                            href="{% url 'topology' %}"
+                            class="nav-link {% if request.resolver_match.url_name == 'topology' %}active{% endif %}"
+                        >
+                            <span>TOPOLOGY</span>
+                        </a>
+
                     {% endif %}
 
                     {% if request.team and not request.active_competition.is_registration_period %}

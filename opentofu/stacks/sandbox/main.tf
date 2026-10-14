@@ -58,6 +58,22 @@ resource "proxmox_virtual_environment_firewall_options" "vm" {
   output_policy = "DROP"
 }
 
+# Sandbox VMs accept SSH only from the Proxmox host, and only on their
+# management NIC (the last NIC, after the sandbox-facing ones). Nothing else is
+# allowed in or out (DROP/DROP above).
+resource "proxmox_virtual_environment_firewall_rules" "vm" {
+  for_each = local.sandbox_vms
+
+  node_name = var.proxmox_instance
+  vm_id     = proxmox_virtual_environment_vm.vm[each.key].vm_id
+
+  rule {
+    security_group = local.platform.security_group_names.ssh.name
+    iface          = "net${length(each.value.network_devices)}"
+    comment        = "SSH from the Proxmox host on the management NIC"
+  }
+}
+
 resource "proxmox_virtual_environment_vm" "vm" {
   for_each = local.sandbox_vms
 
@@ -118,8 +134,10 @@ resource "proxmox_virtual_environment_vm" "vm" {
     }
   }
 
+  # Management NIC on the sandbox-only management bridge (vmbr4), never on the
+  # infrastructure maintenance network (vmbr2).
   network_device {
-    bridge   = local.platform.networks.maintenance.name
+    bridge   = local.platform.networks.sandbox_maintenance.name
     model    = "virtio"
     firewall = true
   }

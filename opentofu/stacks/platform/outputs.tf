@@ -29,9 +29,10 @@ output "infrastructure" {
     private_internet_ips = local.private_internet_ips
     networks             = local.networks
     proxmox = {
-      host     = local.proxmox_host_ip
-      api_port = local.proxmox_api_port
-      node     = var.proxmox_instance
+      host                     = local.proxmox_host_ip
+      sandbox_maintenance_host = local.sandbox_maintenance_host_ip
+      api_port                 = local.proxmox_api_port
+      node                     = var.proxmox_instance
     }
   }
 }

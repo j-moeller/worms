@@ -8,6 +8,11 @@ from typing import List
 
 import jinja2
 
+# Sandbox management network (vmbr4). Must match networks.sandbox_maintenance
+# in opentofu/shared/shared-variables.tf. Host addresses .1-.9 are reserved
+# (the Proxmox host is .1).
+SANDBOX_MAINTENANCE_NETWORK = ipaddress.ip_network("10.4.0.0/16")
+
 TEMPLATE = """
 locals {
   seed = "{{ seed }}"
@@ -585,8 +590,11 @@ class ArchitectureGenerator:
         )[0]
 
     def _maintenance_cidr(self, vm_index: int) -> str:
+        network = SANDBOX_MAINTENANCE_NETWORK
         host = vm_index + 10
-        return f"10.3.0.{host}/24"
+        if host >= network.num_addresses - 1:
+            raise ValueError(f"Too many sandbox VMs for {network}")
+        return f"{network.network_address + host}/{network.prefixlen}"
 
     def _allocate_ip_config(
         self,

@@ -1,5 +1,5 @@
 ---
-# Database VM (OpenTofu: infrastructure/persistent, key db).
+# Database VM (OpenTofu: infrastructure/persistent, key database).
 tls_dns_name: database.worms.internal
 # Django connects by IP with sslmode=verify-full.
 postgresql_tls_extra_sans:

@@ -36,11 +36,11 @@ locals {
   nw = local.platform.networks
 
   persistent = {
-    db = {
+    database = {
       user_data_file_id = local.platform.cloud_init.postgresql.file_id
       nics = [
-        { bridge = local.nw.core.name, cidr = "${local.infrastructure_ips.db}/24", gateway = local.host_ips.core },
-        { bridge = local.nw.mgmt_trusted.name, cidr = "${local.management_ips.db}/24" },
+        { bridge = local.nw.core.name, cidr = "${local.infrastructure_ips.database}/24", gateway = local.host_ips.core },
+        { bridge = local.nw.mgmt_trusted.name, cidr = "${local.management_ips.database}/24" },
       ]
       firewall_rules = [
         { group = local.sg.database, iface = "net0" },
@@ -91,4 +91,10 @@ module "infrastructure_vms" {
   hookscript_file_id = local.platform.hookscript_file_id
   tag                = "persistent"
   pool_id            = local.platform.pools["persistent"].pool_id
+}
+
+# The database VM's key was renamed from db (keeps an existing VM).
+moved {
+  from = module.infrastructure_vms["db"]
+  to   = module.infrastructure_vms["database"]
 }

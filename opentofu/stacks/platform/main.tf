@@ -136,7 +136,7 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "dashboar
     action  = "ACCEPT"
     proto   = "tcp"
     dport   = "5432"
-    dest    = local.infrastructure_ips.db
+    dest    = local.infrastructure_ips.database
     comment = "Dashboard -> database:5432"
   }
 
@@ -176,7 +176,7 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "orchestr
     action  = "ACCEPT"
     proto   = "tcp"
     dport   = "5432"
-    dest    = local.infrastructure_ips.db
+    dest    = local.infrastructure_ips.database
     comment = "Orchestrator -> database:5432"
   }
 }
@@ -207,7 +207,7 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "db_clien
     action  = "ACCEPT"
     proto   = "tcp"
     dport   = "5432"
-    dest    = local.infrastructure_ips.db
+    dest    = local.infrastructure_ips.database
     comment = "-> database:5432"
   }
 }

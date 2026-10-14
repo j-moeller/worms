@@ -88,10 +88,10 @@ cd ansible && ansible-playbook -e @group_vars/vault.yml <playbook>.yml
 ```
 make inventory                      # hosts Ansible will contact + VMs it skips
 make ping                           # one line per host: reachable or not
-make debug HOST=db                  # step by step: resolved address, TCP 22,
+make debug HOST=database                # step by step: resolved address, TCP 22,
                                     # SSH login, Python, sudo, cloud-init
-make debug HOST=db ARGS=-vvv        # ... with the full SSH command and error
-make provision ARGS="--limit db -vvv"           # run only against one VM
+make debug HOST=database ARGS=-vvv    # ... with the full SSH command and error
+make provision ARGS="--limit database -vvv"        # run only against one VM
 make provision ARGS="--limit orchestrator -e hide_secrets=false"
                                     # show output of no_log tasks (secrets!)
 ```

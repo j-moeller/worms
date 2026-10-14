@@ -102,7 +102,7 @@ locals {
   # what the database / firewall rules see as source.
   infrastructure_ips = {
     dashboard    = "10.10.0.18"
-    db           = "10.11.0.16"
+    database     = "10.11.0.16"
     orchestrator = "10.11.0.19"
     scoring      = "10.12.0.14"
     logging      = "10.12.0.15"
@@ -119,7 +119,7 @@ locals {
 
   # Management (SSH) address of every static VM. Ansible connects to these.
   management_ips = {
-    db           = "10.3.0.16"
+    database     = "10.3.0.16"
     orchestrator = "10.3.0.19"
     dashboard    = "10.5.0.18"
     scoring      = "10.5.0.14"

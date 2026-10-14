@@ -17,7 +17,7 @@ This script reads `tofu output -json` from those stacks and writes
         infrastructure_ips: {...}
         ...
       children:
-        db:          # one group per OpenTofu VM key
+        database:    # one group per OpenTofu VM key
           hosts:
             database.worms.internal:
               ansible_host: 10.3.0.16      # management IP
@@ -37,6 +37,7 @@ Standard library only, so it runs with the system Python on the control node.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import json
 import subprocess
 import sys
@@ -226,6 +227,12 @@ def summarize(inventory: dict) -> None:
         )
         print("-" * 78)
 
+    if gv.get("inventory_generated_at"):
+        print(f"Generated    : {gv['inventory_generated_at']}  (make inventory to refresh)")
+    for stack, state in (gv.get("opentofu_stacks") or {}).items():
+        print(f"Stack        : {stack:<26} {state}")
+    print("-" * 78)
+
     print(f"  {'group':<16} {'host':<30} {'management IP':<15} {'vmid':<6} stack")
     for group in sorted(groups):
         for name, host in sorted((groups[group].get("hosts") or {}).items()):
@@ -316,23 +323,26 @@ def main() -> None:
             "       Apply it first: cd opentofu/stacks/platform && make apply"
         )
 
-    stacks = {}
+    stacks, status = {}, {}
     for stack, _ in VM_STACKS:
         stack_dir = root / "opentofu" / "stacks" / stack
         outputs = tofu_output(stack_dir, args.tofu_bin)
-        if outputs and "ansible_hosts" not in outputs:
+        if not outputs:
+            status[stack] = "NOT APPLIED (no state or no outputs)"
+        elif "ansible_hosts" not in outputs:
             # Applied before the output existed: its VMs would silently vanish.
-            print(
-                f"warning: stack {stack} has state but no 'ansible_hosts' output; "
-                f"its VMs are NOT in the inventory. Run: cd opentofu/stacks/{stack} && tofu apply",
-                file=sys.stderr,
-            )
+            status[stack] = "NO ansible_hosts OUTPUT (run tofu apply in the stack)"
         stacks[stack] = (outputs.get("ansible_hosts") or {}).get("value", {})
+        status.setdefault(stack, f"applied, {len(stacks[stack])} VM(s)")
+        if not status[stack].startswith("applied"):
+            print(f"warning: stack {stack}: {status[stack]}", file=sys.stderr)
     sandbox = load_outputs(sandbox_dir, "sandbox", args.tofu_bin, args.sandbox_json)
     if args.require_sandbox and not sandbox.get("hosts"):
         sys.exit("error: --require-sandbox set but the sandbox stack has no hosts.")
 
     inventory = build_inventory(infrastructure, stacks, sandbox)
+    inventory["all"]["vars"]["opentofu_stacks"] = status
+    inventory["all"]["vars"]["inventory_generated_at"] = datetime.now().isoformat(timespec="seconds")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(HEADER + to_yaml(inventory))

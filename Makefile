@@ -12,7 +12,7 @@
 #   make debug HOST=<group|host>
 #                     Step-by-step connection diagnostics (ansible/Debug.yml).
 #   ARGS="..."        Extra ansible-playbook arguments, e.g.
-#                     make provision ARGS="--limit db -vvv"
+#                     make provision ARGS="--limit database -vvv"
 #   make internet-allow / internet-deny
 #                     Toggle internet access by hand (Ansible, Internet.yml).
 #
@@ -35,7 +35,7 @@ INTERNET_FLAG = /run/worms/internet-allowed
 # Ansible invocation. Inventory and the vault key come from ansible/ansible.cfg;
 # -e @group_vars/vault.yml loads the (auto-decrypted) secrets. Run from ansible/.
 # ARGS is passed to every playbook (debugging), e.g.
-#   make provision ARGS="--limit db -vvv"
+#   make provision ARGS="--limit database -vvv"
 ARGS ?=
 ANSIBLE_BASE = ansible-playbook -e @group_vars/vault.yml
 ANSIBLE = $(ANSIBLE_BASE) $(ARGS)
@@ -125,7 +125,7 @@ ping:
 	cd ansible && ansible 'all:!proxmox_host' -m ansible.builtin.ping -o
 
 debug:
-	@test -n "$(HOST)" || (echo 'usage: make debug HOST=<group or host>, e.g. HOST=db' && false)
+	@test -n "$(HOST)" || (echo 'usage: make debug HOST=<group or host>, e.g. HOST=database' && false)
 	cd ansible && ansible-playbook Debug.yml -e target='$(HOST)' $(ARGS)
 
 internet-allow:

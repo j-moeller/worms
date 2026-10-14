@@ -60,9 +60,21 @@ Ansible does not define IPs at all. It is generated from OpenTofu:
 make inventory        # runs scripts/generate_inventory.py
 ```
 
-This reads `tofu output -json` from the platform and sandbox stacks and writes
-`ansible/inventory.generated.yml` (ground-truth vars + the dynamic `sandbox`
-group). Always run Ansible with **both** inventories:
+This reads `tofu output -json` and writes `ansible/inventory.generated.yml`:
+
+- **hosts** come from the `ansible_hosts` output of every VM stack
+  (persistent, ephemeral, private_internet, sandbox), i.e. from the VMs in the
+  OpenTofu **state**. Each VM lands in the group named after its OpenTofu key
+  (`db`, `dashboard`, `apt_cache`, ...), with its management IP, Proxmox VMID
+  and stack as host vars. Comment out a VM and `tofu apply`: it disappears from
+  the inventory and no play contacts it (plays on an empty group are skipped).
+- **addressing** (`infrastructure_ips`, `management_ips`, `services_ips`,
+  `private_internet_ips`, `networks`, ...) comes from the platform stack.
+
+`ansible/inventory.yml` contains **groups only**: it maps the VM groups to role
+groups (`tls_hosts`, `django_hosts`, ...). Per-VM settings live in
+`ansible/group_vars/<vm group>.yml`. `make configure`/`make provision`
+regenerate the inventory first, so Ansible always follows the current state.
 
 Both inventories and the vault key are wired up in `ansible/ansible.cfg`, so a
 single playbook run is just:
@@ -71,12 +83,20 @@ single playbook run is just:
 cd ansible && ansible-playbook -e @group_vars/vault.yml <playbook>.yml
 ```
 
-`inventory.yml` keeps the semantic groups/roles (which host is a Django vs Flask
-host, its settings module, DNS entries, TLS names); every IP in it is a
-`{{ infrastructure_ips.* }}` / `{{ management_ips.* }}` / `{{ services_ips.* }}` /
-`{{ private_internet_ips.* }}` reference resolved
-from the generated file. So changing an address in OpenTofu + `make inventory`
-reconfigures Ansible with no edits to `inventory.yml`.
+# Debugging
+
+```
+make inventory                      # hosts Ansible will contact + VMs it skips
+make ping                           # one line per host: reachable or not
+make debug HOST=db                  # step by step: resolved address, TCP 22,
+                                    # SSH login, Python, sudo, cloud-init
+make debug HOST=db ARGS=-vvv        # ... with the full SSH command and error
+make provision ARGS="--limit db -vvv"           # run only against one VM
+make provision ARGS="--limit orchestrator -e hide_secrets=false"
+                                    # show output of no_log tasks (secrets!)
+```
+
+Every host carries `proxmox_vm_id` (`qm status <vmid>`) and `opentofu_stack`.
 
 # Init (what `make` does, idempotently)
 

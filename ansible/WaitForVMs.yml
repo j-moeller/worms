@@ -4,7 +4,7 @@
 # playbooks never race the first boot.
 
 - name: Wait for the infrastructure VMs
-  hosts: all:!proxmox_host:!ca:!sandbox
+  hosts: all:!proxmox_host:!sandbox:!sandbox_gw
   gather_facts: false
   tasks:
     - name: Wait for SSH

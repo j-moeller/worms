@@ -14,6 +14,11 @@
 #   -i inventory.yml -i inventory.generated.yml
 # so these references resolve.
 
+# Tasks that handle secrets hide their output (no_log). For debugging, show it:
+#   make provision ARGS="--limit orchestrator -e hide_secrets=false"
+# (the output then contains passwords: do not paste it anywhere).
+hide_secrets: true
+
 # --- PostgreSQL -------------------------------------------------------------
 postgres_db: mydb
 postgres_host: "{{ infrastructure_ips.db }}"

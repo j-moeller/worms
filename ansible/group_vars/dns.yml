@@ -1,0 +1,18 @@
+---
+# DNS VM (OpenTofu: infrastructure/ephemeral, key dns). Serves the services
+# bridge only (sandbox VMs via sandbox-gw, the private-internet VMs). Only names
+# the sandbox needs: internal infrastructure (database, dashboard,
+# orchestrator) is deliberately not resolvable from the sandbox side.
+dns_listen_address: "{{ services_ips.dns }}"
+
+# `group`: the entry is only served while that VM exists in OpenTofu.
+dns_entries:
+  - {name: scoring.worms.internal, ip: "{{ services_ips.scoring }}", group: scoring}
+  - {name: logging.worms.internal, ip: "{{ services_ips.logging }}", group: logging}
+  - {name: apt-cache.worms.internal, ip: "{{ private_internet_ips.apt_cache.network }}", group: apt_cache}
+  - {name: pypi.worms.internal, ip: "{{ private_internet_ips.devpi.network }}", group: devpi}
+  - {name: docker-registry.worms.internal, ip: "{{ private_internet_ips.docker_registry.network }}", group: docker_registry}
+  - {name: manpages.worms.internal, ip: "{{ private_internet_ips.manpages.network }}", group: manpages}
+  - {name: ntp.worms.internal, ip: "{{ private_internet_ips.ntp.network }}", group: ntp}
+  - {name: cve-search.worms.internal, ip: "{{ private_internet_ips.cve_search.network }}", group: cve_search}
+  - {name: wikipedia.worms.internal, ip: "{{ private_internet_ips.wikipedia.network }}", group: wikipedia}

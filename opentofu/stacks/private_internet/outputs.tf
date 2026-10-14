@@ -7,3 +7,16 @@ output "private_internet" {
     }
   }
 }
+
+# The VMs in this stack's state, for the Ansible inventory
+# (scripts/generate_inventory.py): Ansible contacts exactly these, so a
+# commented-out service is skipped after `tofu apply`.
+output "ansible_hosts" {
+  value = {
+    for key, vm in module.private_internet_vms : key => {
+      name          = vm.name
+      vm_id         = vm.vm_id
+      management_ip = vm.management_ip
+    }
+  }
+}

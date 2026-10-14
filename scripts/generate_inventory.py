@@ -1,34 +1,35 @@
 #!/usr/bin/env python3
 """Generate the Ansible inventory from OpenTofu outputs (the ground truth).
 
-OpenTofu owns all addressing:
-  * static infrastructure IPs / subnets / Proxmox host come from the
-    `infrastructure` output of the platform stack (which derives them from the
-    single source of truth in opentofu/shared/shared-variables.tf);
-  * dynamic sandbox VM addresses come from the `sandbox` output of the sandbox
-    stack (opentofu/stacks/sandbox/generated_vms*.tf).
+OpenTofu owns all addressing AND decides which VMs exist:
+  * addressing (subnets, data-plane IPs, Proxmox host) comes from the
+    `infrastructure` output of the platform stack (derived from the single
+    source of truth in opentofu/shared/shared-variables.tf);
+  * hosts come from the `ansible_hosts` output of every VM stack, i.e. from the
+    VMs in that stack's STATE. A VM that is commented out (and applied away) or
+    a stack that is not applied simply has no host, so Ansible never contacts it.
 
 This script reads `tofu output -json` from those stacks and writes
 `ansible/inventory.generated.yml`:
 
     all:
-      vars:        # ground-truth addressing, referenced by inventory.yml
+      vars:          # addressing, referenced by inventory.yml / group_vars
         infrastructure_ips: {...}
-        private_internet_ips: {...}
-        networks: {...}
-        proxmox: {...}
+        ...
       children:
-        sandbox:   # dynamic hosts, enumerated from OpenTofu
+        db:          # one group per OpenTofu VM key
           hosts:
-            sandbox-vm01: {ansible_host: 10.3.0.111, ...}
+            db.worms.internal:
+              ansible_host: 10.3.0.16      # management IP
+              ansible_user: debian
+              proxmox_vm_id: 101           # `qm status 101`, `qm terminal`, ...
+              opentofu_stack: infrastructure/persistent
+        sandbox:     # all generated sandbox VMs
+          hosts: {...}
 
-Ansible is then run with both inventories, e.g.
-
-    ansible-playbook -i inventory.yml -i inventory.generated.yml <playbook>
-
-so the static, human-maintained groups/roles in inventory.yml keep working while
-every IP is sourced from OpenTofu. Re-run this whenever the platform or sandbox
-stack changes (`make inventory`).
+inventory.yml only declares groups (no hosts): the role groups (tls_hosts,
+django_hosts, ...) have these VM groups as children, and per-VM settings live
+in group_vars/<vm group>.yml. Re-run after every `tofu apply` (`make inventory`).
 
 Standard library only, so it runs with the system Python on the control node.
 """
@@ -76,8 +77,24 @@ def load_outputs(stack_dir: Path, name: str, tofu_bin: str, override: Path | Non
     return entry.get("value", {}) if entry else {}
 
 
-def build_inventory(infrastructure: dict, sandbox: dict) -> dict:
-    """Assemble the generated-inventory structure from the stack outputs."""
+# VM stacks whose `ansible_hosts` output becomes inventory hosts, with the
+# group each VM key lands in (default: the key itself).
+VM_STACKS = [
+    ("infrastructure/persistent", None),
+    ("infrastructure/ephemeral", None),
+    ("private_internet", None),
+    ("sandbox", lambda key: key if key == "sandbox_gw" else "sandbox"),
+]
+
+DOMAIN = "worms.internal"
+ANSIBLE_USER = "debian"
+
+
+def build_inventory(infrastructure: dict, stacks: dict, sandbox: dict) -> dict:
+    """Assemble the generated-inventory structure from the stack outputs.
+
+    `stacks` maps a VM stack name to its `ansible_hosts` output ({} if the
+    stack is not applied)."""
     proxmox = dict(infrastructure.get("proxmox", {}))
     # Proxmox API port is numeric in HCL but arrives as int; keep it an int.
     if "api_port" in proxmox:
@@ -95,22 +112,26 @@ def build_inventory(infrastructure: dict, sandbox: dict) -> dict:
         "proxmox": proxmox,
     }
 
-    sandbox_hosts = {}
-    for name, host in sorted(sandbox.get("hosts", {}).items()):
-        sandbox_hosts[name] = {
-            "ansible_host": host["maintenance_ip"],
-            "ansible_user": "debian",
-            "sandbox_addresses": host.get("addresses", []),
-        }
-
-    return {
-        "all": {
-            "vars": group_vars,
-            "children": {
-                "sandbox": {"hosts": sandbox_hosts},
-            },
-        }
+    sandbox_addresses = {
+        name: host.get("addresses", []) for name, host in sandbox.get("hosts", {}).items()
     }
+
+    children: dict = {}
+    for stack, group_of in VM_STACKS:
+        for key, vm in sorted(stacks.get(stack, {}).items()):
+            group = group_of(key) if group_of else key
+            hostname = vm["name"] if group == "sandbox" else f"{vm['name']}.{DOMAIN}"
+            host = {
+                "ansible_host": vm["management_ip"],
+                "ansible_user": ANSIBLE_USER,
+                "proxmox_vm_id": int(vm["vm_id"]),
+                "opentofu_stack": stack,
+            }
+            if key in sandbox_addresses:
+                host["sandbox_addresses"] = sandbox_addresses[key]
+            children.setdefault(group, {"hosts": {}})["hosts"][hostname] = host
+
+    return {"all": {"vars": group_vars, "children": children}}
 
 
 # --- minimal, deterministic YAML emitter (stdlib only) ----------------------
@@ -181,53 +202,38 @@ HEADER = (
 
 
 def summarize(inventory: dict) -> None:
-    """Print a human-readable table of the configuration being set up
-    (VM names + IP addresses), sourced from the OpenTofu ground truth."""
+    """Print the hosts Ansible will contact (sourced from the OpenTofu state)
+    and the configured VMs that do not exist there (Ansible skips them)."""
     allv = inventory.get("all", {})
     gv = allv.get("vars", {})
-    infra = gv.get("infrastructure_ips", {}) or {}
-    mgmt = gv.get("management_ips", {}) or {}
-    pi = gv.get("private_internet_ips", {}) or {}
     proxmox = gv.get("proxmox", {}) or {}
-    sandbox = (
-        allv.get("children", {}).get("sandbox", {}).get("hosts", {}) or {}
-    )
+    groups = allv.get("children", {}) or {}
 
-    line = "=" * 64
+    line = "=" * 78
     print(line)
-    print("Configuration (ground truth from OpenTofu)")
+    print("Hosts Ansible will contact (from the OpenTofu state)")
     print(line)
-
     if proxmox:
         print(
             f"Proxmox host : {proxmox.get('host', '?')}:"
             f"{proxmox.get('api_port', '?')}  (node {proxmox.get('node', '?')})"
         )
-        print("-" * 64)
+        print("-" * 78)
 
-    print("Infrastructure VMs           data IP           management IP")
-    for name in sorted(set(infra) | set(mgmt)):
-        print(f"  {name:<26} {infra.get(name, '-'):<17} {mgmt.get(name, '-')}")
-
-    if pi:
-        print("-" * 64)
-        print("Private-internet services    private IP        maintenance IP")
-        for name in sorted(pi):
-            svc = pi[name]
+    print(f"  {'group':<16} {'host':<30} {'management IP':<15} {'vmid':<6} stack")
+    for group in sorted(groups):
+        for name, host in sorted((groups[group].get("hosts") or {}).items()):
             print(
-                f"  {name:<26} {svc.get('network', '?'):<16} "
-                f"{svc.get('maintenance', '?')}"
+                f"  {group:<16} {name:<30} {host.get('ansible_host', '?'):<15} "
+                f"{host.get('proxmox_vm_id', '?')!s:<6} {host.get('opentofu_stack', '?')}"
             )
 
-    print("-" * 64)
-    if sandbox:
-        print(f"Sandbox VMs ({len(sandbox)})            maintenance IP    addresses")
-        for name in sorted(sandbox):
-            host = sandbox[name]
-            addrs = ", ".join(host.get("sandbox_addresses", []))
-            print(f"  {name:<26} {host.get('ansible_host', '?'):<16} {addrs}")
-    else:
-        print("Sandbox VMs                  (none deployed)")
+    # Addressed in OpenTofu but no VM in any state: not deployed / commented out.
+    expected = set(gv.get("management_ips", {}) or {}) | set(gv.get("private_internet_ips", {}) or {})
+    missing = sorted(expected - set(groups))
+    if missing:
+        print("-" * 78)
+        print("Not in the OpenTofu state (Ansible skips them): " + ", ".join(missing))
     print(line)
 
 
@@ -282,23 +288,29 @@ def main() -> None:
             "       Apply it first: cd opentofu/stacks/platform && make apply"
         )
 
+    stacks = {}
+    for stack, _ in VM_STACKS:
+        stack_dir = root / "opentofu" / "stacks" / stack
+        outputs = tofu_output(stack_dir, args.tofu_bin)
+        if outputs and "ansible_hosts" not in outputs:
+            # Applied before the output existed: its VMs would silently vanish.
+            print(
+                f"warning: stack {stack} has state but no 'ansible_hosts' output; "
+                f"its VMs are NOT in the inventory. Run: cd opentofu/stacks/{stack} && tofu apply",
+                file=sys.stderr,
+            )
+        stacks[stack] = (outputs.get("ansible_hosts") or {}).get("value", {})
     sandbox = load_outputs(sandbox_dir, "sandbox", args.tofu_bin, args.sandbox_json)
     if args.require_sandbox and not sandbox.get("hosts"):
         sys.exit("error: --require-sandbox set but the sandbox stack has no hosts.")
 
-    inventory = build_inventory(infrastructure, sandbox)
+    inventory = build_inventory(infrastructure, stacks, sandbox)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(HEADER + to_yaml(inventory))
 
-    n_infra = len(infrastructure.get("infrastructure_ips", {}))
-    n_pi = len(infrastructure.get("private_internet_ips", {}))
-    n_sandbox = len(sandbox.get("hosts", {}))
-    print(
-        f"wrote {output_path} "
-        f"({n_infra} infrastructure IPs, {n_pi} private-internet services, "
-        f"{n_sandbox} sandbox VMs)"
-    )
+    n_hosts = sum(len(g.get("hosts", {})) for g in inventory["all"]["children"].values())
+    print(f"wrote {output_path} ({n_hosts} hosts from the OpenTofu state)")
 
     if not args.quiet:
         summarize(inventory)

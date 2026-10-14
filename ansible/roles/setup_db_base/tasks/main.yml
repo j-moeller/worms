@@ -101,7 +101,7 @@
     conn_limit: "{{ item.conn_limit | default(omit) }}"
     encrypted: true
   loop: "{{ postgresql_users }}"
-  no_log: true
+  no_log: "{{ hide_secrets }}"
 
 # Migrator (django_migrator)
 - name: Create PostgreSQL migrator user

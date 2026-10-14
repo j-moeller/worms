@@ -1,0 +1,17 @@
+---
+# Dashboard VM (OpenTofu: infrastructure/persistent, key dashboard).
+tls_dns_name: dashboard.worms.internal
+
+django_variant: dashboard
+django_settings_module: config.settings.dashboard
+django_db_user: django_dashboard
+django_db_password: "{{ vault_django_dashboard_password }}"
+django_secret_key: "{{ vault_dashboard_secret_key }}"
+django_allowed_hosts: "dashboard.worms.internal,{{ infrastructure_ips.dashboard }}"
+# Public facing: no migrator credentials, migrations run on the orchestrator.
+django_run_migrations: false
+django_extra_env:
+  # No DNS on the infrastructure side: connect by IP, verify the name.
+  ORCHESTRATOR_URL: "https://{{ infrastructure_ips.orchestrator }}"
+  ORCHESTRATOR_TLS_NAME: orchestrator.worms.internal
+  ORCHESTRATOR_API_TOKEN: "{{ vault_orchestrator_dashboard_token }}"

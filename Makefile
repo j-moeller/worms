@@ -6,7 +6,13 @@
 #                       -> infrastructure -> configure -> [internet denied]
 #                       -> offline
 #   make provision    Ansible only (configure + offline), same internet window.
-#   make show-config  Print the VM names + IP addresses that are configured.
+#   make show-config  Print the hosts Ansible will contact (from the OpenTofu
+#                     state) and the VMs it skips.
+#   make ping         One line per host: can Ansible reach it?
+#   make debug HOST=<group|host>
+#                     Step-by-step connection diagnostics (ansible/Debug.yml).
+#   ARGS="..."        Extra ansible-playbook arguments, e.g.
+#                     make provision ARGS="--limit db -vvv"
 #   make internet-allow / internet-deny
 #                     Toggle internet access by hand (Ansible, Internet.yml).
 #
@@ -28,7 +34,11 @@ INTERNET_FLAG = /run/worms/internet-allowed
 
 # Ansible invocation. Inventory and the vault key come from ansible/ansible.cfg;
 # -e @group_vars/vault.yml loads the (auto-decrypted) secrets. Run from ansible/.
-ANSIBLE = ansible-playbook -e @group_vars/vault.yml
+# ARGS is passed to every playbook (debugging), e.g.
+#   make provision ARGS="--limit db -vvv"
+ARGS ?=
+ANSIBLE_BASE = ansible-playbook -e @group_vars/vault.yml
+ANSIBLE = $(ANSIBLE_BASE) $(ARGS)
 
 # $(call online,<targets>): run the make targets with internet access allowed,
 # then deny it again, whatever happens (success, failure, Ctrl-C). A failed
@@ -42,7 +52,7 @@ define online
 endef
 
 .PHONY: all init secrets platform infrastructure inventory show-config \
-        provision configure offline internet-allow internet-deny \
+        provision configure offline internet-allow internet-deny ping debug \
         destroy destroy_all terminate
 
 all: init secrets platform
@@ -79,19 +89,20 @@ infrastructure:
 	cd opentofu/stacks/private_internet && $(MAKE) apply
 	cd opentofu/stacks/infrastructure/persistent && $(MAKE) apply
 	cd opentofu/stacks/infrastructure/ephemeral && $(MAKE) apply
-	$(MAKE) --no-print-directory inventory
 
-# Regenerate the Ansible inventory from OpenTofu outputs (prints the config).
+# Regenerate the Ansible inventory from the OpenTofu state: hosts = the VMs
+# the stacks actually contain (prints them, and the VMs Ansible skips).
 inventory:
 	python3 scripts/generate_inventory.py
 
-# Print the configured VM names + IPs from the already-generated inventory.
+# Print the hosts of the already-generated inventory (no tofu call).
 show-config:
 	python3 scripts/generate_inventory.py --show
 
 # Ansible configuration of all VMs (internet access allowed: package installs,
 # caches in online mode populate themselves).
 configure:
+	$(MAKE) --no-print-directory inventory
 	cd ansible && $(ANSIBLE) WaitForVMs.yml
 	cd ansible && $(ANSIBLE) SetupDNS.yml
 	cd ansible && $(ANSIBLE) CreateCA.yml
@@ -109,11 +120,19 @@ offline:
 	cd ansible && $(ANSIBLE) SetupDNS.yml
 	cd ansible && $(ANSIBLE) SetupPrivateInternet.yml
 
+# ---- Debugging ----------------------------------------------------------------
+ping:
+	cd ansible && ansible 'all:!proxmox_host' -m ansible.builtin.ping -o
+
+debug:
+	@test -n "$(HOST)" || (echo 'usage: make debug HOST=<group or host>, e.g. HOST=db' && false)
+	cd ansible && ansible-playbook Debug.yml -e target='$(HOST)' $(ARGS)
+
 internet-allow:
-	cd ansible && $(ANSIBLE) Internet.yml -e internet=allowed
+	cd ansible && $(ANSIBLE_BASE) Internet.yml -e internet=allowed
 
 internet-deny:
-	cd ansible && $(ANSIBLE) Internet.yml -e internet=denied
+	cd ansible && $(ANSIBLE_BASE) Internet.yml -e internet=denied
 
 # ---- Teardown ---------------------------------------------------------------
 destroy_all:

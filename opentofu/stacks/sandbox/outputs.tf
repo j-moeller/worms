@@ -18,3 +18,24 @@ output "sandbox" {
     }
   }
 }
+
+# The VMs in this stack's state, for the Ansible inventory
+# (scripts/generate_inventory.py): group `sandbox_gw` and group `sandbox`.
+output "ansible_hosts" {
+  value = merge(
+    {
+      sandbox_gw = {
+        name          = proxmox_virtual_environment_vm.gw.name
+        vm_id         = proxmox_virtual_environment_vm.gw.vm_id
+        management_ip = local.management_ips.sandbox_gw
+      }
+    },
+    {
+      for key, vm in proxmox_virtual_environment_vm.vm : key => {
+        name          = vm.name
+        vm_id         = vm.vm_id
+        management_ip = split("/", local.sandbox_vms[key].maintenance_network_cidr)[0]
+      }
+    },
+  )
+}

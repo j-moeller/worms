@@ -5,7 +5,7 @@ variable "user_data_file_id" {}
 variable "disk_file_id" {}
 
 variable "nics" {
-  description = "NICs in order (net0, net1, ...). At most one should carry a gateway."
+  description = "NICs in order (net0, net1, ...). At most one should carry a gateway. The LAST NIC is the management NIC (SSH, Ansible)."
   type = list(object({
     bridge  = string
     cidr    = string

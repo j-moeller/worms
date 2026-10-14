@@ -1,26 +1,18 @@
-# Static, semantic inventory: groups, roles and per-host application config.
+# Static, semantic inventory: GROUPS ONLY, no VM hosts.
 #
-# Every IP address here is sourced from OpenTofu (the ground truth) via the
-# variables in inventory.generated.yml (written by scripts/generate_inventory.py
-# from `tofu output`). This file never hardcodes an address, so changing an IP
-# in opentofu/shared/shared-variables.tf and re-running `make inventory` is all
-# that is needed — this file is untouched.
+# Which VMs exist is decided by OpenTofu: inventory.generated.yml (written by
+# scripts/generate_inventory.py from the `ansible_hosts` output of every VM
+# stack, `make inventory`) puts each VM into the group named after its OpenTofu
+# key (db, dashboard, apt_cache, ...), with its management IP as ansible_host.
+# A VM that is not in the OpenTofu state has no host, so no play contacts it
+# (plays on an empty group are skipped).
 #
-# ALWAYS run with both inventories so the {{ infrastructure_ips.* }} /
-# {{ management_ips.* }} / {{ services_ips.* }} / {{ private_internet_ips.* }}
-# references resolve. Ansible always connects to the management address
-# (management_ips / private_internet_ips.*.maintenance):
-#     ansible-playbook -i inventory.yml -i inventory.generated.yml <playbook>
-#
-# Dynamic sandbox hosts are not listed here; they come from the generated
-# inventory's `sandbox` group.
+# This file maps those VM groups to role groups; per-VM settings live in
+# group_vars/<vm group>.yml; addressing comes from inventory.generated.yml
+# (infrastructure_ips, management_ips, services_ips, private_internet_ips, ...).
+# Both inventories are configured in ansible.cfg.
 all:
   children:
-
-    ca:
-      hosts:
-        pki_ca_host:
-          ansible_host: 127.0.0.1
 
     # The Proxmox node itself (also the Ansible controller). See
     # SetupHostNetwork.yml; set host_publish_dashboard: true here to expose the
@@ -31,159 +23,58 @@ all:
           ansible_host: 127.0.0.1
           ansible_connection: local
 
+    # ---- VM groups (filled by inventory.generated.yml) ----------------------
+    db:
+    dashboard:
+    orchestrator:
+    scoring:
+    logging:
+    dns:
+    apt_cache:
+    devpi:
+    docker_registry:
+    manpages:
+    ntp:
+    cve_search:
+    wikipedia:
+    sandbox_gw:
+    sandbox:
+
+    # ---- Role groups --------------------------------------------------------
+    database:
+      children:
+        db:
+
     dns_hosts:
-      hosts:
-        dns.worms.internal:
-          ansible_host: "{{ management_ips.dns }}"
-          ansible_user: debian
-          # Serves the services bridge only (sandbox VMs via sandbox-gw, the
-          # private-internet VMs). Only names the sandbox needs: internal
-          # infrastructure (database, dashboard, orchestrator) is deliberately
-          # not resolvable from the sandbox side.
-          dns_listen_address: "{{ services_ips.dns }}"
-          dns_entries:
-            - name: scoring.worms.internal
-              ip: "{{ services_ips.scoring }}"
-            - name: logging.worms.internal
-              ip: "{{ services_ips.logging }}"
-            - name: apt-cache.worms.internal
-              ip: "{{ private_internet_ips.apt_cache.network }}"
-            - name: pypi.worms.internal
-              ip: "{{ private_internet_ips.devpi.network }}"
-            - name: docker-registry.worms.internal
-              ip: "{{ private_internet_ips.docker_registry.network }}"
-            - name: manpages.worms.internal
-              ip: "{{ private_internet_ips.manpages.network }}"
-            - name: ntp.worms.internal
-              ip: "{{ private_internet_ips.ntp.network }}"
-            - name: cve-search.worms.internal
-              ip: "{{ private_internet_ips.cve_search.network }}"
-            - name: wikipedia.worms.internal
-              ip: "{{ private_internet_ips.wikipedia.network }}"
+      children:
+        dns:
 
     tls_hosts:
-      hosts:
-        scoring.worms.internal:
-          ansible_host: "{{ management_ips.scoring }}"
-          ansible_user: debian
-          tls_dns_name: scoring.worms.internal
-
-        logging.worms.internal:
-          ansible_host: "{{ management_ips.logging }}"
-          ansible_user: debian
-          tls_dns_name: logging.worms.internal
-
-        database.worms.internal:
-          ansible_host: "{{ management_ips.db }}"
-          ansible_user: debian
-          tls_dns_name: database.worms.internal
-          # Django connects by IP with sslmode=verify-full.
-          postgresql_tls_extra_sans:
-            - "IP:{{ infrastructure_ips.db }}"
-
-        dashboard.worms.internal:
-          ansible_host: "{{ management_ips.dashboard }}"
-          ansible_user: debian
-          tls_dns_name: dashboard.worms.internal
-
-        orchestrator.worms.internal:
-          ansible_host: "{{ management_ips.orchestrator }}"
-          ansible_user: debian
-          tls_dns_name: orchestrator.worms.internal
+      children:
+        scoring:
+        logging:
+        db:
+        dashboard:
+        orchestrator:
 
     nginx_hosts:
-      hosts:
-        scoring.worms.internal:
-        logging.worms.internal:
-        dashboard.worms.internal:
-        orchestrator.worms.internal:
+      children:
+        scoring:
+        logging:
+        dashboard:
+        orchestrator:
 
-    # Sandbox-facing REST APIs (role sandbox_api). Each uses an INSERT-only
-    # database role (+ SELECT on the access token hashes for validation).
+    # Sandbox-facing REST APIs (role sandbox_api).
     sandbox_api_hosts:
-      hosts:
-        scoring.worms.internal:
-          sandbox_api_kind: scoring
-          sandbox_api_db_user: dbuser_scoring
-          sandbox_api_db_password: "{{ vault_dbuser_scoring_password }}"
-          sandbox_api_max_body_bytes: 2048
-        logging.worms.internal:
-          sandbox_api_kind: logging
-          sandbox_api_db_user: dbuser_logging
-          sandbox_api_db_password: "{{ vault_dbuser_logging_password }}"
-          sandbox_api_max_body_bytes: 16384
+      children:
+        scoring:
+        logging:
 
-    # Django application hosts. Per-host vars select the settings module, the
-    # least-privilege DB user and (for the orchestrator) the Proxmox credentials.
-    # IPs come from the ground truth; secrets are vault references.
+    # Django application hosts (role django_app).
     django_hosts:
-      hosts:
-        dashboard.worms.internal:
-          django_variant: dashboard
-          django_settings_module: config.settings.dashboard
-          django_db_user: django_dashboard
-          django_db_password: "{{ vault_django_dashboard_password }}"
-          django_secret_key: "{{ vault_dashboard_secret_key }}"
-          django_allowed_hosts: "dashboard.worms.internal,{{ infrastructure_ips.dashboard }}"
-          # Public facing: no migrator credentials, migrations run on the orchestrator.
-          django_run_migrations: false
-          django_extra_env:
-            # No DNS on the infrastructure side: connect by IP, verify the name.
-            ORCHESTRATOR_URL: "https://{{ infrastructure_ips.orchestrator }}"
-            ORCHESTRATOR_TLS_NAME: orchestrator.worms.internal
-            ORCHESTRATOR_API_TOKEN: "{{ vault_orchestrator_dashboard_token }}"
-
-        orchestrator.worms.internal:
-          django_variant: orchestrator
-          django_settings_module: config.settings.orchestrator
-          django_db_user: django_orchestrator
-          django_db_password: "{{ vault_django_orchestrator_password }}"
-          django_secret_key: "{{ vault_orchestrator_secret_key }}"
-          django_allowed_hosts: "orchestrator.worms.internal,{{ infrastructure_ips.orchestrator }}"
-          django_run_migrations: true
-          django_extra_pip_packages:
-            - proxmoxer
-            - requests
-          # Proxmox credentials delivered securely into the env file (0600 root).
-          django_extra_env:
-            PROXMOX_HOST: "{{ proxmox.host }}"
-            PROXMOX_PORT: "{{ proxmox.api_port }}"
-            PROXMOX_NODE: "{{ proxmox.node }}"
-            PROXMOX_USER: "{{ proxmox_api_user }}"
-            PROXMOX_TOKEN_NAME: "{{ proxmox_api_token_name }}"
-            PROXMOX_TOKEN_VALUE: "{{ proxmox_api_token_value }}"
-            # Read-only token for the topology collector (PVEAuditor).
-            PROXMOX_READONLY_USER: "{{ proxmox_readonly_api_user }}"
-            PROXMOX_READONLY_TOKEN_NAME: "{{ proxmox_readonly_api_token_name }}"
-            PROXMOX_READONLY_TOKEN_VALUE: "{{ proxmox_readonly_api_token_value }}"
-            # REST API callers (orchestrator/api.py).
-            ORCHESTRATOR_DASHBOARD_TOKEN: "{{ vault_orchestrator_dashboard_token }}"
-          # Periodic management commands (systemd timers, same env file).
-          django_timers:
-            - name: collect-topology
-              command: collect_topology
-              description: Collect Proxmox topology for the dashboard (read-only)
-              on_calendar: "*:0/2"
-
-    orchestrator:
-      hosts:
-        orchestrator.worms.internal:
-
-    scoring:
-      hosts:
-        scoring.worms.internal:
-
-    logging:
-      hosts:
-        logging.worms.internal:
-
-    database:
-      hosts:
-        database.worms.internal:
-
-    dashboard:
-      hosts:
-        dashboard.worms.internal:
+      children:
+        dashboard:
+        orchestrator:
 
     private_internet:
       children:
@@ -196,44 +87,23 @@ all:
         wikipedia_hosts:
 
     apt_cache_hosts:
-      hosts:
-        apt-cache.worms.internal:
-          ansible_host: "{{ private_internet_ips.apt_cache.maintenance }}"
-          ansible_user: debian
-
+      children:
+        apt_cache:
     devpi_hosts:
-      hosts:
-        pypi.worms.internal:
-          ansible_host: "{{ private_internet_ips.devpi.maintenance }}"
-          ansible_user: debian
-
+      children:
+        devpi:
     docker_registry_hosts:
-      hosts:
-        docker-registry.worms.internal:
-          ansible_host: "{{ private_internet_ips.docker_registry.maintenance }}"
-          ansible_user: debian
-
+      children:
+        docker_registry:
     manpages_hosts:
-      hosts:
-        manpages.worms.internal:
-          ansible_host: "{{ private_internet_ips.manpages.maintenance }}"
-          ansible_user: debian
-
+      children:
+        manpages:
     ntp_hosts:
-      hosts:
-        ntp.worms.internal:
-          ansible_host: "{{ private_internet_ips.ntp.maintenance }}"
-          ansible_user: debian
-          ntp_allow_network: "{{ networks.services }}"
-
+      children:
+        ntp:
     cve_search_hosts:
-      hosts:
-        cve-search.worms.internal:
-          ansible_host: "{{ private_internet_ips.cve_search.maintenance }}"
-          ansible_user: debian
-
+      children:
+        cve_search:
     wikipedia_hosts:
-      hosts:
-        wikipedia.worms.internal:
-          ansible_host: "{{ private_internet_ips.wikipedia.maintenance }}"
-          ansible_user: debian
+      children:
+        wikipedia:

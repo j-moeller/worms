@@ -1,0 +1,34 @@
+---
+# Orchestrator VM (OpenTofu: infrastructure/persistent, key orchestrator).
+tls_dns_name: orchestrator.worms.internal
+
+django_variant: orchestrator
+django_settings_module: config.settings.orchestrator
+django_db_user: django_orchestrator
+django_db_password: "{{ vault_django_orchestrator_password }}"
+django_secret_key: "{{ vault_orchestrator_secret_key }}"
+django_allowed_hosts: "orchestrator.worms.internal,{{ infrastructure_ips.orchestrator }}"
+django_run_migrations: true
+django_extra_pip_packages:
+  - proxmoxer
+  - requests
+# Proxmox credentials delivered securely into the env file (0600 root).
+django_extra_env:
+  PROXMOX_HOST: "{{ proxmox.host }}"
+  PROXMOX_PORT: "{{ proxmox.api_port }}"
+  PROXMOX_NODE: "{{ proxmox.node }}"
+  PROXMOX_USER: "{{ proxmox_api_user }}"
+  PROXMOX_TOKEN_NAME: "{{ proxmox_api_token_name }}"
+  PROXMOX_TOKEN_VALUE: "{{ proxmox_api_token_value }}"
+  # Read-only token for the topology collector (PVEAuditor).
+  PROXMOX_READONLY_USER: "{{ proxmox_readonly_api_user }}"
+  PROXMOX_READONLY_TOKEN_NAME: "{{ proxmox_readonly_api_token_name }}"
+  PROXMOX_READONLY_TOKEN_VALUE: "{{ proxmox_readonly_api_token_value }}"
+  # REST API callers (orchestrator/api.py).
+  ORCHESTRATOR_DASHBOARD_TOKEN: "{{ vault_orchestrator_dashboard_token }}"
+# Periodic management commands (systemd timers, same env file).
+django_timers:
+  - name: collect-topology
+    command: collect_topology
+    description: Collect Proxmox topology for the dashboard (read-only)
+    on_calendar: "*:0/2"

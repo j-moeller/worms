@@ -9,8 +9,8 @@ no-hosts
 # Don't inherit upstream resolvers from resolv.conf.
 no-resolv
 
-# Local DNS entries.
-{% for entry in dns_entries %}
+# Local DNS entries (only for VMs that exist in OpenTofu, see group_vars/dns.yml).
+{% for entry in dns_entries if entry.group is not defined or groups[entry.group] | default([]) | length > 0 %}
 address=/{{ entry.name }}/{{ entry.ip }}
 {% endfor %}
 

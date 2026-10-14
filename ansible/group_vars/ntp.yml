@@ -1,0 +1,3 @@
+---
+# NTP VM (OpenTofu: private_internet, key ntp).
+ntp_allow_network: "{{ networks.services }}"

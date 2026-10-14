@@ -40,7 +40,7 @@
     ownca_version: 3
   delegate_to: "{{ pki_ca_host }}"
   register: tls_certificate
-  no_log: true
+  no_log: "{{ hide_secrets }}"
 
 - name: Install signed server certificate
   ansible.builtin.copy:

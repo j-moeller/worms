@@ -103,7 +103,7 @@
     owner: root
     group: root
     mode: "0600"
-  no_log: true
+  no_log: "{{ hide_secrets }}"
   notify:
     - Restart Django
 
@@ -115,7 +115,7 @@
     cmd: "{{ django_venv_dir }}/bin/python manage.py migrate --noinput --database=migrator"
     chdir: "{{ django_source_dir }}"
   become_user: "{{ django_app_user }}"
-  no_log: true
+  no_log: "{{ hide_secrets }}"
   environment:
     PRODUCTION: "1"
     DJANGO_SETTINGS_MODULE: "{{ django_settings_module }}"

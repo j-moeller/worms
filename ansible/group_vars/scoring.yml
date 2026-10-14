@@ -1,0 +1,10 @@
+---
+# Scoring VM (OpenTofu: infrastructure/ephemeral, key scoring).
+tls_dns_name: scoring.worms.internal
+
+# Sandbox-facing REST API: INSERT-only database role (+ SELECT on the access
+# token hashes for validation).
+sandbox_api_kind: scoring
+sandbox_api_db_user: dbuser_scoring
+sandbox_api_db_password: "{{ vault_dbuser_scoring_password }}"
+sandbox_api_max_body_bytes: 2048

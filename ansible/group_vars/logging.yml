@@ -1,0 +1,10 @@
+---
+# Logging VM (OpenTofu: infrastructure/ephemeral, key logging).
+tls_dns_name: logging.worms.internal
+
+# Sandbox-facing REST API: INSERT-only database role (+ SELECT on the access
+# token hashes for validation).
+sandbox_api_kind: logging
+sandbox_api_db_user: dbuser_logging
+sandbox_api_db_password: "{{ vault_dbuser_logging_password }}"
+sandbox_api_max_body_bytes: 16384

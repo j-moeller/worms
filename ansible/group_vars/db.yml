@@ -3,4 +3,4 @@
 tls_dns_name: database.worms.internal
 # Django connects by IP with sslmode=verify-full.
 postgresql_tls_extra_sans:
-  - "IP:{{ infrastructure_ips.db }}"
+  - "IP:{{ infrastructure_ips.database }}"

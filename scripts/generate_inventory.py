@@ -19,7 +19,7 @@ This script reads `tofu output -json` from those stacks and writes
       children:
         db:          # one group per OpenTofu VM key
           hosts:
-            db.worms.internal:
+            database.worms.internal:
               ansible_host: 10.3.0.16      # management IP
               ansible_user: debian
               proxmox_vm_id: 101           # `qm status 101`, `qm terminal`, ...
@@ -63,7 +63,9 @@ def tofu_output(stack_dir: Path, tofu_bin: str) -> dict:
     return json.loads(proc.stdout or "{}")
 
 
-def load_outputs(stack_dir: Path, name: str, tofu_bin: str, override: Path | None) -> dict:
+def load_outputs(
+    stack_dir: Path, name: str, tofu_bin: str, override: Path | None
+) -> dict:
     """Return the `.value` of output `name` for a stack.
 
     `override` lets callers feed a pre-dumped `tofu output -json` file (testing /
@@ -113,7 +115,8 @@ def build_inventory(infrastructure: dict, stacks: dict, sandbox: dict) -> dict:
     }
 
     sandbox_addresses = {
-        name: host.get("addresses", []) for name, host in sandbox.get("hosts", {}).items()
+        name: host.get("addresses", [])
+        for name, host in sandbox.get("hosts", {}).items()
     }
 
     children: dict = {}
@@ -136,11 +139,14 @@ def build_inventory(infrastructure: dict, stacks: dict, sandbox: dict) -> dict:
 
 # --- minimal, deterministic YAML emitter (stdlib only) ----------------------
 
+
 def _needs_quote(value: str) -> bool:
     if value == "":
         return True
-    specials = set(':{}[],&*#?|-<>=!%@`"\'')
-    return value[0] in specials or any(c in value for c in ":#") or value.strip() != value
+    specials = set(":{}[],&*#?|-<>=!%@`\"'")
+    return (
+        value[0] in specials or any(c in value for c in ":#") or value.strip() != value
+    )
 
 
 def _emit_scalar(value) -> str:
@@ -229,7 +235,9 @@ def summarize(inventory: dict) -> None:
             )
 
     # Addressed in OpenTofu but no VM in any state: not deployed / commented out.
-    expected = set(gv.get("management_ips", {}) or {}) | set(gv.get("private_internet_ips", {}) or {})
+    expected = set(gv.get("management_ips", {}) or {}) | set(
+        gv.get("private_internet_ips", {}) or {}
+    )
     missing = sorted(expected - set(groups))
     if missing:
         print("-" * 78)
@@ -244,24 +252,42 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=repo_root)
     parser.add_argument("--tofu-bin", default="tofu")
-    parser.add_argument("--quiet", action="store_true",
-                        help="Do not print the configuration summary.")
-    parser.add_argument("--show", nargs="?", const="", default=None, metavar="FILE",
-                        help="Print the config summary from an existing generated "
-                             "inventory (default: the output path) and exit; does not "
-                             "run tofu or rewrite anything.")
+    parser.add_argument(
+        "--quiet", action="store_true", help="Do not print the configuration summary."
+    )
+    parser.add_argument(
+        "--show",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="FILE",
+        help="Print the config summary from an existing generated "
+        "inventory (default: the output path) and exit; does not "
+        "run tofu or rewrite anything.",
+    )
     parser.add_argument(
         "--output",
         type=Path,
         default=None,
         help="Inventory file to write (default: <repo>/ansible/inventory.generated.yml).",
     )
-    parser.add_argument("--platform-json", type=Path, default=None,
-                        help="Pre-dumped `tofu output -json` for the platform stack (testing).")
-    parser.add_argument("--sandbox-json", type=Path, default=None,
-                        help="Pre-dumped `tofu output -json` for the sandbox stack (testing).")
-    parser.add_argument("--require-sandbox", action="store_true",
-                        help="Fail if the sandbox stack has no state (default: allow empty).")
+    parser.add_argument(
+        "--platform-json",
+        type=Path,
+        default=None,
+        help="Pre-dumped `tofu output -json` for the platform stack (testing).",
+    )
+    parser.add_argument(
+        "--sandbox-json",
+        type=Path,
+        default=None,
+        help="Pre-dumped `tofu output -json` for the sandbox stack (testing).",
+    )
+    parser.add_argument(
+        "--require-sandbox",
+        action="store_true",
+        help="Fail if the sandbox stack has no state (default: allow empty).",
+    )
     args = parser.parse_args()
 
     root = args.repo_root.resolve()
@@ -281,7 +307,9 @@ def main() -> None:
         summarize(yaml.safe_load(show_path.read_text()))
         return
 
-    infrastructure = load_outputs(platform_dir, "infrastructure", args.tofu_bin, args.platform_json)
+    infrastructure = load_outputs(
+        platform_dir, "infrastructure", args.tofu_bin, args.platform_json
+    )
     if not infrastructure.get("infrastructure_ips"):
         sys.exit(
             "error: platform stack has no 'infrastructure' output.\n"
@@ -309,7 +337,9 @@ def main() -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(HEADER + to_yaml(inventory))
 
-    n_hosts = sum(len(g.get("hosts", {})) for g in inventory["all"]["children"].values())
+    n_hosts = sum(
+        len(g.get("hosts", {})) for g in inventory["all"]["children"].values()
+    )
     print(f"wrote {output_path} ({n_hosts} hosts from the OpenTofu state)")
 
     if not args.quiet:

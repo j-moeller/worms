@@ -21,7 +21,7 @@ hide_secrets: true
 
 # --- PostgreSQL -------------------------------------------------------------
 postgres_db: mydb
-postgres_host: "{{ infrastructure_ips.db }}"
+postgres_host: "{{ infrastructure_ips.database }}"
 
 # The admin (SUPERUSER) role may log in remotely only from the Proxmox host
 # (/32, from the OpenTofu ground truth), never from other VMs on the maintenance

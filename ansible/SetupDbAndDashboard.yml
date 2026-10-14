@@ -10,7 +10,7 @@
 # awaited by WaitForVMs.yml, which `make configure` runs first.
 
 - name: Configure database server
-  hosts: database
+  hosts: database_hosts
   become: true
 
   roles:
@@ -26,7 +26,7 @@
 
 
 - name: Configure database permissions
-  hosts: database
+  hosts: database_hosts
   become: true
 
   roles:

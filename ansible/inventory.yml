@@ -24,7 +24,7 @@ all:
           ansible_connection: local
 
     # ---- VM groups (filled by inventory.generated.yml) ----------------------
-    db:
+    database:
     dashboard:
     orchestrator:
     scoring:
@@ -41,9 +41,9 @@ all:
     sandbox:
 
     # ---- Role groups --------------------------------------------------------
-    database:
+    database_hosts:
       children:
-        db:
+        database:
 
     dns_hosts:
       children:
@@ -53,7 +53,7 @@ all:
       children:
         scoring:
         logging:
-        db:
+        database:
         dashboard:
         orchestrator:
 

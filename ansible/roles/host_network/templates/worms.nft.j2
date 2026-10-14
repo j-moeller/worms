@@ -76,9 +76,9 @@ table inet worms {
 {% endfor %}
 
     # Routed zone allow-list.
-    iifname "{{ b.dmz }}" oifname "{{ b.core }}" ip saddr {{ infrastructure_ips.dashboard }} ip daddr {{ infrastructure_ips.db }} tcp dport 5432 accept comment "dashboard -> database"
+    iifname "{{ b.dmz }}" oifname "{{ b.core }}" ip saddr {{ infrastructure_ips.dashboard }} ip daddr {{ infrastructure_ips.database }} tcp dport 5432 accept comment "dashboard -> database"
     iifname "{{ b.dmz }}" oifname "{{ b.core }}" ip saddr {{ infrastructure_ips.dashboard }} ip daddr {{ infrastructure_ips.orchestrator }} tcp dport 443 accept comment "dashboard -> orchestrator"
-    iifname "{{ b.ingest }}" oifname "{{ b.core }}" ip saddr { {{ infrastructure_ips.scoring }}, {{ infrastructure_ips.logging }}, {{ infrastructure_ips.monitor }} } ip daddr {{ infrastructure_ips.db }} tcp dport 5432 accept comment "ingest -> database"
+    iifname "{{ b.ingest }}" oifname "{{ b.core }}" ip saddr { {{ infrastructure_ips.scoring }}, {{ infrastructure_ips.logging }}, {{ infrastructure_ips.monitor }} } ip daddr {{ infrastructure_ips.database }} tcp dport 5432 accept comment "ingest -> database"
 {% if host_publish_dashboard %}
     iifname "{{ host_wan_interface }}" oifname "{{ b.dmz }}" ip daddr {{ infrastructure_ips.dashboard }} tcp dport 443 ct status dnat accept comment "internet -> dashboard"
 {% endif %}

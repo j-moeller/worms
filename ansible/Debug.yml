@@ -2,8 +2,8 @@
 # Connection diagnostics for one VM or group, step by step, so a failure shows
 # WHERE it breaks (each step runs even if an earlier one failed):
 #
-#   make debug HOST=db                  (or HOST=dns_hosts, HOST=db.worms.internal)
-#   cd ansible && ansible-playbook Debug.yml -e target=db -vvv   (full SSH trace)
+#   make debug HOST=database                  (or HOST=dns_hosts, HOST=database.worms.internal)
+#   cd ansible && ansible-playbook Debug.yml -e target=database -vvv   (full SSH trace)
 #
 #   1. what Ansible resolved (address, user, VMID, OpenTofu stack): no connection
 #   2. TCP port 22 from the controller        -> network / Proxmox firewall

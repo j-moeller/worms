@@ -54,12 +54,13 @@
     provider: ownca
     ownca_path: "{{ pki_ca_cert_path }}"
     ownca_privatekey_path: "{{ pki_ca_key_path }}"
-    ownca_privatekey_passphrase: "{{ pki_ca_key_passphrase | default(omit) }}"
+    ownca_privatekey_passphrase: "{{ pki_ca_passphrase }}"
     ownca_not_after: "{{ postgresql_tls_validity }}"
     ownca_not_before: "-1d"
-  delegate_to: localhost
+  delegate_to: "{{ pki_ca_host }}"
   become: false
   register: postgresql_cert
+  no_log: "{{ hide_secrets }}"
 
 - name: Install server certificate
   ansible.builtin.copy:

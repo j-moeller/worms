@@ -25,12 +25,20 @@ data "terraform_remote_state" "platform" {
   }
 }
 
+data "terraform_remote_state" "firewall" {
+  backend = "local"
+
+  config = {
+    path = "../../firewall/terraform.tfstate"
+  }
+}
+
 locals {
   platform = data.terraform_remote_state.platform.outputs.platform
 }
 
 locals {
-  sg = local.platform.security_groups
+  sg = data.terraform_remote_state.firewall.outputs.security_groups
   nw = local.platform.networks
 }
 

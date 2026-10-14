@@ -1,0 +1,4 @@
+---
+# Encrypted PEM keys: PKCS#8 ("ENCRYPTED PRIVATE KEY", e.g. after conversion)
+# or traditional PKCS#1 with a Proc-Type header (what openssl_privatekey writes).
+pki_ca_key_encrypted_pattern: "^(-----BEGIN ENCRYPTED PRIVATE KEY-----|Proc-Type: 4,ENCRYPTED)"

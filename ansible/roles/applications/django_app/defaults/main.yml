@@ -24,7 +24,7 @@ django_venv_dir: "/opt/{{ django_app_name }}/venv"
 django_env_file: "/etc/{{ django_app_name }}/django.env"
 
 # The two apps live in the same Django project; the settings module selects the role.
-django_local_source: "../projects/dashboard"
+django_local_source: "{{ playbook_dir }}/../projects/dashboard"
 django_wsgi_module: "config.wsgi:application"
 
 gunicorn_workers: 2

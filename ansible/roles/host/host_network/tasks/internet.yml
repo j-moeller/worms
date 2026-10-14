@@ -18,7 +18,7 @@
   ansible.builtin.command: pvesh get {{ host_internet_group }} --output-format json
   register: internet_group_rules
   changed_when: false
-  # The group does not exist before the platform stack: nothing to remove.
+  # The group does not exist before the firewall stack: nothing to remove.
   failed_when: internet_group_rules.rc != 0 and internet == "allowed"
 
 # ---- allow ---------------------------------------------------------------------

@@ -25,6 +25,14 @@ data "terraform_remote_state" "platform" {
   }
 }
 
+data "terraform_remote_state" "firewall" {
+  backend = "local"
+
+  config = {
+    path = "../../firewall/terraform.tfstate"
+  }
+}
+
 locals {
   platform = data.terraform_remote_state.platform.outputs.platform
 }
@@ -32,7 +40,7 @@ locals {
 # net0 = data-plane NIC in the VM's zone (default route via the host),
 # net1 = management NIC (SSH from the host only).
 locals {
-  sg = local.platform.security_groups
+  sg = data.terraform_remote_state.firewall.outputs.security_groups
   nw = local.platform.networks
 
   persistent = {

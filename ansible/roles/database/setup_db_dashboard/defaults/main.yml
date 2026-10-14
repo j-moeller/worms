@@ -6,7 +6,7 @@ django_app_dir: /opt/dashboard
 django_source_dir: /opt/dashboard/src
 django_venv_dir: /opt/dashboard/venv
 
-django_local_source: "../projects/dashboard"
+django_local_source: "{{ playbook_dir }}/../projects/dashboard"
 
 django_asgi_module: "dashboard.asgi:application"
 django_settings_module: "dashboard.settings"

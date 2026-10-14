@@ -5,7 +5,7 @@ export PROXMOX_API_TOKEN=<the value of your Proxmox API token>   # the one exter
 make                             # idempotent, end to end (as root on the Proxmox node)
 ```
 
-`make` applies the platform stack and the host firewall, then **allows internet
+`make` applies the platform and firewall stacks and the host firewall, then **allows internet
 access**, creates the infrastructure VMs (cloud-init installs packages) and
 configures them with Ansible (the private-internet caches populate in online
 mode). Afterwards it **denies internet access again** — always, also when a step
@@ -22,7 +22,11 @@ All internal management credentials — every PostgreSQL role password, the
 Django `SECRET_KEY`s and the internal CA passphrase — are generated **once** by
 `scripts/generate_secrets.py` (run via `make secrets`) into
 `ansible/group_vars/vault.yml`, encrypted with ansible-vault using an
-auto-generated `ansible/.vault_pass`. You never type, see or track them, and
+auto-generated `ansible/.vault_pass`. The CA private key
+(`ansible/pki/worms/ca.key`, git-ignored) is always encrypted with that
+passphrase (`pki_ca_passphrase`); `CreateCA.yml` refuses to run without it and
+encrypts a key created before the passphrase existed in place (the CA and its
+certificates stay valid). You never type, see or track them, and
 because they persist, re-running `make` does not rotate them (which would break
 the already-configured database). Both files are git-ignored.
 
@@ -103,10 +107,14 @@ Every host carries `proxmox_vm_id` (`qm status <vmid>`) and `opentofu_stack`.
 `make` runs these in order; each step is safe to re-run:
 
 - `make secrets` — generate management secrets once (no-op if already present).
-- `tofu apply` the base stacks (platform, private_internet, persistent,
-  ephemeral). Addressing comes from `opentofu/shared/shared-variables.tf` (the
-  single source of truth); the platform stack emits the `infrastructure` output.
-    - `SetupHostNetwork.yml` (host sysctls + nftables) right after the platform stack
+- `tofu apply` the base stacks. Addressing comes from
+  `opentofu/shared/shared-variables.tf` (the single source of truth).
+    - platform: bridges, images, cloud-init snippets, pools, hookscript; emits
+      the `infrastructure` output (addressing for Ansible)
+    - firewall: Proxmox cluster/node firewall and all security groups; emits
+      `security_groups`, which every VM stack attaches
+    - `SetupHostNetwork.yml` (host sysctls + nftables, `make host-network`)
+    - private_internet: the private-internet VMs
     - persistent: database, dashboard, orchestrator
     - ephemeral: DNS, scoring, logging
 - `make inventory` — generate `ansible/inventory.generated.yml` from OpenTofu
@@ -172,15 +180,24 @@ orchestrator).
 # Where things are configured
 
 - **OpenTofu**: everything Proxmox-level — bridges, VMs, the per-VM firewall
-  (security groups, `ipfilter`), and the hookscript every VM carries
+  (security groups in `opentofu/stacks/firewall`, `ipfilter` per VM), and the
+  hookscript every VM carries
   (`worms-hook.sh`: isolates VM ports on the management bridges, so VMs there
   can only reach the host).
-- **Ansible**: VM configuration, and the Proxmox host's own OS settings
+- **Ansible**: VM configuration (roles grouped by component under
+  `ansible/roles/`, see `ansible/roles/README.md`), and the Proxmox host's own OS settings
   (`SetupHostNetwork.yml`, role `host_network`, runs locally on the node):
   sysctls, the nftables zone firewall + boot unit (`/etc/worms/worms.nft`),
   and the Proxmox host firewall rule orchestrator → API. Internet access is
   runtime state toggled by `Internet.yml` (same role, `tasks/internet.yml`).
 - **Makefile**: the order, and the internet window around provisioning.
+
+Stack dependencies (each reads the others' local state via
+`terraform_remote_state`): `platform` and `firewall` are independent; the VM
+stacks (`private_internet`, `infrastructure/*`, `sandbox`) need both. Destroy in
+reverse (`make destroy_all`). Existing deployments made before the firewall
+stack are migrated by `make firewall-migrate` (run automatically by `make
+platform` / `make firewall`; state only).
 
 # Containment of rogue sandbox VMs
 

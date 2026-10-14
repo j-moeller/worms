@@ -25,6 +25,14 @@ data "terraform_remote_state" "platform" {
   }
 }
 
+data "terraform_remote_state" "firewall" {
+  backend = "local"
+
+  config = {
+    path = "../firewall/terraform.tfstate"
+  }
+}
+
 locals {
   platform = data.terraform_remote_state.platform.outputs.platform
 }
@@ -38,7 +46,7 @@ locals {
 # data_disk_size > 0 attaches a dedicated data disk (virtio1 -> /dev/vdb), mounted
 # by the service's cloud-init snippet. cpu_type "host" gives cve_search AVX (MongoDB 8).
 locals {
-  sg = local.platform.security_groups
+  sg = data.terraform_remote_state.firewall.outputs.security_groups
 
   # net0: serve the services bridge, and use apt-cache/DNS there (apt_client).
   # net1: SSH from the host; internet egress while internet access is allowed (Internet.yml).

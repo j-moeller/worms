@@ -2,9 +2,11 @@
 # worms-platform
 #
 #   make              Idempotent, end-to-end setup of the base infrastructure:
-#                       init -> secrets -> platform -> [internet allowed]
-#                       -> infrastructure -> configure -> [internet denied]
-#                       -> offline
+#                       init -> secrets -> platform -> firewall -> host-network
+#                       -> [internet allowed] -> infrastructure -> configure
+#                       -> [internet denied] -> offline
+#   make firewall     Apply only the Proxmox firewall (security groups).
+#   make host-network Host nftables/sysctls only (SetupHostNetwork.yml).
 #   make provision    Ansible only (configure + offline), same internet window.
 #   make show-config  Print the hosts Ansible will contact (from the OpenTofu
 #                     state) and the VMs it skips.
@@ -51,11 +53,12 @@ define online
 	$(MAKE) --no-print-directory $(1)
 endef
 
-.PHONY: all init secrets platform infrastructure inventory show-config \
+.PHONY: all init secrets platform firewall firewall-migrate host-network infrastructure \
+        inventory show-config \
         provision configure offline internet-allow internet-deny ping debug \
         destroy destroy_all terminate
 
-all: init secrets platform
+all: init secrets platform firewall host-network
 	$(call online,infrastructure configure)
 	$(MAKE) --no-print-directory offline show-config
 	@echo "== setup complete (internet access denied) =="
@@ -66,6 +69,7 @@ provision:
 
 init:
 	cd opentofu/stacks/platform && tofu init -input=false
+	cd opentofu/stacks/firewall && tofu init -input=false
 	cd opentofu/stacks/infrastructure/persistent && tofu init -input=false
 	cd opentofu/stacks/infrastructure/ephemeral && tofu init -input=false
 	cd opentofu/stacks/sandbox && tofu init -input=false
@@ -75,13 +79,33 @@ init:
 secrets:
 	python3 scripts/generate_secrets.py
 
-# Bridges, VM firewall and hookscript (OpenTofu), then the host firewall
-# (Ansible, from the generated inventory). Needed before internet can be
-# allowed: the gate lives in the host firewall and the provisioning group.
-platform:
+# Bridges, images, cloud-init snippets, pools and hookscript.
+platform: firewall-migrate
 	cd opentofu/stacks/platform && $(MAKE) apply
+
+# Proxmox firewall: cluster/node options and the security groups the VMs
+# attach (incl. the empty `provisioning` group Internet.yml fills). Independent
+# of the platform stack; every VM stack reads its `security_groups` output.
+firewall: firewall-migrate
+	cd opentofu/stacks/firewall && $(MAKE) apply
+
+# Host firewall and routing (Ansible on the Proxmox node: nftables, sysctls,
+# the node rule for the orchestrator). Needs only the platform addressing, so
+# the inventory has no VMs yet; it is regenerated after `infrastructure`.
+# Needed before internet can be allowed: the gate is the nft set internet_wan.
+host-network:
 	$(MAKE) --no-print-directory inventory
 	cd ansible && $(ANSIBLE) SetupHostNetwork.yml
+
+# One-time state migration for deployments made before the firewall stack:
+# moves the firewall resources from the platform state into the firewall state
+# (state only, no API calls; backups are written next to both states). No-op
+# on fresh installs and once migrated.
+firewall-migrate:
+	@cd opentofu/stacks/firewall && \
+	for r in $$(tofu -chdir=../platform state list 2>/dev/null | grep -E '^proxmox_(virtual_environment_cluster_firewall|node_firewall)'); do \
+	  tofu state mv -state=../platform/terraform.tfstate -state-out=terraform.tfstate "$$r" "$$r" || exit 1; \
+	done
 
 # Base infrastructure VMs (NOT the per-round sandbox). Internet access must be
 # allowed: cloud-init installs packages at first boot. The inventory is
@@ -139,10 +163,10 @@ internet-deny:
 	cd ansible && $(ANSIBLE_BASE) Internet.yml -e internet=denied
 
 # ---- Teardown ---------------------------------------------------------------
-destroy_all:
-	cd opentofu/stacks/sandbox && $(MAKE) destroy
-	cd opentofu/stacks/infrastructure/ephemeral && $(MAKE) destroy
-	cd opentofu/stacks/infrastructure/persistent && $(MAKE) destroy
+# VM stacks first (they reference the security groups, pools and images),
+# then the firewall, then the platform.
+destroy_all: destroy
+	cd opentofu/stacks/firewall && $(MAKE) destroy
 	cd opentofu/stacks/platform && $(MAKE) destroy
 
 destroy:

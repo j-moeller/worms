@@ -73,7 +73,7 @@ host_vars/**/vault.yml
 vault.yml
 .vault_pass
 # Rendered PKI material
-pki/
+/pki/
 # Inventory generated from OpenTofu outputs (scripts/generate_inventory.py).
 # Rebuild with `make inventory`; it is a derived artifact, not source.
 inventory.generated.yml

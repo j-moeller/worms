@@ -7,22 +7,6 @@ output "platform" {
 
     # Attached to every VM (port isolation on the management bridges).
     hookscript_file_id = proxmox_virtual_environment_file.hookscript.id
-
-    # Security group names by purpose.
-    security_groups = {
-      ssh              = proxmox_virtual_environment_cluster_firewall_security_group.ssh.name
-      provisioning     = proxmox_virtual_environment_cluster_firewall_security_group.provisioning.name
-      dashboard        = proxmox_virtual_environment_cluster_firewall_security_group.dashboard.name
-      orchestrator     = proxmox_virtual_environment_cluster_firewall_security_group.orchestrator.name
-      database         = proxmox_virtual_environment_cluster_firewall_security_group.database.name
-      db_client        = proxmox_virtual_environment_cluster_firewall_security_group.db_client.name
-      sandbox_api      = proxmox_virtual_environment_cluster_firewall_security_group.sandbox_api.name
-      dns              = proxmox_virtual_environment_cluster_firewall_security_group.dns.name
-      private_internet = proxmox_virtual_environment_cluster_firewall_security_group.private_internet.name
-      services_client  = proxmox_virtual_environment_cluster_firewall_security_group.services_client.name
-      sandbox          = proxmox_virtual_environment_cluster_firewall_security_group.sandbox.name
-      sandbox_gw       = proxmox_virtual_environment_cluster_firewall_security_group.sandbox_gw.name
-    }
   }
 }
 

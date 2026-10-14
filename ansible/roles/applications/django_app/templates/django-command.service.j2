@@ -18,7 +18,10 @@ ExecStart={{ django_venv_dir }}/bin/python manage.py {{ item.command }}
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
+# tmpfs, not true: /home is then empty instead of inaccessible. libpq looks for
+# a client certificate in ~/.postgresql/ and aborts on "permission denied"
+# (true), but skips a missing file (tmpfs).
+ProtectHome=tmpfs
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

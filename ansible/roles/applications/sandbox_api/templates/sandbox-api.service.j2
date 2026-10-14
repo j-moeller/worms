@@ -40,7 +40,10 @@ LimitNOFILE=1024
 # Hardening
 NoNewPrivileges=yes
 ProtectSystem=strict
-ProtectHome=yes
+# tmpfs, not true: /home is then empty instead of inaccessible. libpq looks for
+# a client certificate in ~/.postgresql/ and aborts on "permission denied"
+# (true), but skips a missing file (tmpfs).
+ProtectHome=tmpfs
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes

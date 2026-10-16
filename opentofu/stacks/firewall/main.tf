@@ -203,6 +203,12 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "dns" {
 }
 
 # Private-internet services, reachable from the services bridge only.
+#
+# SUPERSEDED by the per-service groups below, which open only the port each
+# service actually serves. Kept (unattached) for one migration cycle: the
+# firewall stack applies before the VM stacks, so deleting it here while a VM
+# still references it would fail. Drop it once every private-internet VM has
+# been re-applied with its per-service group.
 resource "proxmox_virtual_environment_cluster_firewall_security_group" "private_internet" {
   name = "private_internet"
 
@@ -222,6 +228,46 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "private_
     dport   = local.private_internet_ports.udp
     source  = local.networks.services
     comment = "Private-internet services (UDP)"
+  }
+}
+
+# Per-service private-internet groups: one per service, opening ONLY the port
+# that service listens on. The service VMs attach these instead of the broad
+# group above, so each VM accepts just its own service (wikipedia stops
+# answering on 3142, apt-cache on 8888, ...). The client direction is unchanged:
+# it is `services_client` / `sandbox` / `sandbox_gw`, which keep using the union
+# in local.private_internet_ports. Ports here come from
+# local.private_internet_service_ports.
+resource "proxmox_virtual_environment_cluster_firewall_security_group" "private_internet_service" {
+  for_each = local.private_internet_service_ports
+
+  name    = each.value.group
+  comment = "Private-internet ${each.key}: own port only"
+
+  dynamic "rule" {
+    for_each = each.value.tcp == null ? [] : [each.value.tcp]
+
+    content {
+      type    = "in"
+      action  = "ACCEPT"
+      proto   = "tcp"
+      dport   = rule.value
+      source  = local.networks.services
+      comment = "${each.key} (TCP) from the services bridge"
+    }
+  }
+
+  dynamic "rule" {
+    for_each = each.value.udp == null ? [] : [each.value.udp]
+
+    content {
+      type    = "in"
+      action  = "ACCEPT"
+      proto   = "udp"
+      dport   = rule.value
+      source  = local.networks.services
+      comment = "${each.key} (UDP) from the services bridge"
+    }
   }
 }
 

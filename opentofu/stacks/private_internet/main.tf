@@ -46,16 +46,22 @@ locals {
 # data_disk_size > 0 attaches a dedicated data disk (virtio1 -> /dev/vdb), mounted
 # by the service's cloud-init snippet. cpu_type "host" gives cve_search AVX (MongoDB 8).
 locals {
-  sg = data.terraform_remote_state.firewall.outputs.security_groups
+  sg         = data.terraform_remote_state.firewall.outputs.security_groups
+  sg_service = data.terraform_remote_state.firewall.outputs.private_internet_service_groups
 
-  # net0: serve the services bridge, and use apt-cache/DNS there (apt_client).
+  # Per service, so a VM accepts only the port it actually serves (the broad
+  # `private_internet` group is the client side and stays on the sandbox NICs).
+  # net0: serve the services bridge with this service's own port, and use
+  #       apt-cache/DNS there (services_client).
   # net1: SSH from the host; internet egress while internet access is allowed (Internet.yml).
-  firewall_rules = [
-    { group = local.sg.private_internet, iface = "net0" },
-    { group = local.sg.services_client, iface = "net0" },
-    { group = local.sg.ssh, iface = "net1" },
-    { group = local.sg.provisioning, iface = "net1" },
-  ]
+  firewall_rules = {
+    for name, _ in local.services : name => [
+      { group = local.sg_service[name], iface = "net0" },
+      { group = local.sg.services_client, iface = "net0" },
+      { group = local.sg.ssh, iface = "net1" },
+      { group = local.sg.provisioning, iface = "net1" },
+    ]
+  }
 
   services = {
     /*
@@ -141,6 +147,6 @@ module "private_internet_vms" {
   maintenance_network_cidr    = "${local.private_internet_ips[each.key].maintenance}/24"
   maintenance_network_gateway = local.host_ips.mgmt_exposed
 
-  firewall_rules     = local.firewall_rules
+  firewall_rules     = local.firewall_rules[each.key]
   hookscript_file_id = local.platform.hookscript_file_id
 }

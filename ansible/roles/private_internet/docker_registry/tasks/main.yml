@@ -17,8 +17,26 @@
     mode: '0644'
   notify: Restart docker-registry
 
+- name: Create the docker-registry systemd drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/docker-registry.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install the docker-registry hardening drop-in
+  ansible.builtin.template:
+    src: hardening.conf.j2
+    dest: /etc/systemd/system/docker-registry.service.d/hardening.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart docker-registry
+
 - name: Enable and start docker-registry
   ansible.builtin.systemd:
     name: docker-registry
     enabled: true
     state: started
+    daemon_reload: true

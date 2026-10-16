@@ -3,3 +3,4 @@
   ansible.builtin.systemd:
     name: apt-cacher-ng
     state: restarted
+    daemon_reload: true

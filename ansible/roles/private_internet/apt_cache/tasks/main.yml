@@ -28,8 +28,26 @@
     group: apt-cacher-ng
   notify: Restart apt-cacher-ng
 
+- name: Create the apt-cacher-ng systemd drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/apt-cacher-ng.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install the apt-cacher-ng hardening drop-in
+  ansible.builtin.template:
+    src: hardening.conf.j2
+    dest: /etc/systemd/system/apt-cacher-ng.service.d/hardening.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart apt-cacher-ng
+
 - name: Enable and start apt-cacher-ng
   ansible.builtin.systemd:
     name: apt-cacher-ng
     enabled: true
     state: started
+    daemon_reload: true

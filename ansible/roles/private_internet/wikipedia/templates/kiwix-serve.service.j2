@@ -17,7 +17,11 @@ RestartSec=5
 
 # Hardening (same pattern as the application roles). kiwix only ever reads the
 # ZIM files, so there is no writable path at all (ProtectSystem=strict leaves
-# the whole filesystem read-only) and it needs no capabilities.
+# the whole filesystem read-only) and it needs no capabilities. The ZIM is
+# fetched by the root-run download script and lands world-readable, which is
+# all the kiwix user needs. If a kiwix version ever wants to write (search
+# index, cache -- note the kiwix user's home IS the data dir), the fix is
+# ReadWritePaths={{ wikipedia_data_dir }}; untested here, no ZIM present yet.
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=tmpfs

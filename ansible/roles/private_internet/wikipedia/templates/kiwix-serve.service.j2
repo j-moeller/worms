@@ -41,7 +41,10 @@ MemoryDenyWriteExecute=yes
 CapabilityBoundingSet=
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
-RestrictAddressFamilies=AF_UNIX AF_INET
+# kiwix enumerates interfaces at startup (getifaddrs), which needs a netlink
+# socket; without AF_NETLINK it dies with a misleading "port 8888 ... need more
+# permissions" error. AF_INET6 because the host has IPv6 and getifaddrs walks it.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target

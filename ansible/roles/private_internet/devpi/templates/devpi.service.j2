@@ -39,7 +39,9 @@ SystemCallArchitectures=native
 SystemCallFilter=@system-service
 # Serves clients and, while internet access is allowed, fetches from PyPI.
 # Who may reach it is scoped by the Proxmox firewall, not here.
-RestrictAddressFamilies=AF_UNIX AF_INET
+# AF_NETLINK: the process enumerates interfaces (getifaddrs) at bind time;
+# without it bind fails (see kiwix). AF_INET6: the host has IPv6.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 
 # Deliberately NO MemoryMax: devpi-web's Whoosh indexing peaks around 1.8 GB
 # while the mirror is populated. A ceiling here would reproduce the OOM that

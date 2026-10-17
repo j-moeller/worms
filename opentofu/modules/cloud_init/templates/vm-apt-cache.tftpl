@@ -5,6 +5,20 @@ hostname: ${hostname}
 ssh_authorized_keys:
   - ${ssh_public_key}
 
+# Block service auto-start during package install. apt-cacher-ng's postinst
+# otherwise starts the daemon against the data-disk mount below, which is
+# root-owned at this point (cloud-init mounts it before the apt-cacher-ng user
+# exists), so the daemon can't write it, the postinst fails, and cloud-init ends
+# in "error" (which WaitForVMs treats as fatal). We start it ourselves in runcmd
+# after chowning the mount. write_files runs once per instance in the init
+# stage, before packages, and does not re-run on reboot.
+write_files:
+  - path: /usr/sbin/policy-rc.d
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      exit 101
+
 disk_setup:
   /dev/vdb:
     table_type: gpt
@@ -25,4 +39,7 @@ packages:
   - ca-certificates
 
 runcmd:
+  - rm -f /usr/sbin/policy-rc.d
+  - chown -R apt-cacher-ng:apt-cacher-ng /var/cache/apt-cacher-ng
+  - systemctl enable --now apt-cacher-ng
   - echo "done" > /tmp/cloud-config.done

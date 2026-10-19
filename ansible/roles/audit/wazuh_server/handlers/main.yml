@@ -1,0 +1,10 @@
+---
+- name: Restart wazuh-manager
+  ansible.builtin.service:
+    name: wazuh-manager
+    state: restarted
+
+- name: Restart filebeat
+  ansible.builtin.service:
+    name: filebeat
+    state: restarted

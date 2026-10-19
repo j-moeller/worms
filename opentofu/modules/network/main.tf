@@ -1,6 +1,6 @@
 # One Linux bridge per network zone (see opentofu/shared/shared-variables.tf).
 #
-# Only the routed zones (dmz, core, ingest) and the management bridges get a
+# Only the routed zones (dmz, core, ingest, siem) and the management bridges get a
 # host address. The services, sandbox and mirror bridges are pure layer 2 for
 # the host: it has no IP there, so nothing a sandbox VM can reach terminates on
 # (or is routed by) the hypervisor's IP stack.
@@ -21,6 +21,10 @@ locals {
     ingest = {
       address = "${var.host_ips.ingest}/${split("/", var.networks.ingest)[1]}"
       comment = "Ingest: database leg of scoring/logging (routed to database:5432 only)."
+    }
+    siem = {
+      address = "${var.host_ips.siem}/${split("/", var.networks.siem)[1]}"
+      comment = "SIEM: wazuh (receives syslog from every infrastructure VM, routed tcp 514 only)."
     }
     services = {
       address = null

@@ -53,6 +53,7 @@ locals {
       firewall_rules = [
         { group = local.sg.database, iface = "net0" },
         { group = local.sg.provisioning, iface = "net0" },
+        { group = local.sg.log_client, iface = "net0" },
         { group = local.sg.ssh, iface = "net1" },
       ]
     }
@@ -66,6 +67,7 @@ locals {
       firewall_rules = [
         { group = local.sg.dashboard, iface = "net0" },
         { group = local.sg.provisioning, iface = "net0" },
+        { group = local.sg.log_client, iface = "net0" },
         { group = local.sg.ssh, iface = "net1" },
       ]
     }
@@ -78,6 +80,27 @@ locals {
       ]
       firewall_rules = [
         { group = local.sg.orchestrator, iface = "net0" },
+        { group = local.sg.provisioning, iface = "net0" },
+        { group = local.sg.log_client, iface = "net0" },
+        { group = local.sg.ssh, iface = "net1" },
+      ]
+    }
+
+    # Central log server (Wazuh all-in-one: manager, indexer, dashboard).
+    # Receives syslog (audit logs) from every infrastructure VM; the dashboard
+    # is reachable from the Proxmox host only (SSH tunnel). Management on
+    # mgmt-exposed: it parses logs of VMs that may be compromised.
+    wazuh = {
+      user_data_file_id = local.platform.cloud_init.wazuh.file_id
+      cpu               = 4
+      ram               = 8192
+      disk_size         = 50
+      nics = [
+        { bridge = local.nw.siem.name, cidr = "${local.infrastructure_ips.wazuh}/24", gateway = local.host_ips.siem },
+        { bridge = local.nw.mgmt_exposed.name, cidr = "${local.management_ips.wazuh}/24" },
+      ]
+      firewall_rules = [
+        { group = local.sg.wazuh, iface = "net0" },
         { group = local.sg.provisioning, iface = "net0" },
         { group = local.sg.ssh, iface = "net1" },
       ]
@@ -95,6 +118,9 @@ module "infrastructure_vms" {
   nics               = each.value.nics
   firewall_rules     = each.value.firewall_rules
   user_data_file_id  = each.value.user_data_file_id
+  cpu                = try(each.value.cpu, 2)
+  ram                = try(each.value.ram, 2048)
+  disk_size          = try(each.value.disk_size, 5)
   disk_file_id       = local.platform.os_images.debian.file_id
   hookscript_file_id = local.platform.hookscript_file_id
   tag                = "persistent"

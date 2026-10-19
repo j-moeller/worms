@@ -37,6 +37,7 @@ all:
     ntp:
     cve_search:
     wikipedia:
+    wazuh:
     sandbox_gw:
     sandbox:
 
@@ -69,6 +70,22 @@ all:
       children:
         scoring:
         logging:
+
+    # Central log server (role wazuh_server).
+    wazuh_hosts:
+      children:
+        wazuh:
+
+    # auditd + log forwarding to wazuh (role auditd): every infrastructure VM.
+    audit_hosts:
+      children:
+        database:
+        dashboard:
+        orchestrator:
+        scoring:
+        logging:
+        dns:
+        private_internet:
 
     # Django application hosts (role django_app).
     django_hosts:

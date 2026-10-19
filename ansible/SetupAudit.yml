@@ -1,0 +1,16 @@
+---
+# Central logging: Wazuh on the wazuh VM (role wazuh_server), auditd on every
+# infrastructure VM, shipping its audit log to Wazuh via rsyslog (role auditd).
+# Wazuh first, so the VMs' forwarders connect right away (they queue the events
+# while it is unreachable). Needs internet access (make provision).
+- name: Set up the central log server
+  hosts: wazuh_hosts
+  become: true
+  roles:
+    - wazuh_server
+
+- name: Set up auditd and log forwarding
+  hosts: audit_hosts
+  become: true
+  roles:
+    - auditd

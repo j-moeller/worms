@@ -1,0 +1,26 @@
+## Managed by Ansible (role auditd). DO NOT EDIT.
+##
+## The keys are the ones Wazuh's audit rules know (lists/audit-keys):
+##   audit-wazuh-c = command, -w = write, -a = attribute change, -x = execute.
+
+# Every executed command (also the ones Ansible runs).
+-a always,exit -F arch=b64 -S execve -k audit-wazuh-c
+-a always,exit -F arch=b32 -S execve -k audit-wazuh-c
+
+# Accounts, privileges, SSH and audit configuration.
+-w /etc/passwd -p wa -k audit-wazuh-w
+-w /etc/shadow -p wa -k audit-wazuh-w
+-w /etc/group -p wa -k audit-wazuh-w
+-w /etc/sudoers -p wa -k audit-wazuh-w
+-w /etc/sudoers.d/ -p wa -k audit-wazuh-w
+-w /etc/ssh/sshd_config -p wa -k audit-wazuh-w
+-w /root/.ssh/ -p wa -k audit-wazuh-w
+-w /etc/audit/ -p wa -k audit-wazuh-w
+
+# Persistence: services, timers and cron jobs.
+-w /etc/systemd/system/ -p wa -k audit-wazuh-w
+-w /etc/cron.d/ -p wa -k audit-wazuh-w
+-w /etc/crontab -p wa -k audit-wazuh-w
+
+# Kernel modules.
+-a always,exit -F arch=b64 -S init_module,finit_module,delete_module -k audit-wazuh-a

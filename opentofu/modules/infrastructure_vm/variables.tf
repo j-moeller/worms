@@ -36,6 +36,12 @@ variable "ram" {
   default = 2048
 }
 
+variable "disk_size" {
+  description = "Root disk size in GB."
+  type        = number
+  default     = 5
+}
+
 variable "tag" {
   default = "infrastructure"
 }

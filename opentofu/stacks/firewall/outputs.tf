@@ -14,5 +14,7 @@ output "security_groups" {
     services_client  = proxmox_virtual_environment_cluster_firewall_security_group.services_client.name
     sandbox          = proxmox_virtual_environment_cluster_firewall_security_group.sandbox.name
     sandbox_gw       = proxmox_virtual_environment_cluster_firewall_security_group.sandbox_gw.name
+    wazuh            = proxmox_virtual_environment_cluster_firewall_security_group.wazuh.name
+    log_client       = proxmox_virtual_environment_cluster_firewall_security_group.log_client.name
   }
 }

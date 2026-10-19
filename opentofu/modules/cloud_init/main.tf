@@ -243,3 +243,23 @@ resource "proxmox_virtual_environment_file" "wikipedia_vm_static" {
   }
 }
 
+
+/**
+ * Central log server (Wazuh)
+ */
+resource "proxmox_virtual_environment_file" "wazuh_vm_static" {
+  content_type = "snippets"
+  datastore_id = var.datastore_id
+  node_name    = var.node_name
+
+  source_raw {
+    data = templatefile(
+      "${path.module}/templates/vm-wazuh.tftpl",
+      {
+        ssh_public_key = trimspace(file("${var.ssh_public_key}")),
+        hostname       = "wazuh"
+      }
+    )
+    file_name = "vm-wazuh.yml"
+  }
+}

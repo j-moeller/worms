@@ -12,6 +12,7 @@ stay unique across folders.
 | `database/`         | `setup_db_base`, `setup_db_permissions`                       | SetupDbAndDashboard.yml        | `database_hosts`                |
 | `applications/`     | `django_app` (dashboard, orchestrator), `sandbox_api`         | SetupDbAndDashboard.yml, SetupSandboxApi.yml | `django_hosts`, `sandbox_api_hosts` |
 | `dns/`              | `setup_dns`                                                   | SetupDNS.yml                   | `dns_hosts`                     |
+| `audit/`            | `wazuh_server` (Wazuh all-in-one), `auditd` (auditd + rsyslog forwarding to Wazuh) | SetupAudit.yml | `wazuh_hosts`, `audit_hosts` |
 | `private_internet/` | `apt_client`, `apt_cache`, `cve_search`, `devpi`, `docker_registry`, `manpages`, `ntp`, `wikipedia` | SetupPrivateInternet.yml | `private_internet` |
 
 `database/setup_db_dashboard` is not used by any playbook (superseded by

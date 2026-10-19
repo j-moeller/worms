@@ -6,8 +6,9 @@
 # a packet must pass every base chain, so this table can only restrict further.
 #
 # * FORWARD default drop. The host routes only dashboard -> database/
-#   orchestrator and scoring/logging/monitor -> database (+ internet ->
-#   dashboard:443 if published). Nothing is forwarded from the sandbox,
+#   orchestrator, scoring/logging/monitor -> database and syslog (tcp 514)
+#   from the infrastructure VMs -> wazuh (+ internet -> dashboard:443 if
+#   published). Nothing is forwarded from the sandbox,
 #   services or mirror bridges; the host has no address on them.
 # * INPUT from VM bridges: replies to host-initiated connections (SSH) and
 #   orchestrator -> Proxmox API only.
@@ -15,7 +16,7 @@
 #   `internet_wan`, which is empty here. Only Internet.yml (internet=allowed) fills it,
 #   at runtime (a reboot or a reload empties it again).
 {% set b = bridges %}
-{% set same_bridge = [b.services, b.mirror, b.dmz, b.core, b.ingest, b.mgmt_trusted, b.mgmt_exposed, b.mgmt_sandbox] %}
+{% set same_bridge = [b.services, b.mirror, b.dmz, b.core, b.ingest, b.siem, b.mgmt_trusted, b.mgmt_exposed, b.mgmt_sandbox] %}
 
 table inet worms
 delete table inet worms
@@ -24,7 +25,7 @@ table inet worms {
   # Bridges on which the host has an address (routed zones, management).
   set vm_bridges {
     type ifname
-    elements = { "{{ b.dmz }}", "{{ b.core }}", "{{ b.ingest }}", "{{ b.mgmt_trusted }}", "{{ b.mgmt_exposed }}", "{{ b.mgmt_sandbox }}" }
+    elements = { "{{ b.dmz }}", "{{ b.core }}", "{{ b.ingest }}", "{{ b.siem }}", "{{ b.mgmt_trusted }}", "{{ b.mgmt_exposed }}", "{{ b.mgmt_sandbox }}" }
   }
 
   # Bridges on which the host has NO address and never accepts anything.
@@ -37,7 +38,7 @@ table inet worms {
   # gateway). Never the sandbox, services or mirror bridges.
   set internet_zones {
     type ifname
-    elements = { "{{ b.dmz }}", "{{ b.core }}", "{{ b.ingest }}", "{{ b.mgmt_exposed }}" }
+    elements = { "{{ b.dmz }}", "{{ b.core }}", "{{ b.ingest }}", "{{ b.siem }}", "{{ b.mgmt_exposed }}" }
   }
 
   # The gate: empty = internet denied. Internet.yml adds the WAN
@@ -79,6 +80,9 @@ table inet worms {
     iifname "{{ b.dmz }}" oifname "{{ b.core }}" ip saddr {{ infrastructure_ips.dashboard }} ip daddr {{ infrastructure_ips.database }} tcp dport 5432 accept comment "dashboard -> database"
     iifname "{{ b.dmz }}" oifname "{{ b.core }}" ip saddr {{ infrastructure_ips.dashboard }} ip daddr {{ infrastructure_ips.orchestrator }} tcp dport 443 accept comment "dashboard -> orchestrator"
     iifname "{{ b.ingest }}" oifname "{{ b.core }}" ip saddr { {{ infrastructure_ips.scoring }}, {{ infrastructure_ips.logging }}, {{ infrastructure_ips.monitor }} } ip daddr {{ infrastructure_ips.database }} tcp dport 5432 accept comment "ingest -> database"
+    # Audit logs (rsyslog) of every infrastructure VM, sent via its default
+    # route: dmz/core/ingest, or mgmt-exposed for DNS and private internet.
+    iifname { "{{ b.dmz }}", "{{ b.core }}", "{{ b.ingest }}", "{{ b.mgmt_exposed }}" } oifname "{{ b.siem }}" ip daddr {{ infrastructure_ips.wazuh }} tcp dport 514 accept comment "syslog -> wazuh"
 {% if host_publish_dashboard %}
     iifname "{{ host_wan_interface }}" oifname "{{ b.dmz }}" ip daddr {{ infrastructure_ips.dashboard }} tcp dport 443 ct status dnat accept comment "internet -> dashboard"
 {% endif %}

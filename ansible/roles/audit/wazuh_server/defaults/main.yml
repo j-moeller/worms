@@ -1,0 +1,14 @@
+---
+# Wazuh all-in-one (manager, indexer, dashboard) via the official installation
+# assistant. Debian is not on its list of tested systems, hence -i (skip the
+# system checks).
+wazuh_version: "4.14"
+wazuh_install_args: "-a -i"
+
+# Syslog listener for the audit logs (role auditd), and who may send.
+wazuh_syslog_port: 514
+wazuh_syslog_allowed:
+  - "{{ networks.dmz }}"
+  - "{{ networks.core }}"
+  - "{{ networks.ingest }}"
+  - "{{ networks.mgmt_exposed }}"

@@ -1,0 +1,5 @@
+---
+# Central log server (Wazuh, syslog listener). Reached via the VM's default
+# route; the host forwards tcp 514 to it (role host_network).
+auditd_log_server: "{{ infrastructure_ips.wazuh }}"
+auditd_log_server_port: 514

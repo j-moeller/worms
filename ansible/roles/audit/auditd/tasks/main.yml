@@ -1,0 +1,34 @@
+---
+# auditd records what happens on the VM (/var/log/audit/audit.log); rsyslog
+# ships that file to the central Wazuh server.
+- name: Install auditd and rsyslog
+  ansible.builtin.apt:
+    name:
+      - auditd
+      - rsyslog
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install audit rules
+  ansible.builtin.template:
+    src: worms.rules.j2
+    dest: /etc/audit/rules.d/worms.rules
+    mode: "0640"
+  notify: Load audit rules
+
+- name: Forward the audit log to the log server
+  ansible.builtin.template:
+    src: 60-audit-forward.conf.j2
+    dest: /etc/rsyslog.d/60-audit-forward.conf
+    mode: "0644"
+  notify: Restart rsyslog
+
+- name: Enable auditd and rsyslog
+  ansible.builtin.service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - auditd
+    - rsyslog

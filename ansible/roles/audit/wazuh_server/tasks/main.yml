@@ -1,0 +1,48 @@
+---
+# Installs Wazuh all-in-one once (needs internet access: packages.wazuh.com).
+# The generated passwords end up in /root/wazuh-install-files.tar.
+- name: Download the Wazuh installation assistant
+  ansible.builtin.get_url:
+    url: "https://packages.wazuh.com/{{ wazuh_version }}/wazuh-install.sh"
+    dest: /root/wazuh-install.sh
+    mode: "0700"
+
+- name: Install Wazuh (manager, indexer, dashboard)
+  ansible.builtin.command:
+    cmd: bash /root/wazuh-install.sh {{ wazuh_install_args }}
+    chdir: /root
+    creates: /var/ossec/bin/wazuh-control
+
+# Receive the audit logs of the infrastructure VMs as syslog.
+- name: Listen for syslog
+  ansible.builtin.blockinfile:
+    path: /var/ossec/etc/ossec.conf
+    marker: "<!-- {mark} worms: syslog from the infrastructure VMs (Ansible) -->"
+    insertbefore: "</ossec_config>"
+    block: |
+      <remote>
+        <connection>syslog</connection>
+        <port>{{ wazuh_syslog_port }}</port>
+        <protocol>tcp</protocol>
+        <local_ip>{{ infrastructure_ips.wazuh }}</local_ip>
+      {% for cidr in wazuh_syslog_allowed %}
+        <allowed-ips>{{ cidr }}</allowed-ips>
+      {% endfor %}
+      </remote>
+  notify: Restart wazuh-manager
+
+# Keep every event, not only those that match an alert rule, so all logs can
+# be searched in the dashboard (index pattern wazuh-archives-*).
+- name: Archive all events
+  ansible.builtin.replace:
+    path: /var/ossec/etc/ossec.conf
+    regexp: "<logall_json>no</logall_json>"
+    replace: "<logall_json>yes</logall_json>"
+  notify: Restart wazuh-manager
+
+- name: Index the archived events
+  ansible.builtin.replace:
+    path: /etc/filebeat/filebeat.yml
+    regexp: '(archives:\s*\n\s*enabled:\s*)false'
+    replace: '\1true'
+  notify: Restart filebeat

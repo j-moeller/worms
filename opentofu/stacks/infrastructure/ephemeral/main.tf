@@ -66,6 +66,7 @@ module "dns" {
     { group = local.sg.dns, iface = "net0" },
     { group = local.sg.ssh, iface = "net1" },
     { group = local.sg.provisioning, iface = "net1" },
+    { group = local.sg.log_client, iface = "net1" },
   ]
 }
 
@@ -88,6 +89,7 @@ module "sandbox_apis" {
     { group = local.sg.sandbox_api, iface = "net0" },
     { group = local.sg.db_client, iface = "net1" },
     { group = local.sg.provisioning, iface = "net1" },
+    { group = local.sg.log_client, iface = "net1" },
     { group = local.sg.ssh, iface = "net2" },
   ]
   user_data_file_id  = local.platform.cloud_init.flask.file_id

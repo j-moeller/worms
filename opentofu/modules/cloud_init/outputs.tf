@@ -100,3 +100,11 @@ output "wikipedia" {
     node_name    = var.node_name
   }
 }
+
+output "wazuh" {
+  value = {
+    file_id      = proxmox_virtual_environment_file.wazuh_vm_static.id
+    datastore_id = var.datastore_id
+    node_name    = var.node_name
+  }
+}

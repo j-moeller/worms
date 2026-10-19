@@ -1,0 +1,23 @@
+# Managed by Ansible (role auditd). DO NOT EDIT.
+# Ships /var/log/audit/audit.log to the central log server (Wazuh) over TCP.
+# The disk-assisted queue keeps the events while the server is unreachable.
+module(load="imfile")
+
+input(type="imfile"
+      File="/var/log/audit/audit.log"
+      Tag="auditd:"
+      Facility="local6"
+      Ruleset="audit_forward")
+
+ruleset(name="audit_forward") {
+  action(type="omfwd"
+         Target="{{ auditd_log_server }}"
+         Port="{{ auditd_log_server_port }}"
+         Protocol="tcp"
+         Template="RSYSLOG_TraditionalForwardFormat"
+         queue.type="LinkedList"
+         queue.filename="audit_forward"
+         queue.maxDiskSpace="1g"
+         queue.saveOnShutdown="on"
+         action.resumeRetryCount="-1")
+}

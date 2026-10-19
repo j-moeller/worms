@@ -146,6 +146,7 @@ configure:
 	cd ansible && $(ANSIBLE) SetupDbAndDashboard.yml
 	cd ansible && $(ANSIBLE) SetupSandboxApi.yml
 	cd ansible && $(ANSIBLE) SetupPrivateInternet.yml
+	cd ansible && $(ANSIBLE) SetupAudit.yml
 
 # Internet access denied: switch DNS and the private-internet caches to
 # offline mode (both follow the host state, internet_enabled).

@@ -1,0 +1,14 @@
+#cloud-config
+
+hostname: ${hostname}
+
+ssh_authorized_keys:
+  - ${ssh_public_key}
+
+packages:
+  - curl
+  - ca-certificates
+  - gnupg
+
+runcmd:
+  - echo "done" > /tmp/cloud-config.done

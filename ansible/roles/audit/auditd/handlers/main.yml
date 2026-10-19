@@ -1,0 +1,9 @@
+---
+- name: Load audit rules
+  ansible.builtin.command: augenrules --load
+  changed_when: true
+
+- name: Restart rsyslog
+  ansible.builtin.service:
+    name: rsyslog
+    state: restarted

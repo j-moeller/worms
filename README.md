@@ -115,7 +115,7 @@ Every host carries `proxmox_vm_id` (`qm status <vmid>`) and `opentofu_stack`.
       `security_groups`, which every VM stack attaches
     - `SetupHostNetwork.yml` (host sysctls + nftables, `make host-network`)
     - private_internet: the private-internet VMs
-    - persistent: database, dashboard, orchestrator
+    - persistent: database, dashboard, orchestrator, wazuh
     - ephemeral: DNS, scoring, logging
 - `make inventory` — generate `ansible/inventory.generated.yml` from OpenTofu
   and print the VM/IP configuration.
@@ -127,6 +127,8 @@ Every host carries `proxmox_vm_id` (`qm status <vmid>`) and `opentofu_stack`.
     - Scoring
     - Dashboard + Orchestrator (Django hosts; each started with its own
       settings module: `config.settings.dashboard` / `config.settings.orchestrator`)
+    - Wazuh + auditd on every infrastructure VM (`SetupAudit.yml`, see
+      "Central logging")
 - Django migrates DB tables (as the `django_migrator` role)
 - Ansible sets up:
     - DB (sets per-user least-privilege table permissions)
@@ -140,11 +142,12 @@ Risk zones, each on its own bridge (addresses: `opentofu/shared/shared-variables
 | vmbr20 | dmz | dashboard (internet via host DNAT :443) | 10.10.0.1 (gateway) |
 | vmbr21 | core | database, orchestrator | 10.11.0.1 (gateway) |
 | vmbr22 | ingest | scoring/logging database leg | 10.12.0.1 (gateway) |
+| vmbr24 | siem | wazuh (central log server) | 10.13.0.1 (gateway) |
 | vmbr23 | services | scoring/logging sandbox leg, private internet, DNS, sandbox-gw | none |
 | vmbr1xxx | sandbox | generated networks (10.64.0.0/10), sandbox VMs, sandbox-gw | none |
 | vmbr3 | mirror | traffic mirror for the monitor | none |
 | vmbr2 | mgmt-trusted | SSH: database, orchestrator | 10.3.0.1 |
-| vmbr5 | mgmt-exposed | SSH: dashboard, scoring, logging, DNS, private internet | 10.5.0.1 |
+| vmbr5 | mgmt-exposed | SSH: dashboard, scoring, logging, DNS, private internet, wazuh | 10.5.0.1 |
 | vmbr4 | mgmt-sandbox | SSH: sandbox VMs, sandbox-gw | 10.4.0.1 |
 
 Allowed flows (everything else is dropped twice: by the per-VM Proxmox firewall,
@@ -155,6 +158,9 @@ host nftables FORWARD chain):
 - dashboard → database:5432, orchestrator:443
 - scoring/logging → database:5432 (INSERT into one table each)
 - orchestrator → Proxmox API:8006 (scoped tokens)
+- every infrastructure VM → wazuh:514 (syslog, audit logs), routed by the host
+  from dmz/core/ingest and, for DNS and the private-internet VMs (whose default
+  route is their management NIC), from mgmt-exposed
 - sandbox VMs ↔ sandbox VMs (the experiment), routed by **sandbox-gw**, a
   router VM: sandbox → services bridge on the scoring/logging/private-internet
   ports only, SNATed to sandbox-gw's address. The host has no IP on any bridge
@@ -198,6 +204,40 @@ stacks (`private_internet`, `infrastructure/*`, `sandbox`) need both. Destroy in
 reverse (`make destroy_all`). Existing deployments made before the firewall
 stack are migrated by `make firewall-migrate` (run automatically by `make
 platform` / `make firewall`; state only).
+
+# Central logging (Wazuh + auditd)
+
+`SetupAudit.yml` (part of `make provision`):
+
+- **wazuh** VM (persistent stack, siem bridge, 4 vCPU / 8 GB / 50 GB): Wazuh
+  all-in-one (manager, indexer, dashboard), installed with the official
+  installation assistant (role `wazuh_server`). The manager listens for syslog
+  on tcp 514 from the infrastructure zones and archives **every** event, not
+  only those matching an alert rule.
+- **every infrastructure VM** (`audit_hosts`: database, dashboard,
+  orchestrator, scoring, logging, DNS, private internet; not the sandbox):
+  `auditd` records executed commands and changes to accounts, sudo, SSH,
+  systemd units, cron and kernel modules (`roles/audit/auditd/templates/worms.rules.j2`);
+  `rsyslog` ships `/var/log/audit/audit.log` to wazuh over TCP and queues on
+  disk while wazuh is unreachable. The audit keys (`audit-wazuh-c`, ...) are
+  the ones Wazuh's built-in audit rules know.
+
+The dashboard is reachable from the Proxmox host only. From your machine:
+
+```
+ssh -L 8443:10.13.0.30:443 root@<proxmox>      # then open https://localhost:8443
+```
+
+Log in as `admin`; the generated passwords are on the wazuh VM:
+
+```
+ssh debian@10.5.0.30 sudo tar -O -xf /root/wazuh-install-files.tar wazuh-install-files/wazuh-passwords.txt
+```
+
+Alerts are in *Threat Hunting*. To search all raw audit events, create the index
+pattern `wazuh-archives-*` once (*Dashboard management → Index patterns*,
+time field `timestamp`) and use *Discover*. Events from the VMs show the
+sending VM's address in `location` and its hostname in `predecoder.hostname`.
 
 # Containment of rogue sandbox VMs
 

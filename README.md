@@ -209,7 +209,8 @@ platform` / `make firewall`; state only).
 
 `SetupAudit.yml` (part of `make provision`):
 
-- **wazuh** VM (persistent stack, siem bridge, 4 vCPU / 8 GB / 50 GB): Wazuh
+- **wazuh** VM (persistent stack, siem bridge, 4 vCPU / 2 GB / 50 GB; Wazuh recommends
+  8 GB, so the indexer heap is capped at 512 MB): Wazuh
   all-in-one (manager, indexer, dashboard), installed with the official
   installation assistant (role `wazuh_server`). The manager listens for syslog
   on tcp 514 from the infrastructure zones and archives **every** event, not

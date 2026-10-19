@@ -5,6 +5,10 @@
 wazuh_version: "4.14"
 wazuh_install_args: "-a -i"
 
+# Java heap of the indexer (default 1g). The VM has 2 GB for manager, indexer
+# and dashboard together.
+wazuh_indexer_heap: 512m
+
 # Syslog listener for the audit logs (role auditd), and who may send.
 wazuh_syslog_port: 514
 wazuh_syslog_allowed:

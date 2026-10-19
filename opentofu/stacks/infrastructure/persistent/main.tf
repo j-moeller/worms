@@ -93,7 +93,7 @@ locals {
     wazuh = {
       user_data_file_id = local.platform.cloud_init.wazuh.file_id
       cpu               = 4
-      ram               = 8192
+      ram               = 2048 # below Wazuh's 8 GB; indexer heap capped (role wazuh_server)
       disk_size         = 50
       nics = [
         { bridge = local.nw.siem.name, cidr = "${local.infrastructure_ips.wazuh}/24", gateway = local.host_ips.siem },

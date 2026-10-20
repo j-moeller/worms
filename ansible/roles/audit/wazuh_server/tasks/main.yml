@@ -7,27 +7,24 @@
     dest: /root/wazuh-install.sh
     mode: "0700"
 
-# Before the installer: it starts the indexer, which must fit into the VM.
-- name: Create the indexer JVM options directory
-  ansible.builtin.file:
-    path: /etc/wazuh-indexer/jvm.options.d
-    state: directory
-    mode: "0755"
+- name: Install Wazuh (manager, indexer, dashboard)
+  ansible.builtin.command:
+    cmd: bash /root/wazuh-install.sh {{ wazuh_install_args }}
+    chdir: /root
+    creates: /var/ossec/bin/wazuh-control
 
+# Only after the installer: it refuses to run if /etc/wazuh-indexer exists.
+# Overrides the heap in jvm.options (read last).
 - name: Limit the indexer heap
   ansible.builtin.copy:
     dest: /etc/wazuh-indexer/jvm.options.d/worms-heap.options
     content: |
       -Xms{{ wazuh_indexer_heap }}
       -Xmx{{ wazuh_indexer_heap }}
-    mode: "0644"
+    owner: root
+    group: wazuh-indexer
+    mode: "0640"
   notify: Restart wazuh-indexer
-
-- name: Install Wazuh (manager, indexer, dashboard)
-  ansible.builtin.command:
-    cmd: bash /root/wazuh-install.sh {{ wazuh_install_args }}
-    chdir: /root
-    creates: /var/ossec/bin/wazuh-control
 
 # Receive the audit logs of the infrastructure VMs as syslog.
 - name: Listen for syslog

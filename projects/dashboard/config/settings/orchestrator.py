@@ -64,6 +64,16 @@ ORCHESTRATOR_TOKENS = {
     "dashboard": env("ORCHESTRATOR_DASHBOARD_TOKEN", ""),
 }
 
+# Round conductor (orchestrator/rounds, manage.py conduct_rounds). Times in
+# seconds. See docs/rounds.md.
+ROUND_CONDUCTOR = {
+    "worm_start_delay": int(env("ROUND_WORM_START_DELAY", "300")),
+    "round_duration": int(env("ROUND_DURATION", "3600")),
+    "end_drain": int(env("ROUND_END_DRAIN", "120")),
+    "job_timeout": int(env("ROUND_JOB_TIMEOUT", "1800")),
+    "capture_grace": int(env("ROUND_CAPTURE_GRACE", "120")),
+}
+
 LOGGING["loggers"]["orchestrator"] = {
     "handlers": ["console"],
     "level": LOG_LEVEL,

@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block header %}
+<title>WORMS//ARENA — Rounds</title>
+{% endblock %}
+
+{% block content %}
+<div style="max-width: 980px; margin: 0 auto; padding: 24px; font-family: system-ui, sans-serif;">
+  <h1>Round runs</h1>
+  <p style="color:#5f6b7a;">
+    One run per team and round. The animated timeline is served as JSON at
+    <code>/rounds/&lt;uuid&gt;/timeline/</code> (the player is a later task; see
+    <code>docs/rounds.md</code>).
+  </p>
+  <table style="width:100%; border-collapse: collapse;">
+    <thead>
+      <tr style="text-align:left; border-bottom:1px solid #d5dae1;">
+        <th style="padding:6px;">Round</th>
+        <th style="padding:6px;">#</th>
+        <th style="padding:6px;">Team</th>
+        <th style="padding:6px;">State</th>
+        <th style="padding:6px;">Timeline</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for run in runs %}
+      <tr style="border-bottom:1px solid #eef1f4;">
+        <td style="padding:6px;">{{ run.round }}</td>
+        <td style="padding:6px;">{{ run.position }}</td>
+        <td style="padding:6px;">{{ run.team }}</td>
+        <td style="padding:6px;">{{ run.state }}</td>
+        <td style="padding:6px;"><a href="/rounds/{{ run.uuid }}/timeline/">JSON</a></td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="5" style="padding:12px; color:#5f6b7a;">No runs yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

@@ -8,6 +8,7 @@ from dashboard.views.scoring import flag_capture_attempts
 from dashboard.views.teams import join_team, leave_team, team_registration
 from dashboard.views.uploads import upload
 from dashboard.views.todos import todos
+from dashboard.views.rounds import rounds, round_timeline_data
 from dashboard.views.topology import topology, topology_data
 from django.conf import settings
 from django.contrib import admin
@@ -38,6 +39,9 @@ urlpatterns = [
     path("profile/", profile, name="profile"),
     #
     path("todos/", todos, name="todos"),
+    #
+    path("rounds/", rounds, name="rounds"),
+    path("rounds/<uuid:uuid>/timeline/", round_timeline_data, name="round_timeline_data"),
     path("topology/", topology, name="topology"),
     path("topology/data/", topology_data, name="topology_data"),
     #

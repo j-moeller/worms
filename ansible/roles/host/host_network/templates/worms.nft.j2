@@ -12,6 +12,8 @@
 #   services or mirror bridges; the host has no address on them.
 # * INPUT from VM bridges: replies to host-initiated connections (SSH) and
 #   orchestrator -> Proxmox API only.
+# * The mirror bridge is receive-only for the monitor (bridge table below,
+#   and worms-mirror).
 # * Internet access for VMs: the rules exist but are gated by the set
 #   `internet_wan`, which is empty here. Only Internet.yml (internet=allowed) fills it,
 #   at runtime (a reboot or a reload empties it again).
@@ -147,8 +149,18 @@ table bridge worms_bridge {
 
   chain forward {
     type filter hook forward priority filter; policy accept;
+    meta ibrname "{{ b.mirror }}" counter drop comment "mirror: receive-only"
     meta ibrname "{{ b.services }}" jump services
     meta ibrname "{{ b.sandbox_glob }}" jump sandbox
+  }
+
+  # The mirror bridge only carries the copies worms-mirror sends out of the
+  # bridge device (bridge output path, not filtered here). Whatever a port
+  # (the monitor's capture NIC) sends into it goes nowhere: worms-mirror drops
+  # it at the port already, this is the second layer.
+  chain input {
+    type filter hook input priority filter; policy accept;
+    meta ibrname "{{ b.mirror }}" counter drop comment "mirror: receive-only"
   }
 
   # Only the services protocol (allowed ports, both directions) within the

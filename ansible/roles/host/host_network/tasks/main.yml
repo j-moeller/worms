@@ -81,6 +81,33 @@
     state: started
     daemon_reload: true
 
+# Traffic mirror for the monitor VM (see the script header).
+- name: Install traffic mirror
+  ansible.builtin.template:
+    src: worms-mirror.sh.j2
+    dest: /usr/local/sbin/worms-mirror
+    mode: "0755"
+  notify: Restart traffic mirror
+
+- name: Install traffic mirror unit
+  ansible.builtin.template:
+    src: worms-mirror.service.j2
+    dest: /etc/systemd/system/worms-mirror.service
+    mode: "0644"
+  notify: Restart traffic mirror
+
+- name: Enable traffic mirror
+  ansible.builtin.systemd:
+    name: worms-mirror
+    enabled: "{{ host_mirror_enabled }}"
+    state: "{{ 'started' if host_mirror_enabled else 'stopped' }}"
+    daemon_reload: true
+
+- name: Remove the mirror filters (mirror disabled)
+  ansible.builtin.command: /usr/local/sbin/worms-mirror clear
+  when: not host_mirror_enabled
+  changed_when: false
+
 # The Proxmox host firewall (input policy DROP) must also let the orchestrator
 # reach the API. Kept here rather than in OpenTofu: managing node-level rules
 # there risks taking over the datacenter rule list.

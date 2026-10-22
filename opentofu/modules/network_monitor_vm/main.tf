@@ -1,31 +1,72 @@
-resource "proxmox_virtual_environment_firewall_options" "monitor_server" {
+# Network monitor: receives a copy of every frame on the sandbox networks
+# (mirrored into the mirror bridge by the Proxmox host, ansible role
+# host_network: worms-mirror) and writes flow records to the database.
+#
+#   net0  data      ingest bridge, default route; database:5432 + syslog only
+#   net1  mgmt      mgmt-exposed bridge; SSH from the host only
+#   net2  capture   mirror bridge; no address, promiscuous, receive-only
+#
+# It parses attacker traffic, so it is treated like scoring/logging (high
+# risk): management on mgmt-exposed, INSERT-only database role.
+
+resource "proxmox_pool_membership" "pool_membership" {
+  pool_id = var.pool_id
+  vm_id   = proxmox_virtual_environment_vm.monitor.vm_id
+}
+
+# Default deny in both directions; ipfilter pins net0/net1 to their addresses.
+# The capture NIC has the Proxmox firewall disabled (below): the mirrored
+# frames are addressed to other VMs and would be dropped by it. It is made
+# receive-only on the host instead (worms-mirror drops everything the VM sends
+# into the mirror bridge; the bridge has no other port and no host address).
+resource "proxmox_virtual_environment_firewall_options" "monitor" {
   node_name = var.proxmox_instance
-  vm_id     = proxmox_virtual_environment_vm.monitor_server.vm_id
+  vm_id     = proxmox_virtual_environment_vm.monitor.vm_id
 
   enabled       = true
   input_policy  = "DROP"
   output_policy = "DROP"
+  ipfilter      = true
+  macfilter     = true
 }
 
-/*
-resource "proxmox_virtual_environment_firewall_rules" "monitor_server_ssh" {
-  node_name = var.proxmox_instance
-  vm_id     = proxmox_virtual_environment_vm.monitor_server.vm_id
+resource "proxmox_virtual_environment_firewall_ipset" "ipfilter" {
+  for_each = {
+    "ipfilter-net0" = var.data_nic.cidr
+    "ipfilter-net1" = var.management_nic.cidr
+  }
 
-  rule {
-    type    = "in"
-    action  = "ACCEPT"
-    proto   = "tcp"
-    dport   = "22"
-    source  = "10.3.0.1"
-    comment = "Allow SSH from Proxmox host"
+  node_name = var.proxmox_instance
+  vm_id     = proxmox_virtual_environment_vm.monitor.vm_id
+  name      = each.key
+  comment   = "Only the configured address may be sent from ${trimprefix(each.key, "ipfilter-")}"
+
+  cidr {
+    name = split("/", each.value)[0]
   }
 }
-*/
 
-resource "proxmox_virtual_environment_vm" "monitor_server" {
-  name      = "monitor-server"
+resource "proxmox_virtual_environment_firewall_rules" "monitor" {
   node_name = var.proxmox_instance
+  vm_id     = proxmox_virtual_environment_vm.monitor.vm_id
+
+  dynamic "rule" {
+    for_each = var.firewall_rules
+
+    content {
+      security_group = rule.value.group
+      iface          = rule.value.iface
+      comment        = "Apply security group: ${rule.value.group}${rule.value.iface == null ? "" : " on ${rule.value.iface}"}"
+    }
+  }
+}
+
+resource "proxmox_virtual_environment_vm" "monitor" {
+  name      = var.name
+  node_name = var.proxmox_instance
+
+  cpu { cores = var.cpu }
+  memory { dedicated = var.ram }
 
   # Only SSH is used: no guest agent (the host never parses guest-controlled
   # agent replies; stop/kill works without it), no serial console, no display,
@@ -35,20 +76,23 @@ resource "proxmox_virtual_environment_vm" "monitor_server" {
   tablet_device   = false
   stop_on_destroy = true
   vga { type = "none" }
-  cpu { cores = 2 }
-  memory { dedicated = 1024 }
 
-  tags = [
-    "infrastructure"
-  ]
+  tags = ["infrastructure", var.tag]
 
   initialization {
     datastore_id = "local-zfs"
 
+    # ipconfig0 / ipconfig1 only: the capture NIC (net2) gets no address.
     ip_config {
       ipv4 {
-        address = var.maintenance_network_cidr
-        gateway = var.maintenance_network_gateway
+        address = var.data_nic.cidr
+        gateway = var.data_nic.gateway
+      }
+    }
+
+    ip_config {
+      ipv4 {
+        address = var.management_nic.cidr
       }
     }
 
@@ -56,15 +100,21 @@ resource "proxmox_virtual_environment_vm" "monitor_server" {
   }
 
   network_device {
-    bridge   = var.vmbr_maintenance_network
+    bridge   = var.data_nic.bridge
     model    = "virtio"
     firewall = true
   }
 
   network_device {
-    bridge   = var.vmbr_monitor_network
+    bridge   = var.management_nic.bridge
     model    = "virtio"
     firewall = true
+  }
+
+  network_device {
+    bridge   = var.capture_bridge
+    model    = "virtio"
+    firewall = false
   }
 
   disk {
@@ -73,6 +123,6 @@ resource "proxmox_virtual_environment_vm" "monitor_server" {
     interface    = "virtio0"
     iothread     = true
     discard      = "on"
-    size         = 5
+    size         = var.disk_size
   }
 }

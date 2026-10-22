@@ -5,15 +5,18 @@ hostname: ${hostname}
 ssh_authorized_keys:
   - ${ssh_public_key}
 
+# Zeek itself is not in Debian: ansible role network_monitor installs it from
+# the Zeek project's openSUSE Build Service repository.
 packages:
   - tcpdump
   - tshark
   - iproute2
-  - bridge-utils
   - ethtool
-  - tshark
-  - zeek
   - python3
+  - python3-venv
+  - ca-certificates
+  - curl
+  - gpg
 
 runcmd:
   - echo "done" > /tmp/cloud-config.done

@@ -1,0 +1,226 @@
+#!/bin/bash
+# Managed by Ansible (role host_network). DO NOT EDIT.
+#
+# worms-mirror: copies every frame on the sandbox networks into the mirror
+# bridge ({{ bridges.mirror }}), where the monitor VM captures it.
+#
+# Where to tap: frames forwarded between two ports of a Linux bridge never pass
+# the bridge device's own qdiscs, so mirroring on vmbr1xxx itself (as
+# helpers/monitor_network.sh did) only sees broadcasts and traffic to/from the
+# host. Instead, the INGRESS of every bridge PORT is mirrored: each frame enters
+# its bridge through exactly one port, so every frame is copied exactly once.
+#
+#   * sandbox VM ports: everything
+#   * {{ host_mirror_router_name }} ports: only frames from the services
+#     bridge ({{ networks.services }}), i.e. the replies of scoring, logging,
+#     DNS and the private internet. Frames the router forwards between two
+#     sandbox networks were already copied where they entered the first
+#     network; mirroring them again would duplicate them.
+#   * ports of the mirror bridge (the monitor's capture NIC): everything they
+#     send is DROPPED, so the capture NIC is receive-only. (The host nftables
+#     bridge table drops it a second time.)
+#
+# The filters sit on the classic ingress qdisc (handle ffff:), which Proxmox
+# also uses for the NIC rate limit (filter pref 50). Ours has pref
+# {{ host_mirror_pref }} and ends with `continue`, so the rate limit still
+# applies. A port is handled only after it has existed for
+# {{ host_mirror_settle_seconds }}s: Proxmox (re)creates the qdisc while it
+# plugs a starting VM's tap, and must not race with us. Ports are re-checked on
+# every link event and every {{ host_mirror_interval }}s (Proxmox drops the
+# qdisc whenever it changes a rate limit).
+#
+#   worms-mirror run      reconcile forever (worms-mirror.service)
+#   worms-mirror once     reconcile once, without the settle delay
+#   worms-mirror status   one line per port; exit 1 if a port is not handled
+#   worms-mirror clear    remove all worms-mirror filters
+set -u
+shopt -s nullglob
+
+MIRROR="{{ bridges.mirror }}"
+# Bridge name patterns (globbed below, under /sys/class/net).
+BRIDGES=({{ ([bridges.sandbox_glob] + host_mirror_extra_bridges) | map('quote') | join(' ') }})
+ROUTER_NAME="{{ host_mirror_router_name }}"
+ROUTER_SOURCE="{{ networks.services }}"
+# 10.2.0.0/24 -> 0a020000/ffffff00, the way `tc filter show` prints a u32 match.
+hex_prefix() {
+  local a b c d len=${1#*/}
+  IFS=. read -r a b c d <<<"${1%/*}"
+  printf '%02x%02x%02x%02x/%08x' "$a" "$b" "$c" "$d" $(( (0xffffffff << (32 - len)) & 0xffffffff ))
+}
+ROUTER_MATCH="match $(hex_prefix "$ROUTER_SOURCE") at 12"   # IPv4 source address
+PVE_CONF_DIR="${WORMS_MIRROR_PVE_CONF_DIR:-/etc/pve/qemu-server}"
+PREF={{ host_mirror_pref }}
+SETTLE={{ host_mirror_settle_seconds }}
+INTERVAL={{ host_mirror_interval }}
+
+log() { logger -t worms-mirror "$*"; }
+
+# VMID of the sandbox router (its ports get the reduced filter), or empty.
+router_vmid() {
+  local conf
+  conf=$(grep -lx "name: $ROUTER_NAME" "$PVE_CONF_DIR"/*.conf 2>/dev/null | head -n1)
+  [ -n "$conf" ] && basename "$conf" .conf
+}
+
+# VMID of a bridge port: tap<vmid>i<n> (nftables firewall) or fwpr<vmid>p<n>
+# (iptables firewall).
+port_vmid() {
+  [[ "$1" =~ ^(tap|fwpr)([0-9]+)[ip][0-9]+$ ]] && echo "${BASH_REMATCH[2]}"
+}
+
+# Ports of the monitored bridges / of the mirror bridge.
+monitored_ports() {
+  local bridge path
+  for bridge in "${BRIDGES[@]}"; do
+    # shellcheck disable=SC2231 # $bridge is a pattern (vmbr1*)
+    for path in /sys/class/net/$bridge/brif/*; do
+      basename "$path"
+    done
+  done
+}
+
+mirror_ports() {
+  local path
+  for path in "/sys/class/net/$MIRROR/brif/"*; do
+    basename "$path"
+  done
+}
+
+# The filter worms-mirror wants on a port: mirror-all | mirror-router | drop.
+wanted() {
+  local port=$1 router=$2
+  if [ -e "/sys/class/net/$MIRROR/brif/$port" ]; then
+    echo drop
+  elif [ -n "$router" ] && [ "$(port_vmid "$port")" = "$router" ]; then
+    echo mirror-router
+  else
+    echo mirror-all
+  fi
+}
+
+# What is installed now (same names), or "none".
+installed() {
+  local out
+  out=$(tc filter show dev "$1" parent ffff: pref "$PREF" 2>/dev/null)
+  if [ -z "$out" ]; then
+    echo none
+  elif grep -q "mirred (Egress Mirror to device $MIRROR)" <<<"$out"; then
+    if grep -q "$ROUTER_MATCH" <<<"$out"; then echo mirror-router; else echo mirror-all; fi
+  elif grep -q "action order 1: gact action drop" <<<"$out"; then
+    echo drop
+  else
+    echo other
+  fi
+}
+
+apply() {
+  local port=$1 want=$2
+  tc qdisc show dev "$port" ingress 2>/dev/null | grep -q "qdisc ingress ffff:" \
+    || tc qdisc add dev "$port" handle ffff: ingress || return 1
+  tc filter del dev "$port" parent ffff: pref "$PREF" 2>/dev/null
+  case "$want" in
+    mirror-all)
+      tc filter add dev "$port" parent ffff: pref "$PREF" protocol all u32 match u32 0 0 \
+        action mirred egress mirror dev "$MIRROR" continue ;;
+    mirror-router)
+      tc filter add dev "$port" parent ffff: pref "$PREF" protocol ip u32 match ip src "$ROUTER_SOURCE" \
+        action mirred egress mirror dev "$MIRROR" continue ;;
+    drop)
+      tc filter add dev "$port" parent ffff: pref "$PREF" protocol all u32 match u32 0 0 action drop ;;
+  esac
+}
+
+# The mirror bridge as a hub: no MAC learning, no multicast snooping, so every
+# copied frame reaches the monitor.
+# Not being able to set these is logged, but does not stop the mirroring.
+prepare_mirror_bridge() {
+  [ -d "/sys/class/net/$MIRROR/bridge" ] || return 1
+  [ "$(cat "/sys/class/net/$MIRROR/bridge/ageing_time")" = 0 ] \
+    || ip link set dev "$MIRROR" type bridge ageing_time 0 \
+    || log "cannot disable MAC learning on $MIRROR"
+  [ "$(cat "/sys/class/net/$MIRROR/bridge/multicast_snooping")" = 0 ] \
+    || ip link set dev "$MIRROR" type bridge mcast_snooping 0 \
+    || log "cannot disable multicast snooping on $MIRROR"
+  return 0
+}
+
+declare -A FIRST_SEEN
+MISSING_LOGGED=0
+
+reconcile() {
+  local settle=$1 now router port want have
+  if ! prepare_mirror_bridge; then
+    [ "$MISSING_LOGGED" = 1 ] || log "mirror bridge $MIRROR does not exist; nothing mirrored"
+    MISSING_LOGGED=1
+    return
+  fi
+  MISSING_LOGGED=0
+  now=$(date +%s)
+  router=$(router_vmid)
+
+  declare -A present=()
+  for port in $(monitored_ports) $(mirror_ports); do
+    present[$port]=1
+    [ -n "${FIRST_SEEN[$port]:-}" ] || FIRST_SEEN[$port]=$now
+    (( now - FIRST_SEEN[$port] >= settle )) || continue
+    want=$(wanted "$port" "$router")
+    have=$(installed "$port")
+    [ "$want" = "$have" ] && continue
+    if apply "$port" "$want"; then
+      log "$port: $want (was $have)"
+    else
+      log "$port: failed to install $want"
+    fi
+  done
+  for port in "${!FIRST_SEEN[@]}"; do
+    [ -n "${present[$port]:-}" ] || unset "FIRST_SEEN[$port]"
+  done
+}
+
+status() {
+  local router port want have rc=0
+  router=$(router_vmid)
+  printf '%-14s %-10s %-14s %s\n' PORT BRIDGE WANTED INSTALLED
+  for port in $(monitored_ports) $(mirror_ports); do
+    want=$(wanted "$port" "$router")
+    have=$(installed "$port")
+    printf '%-14s %-10s %-14s %s\n' "$port" "$(basename "$(readlink -f "/sys/class/net/$port/master")")" "$want" "$have"
+    [ "$want" = "$have" ] || rc=1
+  done
+  return $rc
+}
+
+clear_all() {
+  local port
+  for port in $(monitored_ports) $(mirror_ports); do
+    [ "$(installed "$port")" = none ] || tc filter del dev "$port" parent ffff: pref "$PREF"
+  done
+}
+
+case "${1:-run}" in
+  run)
+    log "started (bridges: ${BRIDGES[*]} -> $MIRROR)"
+    trap 'kill "${MON_PID:-}" 2>/dev/null; exit 0' TERM INT
+    while true; do
+      [ -n "${MON_PID:-}" ] || coproc MON { exec ip -o monitor link 2>/dev/null; }
+      reconcile "$SETTLE"
+      # Wake up on the next link event (a VM's tap appearing), at the latest
+      # after INTERVAL seconds; then wait out the settle time of new ports.
+      read -r -t "$INTERVAL" -u "${MON[0]}" _
+      rc=$?
+      if [ "$rc" -eq 0 ]; then
+        sleep "$SETTLE"
+        while read -r -t 0.2 -u "${MON[0]}" _; do :; done
+      elif [ "$rc" -le 128 ]; then
+        # ip monitor ended (EOF): restart it, poll meanwhile.
+        log "ip monitor exited; restarting it"
+        wait "${MON_PID:-}" 2>/dev/null
+        unset MON_PID
+        sleep "$INTERVAL"
+      fi
+    done ;;
+  once) reconcile 0 ;;
+  status) status ;;
+  clear) clear_all ;;
+  *) echo "usage: $0 run|once|status|clear" >&2; exit 2 ;;
+esac

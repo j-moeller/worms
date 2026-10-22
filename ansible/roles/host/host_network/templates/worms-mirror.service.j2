@@ -1,0 +1,13 @@
+# Managed by Ansible (role host_network). DO NOT EDIT.
+[Unit]
+Description=worms-platform: mirror the sandbox networks to the monitor ({{ bridges.mirror }})
+After=pve-cluster.service network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/sbin/worms-mirror run
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

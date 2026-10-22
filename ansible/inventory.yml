@@ -38,6 +38,7 @@ all:
     cve_search:
     wikipedia:
     wazuh:
+    monitor:
     sandbox_gw:
     sandbox:
 
@@ -54,6 +55,7 @@ all:
       children:
         scoring:
         logging:
+        monitor:
         database:
         dashboard:
         orchestrator:
@@ -71,6 +73,12 @@ all:
         scoring:
         logging:
 
+    # Network monitor: Zeek on the mirror bridge, flow records -> database
+    # (role network_monitor).
+    network_monitor_hosts:
+      children:
+        monitor:
+
     # Central log server (role wazuh_server).
     wazuh_hosts:
       children:
@@ -84,6 +92,7 @@ all:
         orchestrator:
         scoring:
         logging:
+        monitor:
         dns:
         private_internet:
 

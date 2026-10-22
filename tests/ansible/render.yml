@@ -1,0 +1,23 @@
+---
+# Renders a role template with the role's defaults and the addressing of a
+# generated inventory, without touching any host (tests/test_templates.py).
+#
+#   ansible-playbook -i <inventory.generated.yml> tests/ansible/render.yml \
+#     -e role_dir=<abs path to the role> -e template=worms.nft.j2 -e dest=/tmp/out
+#
+# Extra variables (-e / -e @file.yml) override the defaults.
+- name: Render a role template locally
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Load the role defaults
+      ansible.builtin.include_vars:
+        file: "{{ role_dir }}/defaults/main.yml"
+      when: (role_dir ~ '/defaults/main.yml') is file
+
+    - name: Render
+      ansible.builtin.template:
+        src: "{{ role_dir }}/templates/{{ template }}"
+        dest: "{{ dest }}"
+        mode: "0644"

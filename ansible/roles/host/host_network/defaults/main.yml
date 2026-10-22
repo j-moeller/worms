@@ -51,3 +51,15 @@ host_sandbox_limits:
 # Watchdog: if the Proxmox firewall is not enforcing, hard-stop all sandbox VMs.
 host_fw_watchdog_interval: 15s
 host_fw_guest_table: "bridge proxmox-firewall-guests"
+
+# Traffic mirror for the monitor VM (worms-mirror, see the script header):
+# copies every frame entering a sandbox bridge (and the bridges listed here,
+# e.g. bridges.services) into bridges.mirror. The services bridge is NOT
+# mirrored by default: what the sandbox sends there is already copied on the
+# sandbox side, before sandbox-gw hides the VM addresses behind its own.
+host_mirror_enabled: true
+host_mirror_extra_bridges: []
+host_mirror_router_name: sandbox-gw
+host_mirror_pref: 10               # tc filter priority (Proxmox rate limit: 50)
+host_mirror_settle_seconds: 5      # leave new ports to Proxmox for this long
+host_mirror_interval: 10           # re-check all ports at least this often

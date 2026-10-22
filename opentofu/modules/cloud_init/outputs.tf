@@ -22,6 +22,14 @@ output "flask" {
   }
 }
 
+output "network_monitor" {
+  value = {
+    file_id      = proxmox_virtual_environment_file.network_monitor_vm_static.id
+    datastore_id = var.datastore_id
+    node_name    = var.node_name
+  }
+}
+
 output "nginx" {
   value = {
     file_id      = proxmox_virtual_environment_file.nginx_vm_static.id

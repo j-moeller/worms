@@ -99,9 +99,37 @@ module "sandbox_apis" {
   pool_id            = local.platform.pools["ephemeral"].pool_id
 }
 
-# The network monitor (modules/network_monitor_vm) is not deployed yet. When it
-# is: data NIC on ingest (db_client), mirror NIC on vmbr3, management on
-# mgmt-exposed (it parses attacker traffic, so it is high risk).
+# Network monitor: receives a copy of all sandbox traffic on the mirror bridge
+# (the host mirrors every sandbox bridge port into it, worms-mirror in ansible
+# role host_network) and writes flow records into the database.
+# net0 = ingest (default route; outbound database:5432 and syslog only),
+# net1 = mgmt-exposed (it parses attacker traffic, so it is high risk),
+# net2 = mirror (no address, no Proxmox firewall, receive-only on the host).
+module "monitor" {
+  source = "../../../modules/network_monitor_vm"
+
+  proxmox_instance = var.proxmox_instance
+  name             = "monitor"
+  data_nic = {
+    bridge  = local.nw.ingest.name
+    cidr    = "${local.infrastructure_ips.monitor}/24"
+    gateway = local.host_ips.ingest
+  }
+  management_nic = {
+    bridge = local.nw.mgmt_exposed.name
+    cidr   = "${local.management_ips.monitor}/24"
+  }
+  capture_bridge = local.nw.mirror.name
+  firewall_rules = [
+    { group = local.sg.db_client, iface = "net0" },
+    { group = local.sg.provisioning, iface = "net0" },
+    { group = local.sg.log_client, iface = "net0" },
+    { group = local.sg.ssh, iface = "net1" },
+  ]
+  user_data_file_id = local.platform.cloud_init.network_monitor.file_id
+  disk_file_id      = local.platform.os_images.debian.file_id
+  pool_id           = local.platform.pools["ephemeral"].pool_id
+}
 
 # Renamed module instances (keep the existing VMs; only their NICs change).
 moved {

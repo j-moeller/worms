@@ -133,6 +133,10 @@ def build_inventory(infrastructure: dict, stacks: dict, sandbox: dict) -> dict:
             }
             if key in sandbox_addresses:
                 host["sandbox_addresses"] = sandbox_addresses[key]
+            # Optional per-VM facts a stack exports for Ansible (e.g. the
+            # monitor's capture_mac). Never overrides the keys above.
+            for var, value in sorted((vm.get("host_vars") or {}).items()):
+                host.setdefault(var, value)
             children.setdefault(group, {"hosts": {}})["hosts"][hostname] = host
 
     return {"all": {"vars": group_vars, "children": children}}

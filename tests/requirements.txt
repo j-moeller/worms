@@ -8,3 +8,5 @@ psycopg2-binary
 flask
 pyyaml
 shellcheck-py
+proxmoxer
+requests

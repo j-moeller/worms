@@ -80,6 +80,9 @@ def test_database_clients_are_allowed_everywhere(infrastructure):
     users = yaml.safe_load((REPO / "ansible" / "group_vars" / "all.yml").read_text())["postgresql_users"]
     nft = (REPO / "ansible" / "roles" / "host" / "host_network" / "templates" / "worms.nft.j2").read_text()
     for user in users:
+        if "proxmox.host" in user["cidr"]:  # the round agent, on the host
+            assert "source  = local.proxmox_host_ip" in firewall, f"{user['name']}: host not allowed"
+            continue
         vm = re.search(r"infrastructure_ips\.(\w+)", user["cidr"]).group(1)
         assert vm in allowed, f"{vm} ({user['name']}) missing in the database security group"
         assert vm in infrastructure["infrastructure_ips"]

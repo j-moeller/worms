@@ -149,6 +149,17 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "database
       comment = "Allow ${rule.value}"
     }
   }
+
+  # The round agent (docs/rounds.md) and the admin role (pg_hba) connect from
+  # the Proxmox host's address on the core bridge.
+  rule {
+    type    = "in"
+    action  = "ACCEPT"
+    proto   = "tcp"
+    dport   = "5432"
+    source  = local.proxmox_host_ip
+    comment = "Allow the Proxmox host (round agent)"
+  }
 }
 
 # Database leg of scoring/logging (and later the monitor): nothing but 5432.

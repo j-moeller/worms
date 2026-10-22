@@ -41,6 +41,7 @@ GENERATED_PASSWORDS = {
     "vault_dbuser_logging_password": 24,
     "vault_dbuser_network_monitor_password": 24,
     "vault_dbuser_scoring_password": 24,
+    "vault_round_agent_db_password": 24,
     "vault_pki_ca_passphrase": 24,
 }
 GENERATED_SECRET_KEYS = {

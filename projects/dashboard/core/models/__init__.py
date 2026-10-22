@@ -11,3 +11,4 @@ from .logging import Logging, LoggingAttempt
 from .worms import MalwareArtifact, Upload, WormDeployment, WormDeploymentPlan
 from .topology import TopologySnapshot
 from .monitoring import NetworkEvent, NetworkFlow
+from .rounds import GamePlanStep, HostJob, RoundRun, RunEvent

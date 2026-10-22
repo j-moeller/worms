@@ -202,3 +202,53 @@ def test_privileges_reapply_cleanly(database, render):
     conn.commit()
     conn.close()
     insert_flow(database, "dbuser_network_monitor", uid="Creapply")
+
+
+# --- round orchestration (docs/rounds.md) -------------------------------------
+
+
+def test_orchestrator_requests_host_jobs_but_cannot_fake_results(database):
+    run(database, "django_orchestrator",
+        "INSERT INTO host_jobs (uuid, kind, params, state, result, error) "
+        "VALUES (gen_random_uuid(), 'check', '{}', 'queued', '{}', '')")  # fmt: skip
+    denied(database, "django_orchestrator", "UPDATE host_jobs SET state = 'done'")
+    denied(database, "django_orchestrator", "DELETE FROM host_jobs")
+
+
+def test_round_agent_reads_jobs_and_writes_results_only(database):
+    run(database, "postgres",
+        "INSERT INTO host_jobs (uuid, kind, params, state, result, error) "
+        "VALUES (gen_random_uuid(), 'teardown', '{}', 'queued', '{}', '')")  # fmt: skip
+    # Claim a job the way the agent does.
+    rows = run(database, "round_agent",
+               "UPDATE host_jobs SET state = 'running', started_at = now() WHERE id = ("
+               "SELECT id FROM host_jobs WHERE state = 'queued' ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1) "
+               "RETURNING id, kind")  # fmt: skip
+    assert rows and rows[0][1] in ("teardown", "check")
+    run(database, "round_agent",
+        "UPDATE host_jobs SET state = 'done', result = '{\"ok\": true}', finished_at = now() WHERE id = %s", [rows[0][0]])  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "UPDATE host_jobs SET kind = 'prepare'",
+        "UPDATE host_jobs SET params = '{}'",
+        "INSERT INTO host_jobs (uuid, kind, params, state, result, error) VALUES (gen_random_uuid(), 'check', '{}', 'queued', '{}', '')",
+        "DELETE FROM host_jobs",
+        "SELECT * FROM round_runs",
+        "SELECT * FROM virtual_machines",
+        "SELECT * FROM access_tokens",
+        "SELECT * FROM users",
+        "UPDATE virtual_machines SET ctf_flag_hash = 'x'",
+        "INSERT INTO flag_captures (team_id, round_id, vm_id, flag_capture_attempt_id, created_at) VALUES (1, 1, 1, 1, now())",
+    ],
+)  # fmt: skip
+def test_round_agent_cannot(database, sql):
+    denied(database, "round_agent", sql)
+
+
+def test_orchestrator_processes_attempts(database):
+    run(database, "django_orchestrator", "UPDATE flag_capture_attempts SET processed = processed, processed_at = processed_at WHERE false")
+    denied(database, "django_orchestrator", "UPDATE flag_capture_attempts SET vm_flag_hash = 'x'")
+    denied(database, "django_orchestrator", "DELETE FROM flag_capture_attempts")

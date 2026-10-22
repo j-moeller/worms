@@ -65,6 +65,11 @@ class FlagCapture(models.Model):
                 fields=["flag_capture_attempt"],
                 name="unique_capture_per_attempt",
             ),
+            # A VM counts once per team, however often its flag is submitted.
+            models.UniqueConstraint(
+                fields=["team", "vm"],
+                name="unique_capture_per_team_vm",
+            ),
         ]
 
     def __str__(self):

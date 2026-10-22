@@ -34,9 +34,17 @@ postgresql_table_privileges:
     # manage.py collect_topology (update_or_create).
     - privs: INSERT, UPDATE
       tables: [topology_snapshots]
-    # manage.py deploy_worms (bulk_create).
+    # Round orchestration (orchestrator/rounds, docs/rounds.md): runs, game
+    # plans and the sandbox VMs they register; host jobs are only requested.
+    - privs: INSERT, UPDATE
+      tables: [round_runs, game_plan_steps, virtual_machines]
     - privs: INSERT
-      tables: [worm_deployment_plans, worm_deployments]
+      tables: [worm_deployment_plans, worm_deployments, host_jobs, run_events]
+    # Processing of the sandbox APIs' attempts into captures / logs.
+    - privs: UPDATE (processed, processed_at)
+      tables: [flag_capture_attempts, logging_attempts]
+    - privs: INSERT
+      tables: [flag_captures, logging]
 
   # Sandbox-facing APIs (roles/applications/sandbox_api): append one attempt,
   # validate team tokens. No other table, not even the attempts they wrote.
@@ -66,6 +74,16 @@ postgresql_table_privileges:
       tables: [network_flows]
     - privs: INSERT (log, ts, uid, data)
       tables: [network_events]
+
+  # Round agent on the Proxmox host (ansible/roles/host/round_agent): reads
+  # the jobs the orchestrator requested and writes their state and results.
+  # Nothing else: everything it needs is in the job (validated by the agent),
+  # and what it produces goes back through the job's result.
+  round_agent:
+    - privs: SELECT
+      tables: [host_jobs]
+    - privs: UPDATE (state, started_at, heartbeat_at, finished_at, result, error)
+      tables: [host_jobs]
 
 # The roles' table, column and sequence privileges as one sorted list; compared
 # before and after the grants to report "changed" only on a real change.

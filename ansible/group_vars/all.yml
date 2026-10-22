@@ -60,6 +60,11 @@ postgresql_users:
     password: "{{ vault_dbuser_scoring_password }}"
     cidr: "{{ infrastructure_ips.scoring }}/32"
     conn_limit: 8   # sandbox-facing: bounded (app pool: 4)
+  # Round agent on the Proxmox host (docs/rounds.md): job queue only.
+  - name: round_agent
+    password: "{{ vault_round_agent_db_password }}"
+    cidr: "{{ proxmox.host }}/32"
+    conn_limit: 4
 
 # --- PKI / internal CA ------------------------------------------------------
 pki_domain: worms.internal

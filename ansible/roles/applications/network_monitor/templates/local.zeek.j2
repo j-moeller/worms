@@ -1,0 +1,32 @@
+# Managed by Ansible (role network_monitor). DO NOT EDIT.
+#
+# Zeek on the monitor's capture NIC. Loaded after Zeek's default scripts
+# (base/: connection tracking, protocol detection on any port, the
+# dns/http/ssl/ssh/... analyzers), plus:
+
+# JSON logs (one object per line): what zeek-shipper reads.
+@load policy/tuning/json-logs
+# conn.log: Community ID flow hash (same id as in Suricata, Wireshark, ...)
+# and the MAC addresses of both sides.
+@load policy/protocols/conn/community-id-logging
+@load policy/protocols/conn/mac-logging
+# stats.log / capture_loss.log: packets seen and lost (the heartbeat).
+@load policy/misc/stats
+@load policy/misc/capture-loss
+# software.log: client/server software seen (SSH, HTTP user agents, ...).
+@load policy/protocols/http/software
+@load policy/protocols/ssh/software
+
+# The mirrored frames come from virtio NICs with checksum offload: their
+# checksums are often not filled in yet. Zeek would discard them.
+redef ignore_checksums = T;
+
+redef Site::local_nets += { {{ network_monitor_local_nets | join(', ') }} };
+
+# Rotate into the archive directory (zeek-shipper follows the files there);
+# no post-processing (compression would break the shipper's file position).
+redef Log::default_rotation_interval = {{ network_monitor_rotation_interval }};
+redef Log::default_rotation_dir = "{{ network_monitor_archive_dir }}";
+
+redef Stats::report_interval = {{ network_monitor_stats_interval }};
+redef CaptureLoss::watch_interval = {{ network_monitor_capture_loss_interval }};

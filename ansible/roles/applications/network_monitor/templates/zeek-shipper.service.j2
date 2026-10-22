@@ -1,0 +1,50 @@
+# Managed by Ansible (role network_monitor). DO NOT EDIT.
+#
+# Reads Zeek's logs (group {{ network_monitor_zeek_user }}, read-only) and inserts them into the
+# database (INSERT-only role). Sees no packets; may only reach the database.
+[Unit]
+Description=Ship Zeek logs to the database (network_flows, network_events)
+After=network-online.target zeek.service
+Wants=network-online.target
+
+[Service]
+User={{ network_monitor_shipper_user }}
+Group={{ network_monitor_shipper_user }}
+SupplementaryGroups={{ network_monitor_zeek_user }}
+EnvironmentFile={{ network_monitor_shipper_env_file }}
+ExecStart=/usr/bin/python3 -I {{ network_monitor_shipper_dir }}/zeek_shipper.py
+Restart=always
+RestartSec=5
+StateDirectory={{ network_monitor_shipper_state_dir | basename }}
+StateDirectoryMode=0700
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadOnlyPaths={{ network_monitor_log_dir }} {{ network_monitor_archive_dir }}
+# tmpfs, not true: libpq looks for ~/.postgresql/ and must not get EACCES.
+ProtectHome=tmpfs
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+RestrictAddressFamilies=AF_UNIX AF_INET
+IPAddressDeny=any
+IPAddressAllow={{ network_monitor_db_host }}/32
+
+MemoryMax={{ network_monitor_shipper_memory_max }}
+TasksMax=16
+
+[Install]
+WantedBy=multi-user.target

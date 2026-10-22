@@ -1,0 +1,76 @@
+# Network monitor (VM `monitor`): Zeek captures on the mirror NIC (net2, the
+# copy of every sandbox bridge, see worms-mirror in role host_network) and
+# writes JSON logs; zeek-shipper (files/zeek_shipper.py) inserts them into the
+# database: conn.log -> network_flows, the logs below -> network_events.
+#
+# Per-host value from the generated inventory (OpenTofu, ephemeral stack):
+#   monitor_capture_mac   MAC of the capture NIC
+---
+# Zeek is not in Debian: the Zeek project's packages on the openSUSE Build
+# Service (installed while internet access is allowed, i.e. `make provision`).
+# The repository key is fetched from the same place over HTTPS.
+network_monitor_zeek_repo: "https://download.opensuse.org/repositories/security:/zeek/Debian_{{ ansible_distribution_major_version }}/"
+# zeek = the current feature release; e.g. zeek-8.0 pins the LTS line.
+network_monitor_zeek_package: zeek
+network_monitor_zeek_prefix: /opt/zeek
+
+network_monitor_zeek_user: zeek
+network_monitor_shipper_user: zeek-shipper
+network_monitor_config_dir: /etc/zeek-worms
+network_monitor_log_dir: /var/lib/zeek/logs           # current logs (Zeek's working directory)
+network_monitor_archive_dir: /var/lib/zeek/archive    # rotated logs
+network_monitor_shipper_dir: /opt/zeek-shipper
+network_monitor_shipper_state_dir: /var/lib/zeek-shipper
+network_monitor_shipper_env_file: /etc/zeek-shipper/zeek-shipper.env
+
+# Zeek rotates its logs every interval (Zeek interval syntax) into the archive
+# directory; rotated logs are deleted after the retention. They are the
+# shipper's buffer: what is not in the database when they are deleted is lost.
+network_monitor_rotation_interval: "1 hr"
+network_monitor_archive_retention_hours: 48
+# stats.log / capture_loss.log (packets seen and lost): also the heartbeat in
+# network_events.
+network_monitor_stats_interval: "1 min"
+network_monitor_capture_loss_interval: "5 min"
+
+# Addresses Zeek treats as local (local_orig/local_resp in conn.log).
+network_monitor_local_nets:
+  - "{{ networks.sandbox_vms }}"
+  - "{{ networks.services }}"
+
+# Zeek logs shipped to network_events (conn.log is always shipped, to
+# network_flows). Application layer details + the monitor's own status.
+network_monitor_event_logs:
+  - dns
+  - http
+  - ssl
+  - ssh
+  - ftp
+  - smtp
+  - dhcp
+  - notice
+  - weird
+  - software
+  - stats
+  - capture_loss
+
+# Shipper throughput caps (rows per second / burst). Above them the rows wait
+# in the log files (backlog in the `shipper` heartbeat event), nothing is
+# dropped unless the backlog outlives the archive retention.
+network_monitor_max_flows_per_second: 2000
+network_monitor_flow_burst: 20000
+network_monitor_max_events_per_second: 1000
+network_monitor_event_burst: 10000
+network_monitor_max_event_bytes: 4096
+network_monitor_report_seconds: 60
+
+# Resource ceilings: a flood degrades the monitor, not the VM.
+network_monitor_zeek_memory_max: 1200M
+network_monitor_shipper_memory_max: 256M
+
+network_monitor_db_name: "{{ postgres_db }}"
+network_monitor_db_host: "{{ postgres_host }}"
+network_monitor_db_port: 5432
+network_monitor_db_user: dbuser_network_monitor
+network_monitor_db_password: "{{ vault_dbuser_network_monitor_password }}"
+network_monitor_db_sslrootcert: /etc/ssl/certs/ca-certificates.crt

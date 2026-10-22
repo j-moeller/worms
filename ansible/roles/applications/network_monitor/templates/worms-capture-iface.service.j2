@@ -1,0 +1,14 @@
+# Managed by Ansible (role network_monitor). DO NOT EDIT.
+[Unit]
+Description=worms: prepare the capture NIC {{ network_monitor_capture_iface }} (promiscuous, no address)
+After=network-online.target
+Wants=network-online.target
+Before=zeek.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/worms-capture-iface
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,7 @@
+# Managed by Ansible (role network_monitor). DO NOT EDIT.
+[Unit]
+Description=Delete rotated Zeek logs older than {{ network_monitor_archive_retention_hours }} hours
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/find {{ network_monitor_archive_dir }} -type f -mmin +{{ network_monitor_archive_retention_hours * 60 }} -delete

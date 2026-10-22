@@ -1,0 +1,48 @@
+# Managed by Ansible (role network_monitor). DO NOT EDIT.
+#
+# Zeek as a single standalone process (no zeekctl), as its own user with just
+# the capabilities to capture. It parses attacker traffic: no IP networking,
+# read-only system, no access to the shipper's database credentials.
+[Unit]
+Description=Zeek network monitor on {{ network_monitor_capture_iface }}
+Requires=worms-capture-iface.service
+After=worms-capture-iface.service
+
+[Service]
+User={{ network_monitor_zeek_user }}
+Group={{ network_monitor_zeek_user }}
+WorkingDirectory={{ network_monitor_log_dir }}
+UMask=0027
+ExecStart={{ network_monitor_zeek_prefix }}/bin/zeek -i {{ network_monitor_capture_iface }} {{ network_monitor_config_dir }}/local.zeek
+Restart=always
+RestartSec=5
+
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths={{ network_monitor_log_dir }} {{ network_monitor_archive_dir }}
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_PACKET AF_INET AF_INET6
+# Capture uses packet sockets (not affected); no IP traffic at all.
+IPAddressDeny=any
+
+MemoryMax={{ network_monitor_zeek_memory_max }}
+TasksMax=64
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

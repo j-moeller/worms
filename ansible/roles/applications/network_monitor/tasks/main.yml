@@ -1,0 +1,187 @@
+---
+- name: Assert per-host variables
+  ansible.builtin.assert:
+    that:
+      - monitor_capture_mac is defined
+      - monitor_capture_mac | length == 17
+    fail_msg: >-
+      monitor_capture_mac (the capture NIC's MAC) comes from the OpenTofu
+      ephemeral stack via the generated inventory: run `make inventory`.
+
+# The capture NIC is found by its MAC (OpenTofu), never by its name or
+# position. Facts use '_' for '-' in interface names.
+- name: Find the capture interface
+  ansible.builtin.set_fact:
+    network_monitor_capture_iface: "{{ item }}"
+  loop: "{{ ansible_facts.interfaces }}"
+  when: (ansible_facts[item | replace('-', '_')].macaddress | default('') | lower) == (monitor_capture_mac | lower)
+
+- name: Require the capture interface (and not the default route's)
+  ansible.builtin.assert:
+    that:
+      - network_monitor_capture_iface is defined
+      - network_monitor_capture_iface != ansible_facts.default_ipv4.interface | default('')
+    fail_msg: "No interface with MAC {{ monitor_capture_mac }} (or it carries the default route)."
+
+- name: Install packages
+  ansible.builtin.apt:
+    name: [python3, python3-psycopg2, python3-debian, ethtool, iproute2, ca-certificates]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+# Zeek is not in Debian: the Zeek project's OBS repository, key from the same
+# URL (fetched over HTTPS while internet access is allowed).
+- name: Add the Zeek repository
+  ansible.builtin.deb822_repository:
+    name: zeek
+    types: deb
+    uris: "{{ network_monitor_zeek_repo }}"
+    suites: /
+    signed_by: "{{ network_monitor_zeek_repo }}Release.key"
+
+- name: Install Zeek
+  ansible.builtin.apt:
+    name: "{{ network_monitor_zeek_package }}"
+    state: present
+    update_cache: true
+    install_recommends: false
+  notify: Restart zeek
+
+- name: Create the service users
+  ansible.builtin.user:
+    name: "{{ item }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+  loop:
+    - "{{ network_monitor_zeek_user }}"
+    - "{{ network_monitor_shipper_user }}"
+
+# Logs: written by Zeek, read (group) by the shipper only.
+- name: Create the log directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ network_monitor_zeek_user }}"
+    group: "{{ network_monitor_zeek_user }}"
+    mode: "0750"
+  loop:
+    - "{{ network_monitor_log_dir | dirname }}"
+    - "{{ network_monitor_log_dir }}"
+    - "{{ network_monitor_archive_dir }}"
+
+- name: Create the configuration directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: "{{ item.group }}"
+    mode: "0750"
+  loop:
+    - {path: "{{ network_monitor_config_dir }}", group: "{{ network_monitor_zeek_user }}"}
+    - {path: "{{ network_monitor_shipper_env_file | dirname }}", group: root}
+    - {path: "{{ network_monitor_shipper_dir }}", group: "{{ network_monitor_shipper_user }}"}
+
+# --- capture NIC -------------------------------------------------------------
+
+- name: Install the capture interface script
+  ansible.builtin.template:
+    src: worms-capture-iface.sh.j2
+    dest: /usr/local/sbin/worms-capture-iface
+    mode: "0755"
+  notify: Restart capture interface
+
+- name: Install the capture interface unit
+  ansible.builtin.template:
+    src: worms-capture-iface.service.j2
+    dest: /etc/systemd/system/worms-capture-iface.service
+    mode: "0644"
+  notify: Restart capture interface
+
+- name: Enable the capture interface unit
+  ansible.builtin.systemd:
+    name: worms-capture-iface
+    enabled: true
+    state: started
+    daemon_reload: true
+
+# --- Zeek --------------------------------------------------------------------
+
+- name: Configure Zeek
+  ansible.builtin.template:
+    src: local.zeek.j2
+    dest: "{{ network_monitor_config_dir }}/local.zeek"
+    owner: root
+    group: "{{ network_monitor_zeek_user }}"
+    mode: "0640"
+    # Parse only (Zeek exits after loading the scripts).
+    validate: "{{ network_monitor_zeek_prefix }}/bin/zeek --parse-only %s"
+  notify: Restart zeek
+
+- name: Install the Zeek unit
+  ansible.builtin.template:
+    src: zeek.service.j2
+    dest: /etc/systemd/system/zeek.service
+    mode: "0644"
+  notify: Restart zeek
+
+- name: Enable Zeek
+  ansible.builtin.systemd:
+    name: zeek
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Install the archive cleanup
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    mode: "0644"
+  loop:
+    - zeek-archive-cleanup.service
+    - zeek-archive-cleanup.timer
+
+- name: Enable the archive cleanup
+  ansible.builtin.systemd:
+    name: zeek-archive-cleanup.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+
+# --- shipper -----------------------------------------------------------------
+
+# Root-owned and read-only for the service: a compromised shipper cannot
+# modify itself.
+- name: Deploy the shipper
+  ansible.builtin.copy:
+    src: zeek_shipper.py
+    dest: "{{ network_monitor_shipper_dir }}/zeek_shipper.py"
+    owner: root
+    group: "{{ network_monitor_shipper_user }}"
+    mode: "0644"
+  notify: Restart zeek-shipper
+
+- name: Install the shipper environment file (secrets)
+  ansible.builtin.template:
+    src: zeek-shipper.env.j2
+    dest: "{{ network_monitor_shipper_env_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: "{{ hide_secrets }}"
+  notify: Restart zeek-shipper
+
+- name: Install the shipper unit
+  ansible.builtin.template:
+    src: zeek-shipper.service.j2
+    dest: /etc/systemd/system/zeek-shipper.service
+    mode: "0644"
+  notify: Restart zeek-shipper
+
+- name: Enable the shipper
+  ansible.builtin.systemd:
+    name: zeek-shipper
+    enabled: true
+    state: started
+    daemon_reload: true

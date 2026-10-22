@@ -1,0 +1,4 @@
+---
+# Network monitor VM (OpenTofu: infrastructure/ephemeral, key monitor).
+# monitor_capture_mac comes from the generated inventory. Settings: role
+# network_monitor (defaults/main.yml).

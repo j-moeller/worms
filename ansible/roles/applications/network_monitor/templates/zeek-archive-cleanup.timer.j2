@@ -1,0 +1,10 @@
+# Managed by Ansible (role network_monitor). DO NOT EDIT.
+[Unit]
+Description=Delete old rotated Zeek logs (hourly)
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target

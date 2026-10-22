@@ -145,6 +145,7 @@ configure:
 	cd ansible && $(ANSIBLE) ConfigureNginxDjango.yml
 	cd ansible && $(ANSIBLE) SetupDbAndDashboard.yml
 	cd ansible && $(ANSIBLE) SetupSandboxApi.yml
+	cd ansible && $(ANSIBLE) SetupNetworkMonitor.yml
 	cd ansible && $(ANSIBLE) SetupPrivateInternet.yml
 	cd ansible && $(ANSIBLE) SetupAudit.yml
 

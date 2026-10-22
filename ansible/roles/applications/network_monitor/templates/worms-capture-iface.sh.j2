@@ -1,0 +1,18 @@
+#!/bin/bash
+# Managed by Ansible (role network_monitor). DO NOT EDIT.
+#
+# The capture NIC ({{ network_monitor_capture_iface }}, MAC {{ monitor_capture_mac }}) only
+# receives the mirrored traffic: up and promiscuous (the copies are addressed
+# to other VMs), no address, no ARP, no IPv6, so the VM never sends anything
+# there (the host drops it anyway). Offloads off: Zeek wants the packets as
+# they were on the wire, not merged by GRO/LRO.
+set -u
+IFACE="{{ network_monitor_capture_iface }}"
+
+sysctl -q -w "net.ipv6.conf.$IFACE.disable_ipv6=1" || true
+ip addr flush dev "$IFACE"
+ip link set dev "$IFACE" arp off multicast off promisc on up
+for feature in rx tx sg tso gso gro lro rxvlan txvlan; do
+  ethtool -K "$IFACE" "$feature" off >/dev/null 2>&1 || true
+done
+ip link show dev "$IFACE" | grep -q PROMISC

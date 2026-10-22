@@ -1,0 +1,21 @@
+---
+# Network monitor (role network_monitor): Zeek on the mirror NIC, zeek-shipper
+# into the database. Run after SetupDbAndDashboard.yml (tables and the
+# INSERT-only grants; the shipper retries until they exist) and
+# DistributeCA.yml (the database certificate is verified). Zeek is installed
+# from the internet (make provision). The host side (worms-mirror, copying the
+# sandbox bridges to the mirror bridge) is SetupHostNetwork.yml.
+- name: Configure the network monitor
+  hosts: network_monitor_hosts
+  become: true
+
+  pre_tasks:
+    - name: Wait for cloud-init completion
+      ansible.builtin.command:
+        cmd: cloud-init status --wait
+      register: cloud_init_status
+      changed_when: false
+      failed_when: cloud_init_status.rc not in [0, 2]
+
+  roles:
+    - network_monitor

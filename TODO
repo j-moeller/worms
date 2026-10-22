@@ -15,9 +15,9 @@
 
 [ ] Monitoring
  - [x] Monitoring of single interface (vmbr1)
- - [ ] Monitoring server (Zeek)
- - [ ] Monitoring of multiple vmbr (depends on complex topology)
- - [ ] Writing to DB
+ - [x] Monitoring server (Zeek)
+ - [x] Monitoring of multiple vmbr (worms-mirror: every sandbox bridge port)
+ - [x] Writing to DB (network_flows, network_events)
  - [ ] Display of network activity on webpage
 
 [ ] Heartbeat
@@ -29,7 +29,7 @@
  - [ ] Initialization with secrets from VMs
  - [ ] Initialization of different teams
  - [x] Connect to DB
- - [ ] Writing to DB
+ - [x] Writing to DB (fixed: database defaults, docs/findings.md)
  - [x] Display of team points on webpage
 
 [ ] Database
@@ -40,12 +40,12 @@
     - [x] Logging
     - [x] scoring
     - [ ] heartbeat
-    - [ ] monitor
+    - [x] monitor
 
 [ ] logging
  - [x] Create logging server (REST API)
  - [x] Connect to DB
- - [ ] Writing to DB
+ - [x] Writing to DB (fixed: database defaults, docs/findings.md)
  - [ ] Display in web server
  - [ ] Download
 
@@ -73,3 +73,8 @@
 [x] Limit request size, limit request frequency
 
 [ ] Watch dog, failsafe, killswitch
+[ ] Testing
+ - [x] Offline suite (make test)
+ - [x] End-to-end simulation (make simulate)
+ - [ ] Run make simulate on the real host (not done yet)
+ - [ ] Port-isolation hookscript is not attached (docs/findings.md)

@@ -1,0 +1,89 @@
+# Findings, state and changes: network monitor, monitoring database, testing
+
+Work on branch `claude/jolly-ride-5az76k` (based on `feature/auditd-wazuh`).
+Details: [monitoring.md](monitoring.md), [testing.md](testing.md).
+
+## What already existed (assessment)
+
+| Building block | State found | Now |
+|---|---|---|
+| `opentofu/modules/network_monitor_vm` | Not deployed anywhere. No pool, no `ipfilter`/`macfilter`, the `security_groups` variable unused, the SSH rule commented out, so no way in. Only a management and a mirror NIC: **no path to the database**. The mirror NIC had the Proxmox firewall on with input policy DROP, which would drop every mirrored frame (they are addressed to other VMs). | Reworked like `infrastructure_vm` and deployed in the ephemeral stack: data NIC on ingest, management on mgmt-exposed, capture NIC on the mirror bridge without firewall and address. |
+| Addresses (`shared-variables.tf`) | `monitor` already had `10.12.0.100` (ingest) and `10.5.0.100` (mgmt-exposed). | Used as is. |
+| Mirror bridge `vmbr3` | Created by the platform stack, host has no address on it; host nftables drops it at the inet level. | Plus: bridge-level drop of everything entering it (receive-only). |
+| Proxmox firewall | The `database` group already accepted `monitor`; `db_client` ("and later the monitor") reusable. | Used as is. |
+| Host nftables | Already routed `monitor → database:5432`. | Used as is. |
+| Database role | `dbuser_network_monitor` existed (pg_hba from `10.12.0.100/32`, vault password) with **no table privileges** (`[]`) and no tables. | Tables `network_flows`/`network_events`, INSERT-only grants, connection limit. |
+| Mirroring (`helpers/monitor_network.sh`) | Manual. Mirrored the **bridge device**, which misses every frame forwarded between VMs (only broadcasts and host traffic pass the bridge device's qdisc), and mirrored **into `vmbr4`, which is now the sandbox management bridge**. | Replaced by the `worms-mirror` service on the host (per-port, automatic). The helper now exits with a warning. |
+| cloud-init `vm-network-monitor` | Listed `zeek` (not in Debian 13: the whole package step would fail) and `tshark` twice. | Zeek comes from the Zeek project's OBS repository via Ansible. |
+
+## Bugs found (and fixed)
+
+1. **Scoring and logging could not write to the database.** The sandbox
+   APIs insert only `(team_token_hash, vm_flag_hash | log_data)`, as their
+   INSERT-only roles allow. But `processed`, `created_at` and the logging
+   attempt's `uuid` only had **Python-side** Django defaults, no database
+   defaults, so every INSERT failed with a NOT NULL violation (the API answers
+   503). This matches the unchecked "Writing to DB" items in `TODO`. Found by
+   `tests/test_database.py`. Fix: database defaults for `processed`/`created_at`
+   (migration `0004`); the logging API generates the `uuid` and may insert
+   that one column. `UUID4()` as a database default is not available on
+   SQLite, which the DEBUG setup uses.
+2. **`makemigrations` under the orchestrator settings planned to drop most
+   tables.** `core/models/__init__.py` imported only two models; the rest were
+   registered only through the dashboard's URLconf. Fix: it imports every
+   model module.
+3. **worms-mirror itself** (during development, caught by its test): the
+   iproute2 keyword is `mcast_snooping`, not `multicast_snooping`.
+
+## Open issues (not changed: outside this task)
+
+- **The port-isolation hookscript is not attached to any VM.**
+  `hook_script_file_id` is commented out ("TODO: HOOK") in
+  `infrastructure_vm`, `private_internet_vm`, the sandbox VMs and sandbox-gw,
+  so the README's "management bridges are port-isolated" does not hold. The
+  isolation on the management bridges currently rests on the Proxmox firewall
+  alone (output policy DROP, `ssh` group inbound only), and
+  `make simulate` checks that from a sandbox VM. Possibly because Proxmox lets only
+  `root@pam` set hookscripts, not API tokens.
+- The sandbox VMs do not trust the internal CA (README "Round start":
+  "distribute the self-signed CA" is not implemented for the sandbox group).
+  The simulation copies the CA into its own temp file.
+- `opentofu/stacks/sandbox/generated_vms.tf` is an old, fully commented-out
+  topology using `10.5.x.0/24`, which overlaps mgmt-exposed. Harmless while
+  commented; `generated_vms_01.tf` is not `tofu fmt`-clean (cosmetic).
+- Nobody processes the attempts yet (`processed` stays false; no
+  `flag_captures`/`logging` rows are created).
+- Infrastructure VMs have no time synchronisation configured. Flow
+  timestamps come from the monitor's clock, submission timestamps from the
+  database's.
+- Retention of `network_flows` (see monitoring.md, Limitations).
+
+## Changes (by commit)
+
+1. *Deploy the network monitor VM and mirror the sandbox traffic to it:*
+   OpenTofu module + ephemeral stack, cloud-init output, `host_vars` in the
+   inventory generator, `worms-mirror` + nftables, inventory groups, test
+   fixtures, mirror tests.
+2. *Monitoring schema, INSERT-only grants, zeek-shipper; fix attempt
+   inserts:* Django models/migrations `0003`/`0004`, grants, `zeek_shipper.py`,
+   the scoring/logging fix, database/API/shipper tests.
+3. *Ansible role network_monitor:* Zeek + capture NIC + shipper + archive
+   cleanup, `SetupNetworkMonitor.yml` in `make provision`, Ansible tests.
+4. *Test suite and end-to-end simulation:* `Simulate.yml` + helper scripts,
+   `make test`, `make simulate`, tofu/simulation tests.
+5. *Documentation:* this file, monitoring.md, testing.md, README, TODO.
+
+## How it was verified, and what was not
+
+- Offline suite: 138 passed, 2 skipped. The skips are kernel features
+  missing in the development container (nftables bridge family for `nft -c`,
+  tc `gact` for the drop test).
+- `tofu validate` of all six stacks, with OpenTofu 1.13.2 and bpg/proxmox
+  0.118.0 built from source.
+- The `worms-mirror` logic ran against real kernel bridges, veths and tc in
+  network namespaces, with exactly-once delivery checked by tcpdump.
+- **Not run on a Proxmox host** (none available): VM creation, the Proxmox
+  side of the firewall, Zeek itself (its OBS repository was not reachable
+  from the development environment), the systemd hardening in practice.
+  First steps on the real host: `make` (or `make infrastructure host-network
+  provision`), deploy a sandbox, `make simulate`.

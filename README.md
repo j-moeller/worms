@@ -116,7 +116,7 @@ Every host carries `proxmox_vm_id` (`qm status <vmid>`) and `opentofu_stack`.
     - `SetupHostNetwork.yml` (host sysctls + nftables, `make host-network`)
     - private_internet: the private-internet VMs
     - persistent: database, dashboard, orchestrator, wazuh
-    - ephemeral: DNS, scoring, logging
+    - ephemeral: DNS, scoring, logging, monitor
 - `make inventory` — generate `ansible/inventory.generated.yml` from OpenTofu
   and print the VM/IP configuration.
 - `make provision` — Ansible sets up:
@@ -127,6 +127,8 @@ Every host carries `proxmox_vm_id` (`qm status <vmid>`) and `opentofu_stack`.
     - Scoring
     - Dashboard + Orchestrator (Django hosts; each started with its own
       settings module: `config.settings.dashboard` / `config.settings.orchestrator`)
+    - Network monitor: Zeek + zeek-shipper (`SetupNetworkMonitor.yml`, see
+      "Network monitoring")
     - Wazuh + auditd on every infrastructure VM (`SetupAudit.yml`, see
       "Central logging")
 - Django migrates DB tables (as the `django_migrator` role)
@@ -141,13 +143,13 @@ Risk zones, each on its own bridge (addresses: `opentofu/shared/shared-variables
 |---|---|---|---|
 | vmbr20 | dmz | dashboard (internet via host DNAT :443) | 10.10.0.1 (gateway) |
 | vmbr21 | core | database, orchestrator | 10.11.0.1 (gateway) |
-| vmbr22 | ingest | scoring/logging database leg | 10.12.0.1 (gateway) |
+| vmbr22 | ingest | scoring/logging/monitor database leg | 10.12.0.1 (gateway) |
 | vmbr24 | siem | wazuh (central log server) | 10.13.0.1 (gateway) |
 | vmbr23 | services | scoring/logging sandbox leg, private internet, DNS, sandbox-gw | none |
 | vmbr1xxx | sandbox | generated networks (10.64.0.0/10), sandbox VMs, sandbox-gw | none |
-| vmbr3 | mirror | traffic mirror for the monitor | none |
+| vmbr3 | mirror | copy of all sandbox traffic, monitor capture NIC (receive-only) | none |
 | vmbr2 | mgmt-trusted | SSH: database, orchestrator | 10.3.0.1 |
-| vmbr5 | mgmt-exposed | SSH: dashboard, scoring, logging, DNS, private internet, wazuh | 10.5.0.1 |
+| vmbr5 | mgmt-exposed | SSH: dashboard, scoring, logging, monitor, DNS, private internet, wazuh | 10.5.0.1 |
 | vmbr4 | mgmt-sandbox | SSH: sandbox VMs, sandbox-gw | 10.4.0.1 |
 
 Allowed flows (everything else is dropped twice: by the per-VM Proxmox firewall,
@@ -157,6 +159,9 @@ host nftables FORWARD chain):
 - internet → dashboard:443 (host DNAT, `host_publish_dashboard: true` on `proxmox_host`)
 - dashboard → database:5432, orchestrator:443
 - scoring/logging → database:5432 (INSERT into one table each)
+- monitor → database:5432 (INSERT into network_flows / network_events)
+- host → mirror bridge: a copy of every frame entering a sandbox bridge
+  (`worms-mirror`); nothing the monitor sends there goes anywhere
 - orchestrator → Proxmox API:8006 (scoped tokens)
 - every infrastructure VM → wazuh:514 (syslog, audit logs), routed by the host
   from dmz/core/ingest and, for DNS and the private-internet VMs (whose default
@@ -216,7 +221,7 @@ platform` / `make firewall`; state only).
   on tcp 514 from the infrastructure zones and archives **every** event, not
   only those matching an alert rule.
 - **every infrastructure VM** (`audit_hosts`: database, dashboard,
-  orchestrator, scoring, logging, DNS, private internet; not the sandbox):
+  orchestrator, scoring, logging, monitor, DNS, private internet; not the sandbox):
   `auditd` records executed commands and changes to accounts, sudo, SSH,
   systemd units, cron and kernel modules (`roles/audit/auditd/templates/worms.rules.j2`);
   `rsyslog` ships `/var/log/audit/audit.log` to wazuh over TCP and queues on
@@ -239,6 +244,37 @@ Alerts are in *Threat Hunting*. To search all raw audit events, create the index
 pattern `wazuh-archives-*` once (*Dashboard management → Index patterns*,
 time field `timestamp`) and use *Discover*. Events from the VMs show the
 sending VM's address in `location` and its hostname in `predecoder.hostname`.
+
+# Network monitoring
+
+The **monitor** VM (ephemeral stack) records every connection on the sandbox
+networks in the database: `worms-mirror` on the host copies each frame that
+enters a sandbox bridge into the mirror bridge (`vmbr3`); Zeek on the
+monitor's capture NIC analyses it; `zeek-shipper` inserts one row per
+connection into `network_flows` (time, addresses, ports, tcp/udp/icmp,
+application protocol detected from the payload, bytes and packets per
+direction, TCP state, ...) and application details (DNS names, HTTP requests,
+TLS server names, ...) plus heartbeats into `network_events`. INSERT-only
+role, TLS-verified. Design, research and limitations: `docs/monitoring.md`.
+
+```
+worms-mirror status                      # on the host: which ports are mirrored
+SELECT * FROM network_flows ORDER BY ts DESC LIMIT 20;
+```
+
+# Testing
+
+```
+make test        # offline suite: OpenTofu/Ansible checks, DB privileges, APIs,
+                 # zeek-shipper, worms-mirror (network namespaces); no Proxmox needed
+make simulate    # end to end on the deployed platform: a sandbox VM submits to
+                 # scoring/logging and makes traffic; checks the database
+                 # (submissions, flows exactly once with exact sizes), services
+                 # and containment; PASS/FAIL report
+```
+
+Details: `docs/testing.md`. Findings and open issues of this work:
+`docs/findings.md`.
 
 # Containment of rogue sandbox VMs
 
@@ -274,7 +310,8 @@ sending VM's address in `location` and its hostname in `predecoder.hostname`.
     - monitor VM
 - `make inventory` — refresh `inventory.generated.yml` so the new sandbox VMs
   (with the IPs OpenTofu just assigned) appear in Ansible's `sandbox` group.
-- Python sets up "mirroring" of vmbrs to monitor network
+- Mirroring of the sandbox bridges to the monitor is automatic
+  (`worms-mirror` on the host picks up every new sandbox NIC)
 - Python generates worm deployment (adds to DB)
 - Ansible sets up (over the sandbox group):
     - distribute the self-signed CA / certificates

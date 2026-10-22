@@ -1,3 +1,12 @@
+# SUPERSEDED by worms-mirror (ansible role host_network, docs/monitoring.md).
+# Do not run this script:
+#   * vmbr4 is now the sandbox MANAGEMENT bridge: mirroring into it would copy
+#     the sandbox traffic onto a management network.
+#   * tc on the bridge device itself only sees broadcasts and traffic to/from
+#     the host, not the frames forwarded between VMs.
+# Kept for reference only.
+exit 1
+
 MONITORED=vmbr1
 MIRROR=vmbr4
 

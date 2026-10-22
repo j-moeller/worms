@@ -1,0 +1,118 @@
+# Testing
+
+Two layers:
+
+| | `make test` | `make simulate` |
+|---|---|---|
+| Runs | anywhere (laptop, CI, the Proxmox host) | on the Proxmox host, against the deployed platform |
+| Needs | Python 3; optionally PostgreSQL server binaries, `tofu` (+ provider), `ip`/`tc`/`tcpdump` and root, `nft`, `systemd-analyze` | a provisioned platform; a deployed sandbox for the traffic part |
+| Covers | configuration, code, privileges, mirror logic | the running system end to end: features, configuration, containment |
+| Changes things | nothing outside temp dirs and private network namespaces | creates a test team/token, removes it afterwards |
+
+## `make test`: offline suite
+
+`make test` creates `.venv-test` from `tests/requirements.txt` on first use
+and runs `pytest` (`PYTEST_ARGS="-k shipper -x"` to narrow it down). A test
+whose tool is missing is **skipped with the reason** (`-ra` summary), so the
+suite runs everywhere and does as much as it can. On the development machine:
+138 passed, 2 skipped (its kernel lacks the nftables bridge family and the tc
+`gact` action).
+
+| File | What |
+|---|---|
+| `test_database.py` | A throwaway PostgreSQL with the **real migrations** (as `django_migrator`), the roles from `group_vars/all.yml` and the **rendered `privileges.sql.j2`**. Permission matrix: scoring/logging/monitor can append to exactly their table and read nothing they wrote; no role can create objects; the dashboard/orchestrator can read the monitoring tables; ON CONFLICT DO NOTHING works without SELECT, upserts are refused; grants re-apply idempotently. |
+| `test_sandbox_api.py` | The scoring and logging APIs (`app.py`, Flask test client) against that database as their INSERT-only roles: valid submissions are stored; invalid/revoked tokens, oversized/deep/odd payloads, wrong methods are refused before the database; team rate limit; database down. Uses the same test-team SQL as the simulation. |
+| `test_zeek_shipper.py` | Parsing of Zeek JSON (realistic conn/dns records, hostile values: bad addresses, huge numbers, NUL bytes, forged timestamps, SQL in fields); size limits; following logs across rotation and restarts; rewind after a failed insert; end to end into the database: no duplicates after a restart (even with lost state), nothing lost in a database outage, throttling without dropping, heartbeat. |
+| `test_worms_mirror.py` | The rendered `worms-mirror` in **network namespaces** (a miniature host: sandbox bridge, two VMs, a sandbox-gw, the mirror bridge with the monitor): each frame copied exactly once (tcpdump on the "monitor"), router ports copy only services replies, Proxmox' rate-limit filter still runs, re-plugged ports are repaired, the daemon picks up new ports, the monitor's port is receive-only. Root only; uses unique namespace names, so it is safe on the Proxmox host. |
+| `test_ansible.py` | `--syntax-check` of every playbook; rendered templates: host nftables (`nft -c`), shell scripts (`bash -n`, shellcheck), systemd units (`systemd-analyze verify`), Zeek config and unit hardening; inventory groups (monitor in audit/tls/network_monitor groups); provisioning order. |
+| `test_tofu.py` | `tofu fmt`; `tofu validate` of every stack (needs the provider, see below); the addressing fixture matches `shared-variables.tf`; cross-layer consistency (every database client allowed by the Proxmox security group, pg_hba and host routing; the monitor's capture NIC unfiltered and address-less). |
+| `test_simulation.py` | A rehearsal of `Simulate.yml` with localhost as the Proxmox host and database (the throwaway PostgreSQL): the test team is created and removed, missing platform parts are reported as FAIL (not a crash); `verify.sql` recognises a successful run. |
+
+`tests/fixtures/platform-outputs.json` is the platform stack's
+`infrastructure` output, computed by tofu from
+`opentofu/shared/shared-variables.tf`. `test_tofu.py` regenerates it and
+fails when it is stale. To update it, copy `shared-variables.tf` and the
+`infrastructure` output into an empty directory, then run `tofu init && tofu
+apply -var proxmox_api_url=x -var proxmox_api_token=x && tofu output -json >
+tests/fixtures/platform-outputs.json`.
+
+`tofu validate` needs the `bpg/proxmox` provider. Without registry access,
+set `TF_CLI_CONFIG_FILE` to a config with a `filesystem_mirror` that holds
+the provider binary.
+
+## `make simulate`: end-to-end simulation
+
+```
+cd opentofu/stacks/sandbox && make apply      # a sandbox, ideally >= 2 VMs
+make simulate                                  # = make inventory + ansible-playbook Simulate.yml
+make simulate ARGS="-e sim_wait_seconds=600"   # wait longer for the records
+```
+
+The playbook plays a sandbox VM (`groups.sandbox[0]`, peer
+`groups.sandbox[1]`). Each check is recorded as PASS or FAIL. At the end
+there is one report, and the run fails if any check failed:
+
+```
+PASS  proxmox.local  host: worms-mirror covers every port  [...]
+PASS  sandbox-vm01   sandbox -> scoring: flag submission accepted (201, TLS verified)
+PASS  database...    scoring: flag stored in flag_capture_attempts (exactly once)
+PASS  database...    monitor: UDP flow recorded once, 5 packets / 500 bytes / 640 IP bytes
+FAIL  ...
+```
+
+What it checks:
+
+1. **Host:** proxmox-firewall, the host firewall, the firewall watchdog and
+   worms-mirror are active; every sandbox port is mirrored and the monitor's
+   is receive-only (`worms-mirror status`); nftables drops what enters the
+   mirror bridge.
+2. **Services:** units on scoring, logging, monitor and database (incl.
+   auditd/rsyslog); the monitor's capture NIC is promiscuous without address.
+3. **Scoring and logging (sandbox → API → database):** from the sandbox VM,
+   DNS resolves `scoring.worms.internal`; a flag and a log are submitted over
+   HTTPS **with certificate verification** through sandbox-gw (201); refused
+   requests: invalid token 401, oversized body 413 (nginx), GET 403, other
+   path 404. In the database: the flag (hash) and the log are stored **exactly
+   once**.
+4. **Monitor (traffic → Zeek → database):** the sandbox VM makes traffic
+   with known properties to the peer VM on random ports (so earlier runs never
+   match): HTTP on a high port, which must come out as `service = http` (detected
+   from the payload) and exactly one flow row; 5 UDP datagrams of 100 bytes,
+   which must give exactly one flow with 5 packets / 500 payload bytes / 640 IP
+   bytes (no copy is missed or duplicated); a connection to a closed port
+   (`REJ`). Also the API connection, recorded with the **VM's own address**
+   (copied before SNAT) and `service = ssl`; the DNS query and the HTTP
+   request in `network_events`; the shipper and Zeek heartbeats younger than
+   3/5 minutes.
+5. **Containment:**
+   - sandbox VM: cannot reach the database, dashboard, orchestrator, wazuh,
+     the monitor, the Proxmox API/host, sandbox-gw's management address,
+     non-API ports of the services, the internet;
+   - monitor: reaches only the database and wazuh;
+   - scoring/logging: reach only the database;
+   - the database roles, tested **from their own VMs with their own
+     credentials over verified TLS**: monitor INSERT-only, cannot read or
+     modify anything; scoring/logging only read token hashes, cannot read or
+     modify attempts or other tables;
+   - frames the monitor sends on its capture NIC are dropped by the host
+     (tc drop counter).
+6. **Cleanup:** the test team, token and everything submitted with it are
+   deleted (checked). The recorded flows stay: they are real observations,
+   on random high ports.
+
+Zeek writes a connection when it ends, and UDP "connections" end after a
+minute of silence. So the database checks are polled for up to
+`sim_wait_seconds` (default 240).
+
+Without a sandbox, steps 3 and 4 and the sandbox containment are reported as
+FAIL ("sandbox deployed"); the other checks still run.
+
+## Not covered (yet)
+
+- Dashboard/orchestrator behaviour (Django views, the topology collector).
+- Processing of the attempts (`processed`, scoring of flags): not
+  implemented in the platform yet.
+- Wazuh: whether the audit logs arrive (only that auditd/rsyslog run).
+- Load: flood behaviour of the APIs and the monitor (the limits are
+  unit-tested, not stress-tested).
+- The private-internet services.

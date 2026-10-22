@@ -5,16 +5,21 @@ from core.models.competition import Round
 from core.models.team import Team
 from django.db import models
 from django.db.models import Q
+from django.db.models.functions import Now
 
 
 class LoggingAttempt(models.Model):
+    # No database default (UUID4() is not available on SQLite, the DEBUG
+    # database): the logging API generates it (sandbox_api/files/app.py).
     uuid = models.UUIDField(default=uuid.uuid4, unique=True)
     team_token_hash = models.TextField()
     log_data = models.JSONField()
 
-    processed = models.BooleanField(default=False)
+    # Database defaults as well: the sandbox API inserts only the columns
+    # above (INSERT-only role), so these must be filled by PostgreSQL.
+    processed = models.BooleanField(default=False, db_default=False)
     processed_at = models.DateTimeField(default=None, blank=True, null=True)
-    created_at = models.DateTimeField(default=clock.now)
+    created_at = models.DateTimeField(default=clock.now, db_default=Now())
 
     class Meta:
         db_table = "logging_attempts"

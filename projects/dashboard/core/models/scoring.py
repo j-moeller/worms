@@ -4,6 +4,7 @@ from core.models.team import Team
 from core.models.vm import VirtualMachine
 from django.db import models
 from django.db.models import Q
+from django.db.models.functions import Now
 from django.db.models.aggregates import Count
 
 
@@ -11,9 +12,11 @@ class FlagCaptureAttempt(models.Model):
     team_token_hash = models.TextField()
     vm_flag_hash = models.TextField()
 
-    processed = models.BooleanField(default=False)
+    # Database defaults as well: the sandbox API inserts only the columns
+    # above (INSERT-only role), so these must be filled by PostgreSQL.
+    processed = models.BooleanField(default=False, db_default=False)
     processed_at = models.DateTimeField(default=None, blank=True, null=True)
-    created_at = models.DateTimeField(default=clock.now)
+    created_at = models.DateTimeField(default=clock.now, db_default=Now())
 
     class Meta:
         db_table = "flag_capture_attempts"

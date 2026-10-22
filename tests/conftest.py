@@ -94,3 +94,23 @@ def render(generated_inventory, tmp_path_factory):
         return dest.read_text()
 
     return _render
+
+
+@pytest.fixture(scope="session")
+def database(render):
+    """A PostgreSQL cluster set up like the database VM (tests/pg.py)."""
+    import pg
+
+    pytest.importorskip("psycopg2")
+    pytest.importorskip("django")
+    bindir = pg.pg_bindir()
+    if bindir is None:
+        pytest.skip("PostgreSQL server binaries (initdb) not installed")
+    privileges = render("ansible/roles/database/setup_db_permissions", "privileges.sql.j2")
+    cluster = pg.Cluster(bindir)
+    cluster.start()
+    try:
+        pg.setup(cluster, privileges)
+        yield cluster
+    finally:
+        cluster.stop()

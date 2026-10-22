@@ -48,13 +48,24 @@ postgresql_table_privileges:
       tables: [access_tokens]
 
   dbuser_logging:
-    - privs: INSERT (team_token_hash, log_data)
+    - privs: INSERT (uuid, team_token_hash, log_data)
       tables: [logging_attempts]
     - privs: SELECT (access_token_hash, team_id, revoked)
       tables: [access_tokens]
 
-  # The network monitor is not deployed yet: no table access.
-  dbuser_network_monitor: []
+  # Network monitor (roles/applications/network_monitor, zeek_shipper.py):
+  # append flows and events; it cannot read anything, not even what it wrote.
+  # network_flows is inserted with ON CONFLICT DO NOTHING (unique uid), which
+  # needs no SELECT.
+  dbuser_network_monitor:
+    - privs: >-
+        INSERT (uid, community_id, ts, duration, src_ip, src_port, dst_ip,
+        dst_port, src_mac, dst_mac, transport, service, src_bytes, dst_bytes,
+        src_pkts, dst_pkts, src_ip_bytes, dst_ip_bytes, missed_bytes,
+        conn_state, history)
+      tables: [network_flows]
+    - privs: INSERT (log, ts, uid, data)
+      tables: [network_events]
 
 # The roles' table, column and sequence privileges as one sorted list; compared
 # before and after the grants to report "changed" only on a real change.

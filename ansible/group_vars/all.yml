@@ -55,6 +55,7 @@ postgresql_users:
   - name: dbuser_network_monitor
     password: "{{ vault_dbuser_network_monitor_password }}"
     cidr: "{{ infrastructure_ips.monitor }}/32"
+    conn_limit: 4   # parses sandbox traffic: bounded (zeek-shipper: 1)
   - name: dbuser_scoring
     password: "{{ vault_dbuser_scoring_password }}"
     cidr: "{{ infrastructure_ips.scoring }}/32"

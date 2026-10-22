@@ -27,6 +27,7 @@ import logging
 import os
 import threading
 import time
+import uuid
 
 import psycopg2
 from flask import Flask, jsonify, request
@@ -55,9 +56,11 @@ TEAM_BAN_AFTER = env_int("TEAM_BAN_AFTER", 100)  # rejected requests per minute
 TEAM_BAN_SECONDS = env_int("TEAM_BAN_SECONDS", 300)
 TOKEN_REFRESH_SECONDS = env_int("TOKEN_REFRESH_SECONDS", 60)
 
+# Every other column has a database default (processed, created_at); the
+# logging attempt's uuid is generated here (no database default on SQLite).
 INSERT = {
     "scoring": "INSERT INTO flag_capture_attempts (team_token_hash, vm_flag_hash) VALUES (%s, %s)",
-    "logging": "INSERT INTO logging_attempts (team_token_hash, log_data) VALUES (%s, %s)",
+    "logging": "INSERT INTO logging_attempts (uuid, team_token_hash, log_data) VALUES (%s, %s, %s)",
 }[KIND]
 
 app = Flask(__name__)
@@ -280,7 +283,8 @@ def submit():
         return error(400, problem)
 
     try:
-        execute(INSERT, (token_hash, value))
+        params = (token_hash, value) if KIND == "scoring" else (str(uuid.uuid4()), token_hash, value)
+        execute(INSERT, params)
     except Exception:
         log.exception("insert failed")
         return error(503, "Temporarily unavailable.")

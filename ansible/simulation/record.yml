@@ -1,0 +1,14 @@
+---
+# One check result of Simulate.yml, kept on the host that made it; the last
+# play collects them all. Vars: check (name), ok (bool), detail (text).
+- name: "{{ check }}"
+  ansible.builtin.set_fact:
+    sim_results: >-
+      {{ sim_results | default([]) + [{
+           'host': inventory_hostname,
+           'check': check,
+           'ok': ok | bool,
+           'detail': detail | default('') | string,
+           'line': ('PASS' if ok | bool else 'FAIL') ~ '  ' ~ inventory_hostname ~ '  ' ~ check
+                   ~ (('  [' ~ (detail | string) ~ ']') if detail | default('') | string else '')
+         }] }}

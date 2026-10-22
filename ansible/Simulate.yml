@@ -1,0 +1,763 @@
+---
+# End-to-end simulation of the running platform (`make simulate`).
+#
+# Plays a sandbox VM: submits a flag to scoring and a log to logging (through
+# sandbox-gw, DNS, nginx/TLS, the API, into the database), makes traffic to a
+# second sandbox VM whose packet and byte counts are known, and then checks in
+# the database that
+#
+#   * the submissions were stored (flag_capture_attempts, logging_attempts),
+#   * the monitor recorded the flows exactly once and with the right sizes,
+#     the application protocol (http on a random port, ssl to the API) and
+#     the sandbox VM's own address (copied before sandbox-gw's SNAT),
+#     plus DNS/HTTP details and fresh heartbeats (network_events).
+#
+# Along the way it checks configuration and containment: services running,
+# the mirror covering every sandbox port, the monitor's capture NIC
+# receive-only, what sandbox VM / monitor / scoring / logging can and cannot
+# reach, what their database roles can and cannot do (from their own VMs,
+# with their own credentials, TLS verified).
+#
+# Needs a deployed sandbox (`cd opentofu/stacks/sandbox && make apply`, `make
+# inventory`) with at least one VM (two for the VM-to-VM traffic). Without a
+# sandbox, only the service/containment checks run.
+#
+# Test data: a team "simulation-<run id>" with one access token, created for
+# the run and deleted at the end with everything submitted with that token.
+# The recorded flows are real observations and stay (random high ports).
+#
+#   make simulate                          (= ansible-playbook Simulate.yml)
+#   make simulate ARGS="-e sim_wait_seconds=600"
+#
+# Every check is reported (PASS/FAIL) at the end; the run fails if one failed.
+
+# ---------------------------------------------------------------------------
+- name: Simulation | prepare
+  hosts: proxmox_host
+  gather_facts: false
+  vars:
+    sim_wait_seconds: 240
+  tasks:
+    # Fixed first: a lookup in `vars` would be re-run on every reference.
+    - name: Run id and token
+      ansible.builtin.set_fact:
+        sim_run_id: "{{ lookup('ansible.builtin.password', '/dev/null', chars=['ascii_lowercase', 'digits'], length=8) }}"
+        sim_token: "{{ lookup('ansible.builtin.password', '/dev/null', chars=['ascii_letters', 'digits'], length=40) }}"
+
+    - name: Run parameters
+      ansible.builtin.set_fact:
+        sim:
+          run_id: "{{ run_id }}"
+          token: "{{ token }}"
+          token_hash: "{{ token | hash('sha256') }}"
+          flag: "FLAG{simulation-{{ run_id }}}"
+          flag_hash: "{{ ('FLAG{simulation-' ~ run_id ~ '}') | hash('sha256') }}"
+          client: "{{ groups['sandbox'][0] | default(None) }}"
+          peer: "{{ groups['sandbox'][1] | default(None) }}"
+          http_port: "{{ 20000 + (run_id | hash('md5') | int(base=16)) % 10000 }}"
+          udp_port: "{{ 30000 + (run_id | hash('md5') | int(base=16)) % 10000 }}"
+          udp_sport: "{{ 40000 + (run_id | hash('md5') | int(base=16)) % 10000 }}"
+          closed_port: "{{ 50000 + (run_id | hash('md5') | int(base=16)) % 10000 }}"
+          udp_count: 5
+          udp_size: 100
+          wait_seconds: "{{ sim_wait_seconds }}"
+      vars:
+        run_id: "{{ sim_run_id }}"
+        token: "{{ sim_token }}"
+
+    - name: Show the run
+      ansible.builtin.debug:
+        msg:
+          - "run id {{ sim.run_id }}"
+          - "sandbox client {{ sim.client or '- (no sandbox deployed: traffic checks skipped)' }}"
+          - "sandbox peer {{ sim.peer or '- (fewer than two sandbox VMs: VM-to-VM checks skipped)' }}"
+
+    - name: Check | a sandbox is deployed
+      ansible.builtin.include_tasks: simulation/record.yml
+      vars:
+        check: "sandbox deployed (client VM for the traffic)"
+        ok: "{{ sim.client is truthy }}"
+        detail: "{{ groups['sandbox'] | default([]) | length }} sandbox VM(s)"
+
+    - name: Host services
+      ansible.builtin.command: systemctl is-active {{ item }}
+      loop: [proxmox-firewall, worms-host-firewall, worms-firewall-watchdog.timer, worms-mirror]
+      register: host_units
+      changed_when: false
+      failed_when: false
+
+    - name: Check | host services
+      ansible.builtin.include_tasks: simulation/record.yml
+      loop: "{{ host_units.results }}"
+      loop_control:
+        loop_var: unit
+        label: "{{ unit.item }}"
+      vars:
+        check: "host: {{ unit.item }} active"
+        ok: "{{ unit.rc == 0 }}"
+        detail: "{{ unit.stdout }}"
+
+    - name: Mirror coverage
+      ansible.builtin.command: /usr/local/sbin/worms-mirror status
+      register: mirror_status
+      changed_when: false
+      failed_when: false
+
+    - name: Check | every sandbox port is mirrored, the monitor's is receive-only
+      ansible.builtin.include_tasks: simulation/record.yml
+      vars:
+        check: "host: worms-mirror covers every port"
+        ok: "{{ mirror_status.rc == 0 and (sim.client is falsy or 'mirror-all' in mirror_status.stdout) and 'drop' in mirror_status.stdout }}"
+        detail: "{{ mirror_status.stdout_lines | default([]) | join(' | ') }}"
+
+    - name: Host bridge firewall drops what enters the mirror bridge
+      ansible.builtin.command: nft list chain bridge worms_bridge input
+      register: mirror_nft
+      changed_when: false
+      failed_when: false
+
+    - name: Check | mirror bridge receive-only (nftables)
+      ansible.builtin.include_tasks: simulation/record.yml
+      vars:
+        check: "host: nftables drops traffic from the mirror NIC"
+        ok: "{{ mirror_nft.rc == 0 and ('meta ibrname \"' ~ bridges.mirror ~ '\"') in mirror_nft.stdout }}"
+        detail: "{{ mirror_nft.stderr | default('') }}"
+
+    - name: Drop counter of the monitor's capture port (before)
+      ansible.builtin.shell: >-
+        tc -s filter show dev tap{{ hostvars[groups['monitor'][0]].proxmox_vm_id }}i2 parent ffff:
+        | awk '/Sent/ {print $4; exit}'
+      register: capture_drops_before
+      changed_when: false
+      failed_when: false
+      when: groups['monitor'] | default([]) | length > 0
+
+# ---------------------------------------------------------------------------
+- name: Simulation | services are running
+  hosts: scoring:logging:monitor:database
+  gather_facts: false
+  become: true
+  ignore_unreachable: true
+  vars:
+    sim_units:
+      scoring: [nginx, sandbox-api, auditd, rsyslog]
+      logging: [nginx, sandbox-api, auditd, rsyslog]
+      monitor: [worms-capture-iface, zeek, zeek-shipper, zeek-archive-cleanup.timer, auditd, rsyslog]
+      database: [postgresql, auditd, rsyslog]
+  tasks:
+    - name: Units
+      ansible.builtin.command: systemctl is-active {{ sim_units[group_names | intersect(sim_units.keys() | list) | first] | join(' ') }}
+      register: units
+      changed_when: false
+      failed_when: false
+
+    - name: Check | units active
+      ansible.builtin.include_tasks: simulation/record.yml
+      vars:
+        check: "{{ group_names | intersect(sim_units.keys() | list) | first }}: {{ sim_units[group_names | intersect(sim_units.keys() | list) | first] | join(', ') }} active"
+        ok: "{{ units.rc == 0 }}"
+        detail: "{{ units.stdout_lines | default([]) | join(' ') }}"
+
+    - name: Capture NIC (monitor)
+      ansible.builtin.shell: |
+        set -e
+        iface=$(ip -o link | awk -F': ' 'tolower($0) ~ /{{ monitor_capture_mac | lower }}/ {print $2; exit}')
+        echo "iface=$iface"
+        ip -o link show dev "$iface" | grep -q PROMISC && echo promisc=yes || echo promisc=no
+        echo "ipv4=$(ip -o -4 addr show dev "$iface" | wc -l)"
+      register: capture
+      changed_when: false
+      failed_when: false
+      when: "'monitor' in group_names"
+
+    - name: Check | capture NIC promiscuous, without address
+      ansible.builtin.include_tasks: simulation/record.yml
+      vars:
+        check: "monitor: capture NIC promiscuous, no IPv4 address"
+        ok: "{{ 'promisc=yes' in capture.stdout and 'ipv4=0' in capture.stdout }}"
+        detail: "{{ capture.stdout_lines | join(' ') }}"
+      when: "'monitor' in group_names"
+
+# ---------------------------------------------------------------------------
+- name: Simulation | test team
+  hosts: database
+  gather_facts: false
+  ignore_unreachable: true
+  become: true
+  become_user: postgres
+  vars:
+    sim: "{{ hostvars[groups['proxmox_host'][0]].sim }}"
+  tasks:
+    - name: Create the test team and token
+      community.postgresql.postgresql_query:
+        db: "{{ postgres_db }}"
+        query: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/files/simulation/setup.sql') }}"
+        named_args:
+          run_id: "{{ sim.run_id }}"
+          token_hash: "{{ sim.token_hash }}"
+      register: team
+      failed_when: false
+
+    - name: Database time at the start
+      community.postgresql.postgresql_query:
+        db: "{{ postgres_db }}"
+        query: SELECT (now() - interval '15 minutes')::text AS since
+      register: start
+      changed_when: false
+
+    - name: Keep the start time
+      ansible.builtin.set_fact:
+        sim_since: "{{ start.query_result[0].since }}"
+
+    - name: Check | test team created
+      ansible.builtin.include_tasks: simulation/record.yml
+      vars:
+        check: "database: test team simulation-{{ sim.run_id }} created"
+        ok: "{{ team.query_result | default([]) | length == 1 }}"
+        detail: "{{ team.msg | default('') }}"
+
+# ---------------------------------------------------------------------------
+- name: Simulation | a sandbox VM uses the services and makes traffic
+  hosts: sandbox
+  gather_facts: false
+  become: true
+  ignore_unreachable: true
+  vars:
+    sim: "{{ hostvars[groups['proxmox_host'][0]].sim }}"
+    sim_role: "{{ 'client' if inventory_hostname == sim.client else ('peer' if inventory_hostname == sim.peer else 'none') }}"
+    peer_ip: "{{ hostvars[sim.peer].sandbox_addresses[0] if sim.peer else '' }}"
+    sim_dir: "/tmp/worms-simulation-{{ sim.run_id }}"
+  tasks:
+    - name: Peer | serve HTTP on a random port (for 5 minutes)
+      when: sim_role == 'peer'
+      block:
+        - name: Peer | content
+          ansible.builtin.copy:
+            dest: "{{ sim_dir }}/index.html"
+            content: "worms simulation {{ sim.run_id }}\n"
+            mode: "0644"
+
+        - name: Peer | start the server
+          ansible.builtin.command: >-
+            timeout 300 python3 -m http.server {{ sim.http_port }}
+            --bind {{ peer_ip }} --directory {{ sim_dir }}
+          async: 310
+          poll: 0
+          changed_when: false
+
+    - name: Client
+      when: sim_role == 'client'
+      block:
+        - name: Client | source addresses (towards the peer and the services)
+          ansible.builtin.shell: |
+            ip -o route get {{ services_ips.scoring }} | sed -n 's/.* src \([0-9.]*\).*/\1/p'
+            {% if sim.peer %}ip -o route get {{ peer_ip }} | sed -n 's/.* src \([0-9.]*\).*/\1/p'{% endif %}
+          register: sources
+          changed_when: false
+
+        - name: Client | keep them
+          ansible.builtin.set_fact:
+            sim_api_client: "{{ sources.stdout_lines[0] }}"
+            sim_client_ip: "{{ sources.stdout_lines[1] | default('') }}"
+
+        - name: Client | DNS (scoring.worms.internal via the services DNS)
+          ansible.builtin.command: getent hosts scoring.worms.internal
+          register: dns
+          changed_when: false
+          failed_when: false
+
+        - name: Check | DNS
+          ansible.builtin.include_tasks: simulation/record.yml
+          vars:
+            check: "sandbox: scoring.worms.internal resolves to {{ services_ips.scoring }}"
+            ok: "{{ dns.rc == 0 and dns.stdout.split() | first == services_ips.scoring }}"
+            detail: "{{ dns.stdout }}"
+
+        - name: Client | the internal CA (to verify the APIs' certificates)
+          ansible.builtin.copy:
+            src: "{{ pki_ca_cert_path }}"
+            dest: "{{ sim_dir }}-ca.crt"
+            mode: "0644"
+
+        # The token cache of the APIs refreshes every 60 s: retry while 401.
+        - name: Client | submit a flag to scoring
+          ansible.builtin.uri:
+            url: https://scoring.worms.internal/submit
+            method: POST
+            body_format: json
+            body: {team_api_token: "{{ sim.token }}", vm_flag: "{{ sim.flag }}"}
+            ca_path: "{{ sim_dir }}-ca.crt"
+            status_code: [201, 401]
+            timeout: 10
+          register: scoring
+          until: scoring.status != 401
+          retries: 12
+          delay: 10
+          failed_when: false
+
+        - name: Check | scoring accepts the flag
+          ansible.builtin.include_tasks: simulation/record.yml
+          vars:
+            check: "sandbox -> scoring: flag submission accepted (201, TLS verified)"
+            ok: "{{ scoring.status | default(0) == 201 }}"
+            detail: "{{ scoring.status | default('') }} {{ scoring.json | default(scoring.msg | default('')) }}"
+
+        - name: Client | send a log to logging
+          ansible.builtin.uri:
+            url: https://logging.worms.internal/submit
+            method: POST
+            body_format: json
+            body:
+              team_api_token: "{{ sim.token }}"
+              log_data: {simulation: "{{ sim.run_id }}", message: "hello from the simulation"}
+            ca_path: "{{ sim_dir }}-ca.crt"
+            status_code: [201, 401]
+            timeout: 10
+          register: logging
+          until: logging.status != 401
+          retries: 12
+          delay: 10
+          failed_when: false
+
+        - name: Check | logging accepts the log
+          ansible.builtin.include_tasks: simulation/record.yml
+          vars:
+            check: "sandbox -> logging: log submission accepted (201, TLS verified)"
+            ok: "{{ logging.status | default(0) == 201 }}"
+            detail: "{{ logging.status | default('') }} {{ logging.json | default(logging.msg | default('')) }}"
+
+        - name: Client | requests the APIs must refuse
+          ansible.builtin.uri:
+            url: "https://scoring.worms.internal{{ item.path }}"
+            method: "{{ item.method }}"
+            body_format: json
+            body: "{{ item.body | default(omit) }}"
+            ca_path: "{{ sim_dir }}-ca.crt"
+            status_code: "{{ item.expect }}"
+            timeout: 10
+          loop:
+            - {name: "invalid token -> 401", method: POST, path: /submit, body: {team_api_token: "wrong", vm_flag: "x"}, expect: 401}
+            - {name: "body over the limit -> 413", method: POST, path: /submit, body: {team_api_token: "{{ sim.token }}", vm_flag: "{{ 'x' * 4000 }}"}, expect: 413}
+            - {name: "GET /submit -> 403", method: GET, path: /submit, expect: 403}
+            - {name: "other path -> 404", method: POST, path: /admin, body: {}, expect: 404}
+          loop_control:
+            label: "{{ item.name }}"
+          register: refused
+          failed_when: false
+
+        - name: Check | refused requests
+          ansible.builtin.include_tasks: simulation/record.yml
+          loop: "{{ refused.results }}"
+          loop_control:
+            loop_var: r
+            label: "{{ r.item.name }}"
+          vars:
+            check: "sandbox -> scoring: {{ r.item.name }}"
+            ok: "{{ r.status | default(0) == r.item.expect }}"
+            detail: "got {{ r.status | default(r.msg | default('')) }}"
+
+        - name: Client | what a sandbox VM must not reach
+          ansible.builtin.script:
+            cmd: "files/simulation/probe.py {{ probes | to_json | quote }}"
+            executable: python3
+          vars:
+            probes:
+              - {name: "database:5432", host: "{{ infrastructure_ips.database }}", port: 5432}
+              - {name: "dashboard:443", host: "{{ infrastructure_ips.dashboard }}", port: 443}
+              - {name: "orchestrator:443", host: "{{ infrastructure_ips.orchestrator }}", port: 443}
+              - {name: "wazuh:514", host: "{{ infrastructure_ips.wazuh }}", port: 514}
+              - {name: "monitor:22 (data)", host: "{{ infrastructure_ips.monitor }}", port: 22}
+              - {name: "Proxmox API (core gateway)", host: "{{ host_ips.core }}", port: 8006}
+              - {name: "Proxmox host on mgmt-sandbox:22", host: "{{ host_ips.mgmt_sandbox }}", port: 22}
+              - {name: "Proxmox host on mgmt-sandbox:8006", host: "{{ host_ips.mgmt_sandbox }}", port: 8006}
+              - {name: "sandbox-gw management:22", host: "{{ management_ips.sandbox_gw }}", port: 22}
+              - {name: "scoring:22 (services)", host: "{{ services_ips.scoring }}", port: 22}
+              - {name: "dns:22", host: "{{ services_ips.dns }}", port: 22}
+              - {name: "internet 1.1.1.1:443", host: "1.1.1.1", port: 443}
+          register: blocked
+          changed_when: false
+          failed_when: false
+
+        - name: Check | containment of the sandbox
+          ansible.builtin.include_tasks: simulation/record.yml
+          loop: "{{ (((blocked.stdout | default('')) or '{}') | from_json | dict2items) or [{'key': 'probe script', 'value': 'open: ' ~ (blocked.stderr | default(blocked.msg | default('did not run')))}] }}"
+          loop_control:
+            loop_var: p
+            label: "{{ p.key }}"
+          vars:
+            check: "sandbox cannot reach {{ p.key }}"
+            ok: "{{ p.value != 'open' and not p.value.startswith('open:') }}"
+            detail: "{{ p.value }}"
+
+    - name: Client | traffic to the peer
+      when: sim_role == 'client' and sim.peer is truthy
+      block:
+        - name: Client | wait for the peer's HTTP server
+          ansible.builtin.wait_for:
+            host: "{{ peer_ip }}"
+            port: "{{ sim.http_port | int }}"
+            timeout: 30
+
+        - name: Client | HTTP to the peer on a random port (protocol recognised by its payload)
+          ansible.builtin.uri:
+            url: "http://{{ peer_ip }}:{{ sim.http_port }}/"
+            return_content: true
+            timeout: 10
+          register: http
+          failed_when: false
+
+        - name: Check | peer reachable over HTTP
+          ansible.builtin.include_tasks: simulation/record.yml
+          vars:
+            check: "sandbox -> sandbox: HTTP on port {{ sim.http_port }}"
+            ok: "{{ sim.run_id in (http.content | default('')) }}"
+            detail: "{{ http.status | default(http.msg | default('')) }}"
+
+        - name: Client | UDP with known packet and byte counts
+          ansible.builtin.script:
+            cmd: >-
+              files/simulation/udp_send.py {{ sim_client_ip }} {{ sim.udp_sport }} {{ peer_ip }}
+              {{ sim.udp_port }} {{ sim.udp_count }} {{ sim.udp_size }}
+            executable: python3
+          changed_when: false
+
+        - name: Client | TCP to a closed port (rejected)
+          ansible.builtin.script:
+            cmd: "files/simulation/probe.py {{ [{'name': 'closed', 'host': peer_ip, 'port': sim.closed_port}] | to_json | quote }}"
+            executable: python3
+          register: closed
+          changed_when: false
+
+        - name: Check | closed port rejected
+          ansible.builtin.include_tasks: simulation/record.yml
+          vars:
+            check: "sandbox -> sandbox: closed port {{ sim.closed_port }} refused"
+            ok: "{{ (((closed.stdout | default('')) or '{}') | from_json).closed | default('') == 'refused' }}"
+            detail: "{{ closed.stdout | trim }}"
+
+# ---------------------------------------------------------------------------
+- name: Simulation | monitor containment
+  hosts: monitor
+  gather_facts: false
+  become: true
+  ignore_unreachable: true
+  tasks:
+    - name: Reachability from the monitor
+      ansible.builtin.script:
+        cmd: "files/simulation/probe.py {{ probes | to_json | quote }}"
+        executable: python3
+      vars:
+        probes:
+          - {name: "database:5432", host: "{{ infrastructure_ips.database }}", port: 5432}
+          - {name: "wazuh:514", host: "{{ infrastructure_ips.wazuh }}", port: 514}
+          - {name: "dashboard:443", host: "{{ infrastructure_ips.dashboard }}", port: 443}
+          - {name: "orchestrator:443", host: "{{ infrastructure_ips.orchestrator }}", port: 443}
+          - {name: "scoring:443 (ingest)", host: "{{ infrastructure_ips.scoring }}", port: 443}
+          - {name: "logging:22 (ingest)", host: "{{ infrastructure_ips.logging }}", port: 22}
+          - {name: "Proxmox API (ingest gateway)", host: "{{ host_ips.ingest }}", port: 8006}
+          - {name: "Proxmox API (core gateway)", host: "{{ host_ips.core }}", port: 8006}
+          - {name: "internet 1.1.1.1:443", host: "1.1.1.1", port: 443}
+      register: reach
+      changed_when: false
+      failed_when: false
+
+    - name: Check | monitor reachability
+      ansible.builtin.include_tasks: simulation/record.yml
+      loop: "{{ (((reach.stdout | default('')) or '{}') | from_json | dict2items) or [{'key': 'probe script', 'value': 'did not run'}] }}"
+      loop_control:
+        loop_var: p
+        label: "{{ p.key }}"
+      vars:
+        allowed: ["database:5432", "wazuh:514"]
+        check: "monitor {{ 'reaches' if p.key in allowed else 'cannot reach' }} {{ p.key }}"
+        ok: "{{ (p.value == 'open') if p.key in allowed else (p.value != 'open') }}"
+        detail: "{{ p.value }}"
+
+    - name: Database role of the monitor (its own credentials, TLS verify-full)
+      ansible.builtin.script:
+        cmd: "files/simulation/db_privileges.py /etc/zeek-shipper/zeek-shipper.env {{ statements | to_json | quote }}"
+        executable: /usr/bin/python3
+      vars:
+        statements:
+          - "INSERT INTO network_events (log, ts, data) VALUES ('simulation', now(), '{}')"
+          - SELECT count(*) FROM network_flows
+          - SELECT count(*) FROM network_events
+          - UPDATE network_flows SET service = NULL
+          - DELETE FROM network_events
+          - SELECT count(*) FROM access_tokens
+          - SELECT count(*) FROM users
+      register: monitor_db
+      changed_when: false
+      failed_when: false
+
+    - name: Check | monitor database role
+      ansible.builtin.include_tasks: simulation/record.yml
+      loop: "{{ (((monitor_db.stdout | default('')) or '{}') | from_json | dict2items) or [{'key': 'connect', 'value': 'did not run'}] }}"
+      loop_control:
+        loop_var: p
+        label: "{{ p.key }}"
+      vars:
+        expected: {connect: ok, ssl: true}
+        check: "monitor DB role: {{ p.key }}"
+        ok: "{{ (p.value == expected[p.key]) if p.key in expected else (p.value == ('ok' if p.key.startswith('INSERT') else 'denied')) }}"
+        detail: "{{ p.value }}"
+
+    - name: Capture NIC name
+      ansible.builtin.shell: >-
+        ip -o link | awk -F': ' 'tolower($0) ~ /{{ monitor_capture_mac | lower }}/ {print $2; exit}'
+      register: capture_iface
+      changed_when: false
+
+    - name: Try to transmit on the capture NIC (must be dropped by the host)
+      ansible.builtin.script:
+        cmd: "files/simulation/raw_send.py {{ capture_iface.stdout | trim }} 10"
+        executable: python3
+      register: raw
+      changed_when: false
+      failed_when: false
+
+# ---------------------------------------------------------------------------
+- name: Simulation | scoring and logging containment
+  hosts: scoring:logging
+  gather_facts: false
+  become: true
+  ignore_unreachable: true
+  vars:
+    kind: "{{ group_names | intersect(['scoring', 'logging']) | first }}"
+    own_table: "{{ 'flag_capture_attempts' if kind == 'scoring' else 'logging_attempts' }}"
+    other_table: "{{ 'logging_attempts' if kind == 'scoring' else 'flag_capture_attempts' }}"
+  tasks:
+    - name: Database role (its own credentials, TLS verify-full)
+      ansible.builtin.script:
+        cmd: "files/simulation/db_privileges.py /etc/sandbox-api/sandbox-api.env {{ statements | to_json | quote }}"
+        executable: /opt/sandbox-api/venv/bin/python
+      vars:
+        statements:
+          - "SELECT access_token_hash, team_id, revoked FROM access_tokens LIMIT 1"
+          - "SELECT count(*) FROM {{ own_table }}"
+          - "UPDATE {{ own_table }} SET processed = true"
+          - "DELETE FROM {{ own_table }}"
+          - "SELECT count(*) FROM {{ other_table }}"
+          - SELECT name FROM access_tokens LIMIT 1
+          - SELECT count(*) FROM users
+          - SELECT count(*) FROM network_flows
+      register: api_db
+      changed_when: false
+      failed_when: false
+
+    - name: Check | API database role
+      ansible.builtin.include_tasks: simulation/record.yml
+      loop: "{{ (((api_db.stdout | default('')) or '{}') | from_json | dict2items) or [{'key': 'connect', 'value': 'did not run'}] }}"
+      loop_control:
+        loop_var: p
+        label: "{{ p.key }}"
+      vars:
+        expected: {connect: ok, ssl: true}
+        check: "{{ kind }} DB role: {{ p.key }}"
+        ok: "{{ (p.value == expected[p.key]) if p.key in expected else (p.value == ('ok' if p.key.startswith('SELECT access_token_hash') else 'denied')) }}"
+        detail: "{{ p.value }}"
+
+    - name: Reachability from {{ kind }}
+      ansible.builtin.script:
+        cmd: "files/simulation/probe.py {{ probes | to_json | quote }}"
+        executable: python3
+      vars:
+        probes:
+          - {name: "database:5432", host: "{{ infrastructure_ips.database }}", port: 5432}
+          - {name: "dashboard:443", host: "{{ infrastructure_ips.dashboard }}", port: 443}
+          - {name: "orchestrator:443", host: "{{ infrastructure_ips.orchestrator }}", port: 443}
+          - {name: "monitor:22 (ingest)", host: "{{ infrastructure_ips.monitor }}", port: 22}
+          - {name: "Proxmox API (ingest gateway)", host: "{{ host_ips.ingest }}", port: 8006}
+          - {name: "internet 1.1.1.1:443", host: "1.1.1.1", port: 443}
+      register: reach
+      changed_when: false
+      failed_when: false
+
+    - name: Check | API VM reachability
+      ansible.builtin.include_tasks: simulation/record.yml
+      loop: "{{ (((reach.stdout | default('')) or '{}') | from_json | dict2items) or [{'key': 'probe script', 'value': 'did not run'}] }}"
+      loop_control:
+        loop_var: p
+        label: "{{ p.key }}"
+      vars:
+        check: "{{ kind }} {{ 'reaches' if p.key == 'database:5432' else 'cannot reach' }} {{ p.key }}"
+        ok: "{{ (p.value == 'open') if p.key == 'database:5432' else (p.value != 'open') }}"
+        detail: "{{ p.value }}"
+
+# ---------------------------------------------------------------------------
+- name: Simulation | what reached the database
+  hosts: database
+  gather_facts: false
+  ignore_unreachable: true
+  become: true
+  become_user: postgres
+  vars:
+    sim: "{{ hostvars[groups['proxmox_host'][0]].sim }}"
+    client_vars: "{{ hostvars[sim.client] if sim.client else {} }}"
+    params:
+      token_hash: "{{ sim.token_hash }}"
+      flag_hash: "{{ sim.flag_hash }}"
+      run_id: "{{ sim.run_id }}"
+      client: "{{ client_vars.sim_client_ip | default('') or None }}"
+      api_client: "{{ client_vars.sim_api_client | default('') or None }}"
+      peer: "{{ hostvars[sim.peer].sandbox_addresses[0] if sim.peer else None }}"
+      scoring: "{{ services_ips.scoring }}"
+      http_port: "{{ sim.http_port | int }}"
+      udp_port: "{{ sim.udp_port | int }}"
+      udp_sport: "{{ sim.udp_sport | int }}"
+      closed_port: "{{ sim.closed_port | int }}"
+      since: "{{ sim_since }}"
+    with_peer: "{{ sim.peer is truthy }}"
+  tasks:
+    # Zeek logs a connection when it ends; UDP "connections" end after a
+    # minute of silence. So wait (sim_wait_seconds) until everything is there.
+    - name: Wait for the records (up to {{ sim.wait_seconds }} s)
+      community.postgresql.postgresql_query:
+        db: "{{ postgres_db }}"
+        query: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/files/simulation/verify.sql') }}"
+        named_args: "{{ params }}"
+      register: found
+      changed_when: false
+      failed_when: false
+      until: >-
+        found.query_result is defined and (
+          found.query_result[0].flags >= 1 and found.query_result[0].logs >= 1
+          and found.query_result[0].api_service is not none and found.query_result[0].dns_events >= 1
+          and (not with_peer or (found.query_result[0].udp_flows >= 1 and found.query_result[0].http_events >= 1
+                                 and found.query_result[0].closed_state is not none))
+          or sim.client is falsy)
+      retries: "{{ (sim.wait_seconds | int / 10) | round(0, 'ceil') | int }}"
+      delay: 10
+
+    - name: Results
+      ansible.builtin.set_fact:
+        r: "{{ found.query_result[0] | default({}) }}"
+        udp_expected:
+          pkts: "{{ sim.udp_count }}"
+          bytes: "{{ sim.udp_count * sim.udp_size }}"
+          ip_bytes: "{{ sim.udp_count * (sim.udp_size + 28) }}"
+
+    - name: Check | records written by scoring and logging
+      ansible.builtin.include_tasks: simulation/record.yml
+      loop:
+        - {check: "scoring: flag stored in flag_capture_attempts (exactly once)", ok: "{{ r.flags | default(0) == 1 }}", detail: "rows: {{ r.flags | default('-') }}"}
+        - {check: "logging: log stored in logging_attempts (exactly once)", ok: "{{ r.logs | default(0) == 1 }}", detail: "rows: {{ r.logs | default('-') }}"}
+      loop_control:
+        loop_var: c
+        label: "{{ c.check }}"
+      vars:
+        check: "{{ c.check }}"
+        ok: "{{ c.ok }}"
+        detail: "{{ c.detail }}"
+      when: sim.client is truthy
+
+    - name: Check | flows recorded by the monitor
+      ansible.builtin.include_tasks: simulation/record.yml
+      loop:
+        - check: "monitor: sandbox -> scoring flow, VM address (before SNAT), protocol ssl"
+          ok: "{{ 'ssl' in (r.api_service | default('') or '') }}"
+          detail: "{{ params.api_client }} -> {{ services_ips.scoring }}:443 service={{ r.api_service | default('-') }}"
+        - check: "monitor: DNS query of the sandbox VM (network_events dns)"
+          ok: "{{ r.dns_events | default(0) >= 1 }}"
+          detail: "events: {{ r.dns_events | default('-') }}"
+        - check: "monitor: shipper heartbeat younger than 3 min"
+          ok: "{{ (r.shipper_age | default(none)) is not none and r.shipper_age < 180 }}"
+          detail: "age: {{ r.shipper_age | default('-') }} s"
+        - check: "monitor: Zeek stats heartbeat younger than 5 min"
+          ok: "{{ (r.stats_age | default(none)) is not none and r.stats_age < 300 }}"
+          detail: "age: {{ r.stats_age | default('-') }} s"
+      loop_control:
+        loop_var: c
+        label: "{{ c.check }}"
+      vars:
+        check: "{{ c.check }}"
+        ok: "{{ c.ok }}"
+        detail: "{{ c.detail }}"
+      when: sim.client is truthy
+
+    - name: Check | VM-to-VM flows (exactly once, exact sizes, protocol by payload)
+      ansible.builtin.include_tasks: simulation/record.yml
+      loop:
+        - check: "monitor: HTTP flow on port {{ sim.http_port }} recorded once, service http"
+          ok: "{{ r.http_flows | default(0) == 1 and 'http' in ((r.http_flow | default({}) or {}).service | default('') or '') }}"
+          detail: "rows: {{ r.http_flows | default('-') }} {{ r.http_flow | default('') }}"
+        - check: "monitor: HTTP request details (network_events http)"
+          ok: "{{ r.http_events | default(0) >= 1 }}"
+          detail: "events: {{ r.http_events | default('-') }}"
+        - check: "monitor: UDP flow recorded once, {{ udp_expected.pkts }} packets / {{ udp_expected.bytes }} bytes / {{ udp_expected.ip_bytes }} IP bytes"
+          ok: >-
+            {{ r.udp_flows | default(0) == 1
+               and (r.udp_flow | default({}) or {}).transport | default('') == 'udp'
+               and (r.udp_flow.src_pkts | default(-1) | int) == (udp_expected.pkts | int)
+               and (r.udp_flow.src_bytes | default(-1) | int) == (udp_expected.bytes | int)
+               and (r.udp_flow.src_ip_bytes | default(-1) | int) == (udp_expected.ip_bytes | int) }}
+          detail: "rows: {{ r.udp_flows | default('-') }} {{ r.udp_flow | default('') }}"
+        - check: "monitor: rejected TCP connection (conn_state REJ)"
+          ok: "{{ r.closed_state | default('') == 'REJ' }}"
+          detail: "conn_state: {{ r.closed_state | default('-') }}"
+      loop_control:
+        loop_var: c
+        label: "{{ c.check }}"
+      vars:
+        check: "{{ c.check }}"
+        ok: "{{ c.ok }}"
+        detail: "{{ c.detail }}"
+      when: with_peer | bool
+
+  post_tasks:
+    - name: Remove the test team, its token and its submissions
+      community.postgresql.postgresql_query:
+        db: "{{ postgres_db }}"
+        query: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/files/simulation/cleanup.sql') }}"
+        named_args:
+          token_hash: "{{ sim.token_hash }}"
+      register: cleanup
+      failed_when: false
+
+    - name: Check | cleanup
+      ansible.builtin.include_tasks: simulation/record.yml
+      vars:
+        check: "database: test data removed"
+        ok: "{{ cleanup.query_result | default([]) | length == 1 and cleanup.query_result[0].competitions == 1 }}"
+        detail: "{{ cleanup.query_result | default(cleanup.msg | default('')) }}"
+
+# ---------------------------------------------------------------------------
+- name: Simulation | report
+  hosts: proxmox_host
+  gather_facts: false
+  tasks:
+    - name: Drop counter of the monitor's capture port (after)
+      ansible.builtin.shell: >-
+        tc -s filter show dev tap{{ hostvars[groups['monitor'][0]].proxmox_vm_id }}i2 parent ffff:
+        | awk '/Sent/ {print $4; exit}'
+      register: capture_drops_after
+      changed_when: false
+      failed_when: false
+      when: groups['monitor'] | default([]) | length > 0
+
+    - name: Check | the monitor cannot transmit on its capture NIC
+      ansible.builtin.include_tasks: simulation/record.yml
+      vars:
+        sent: "{{ hostvars[groups['monitor'][0]].raw.stdout | default('0') | trim }}"
+        before: "{{ capture_drops_before.stdout | default('0') | trim or '0' }}"
+        after: "{{ capture_drops_after.stdout | default('0') | trim or '0' }}"
+        check: "host: frames sent on the monitor's capture NIC are dropped"
+        ok: "{{ (after | int) - (before | int) >= (sent | int) and (sent | int) > 0 }}"
+        detail: "sent {{ sent }}, dropped packets before {{ before }} after {{ after }}"
+      when: groups['monitor'] | default([]) | length > 0
+
+    - name: Collect the results of every host
+      ansible.builtin.set_fact:
+        sim_all: "{{ groups['all'] | map('extract', hostvars, 'sim_results') | select('defined') | flatten }}"
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "{{ sim_all | map(attribute='line') | list }}"
+
+    - name: Result
+      ansible.builtin.assert:
+        that: sim_all | rejectattr('ok') | list | length == 0
+        fail_msg: >-
+          {{ sim_all | rejectattr('ok') | list | length }} of {{ sim_all | length }} checks failed:
+          {{ sim_all | rejectattr('ok') | map(attribute='check') | join('; ') }}
+        success_msg: "All {{ sim_all | length }} checks passed (run {{ sim.run_id }})."

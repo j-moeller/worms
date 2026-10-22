@@ -1,0 +1,10 @@
+# Offline test suite (make test installs these into .venv-test).
+pytest
+# `ansible`, not just ansible-core: the playbooks use community.postgresql,
+# community.crypto and ansible.posix.
+ansible
+django>=6.0
+psycopg2-binary
+flask
+pyyaml
+shellcheck-py

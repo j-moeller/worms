@@ -17,6 +17,10 @@
 #                     make provision ARGS="--limit database -vvv"
 #   make internet-allow / internet-deny
 #                     Toggle internet access by hand (Ansible, Internet.yml).
+#   make test         Offline test suite (tests/, no Proxmox needed).
+#   make simulate     End-to-end simulation against the deployed platform
+#                     (ansible/Simulate.yml): scoring, logging, monitor,
+#                     containment. See docs/testing.md.
 #
 # Internet access for VMs is never implicit. It is allowed only for the
 # duration of provisioning (cloud-init and Ansible install packages, the
@@ -56,6 +60,7 @@ endef
 .PHONY: all init secrets platform firewall firewall-migrate host-network infrastructure \
         inventory show-config \
         provision configure offline internet-allow internet-deny ping debug \
+        test test-deps simulate \
         destroy destroy_all terminate
 
 all: init secrets platform firewall host-network
@@ -169,6 +174,27 @@ internet-allow:
 
 internet-deny:
 	cd ansible && $(ANSIBLE_BASE) Internet.yml -e internet=denied
+
+# ---- Tests --------------------------------------------------------------------
+# Offline: OpenTofu/Ansible static checks, database privileges, sandbox APIs,
+# zeek-shipper, worms-mirror (network namespaces, as root). Tests whose tools
+# are missing are skipped with the reason. PYTEST_ARGS="-k mirror -x" etc.
+TEST_VENV = .venv-test
+PYTEST_ARGS ?=
+
+test-deps:
+	python3 -m venv $(TEST_VENV)
+	$(TEST_VENV)/bin/pip install -q -r tests/requirements.txt
+
+test:
+	@test -x $(TEST_VENV)/bin/pytest || $(MAKE) --no-print-directory test-deps
+	PATH="$(CURDIR)/$(TEST_VENV)/bin:$$PATH" $(TEST_VENV)/bin/pytest $(PYTEST_ARGS)
+
+# Live: plays a sandbox VM against the deployed platform and checks what
+# arrives in the database (needs a deployed sandbox for the traffic part).
+simulate:
+	$(MAKE) --no-print-directory inventory
+	cd ansible && $(ANSIBLE) Simulate.yml
 
 # ---- Teardown ---------------------------------------------------------------
 # VM stacks first (they reference the security groups, pools and images),

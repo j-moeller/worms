@@ -9,3 +9,4 @@ students.csv
 venv/
 __pycache__/
 .pytest_cache/
+.venv-test/

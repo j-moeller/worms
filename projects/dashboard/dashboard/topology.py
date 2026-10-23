@@ -81,6 +81,71 @@ MANAGEMENT_PORTS = [("tcp", "8006"), ("tcp", "22"), ("tcp", "5900:5999"), ("tcp"
 
 NET_KEY = re.compile(r"^net(\d+)$")
 
+# Network security zones. Each infrastructure bridge carries a comment whose
+# leading phrase names its zone (set in opentofu/modules/network/main.tf);
+# sandbox bridges are generated per round as vmbr1NNN with a "Sandbox network …"
+# comment (opentofu/stacks/sandbox/main.tf). The zone of a bridge is therefore
+# derived from the *live* Proxmox data (comment, then name) rather than from a
+# hardcoded map, so the view always tracks what is actually configured: change
+# a bridge's comment and its zone label follows. Zones that span several bridges
+# (management has three, sandbox one per generated network) are grouped under a
+# single zone. See docs/visualization.md.
+#
+# (leading word of the comment, lowercased) -> (zone id, label, kind)
+ZONE_BY_COMMENT = (
+    ("dmz", "dmz", "DMZ", "routed"),
+    ("core", "core", "Core", "routed"),
+    ("ingest", "ingest", "Ingest", "routed"),
+    ("siem", "siem", "SIEM", "routed"),
+    ("sandbox services", "services", "Sandbox services", "services"),
+    ("mirror", "mirror", "Mirror", "passive"),
+    ("management", "management", "Management", "management"),
+)
+# Display order for the known zones (others sort after, alphabetically).
+ZONE_ORDER = {z[1]: i for i, z in enumerate(
+    (("", "dmz"), ("", "core"), ("", "ingest"), ("", "siem"),
+     ("", "services"), ("", "sandbox"), ("", "mirror"), ("", "management"))
+)}
+
+
+def zone_of(bridge):
+    """Classify a bridge into a security zone from the live data it carries.
+
+    Returns (zone_id, label, kind). `kind` drives only the colour/role shown in
+    the view: routed (host-routed infrastructure), services, sandbox, mirror
+    (passive), management, uplink (has a physical port) or isolated.
+    """
+    name = bridge.get("id", "")
+    comment = (bridge.get("comment") or "").strip()
+    head = comment.split(":", 1)[0].strip().lower()
+    # Sandbox networks: vmbr1NNN (host firewall matches the vmbr1* prefix), or a
+    # "Sandbox network …" comment. Grouped into one zone across all networks.
+    if (name.startswith("vmbr1") and len(name) >= 8) or head.startswith("sandbox network"):
+        return "sandbox", "Sandbox", "sandbox"
+    for needle, zid, label, kind in ZONE_BY_COMMENT:
+        if head.startswith(needle):
+            return zid, label, kind
+    # No comment / unrecognised: the bridge stands alone as its own zone.
+    if bridge.get("cidr"):
+        return name, name, "routed"
+    return name, name, "uplink" if bridge.get("ports") else "isolated"
+
+
+def zones_of(bridges):
+    """Group bridges into zones, mutating each bridge with its `zone` id and
+    returning the ordered list of zones."""
+    zones = {}
+    for b in bridges:
+        zid, label, kind = zone_of(b)
+        b["zone"] = zid
+        z = zones.get(zid)
+        if z is None:
+            z = zones[zid] = {"id": zid, "label": label, "kind": kind, "bridges": [], "comment": ""}
+        z["bridges"].append(b["id"])
+        if not z["comment"] and b.get("comment"):
+            z["comment"] = b["comment"]
+    return sorted(zones.values(), key=lambda z: (ZONE_ORDER.get(z["id"], 99), z["label"]))
+
 
 # ---------------------------------------------------------------------------
 # Parsing helpers
@@ -704,6 +769,9 @@ def analyze(data):
                 known.add(nic["bridge"])
                 bridges.append({"id": nic["bridge"], "cidr": "", "ports": "", "comment": "", "active": False, "vlan_aware": False, "missing": True})
 
+    bridges.sort(key=lambda b: (len(b["id"]), b["id"]))
+    zones = zones_of(bridges)
+
     cluster_fw = data.get("cluster_firewall", {})
     warnings = []
     if not flag(cluster_fw.get("options", {}).get("enable")):
@@ -717,7 +785,8 @@ def analyze(data):
         "node": data.get("node"),
         "version": data.get("version"),
         "api_port": api_port,
-        "bridges": sorted(bridges, key=lambda b: (len(b["id"]), b["id"])),
+        "bridges": bridges,
+        "zones": zones,
         "endpoints": [ep.to_json() for ep in endpoints],
         "groups": [
             {

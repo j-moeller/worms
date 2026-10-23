@@ -182,6 +182,13 @@ is opt-in (`round_agent_reset_services`), because it needs an internet window
 and so can only happen while no sandbox exists; the conductor tears the
 previous sandbox down first.
 
+`make simulate` (`docs/testing.md`) checks the scoring path end to end: a flag
+submitted through the sandbox API becomes a `FlagCapture` and a `captured`
+timeline event after `manage.py process_captures` runs, and it checks that the
+conductor daemon and the round agent are up. The conductor and agent
+themselves are covered offline in `tests/test_rounds.py` and
+`tests/test_round_agent.py`.
+
 ## What is not done here
 
 - **The animation front-end** (the player). The data contract above is ready.

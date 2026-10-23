@@ -429,3 +429,33 @@ def test_timeline_export(one_run):
     # The event timeline is ordered by t.
     ts = [e["t"] for e in data["events"]]
     assert ts == sorted(ts)
+
+
+def test_process_captures_command(one_run):
+    """manage.py process_captures turns a pending attempt into a capture."""
+    import hashlib
+
+    from core.models.rounds import RoundRun
+    from core.models.scoring import FlagCapture, FlagCaptureAttempt
+    from django.core.management import call_command
+
+    run = one_run["run"]
+    power, clock = FakePower(), Clock()
+    conductor = make_conductor(power, clock)
+    for _ in range(6):
+        conductor.tick()
+        fake_agent(run, sha)
+        run.refresh_from_db()
+        if run.state == RoundRun.State.ARMED:
+            break
+    clock.advance(11)
+    conductor.tick()
+    run.refresh_from_db()
+    vm = run.virtual_machines.get(vm_identifier=run.sandbox_params["start_vm"])
+    FlagCaptureAttempt.objects.create(
+        team_token_hash=hashlib.sha256(one_run["token"].encode()).hexdigest(),
+        vm_flag_hash=vm.ctf_flag_hash,
+        created_at=clock.now(),
+    )
+    call_command("process_captures", "--grace", str(conductor.cfg["capture_grace"]))
+    assert FlagCapture.objects.filter(team=one_run["team"], vm=vm).count() == 1

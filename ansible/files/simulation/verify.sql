@@ -6,6 +6,19 @@ SELECT
     WHERE team_token_hash = %(token_hash)s AND vm_flag_hash = %(flag_hash)s) AS flags,
   (SELECT count(*) FROM logging_attempts
     WHERE team_token_hash = %(token_hash)s AND log_data->>'simulation' = %(run_id)s) AS logs,
+  -- Scoring outcome: the submitted flag became a capture of the run's VM, and
+  -- the capture is on the run's timeline (processed by the conductor /
+  -- manage.py process_captures).
+  (SELECT count(*) FROM flag_captures fc
+     JOIN virtual_machines vm ON vm.id = fc.vm_id
+    WHERE vm.ctf_flag_hash = %(flag_hash)s) AS captures,
+  (SELECT count(*) FROM run_events re
+     JOIN virtual_machines vm ON vm.id = re.vm_id
+    WHERE re.kind = 'captured' AND vm.ctf_flag_hash = %(flag_hash)s) AS captured_events,
+  (SELECT count(*) FROM logging l
+     JOIN round_runs rr ON rr.round_id = l.round_id
+    WHERE rr.state = 'finished' AND rr.seed = 0
+      AND l.team_id = (SELECT team_id FROM access_tokens WHERE access_token_hash = %(token_hash)s LIMIT 1)) AS logs_scored,
   (SELECT count(*) FROM network_flows
     WHERE src_ip = %(client)s::inet AND dst_ip = %(peer)s::inet AND dst_port = %(http_port)s
       AND ts >= %(since)s::timestamptz) AS http_flows,

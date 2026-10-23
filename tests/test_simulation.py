@@ -80,19 +80,29 @@ def test_rehearsal_reports_and_cleans_up(rehearsal, database):
         assert cur.fetchone()[0] == 0
         cur.execute("SELECT count(*) FROM access_tokens WHERE name LIKE 'simulation-%%'")
         assert cur.fetchone()[0] == 0
+        # The round data setup.sql added is gone too.
+        cur.execute("SELECT count(*) FROM round_runs WHERE seed = 0 AND state = 'finished'")
+        assert cur.fetchone()[0] == 0
+        cur.execute("SELECT count(*) FROM virtual_machines WHERE vm_identifier LIKE 'simulation-%%'")
+        assert cur.fetchone()[0] == 0
+        cur.execute("SELECT count(*) FROM rounds WHERE name LIKE 'simulation-%%'")
+        assert cur.fetchone()[0] == 0
     conn.close()
     # Without a sandbox, that is reported (not a crash).
     assert any(line.startswith("FAIL") and "sandbox deployed" in line for line in lines)
 
 
-def test_verify_query_sees_a_successful_run(database):
-    """files/simulation/verify.sql against the rows a successful run leaves
-    (inserted as the services would: the monitor's INSERT-only role)."""
+def test_simulation_sql_round_trip(database):
+    """The simulation's SQL together: setup.sql builds the test team, round,
+    run and VM; a submitted flag + log are scored into a capture, a `captured`
+    timeline event and a logging row (as capture processing would); verify.sql
+    reports all of it (flows inserted as the monitor's INSERT-only role would);
+    cleanup.sql removes everything."""
     import hashlib
 
     from pg import PASSWORD
 
-    sql = (ANSIBLE / "files" / "simulation" / "verify.sql").read_text()
+    SIM = ANSIBLE / "files" / "simulation"
     token_hash = hashlib.sha256(b"verify-token").hexdigest()
     flag_hash = hashlib.sha256(b"FLAG{verify}").hexdigest()
     client, peer, scoring = "10.64.0.11", "10.64.0.12", "10.2.0.14"
@@ -124,18 +134,57 @@ def test_verify_query_sees_a_successful_run(database):
         ]:
             cur.execute("INSERT INTO network_events (log, ts, data) VALUES (%s, now(), %s)", (log, json.dumps(data)))
     monitor.close()
+
     admin = database.connect()
     with admin.cursor() as cur:
-        cur.execute("INSERT INTO flag_capture_attempts (team_token_hash, vm_flag_hash) VALUES (%s, %s)", (token_hash, flag_hash))
-        cur.execute("INSERT INTO logging_attempts (uuid, team_token_hash, log_data) VALUES (gen_random_uuid(), %s, %s)",
+        # The round/team/run/VM, exactly as the live simulation sets them up.
+        cur.execute((SIM / "setup.sql").read_text(), params)
+        # The sandbox APIs store the submissions.
+        cur.execute("INSERT INTO flag_capture_attempts (team_token_hash, vm_flag_hash) VALUES (%s, %s) RETURNING id", (token_hash, flag_hash))
+        attempt_id = cur.fetchone()[0]
+        cur.execute("INSERT INTO logging_attempts (uuid, team_token_hash, log_data) VALUES (gen_random_uuid(), %s, %s) RETURNING id",
                     (token_hash, json.dumps({"simulation": "verify1"})))  # fmt: skip
-        cur.execute(sql, params)
+        log_attempt_id = cur.fetchone()[0]
+        # Capture processing turns them into a capture, a timeline event and a
+        # logging row (done here by hand; the real pass is in test_rounds.py).
+        cur.execute(
+            "SELECT vm.id, vm.run_id, vm.round_id, rr.team_id FROM virtual_machines vm "
+            "JOIN round_runs rr ON rr.id = vm.run_id WHERE vm.ctf_flag_hash = %s", (flag_hash,)
+        )
+        vm_id, run_id, round_id, team_id = cur.fetchone()
+        cur.execute(
+            "INSERT INTO flag_captures (team_id, round_id, vm_id, flag_capture_attempt_id, created_at) VALUES (%s, %s, %s, %s, now())",
+            (team_id, round_id, vm_id, attempt_id),
+        )
+        cur.execute(
+            "INSERT INTO run_events (run_id, ts, kind, vm_id, data) VALUES (%s, now(), 'captured', %s, '{}')",
+            (run_id, vm_id),
+        )
+        cur.execute(
+            "INSERT INTO logging (team_id, round_id, logging_attempt_id, created_at) VALUES (%s, %s, %s, now())",
+            (team_id, round_id, log_attempt_id),
+        )
+        cur.execute((SIM / "verify.sql").read_text(), params)
         names = [d.name for d in cur.description]
         r = dict(zip(names, cur.fetchone()))
     admin.close()
+
     assert r["flags"] == 1 and r["logs"] == 1
+    # The new, round-aware scoring columns.
+    assert r["captures"] == 1 and r["captured_events"] == 1 and r["logs_scored"] == 1
     assert r["http_flows"] == 1 and r["http_flow"]["service"] == "http"
     assert r["udp_flows"] == 1 and (r["udp_flow"]["src_pkts"], r["udp_flow"]["src_bytes"], r["udp_flow"]["src_ip_bytes"]) == (5, 500, 640)
     assert r["closed_state"] == "REJ" and r["api_service"] == "ssl"
     assert r["dns_events"] == 1 and r["http_events"] == 1
     assert r["shipper_age"] < 60 and r["stats_age"] < 60
+
+    # cleanup.sql removes the team, round, run, VM, capture, event and logging.
+    conn = database.connect()
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        cur.execute((SIM / "cleanup.sql").read_text(), {"token_hash": token_hash})
+        assert cur.fetchone()[1] == 1  # one competition removed
+        for table in ("round_runs", "virtual_machines", "flag_captures", "run_events", "logging", "teams"):
+            cur.execute(f"SELECT count(*) FROM {table}")
+            assert cur.fetchone()[0] == 0, table
+    conn.close()

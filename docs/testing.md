@@ -62,18 +62,25 @@ FAIL  ...
 
 What it checks:
 
-1. **Host:** proxmox-firewall, the host firewall, the firewall watchdog and
-   worms-mirror are active; every sandbox port is mirrored and the monitor's
-   is receive-only (`worms-mirror status`); nftables drops what enters the
-   mirror bridge.
+1. **Host:** proxmox-firewall, the host firewall, the firewall watchdog,
+   worms-mirror and the **round agent** (`worms-round-agent`) are active;
+   every sandbox port is mirrored and the monitor's is receive-only
+   (`worms-mirror status`); nftables drops what enters the mirror bridge.
 2. **Services:** units on scoring, logging, monitor and database (incl.
-   auditd/rsyslog); the monitor's capture NIC is promiscuous without address.
-3. **Scoring and logging (sandbox → API → database):** from the sandbox VM,
-   DNS resolves `scoring.worms.internal`; a flag and a log are submitted over
-   HTTPS **with certificate verification** through sandbox-gw (201); refused
-   requests: invalid token 401, oversized body 413 (nginx), GET 403, other
-   path 404. In the database: the flag (hash) and the log are stored **exactly
-   once**.
+   auditd/rsyslog); the monitor's capture NIC is promiscuous without address;
+   the **conductor daemon** (`orchestrator-conduct-rounds`) is active.
+3. **Scoring and logging (sandbox → API → database → scoring):** from the
+   sandbox VM, DNS resolves `scoring.worms.internal`; a flag and a log are
+   submitted over HTTPS **with certificate verification** through sandbox-gw
+   (201); refused requests: invalid token 401, oversized body 413 (nginx),
+   GET 403, other path 404. In the database the flag and the log are stored
+   **exactly once**, and — because scoring is now capture-based — the flag is
+   **scored**: `manage.py process_captures` on the orchestrator turns the
+   attempt into a `FlagCapture` of the run's VM (once) and a `captured` event
+   on the run's timeline, and the log is attributed to the team's run. The run
+   setup for this (a finished `RoundRun` + a VM whose released secret is the
+   submitted flag) is created by `files/simulation/setup.sql` and removed by
+   `cleanup.sql`.
 4. **Monitor (traffic → Zeek → database):** the sandbox VM makes traffic
    with known properties to the peer VM on random ports (so earlier runs never
    match): HTTP on a high port, which must come out as `service = http` (detected
@@ -109,9 +116,12 @@ FAIL ("sandbox deployed"); the other checks still run.
 
 ## Not covered (yet)
 
-- Dashboard/orchestrator behaviour (Django views, the topology collector).
-- Processing of the attempts (`processed`, scoring of flags): not
-  implemented in the platform yet.
+- Dashboard behaviour (Django views, the topology collector) and the animated
+  timeline player.
+- A full live round driven by the conductor + agent on a real Proxmox host
+  (the simulation checks capture scoring with an injected finished run, not a
+  sandbox the conductor built; the lifecycle itself is covered offline in
+  `test_rounds.py`/`test_round_agent.py`).
 - Wazuh: whether the audit logs arrive (only that auditd/rsyslog run).
 - Load: flood behaviour of the APIs and the monitor (the limits are
   unit-tested, not stress-tested).

@@ -6,7 +6,11 @@
 # second sandbox VM whose packet and byte counts are known, and then checks in
 # the database that
 #
-#   * the submissions were stored (flag_capture_attempts, logging_attempts),
+#   * the submissions were stored (flag_capture_attempts, logging_attempts)
+#     AND scored: the flag became a FlagCapture of the run's VM and a
+#     `captured` event on the run's timeline (capture processing, as in a
+#     real round; the test fixtures include a finished RoundRun + VM whose
+#     released secret is the submitted flag),
 #   * the monitor recorded the flows exactly once and with the right sizes,
 #     the application protocol (http on a random port, ssl to the API) and
 #     the sandbox VM's own address (copied before sandbox-gw's SNAT),
@@ -81,7 +85,7 @@
 
     - name: Host services
       ansible.builtin.command: systemctl is-active {{ item }}
-      loop: [proxmox-firewall, worms-host-firewall, worms-firewall-watchdog.timer, worms-mirror]
+      loop: [proxmox-firewall, worms-host-firewall, worms-firewall-watchdog.timer, worms-mirror, worms-round-agent]
       register: host_units
       changed_when: false
       failed_when: false
@@ -195,6 +199,7 @@
         named_args:
           run_id: "{{ sim.run_id }}"
           token_hash: "{{ sim.token_hash }}"
+          flag_hash: "{{ sim.flag_hash }}"
       register: team
       failed_when: false
 
@@ -585,6 +590,49 @@
         detail: "{{ p.value }}"
 
 # ---------------------------------------------------------------------------
+# Scoring is capture-based: the submitted flag only counts once the conductor
+# turns the attempt into a FlagCapture against the VM's released secret. The
+# conductor daemon does this on its own, but trigger one pass here so the
+# check is deterministic (and does not depend on the daemon's cadence).
+- name: Simulation | process captures (orchestrator)
+  hosts: orchestrator
+  gather_facts: false
+  ignore_unreachable: true
+  become: true
+  vars:
+    django_env_file: /etc/orchestrator/django.env
+    django_venv: /opt/orchestrator/venv
+    django_src: /opt/orchestrator/src
+  tasks:
+    - name: Conductor daemon running
+      ansible.builtin.command: systemctl is-active orchestrator-conduct-rounds
+      register: conductor_unit
+      changed_when: false
+      failed_when: false
+
+    - name: Check | conductor daemon active
+      ansible.builtin.include_tasks: simulation/record.yml
+      vars:
+        check: "orchestrator: conduct-rounds daemon active"
+        ok: "{{ conductor_unit.rc == 0 }}"
+        detail: "{{ conductor_unit.stdout }}"
+
+    - name: Process pending attempts into captures (one pass)
+      ansible.builtin.shell:
+        cmd: set -a && . {{ django_env_file }} && set +a && {{ django_venv }}/bin/python manage.py process_captures
+        chdir: "{{ django_src }}"
+      register: process_captures
+      changed_when: false
+      failed_when: false
+
+    - name: Check | capture processing ran
+      ansible.builtin.include_tasks: simulation/record.yml
+      vars:
+        check: "orchestrator: process_captures ran"
+        ok: "{{ process_captures.rc == 0 }}"
+        detail: "{{ (process_captures.stdout | default('')) or (process_captures.stderr | default('')) | truncate(120) }}"
+
+# ---------------------------------------------------------------------------
 - name: Simulation | what reached the database
   hosts: database
   gather_facts: false
@@ -622,6 +670,7 @@
       until: >-
         found.query_result is defined and (
           found.query_result[0].flags >= 1 and found.query_result[0].logs >= 1
+          and found.query_result[0].captures >= 1 and found.query_result[0].captured_events >= 1
           and found.query_result[0].api_service is not none and found.query_result[0].dns_events >= 1
           and (not with_peer or (found.query_result[0].udp_flows >= 1 and found.query_result[0].http_events >= 1
                                  and found.query_result[0].closed_state is not none))
@@ -642,6 +691,9 @@
       loop:
         - {check: "scoring: flag stored in flag_capture_attempts (exactly once)", ok: "{{ r.flags | default(0) == 1 }}", detail: "rows: {{ r.flags | default('-') }}"}
         - {check: "logging: log stored in logging_attempts (exactly once)", ok: "{{ r.logs | default(0) == 1 }}", detail: "rows: {{ r.logs | default('-') }}"}
+        - {check: "scoring: flag scored as a capture of the run's VM (exactly once)", ok: "{{ r.captures | default(0) == 1 }}", detail: "captures: {{ r.captures | default('-') }}"}
+        - {check: "scoring: capture recorded on the run timeline (captured event)", ok: "{{ r.captured_events | default(0) >= 1 }}", detail: "events: {{ r.captured_events | default('-') }}"}
+        - {check: "logging: log attributed to the team's run", ok: "{{ r.logs_scored | default(0) >= 1 }}", detail: "rows: {{ r.logs_scored | default('-') }}"}
       loop_control:
         loop_var: c
         label: "{{ c.check }}"

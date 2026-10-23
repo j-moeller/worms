@@ -48,7 +48,11 @@ def team(database):
     """A team with a valid token, created and removed with the SQL the live
     simulation uses."""
     token = f"sim-{uuid.uuid4().hex}"
-    params = {"run_id": uuid.uuid4().hex[:8], "token_hash": hashlib.sha256(token.encode()).hexdigest()}
+    params = {
+        "run_id": uuid.uuid4().hex[:8],
+        "token_hash": hashlib.sha256(token.encode()).hexdigest(),
+        "flag_hash": hashlib.sha256(token.encode() + b"-flag").hexdigest(),
+    }
     conn = database.connect()
     with conn.cursor() as cur:
         cur.execute((SQL / "setup.sql").read_text(), params)

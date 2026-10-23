@@ -16,16 +16,23 @@
     const CARD = { w: 150, h: 50 };
     const HOST_CARD = { w: 190, h: 56 };
     const BRIDGE = { w: 120, h: 36 };
+    // Zone kinds the analyzer emits (dashboard/topology.py zone_of); the colour
+    // is a CSS class z-<kind> defined in topology.html, so zones read the same
+    // in light and dark. A kind the backend adds later just falls back to the
+    // generic .zone colour until a class is added.
+    const ZONE_KINDS = new Set(["routed", "services", "sandbox", "mirror", "management", "uplink", "isolated"]);
 
     const state = {
         data: null,
         pos: new Map(),
         hidden: { bridges: new Set(), pools: new Set(), services: new Set(), groups: new Set() },
-        opts: { flows: true, unknown: true, hostFlows: true, nicLabels: true, portLabels: true, focus: false },
+        opts: { zones: true, flows: true, unknown: true, hostFlows: true, nicLabels: true, portLabels: true, focus: false },
         selected: null, // {type: "ep"|"br"|"flow", id}
         search: "",
         view: { x: 0, y: 0, k: 1 },
         colors: new Map(),
+        zoneOf: new Map(), // bridge id -> zone id
+        zones: [],         // state.data.zones, in display order
     };
 
     // ---------------------------------------------------------------- helpers
@@ -66,6 +73,17 @@
     const nicEnforced = (ep, nic) => Boolean(ep.firewall_enabled && nic.firewall);
     const nicBridge = (ep, name) => (ep.nics.find((n) => n.name === name) || {}).bridge;
     const epLabel = (ep) => (ep.kind === "host" ? `Proxmox host (${ep.name})` : ep.name);
+
+    // Zone lookups (state.zoneOf / state.zones are filled on each data load).
+    // A VM lives in the zone of its first bridged NIC (its data interface); a
+    // NIC into another zone shows as a line crossing the region boundary.
+    function primaryZone(ep) {
+        if (ep.kind === "host") return null;
+        const nic = ep.nics.find((n) => n.bridge);
+        return nic ? state.zoneOf.get(nic.bridge) || null : null;
+    }
+    const zoneBridges = (z) => (z.bridges || []).filter(bridgeVisible);
+    const zoneVisible = (z) => zoneBridges(z).length > 0;
 
     function ruleText(r) {
         const service = r.macro ? `${r.macro} (${r.proto || "any"}/${r.dport || "*"})` : `${r.proto || "any"}${r.dport ? "/" + r.dport : ""}`;
@@ -146,9 +164,19 @@
         return { nodes, edges };
     }
 
+    // Bridges laid out left-to-right grouped by zone, so each zone's members
+    // start clustered and its region reads as one band.
+    function orderedBridgeIds() {
+        const seen = new Set();
+        const order = [];
+        for (const z of state.zones) for (const bid of z.bridges) if (!seen.has(bid)) { seen.add(bid); order.push(bid); }
+        for (const b of state.data.bridges) if (!seen.has(b.id)) { seen.add(b.id); order.push(b.id); }
+        return order;
+    }
+
     function initialPosition(id) {
         const d = state.data;
-        const bridges = d.bridges.map((b) => b.id);
+        const bridges = orderedBridgeIds();
         const bx = (bid) => (bridges.indexOf(bid) - (bridges.length - 1) / 2) * 260;
         if (id.startsWith("br:")) return { x: bx(id.slice(3)), y: 0 };
         if (id === "host") return { x: 0, y: -320 };
@@ -232,6 +260,7 @@
         layers = {
             defs,
             viewport,
+            zones: sv("g", {}, viewport),
             nics: sv("g", {}, viewport),
             flows: sv("g", {}, viewport),
             nodes: sv("g", {}, viewport),
@@ -284,12 +313,142 @@
         return [ep.name, String(ep.vmid || ""), ...ep.nics.map((n) => n.ip)].some((s) => s && s.toLowerCase().includes(q));
     }
 
+    // ----------------------------------------------------- hover tooltips
+    // A floating panel that shows firewall rules on hover, so you can read what
+    // a VM, bridge or zone actually enforces without clicking. Content is built
+    // from the same snapshot the graph is drawn from, so it always matches the
+    // live configuration. (The detail pane on the right still shows the full,
+    // clickable breakdown.)
+
+    let tip = null;
+
+    function ensureTip() {
+        if (!tip) {
+            tip = el("div", { class: "topo-tip" });
+            tip.hidden = true;
+            svg.parentNode.appendChild(tip);
+        }
+        return tip;
+    }
+
+    function showTip(builder, ev) {
+        if (drag) return;
+        const node = builder();
+        if (!node) return hideTip();
+        ensureTip();
+        tip.textContent = "";
+        tip.append(node);
+        tip.hidden = false;
+        moveTip(ev);
+    }
+
+    function moveTip(ev) {
+        if (!tip || tip.hidden) return;
+        if (drag) return hideTip();
+        const r = svg.getBoundingClientRect();
+        const tw = tip.offsetWidth, th = tip.offsetHeight;
+        let x = ev.clientX - r.left + 14;
+        let y = ev.clientY - r.top + 16;
+        if (x + tw > r.width - 6) x = Math.max(6, ev.clientX - r.left - tw - 12);
+        if (y + th > r.height - 6) y = Math.max(6, r.height - th - 6);
+        tip.style.left = x + "px";
+        tip.style.top = y + "px";
+    }
+
+    function hideTip() {
+        if (tip) tip.hidden = true;
+    }
+
+    function attachTip(target, builder) {
+        target.addEventListener("mouseenter", (ev) => showTip(builder, ev));
+        target.addEventListener("mousemove", moveTip);
+        target.addEventListener("mouseleave", hideTip);
+    }
+
+    function tipRuleList(rules, limit = 8) {
+        if (!rules.length) return el("div", { class: "tip-note", text: "no explicit rules — falls through to policy" });
+        const rows = rules.slice(0, limit).map((r) =>
+            el("div", { class: "tip-rule " + (r.action === "ACCEPT" ? "v-allow" : "v-deny"), text: ruleText(r) }));
+        if (rules.length > limit) rows.push(el("div", { class: "tip-note", text: `… +${rules.length - limit} more` }));
+        return el("div", { class: "tip-rules" }, rows);
+    }
+
+    // Distinct ingress ACCEPTs enforced by the VMs attached to these bridges:
+    // "what this zone/bridge accepts inbound".
+    function zoneIngress(bridgeIds) {
+        const on = new Set(bridgeIds);
+        const seen = new Set();
+        const out = [];
+        for (const ep of state.data.endpoints) {
+            if (ep.kind === "host") continue;
+            if (!ep.nics.some((n) => on.has(n.bridge) && nicEnforced(ep, n))) continue;
+            for (const r of ep.rules) {
+                if (r.direction !== "in" || r.action !== "ACCEPT") continue;
+                const key = ruleText(r);
+                if (seen.has(key)) continue;
+                seen.add(key);
+                out.push(r);
+            }
+        }
+        return out;
+    }
+
+    function tipEndpoint(ep) {
+        return el("div", {}, [
+            el("div", { class: "tip-title", text: epLabel(ep) }),
+            el("div", { class: "tip-sub", text: `firewall ${ep.firewall_enabled ? "on" : "OFF"} · policy in ${ep.policy_in} / out ${ep.policy_out}` }),
+            el("div", { class: "tip-nics" }, ep.nics.map((n) =>
+                el("div", { class: "topo-mono" + (nicEnforced(ep, n) ? "" : " v-deny"), text: `${n.name} ${n.bridge || "-"} ${n.cidr || ""}${nicEnforced(ep, n) ? "" : " · UNFILTERED"}` }))),
+            el("div", { class: "tip-h", text: `firewall rules (${ep.rules.length}, top-down)` }),
+            tipRuleList(ep.rules),
+        ]);
+    }
+
+    function tipBridge(b) {
+        const z = state.zones.find((x) => x.id === state.zoneOf.get(b.id));
+        const ingress = zoneIngress([b.id]);
+        return el("div", {}, [
+            el("div", { class: "tip-title topo-mono", text: b.id }),
+            el("div", { class: "tip-sub", text: `${z ? z.label + " zone" : "zone"} · ${b.cidr || "no host IP"} · ${b.ports ? "uplink " + b.ports : "no uplink"}` }),
+            b.comment ? el("div", { class: "tip-note", text: b.comment }) : null,
+            el("div", { class: "tip-h", text: `ingress accepted here (${ingress.length})` }),
+            tipRuleList(ingress),
+        ]);
+    }
+
+    function tipZone(z) {
+        const ingress = zoneIngress(zoneBridges(z));
+        return el("div", {}, [
+            el("div", { class: "tip-title", text: z.label + " zone" }),
+            el("div", { class: "tip-sub", text: `${z.kind} · ${z.bridges.length} bridge${z.bridges.length === 1 ? "" : "s"}` }),
+            z.comment ? el("div", { class: "tip-note", text: z.comment }) : null,
+            el("div", { class: "tip-h", text: "bridges" }),
+            el("div", { class: "topo-mono tip-note", text: z.bridges.join(", ") }),
+            el("div", { class: "tip-h", text: `ingress accepted into this zone (${ingress.length})` }),
+            tipRuleList(ingress),
+        ]);
+    }
+
+    function tipFlow(f) {
+        const eps = byId();
+        const a = eps.get(f.from), b = eps.get(f.to);
+        return el("div", {}, [
+            el("div", { class: "tip-title", text: `${epLabel(a)} → ${epLabel(b)}` }),
+            el("div", { class: "tip-sub" }, [el("span", { class: "topo-mono", text: f.service }), " ", verdictPill(f.verdict)]),
+            el("div", { class: "tip-h", text: "egress (source)" }),
+            el("div", { class: "tip-rule" }, [verdictPill(f.egress.verdict), " ", decisionText(f.egress)]),
+            el("div", { class: "tip-h", text: "ingress (target)" }),
+            el("div", { class: "tip-rule" }, [verdictPill(f.ingress.verdict), " ", decisionText(f.ingress)]),
+        ]);
+    }
+
     function render() {
         ensureLayers();
         const d = state.data;
         const eps = byId();
         const keep = highlightSet();
         const dim = (id) => (keep && !keep.has(id) ? " dim" : "");
+        layers.zones.textContent = "";
         layers.nics.textContent = "";
         layers.flows.textContent = "";
         layers.nodes.textContent = "";
@@ -298,6 +457,31 @@
         const visibleEps = d.endpoints.filter(endpointVisible);
         const visibleBridges = d.bridges.filter((b) => bridgeVisible(b.id));
         const pos = (id) => state.pos.get(id) || (state.pos.set(id, initialPosition(id)), state.pos.get(id));
+
+        // Zone regions: a rounded band enclosing each zone's visible bridges and
+        // the VMs whose data interface lives in it. Recomputed from live
+        // positions every render, so dragging a node reshapes its zone.
+        if (state.opts.zones) {
+            for (const z of state.zones) {
+                if (!zoneVisible(z)) continue;
+                let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, n = 0;
+                const add = (id) => {
+                    const p = pos(id), bx = boxOf(id);
+                    x0 = Math.min(x0, p.x - bx.w / 2); x1 = Math.max(x1, p.x + bx.w / 2);
+                    y0 = Math.min(y0, p.y - bx.h / 2); y1 = Math.max(y1, p.y + bx.h / 2);
+                    n++;
+                };
+                for (const bid of z.bridges) if (bridgeVisible(bid)) add("br:" + bid);
+                for (const ep of visibleEps) if (ep.kind !== "host" && primaryZone(ep) === z.id) add(ep.id);
+                if (!n) continue;
+                const pad = 30;
+                const kind = ZONE_KINDS.has(z.kind) ? z.kind : "other";
+                const g = sv("g", { class: "zone z-" + kind }, layers.zones);
+                sv("rect", { x: x0 - pad, y: y0 - pad, width: x1 - x0 + 2 * pad, height: y1 - y0 + 2 * pad, rx: 16, class: "zone-area" }, g);
+                sv("text", { x: x0 - pad + 12, y: y0 - pad + 20, class: "zone-label", text: z.label.toUpperCase() }, g);
+                attachTip(g, () => tipZone(z));
+            }
+        }
 
         // NIC edges (guest/host <-> bridge)
         for (const ep of visibleEps) {
@@ -352,8 +536,8 @@
                     class: "flow" + (f.verdict === "unknown" ? " unknown" : "") + (selected ? " selected" : "") + dim(f.id),
                 }, layers.flows);
                 const hit = sv("path", { d: dpath, class: "flow-hit" }, layers.flows);
-                const title = `${epLabel(eps.get(f.from))} → ${epLabel(eps.get(f.to))} ${f.service}${f.verdict === "unknown" ? " (depends on rules not visible via the API)" : ""}`;
-                sv("title", { text: title }, hit);
+                hit.setAttribute("aria-label", `${epLabel(eps.get(f.from))} to ${epLabel(eps.get(f.to))} ${f.service}`);
+                attachTip(hit, () => tipFlow(f));
                 attachClick(hit, { type: "flow", id: f.id });
                 attachClick(path, { type: "flow", id: f.id });
                 if (state.opts.portLabels) {
@@ -380,7 +564,8 @@
             sv("rect", { x: -BRIDGE.w / 2, y: -BRIDGE.h / 2, width: BRIDGE.w, height: BRIDGE.h, rx: BRIDGE.h / 2 }, g);
             sv("text", { y: b.cidr ? -2 : 4, "text-anchor": "middle", "font-size": "13", "font-weight": "700", class: "mono", text: b.id }, g);
             if (b.cidr) sv("text", { y: 12, "text-anchor": "middle", "font-size": "10", class: "mono muted", text: b.cidr }, g);
-            sv("title", { text: `${b.id}${b.cidr ? " · " + b.cidr : ""}${b.ports ? " · uplink " + b.ports : " · no uplink"}${b.comment ? "\n" + b.comment : ""}` }, g);
+            g.setAttribute("aria-label", `bridge ${b.id}${b.cidr ? " " + b.cidr : ""}`);
+            attachTip(g, () => tipBridge(b));
             attachNode(g, id, { type: "br", id });
         }
 
@@ -406,7 +591,8 @@
             const badge = sv("g", { transform: `translate(${box.w / 2 - 22},${-box.h / 2 + 4})` }, g);
             sv("rect", { width: 18, height: 12, rx: 3, class: fwClass(ep) }, badge);
             sv("text", { x: 9, y: 9.5, "text-anchor": "middle", "font-size": "8", "font-weight": "700", style: "fill:#fff", text: "FW" }, badge);
-            sv("title", { text: `${epLabel(ep)}\nfirewall ${ep.firewall_enabled ? "on" : "OFF"} · in ${ep.policy_in} · out ${ep.policy_out}\n${ep.nics.map((n) => `${n.name} ${n.bridge || "-"} ${n.cidr || ""}`).join("\n")}` }, g);
+            g.setAttribute("aria-label", `${epLabel(ep)}, firewall ${ep.firewall_enabled ? "on" : "off"}`);
+            attachTip(g, () => tipEndpoint(ep));
             attachNode(g, ep.id, { type: "ep", id: ep.id });
         }
 
@@ -428,6 +614,7 @@
     function attachNode(g, id, selection) {
         g.addEventListener("pointerdown", (ev) => {
             ev.stopPropagation();
+            hideTip();
             const p = svgPoint(ev);
             const start = state.pos.get(id);
             drag = { kind: "node", id, sx: p.x, sy: p.y, ox: start.x, oy: start.y, moved: false, selection };
@@ -439,6 +626,7 @@
     function attachClick(target, selection) {
         target.addEventListener("pointerdown", (ev) => {
             ev.stopPropagation();
+            hideTip();
             const p = svgPoint(ev);
             drag = { kind: "click", sx: p.x, sy: p.y, moved: false, selection };
             svg.setPointerCapture(ev.pointerId);
@@ -446,6 +634,7 @@
     }
 
     svg.addEventListener("pointerdown", (ev) => {
+        hideTip();
         const p = svgPoint(ev);
         drag = { kind: "pan", sx: p.x, sy: p.y, ox: state.view.x, oy: state.view.y, moved: false };
         svg.classList.add("panning");
@@ -545,6 +734,7 @@
 
         box.append(section("Show"));
         const opts = [
+            ["zones", "Zone regions"],
             ["flows", "Allowed connections"],
             ["unknown", "…incl. uncertain (dashed)"],
             ["hostFlows", "…incl. from Proxmox host"],
@@ -554,6 +744,21 @@
         ];
         for (const [key, label] of opts) {
             box.append(toggle(label, state.opts[key], (v) => { state.opts[key] = v; render(); }));
+        }
+
+        const zones = d.zones || [];
+        if (zones.length) {
+            box.append(section("Network security zones"));
+            for (const z of zones) {
+                const kind = ZONE_KINDS.has(z.kind) ? z.kind : "other";
+                const vms = d.endpoints.filter((e) => e.kind !== "host" && primaryZone(e) === z.id).length;
+                box.append(toggle(
+                    [el("span", { class: "zone-dot z-" + kind }), el("span", { text: z.label }), el("span", { class: "sub", text: z.kind })],
+                    z.bridges.some(bridgeVisible),
+                    (v) => setGroup(state.hidden.bridges, z.bridges, v),
+                    [el("span", { class: "count", text: vms })],
+                ));
+            }
         }
 
         const bridgeIds = d.bridges.map((b) => b.id);
@@ -633,9 +838,10 @@
         if (!sel) {
             box.append(
                 el("p", { class: "title", text: "Details" }),
-                el("p", { class: "subtitle", text: "Click a VM, bridge or connection. Drag to move, scroll to zoom." }),
+                el("p", { class: "subtitle", text: "Hover a VM, bridge or zone to read its firewall rules; click for the full breakdown. Drag to move, scroll to zoom." }),
                 section("Reading the graph"),
                 el("ul", {}, [
+                    el("li", { text: "Shaded bands are the network security zones (dmz, core, ingest, siem, services, sandbox, mirror, management), derived from the live bridge configuration." }),
                     el("li", { text: "Arrows are connections the Proxmox firewall lets the source open (egress of the source AND ingress of the target accept)." }),
                     el("li", { text: "Dashed arrows depend on rules the API cannot show (e.g. Proxmox's implicit management access from local_network)." }),
                     el("li", { text: "Red dashed NIC lines are unfiltered (NIC firewall=0, guest or datacenter firewall off)." }),
@@ -810,6 +1016,8 @@
         }
 
         state.data = body;
+        state.zones = body.zones || [];
+        state.zoneOf = new Map((body.bridges || []).map((b) => [b.id, b.zone]));
         const services = [...new Set(body.flows.map((f) => f.service))];
         services.forEach((s) => { if (!state.colors.has(s)) state.colors.set(s, PALETTE[state.colors.size % PALETTE.length]); });
         if (state.selected) {

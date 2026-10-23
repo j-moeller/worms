@@ -17,6 +17,14 @@
         --host: #22303f;
         --host-ink: #ffffff;
         --halo: #f6f7f9;
+        --z-routed: #2a78d6;
+        --z-services: #0f8fa6;
+        --z-sandbox: #d9622b;
+        --z-mirror: #7a5fd3;
+        --z-management: #64748b;
+        --z-uplink: #1a8a5a;
+        --z-isolated: #94a1b2;
+        --z-other: #9aa5b4;
         font-family: "Space Grotesk", system-ui, sans-serif;
         color: var(--ink);
         background: var(--bg);
@@ -39,6 +47,14 @@
             --host: #dfe7ef;
             --host-ink: #12161b;
             --halo: #12161b;
+            --z-routed: #5aa0f0;
+            --z-services: #27b3c9;
+            --z-sandbox: #e8803f;
+            --z-mirror: #9f87e6;
+            --z-management: #8a98aa;
+            --z-uplink: #3cc58a;
+            --z-isolated: #94a1b2;
+            --z-other: #5b6878;
         }
     }
     .topo * { box-sizing: border-box; }
@@ -85,6 +101,7 @@
     .topo-legend { position: absolute; left: 8px; bottom: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font-size: 11px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 12px; max-width: calc(100% - 16px); }
     .topo-legend span { display: inline-flex; align-items: center; gap: 4px; }
     .topo-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; color: var(--muted); }
+    .topo-empty[hidden] { display: none; }  /* the class's display:flex otherwise overrides the hidden attribute, leaving this overlay covering the canvas and swallowing hover/clicks */
 
     .topo-detail table { width: 100%; border-collapse: collapse; font-size: 12px; }
     .topo-detail td, .topo-detail th { text-align: left; padding: 2px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -125,6 +142,30 @@
     .topo svg .fw-bad { fill: var(--bad); }
     .topo svg .status-running { fill: var(--ok); }
     .topo svg .status-stopped { fill: var(--muted); }
+
+    /* Network security zones */
+    .topo .z-routed { color: var(--z-routed); }
+    .topo .z-services { color: var(--z-services); }
+    .topo .z-sandbox { color: var(--z-sandbox); }
+    .topo .z-mirror { color: var(--z-mirror); }
+    .topo .z-management { color: var(--z-management); }
+    .topo .z-uplink { color: var(--z-uplink); }
+    .topo .z-isolated { color: var(--z-isolated); }
+    .topo .z-other { color: var(--z-other); }
+    .topo svg .zone .zone-area { fill: currentColor; fill-opacity: .06; stroke: currentColor; stroke-opacity: .45; stroke-width: 1.5; stroke-dasharray: 2 4; }
+    .topo svg .zone:hover .zone-area { fill-opacity: .11; }
+    .topo svg .zone .zone-label { fill: currentColor; font-family: "Share Tech Mono", ui-monospace, monospace; font-size: 12px; font-weight: 700; letter-spacing: .1em; opacity: .9; }
+    .topo .zone-dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: currentColor; opacity: .9; flex: none; }
+
+    /* Hover tooltip (firewall rules etc.) */
+    .topo-tip { position: absolute; z-index: 5; max-width: 320px; pointer-events: none; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; font-size: 12px; line-height: 1.45; box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
+    .topo-tip[hidden] { display: none; }
+    .topo-tip .tip-title { font-weight: 700; font-size: 13px; }
+    .topo-tip .tip-sub { color: var(--muted); margin-bottom: 2px; }
+    .topo-tip .tip-h { margin-top: 5px; font-size: 10px; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+    .topo-tip .tip-note { color: var(--muted); font-size: 11px; }
+    .topo-tip .tip-nics > div, .topo-tip .tip-rule { font-size: 11px; }
+    .topo-tip .tip-rule { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
     @media (max-width: 1100px) {
         .topo-body { grid-template-columns: 1fr; height: auto; }

@@ -5,6 +5,13 @@
 wazuh_version: "4.14"
 wazuh_install_args: "-a -i"
 
+# The all-in-one install takes ~20-40 min. It runs asynchronously and is polled
+# so the run prints a heartbeat (and is killed if it overruns the timeout, which
+# then fails the play). Watch the installer's own log for live detail:
+#   ssh <wazuh host> sudo tail -f /var/log/wazuh-install.log
+wazuh_install_timeout: 3600       # seconds before the installer is given up on
+wazuh_install_poll_seconds: 20    # heartbeat interval while it runs
+
 # Java heap of the indexer (default 1g). The VM has 2 GB for manager, indexer
 # and dashboard together.
 wazuh_indexer_heap: 512m

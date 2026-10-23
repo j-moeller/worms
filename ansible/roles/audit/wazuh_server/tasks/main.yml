@@ -7,11 +7,35 @@
     dest: /root/wazuh-install.sh
     mode: "0700"
 
+# The installer runs 20-40 min with no output of its own on stdout, so run it
+# asynchronously and poll: the run then prints a heartbeat every
+# wazuh_install_poll_seconds instead of hanging silently on one task. For live
+# detail, tail the installer's log on the VM (see below).
+- name: Note how to watch the Wazuh install
+  ansible.builtin.debug:
+    msg: >-
+      Installing Wazuh (manager, indexer, dashboard) -- takes ~20-40 min.
+      Live log:  ssh {{ ansible_host | default(inventory_hostname) }}
+      sudo tail -f /var/log/wazuh-install.log
+
 - name: Install Wazuh (manager, indexer, dashboard)
   ansible.builtin.command:
     cmd: bash /root/wazuh-install.sh {{ wazuh_install_args }}
     chdir: /root
     creates: /var/ossec/bin/wazuh-control
+  async: "{{ wazuh_install_timeout }}"
+  poll: 0
+  register: wazuh_install
+
+# Skipped (ansible_job_id undefined) when the install was a no-op (creates:).
+- name: Wait for the Wazuh installer to finish (heartbeat every {{ wazuh_install_poll_seconds }}s)
+  ansible.builtin.async_status:
+    jid: "{{ wazuh_install.ansible_job_id }}"
+  register: wazuh_job
+  until: wazuh_job.finished
+  retries: "{{ ((wazuh_install_timeout | int) / (wazuh_install_poll_seconds | int)) | round(0, 'ceil') | int }}"
+  delay: "{{ wazuh_install_poll_seconds }}"
+  when: wazuh_install.ansible_job_id is defined
 
 # Only after the installer: it refuses to run if /etc/wazuh-indexer exists.
 # Overrides the heap in jvm.options (read last).

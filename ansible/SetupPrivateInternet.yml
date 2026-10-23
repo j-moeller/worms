@@ -11,11 +11,13 @@
 # Point every private-internet VM's apt at the apt-cacher-ng cache (path-style),
 # so package installs work both during prep and offline.
 - hosts: private_internet
+  any_errors_fatal: true
   become: true
   roles:
     - apt_client
 
 - hosts: apt_cache_hosts
+  any_errors_fatal: true
   become: true
   pre_tasks:
     - name: Wait for cloud-init to finish (tolerate errors; roles ensure packages)
@@ -26,6 +28,7 @@
     - apt_cache
 
 - hosts: devpi_hosts
+  any_errors_fatal: true
   become: true
   pre_tasks:
     - name: Wait for cloud-init to finish (tolerate errors; roles ensure packages)
@@ -36,6 +39,7 @@
     - devpi
 
 - hosts: docker_registry_hosts
+  any_errors_fatal: true
   become: true
   pre_tasks:
     - name: Wait for cloud-init to finish (tolerate errors; roles ensure packages)
@@ -46,6 +50,7 @@
     - docker_registry
 
 - hosts: manpages_hosts
+  any_errors_fatal: true
   become: true
   pre_tasks:
     - name: Wait for cloud-init to finish (tolerate errors; roles ensure packages)
@@ -56,6 +61,7 @@
     - manpages
 
 - hosts: ntp_hosts
+  any_errors_fatal: true
   become: true
   pre_tasks:
     - name: Wait for cloud-init to finish (tolerate errors; roles ensure packages)
@@ -66,6 +72,7 @@
     - ntp
 
 - hosts: cve_search_hosts
+  any_errors_fatal: true
   become: true
   pre_tasks:
     - name: Wait for cloud-init to finish (tolerate errors; roles ensure packages)
@@ -76,6 +83,7 @@
     - cve_search
 
 - hosts: wikipedia_hosts
+  any_errors_fatal: true
   become: true
   pre_tasks:
     - name: Wait for cloud-init to finish (tolerate errors; roles ensure packages)

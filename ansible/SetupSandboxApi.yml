@@ -4,6 +4,7 @@
 # roles and grants).
 - name: Configure the sandbox-facing APIs
   hosts: sandbox_api_hosts
+  any_errors_fatal: true
   become: true
 
   pre_tasks:

@@ -7,6 +7,7 @@
 # sandbox bridges to the mirror bridge) is SetupHostNetwork.yml.
 - name: Configure the network monitor
   hosts: network_monitor_hosts
+  any_errors_fatal: true
   become: true
 
   pre_tasks:

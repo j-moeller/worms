@@ -109,6 +109,23 @@ overrides the `hidden` attribute, so that overlay stayed on top of the canvas
 (`inset:0`) and swallowed every hover and click over the graph. Fixed with
 `.topo-empty[hidden]{display:none}`.
 
+## Early fail when a VM fails to set up
+
+The deploy now stops as soon as any VM fails, instead of finishing the other
+hosts first:
+
+- **OpenTofu**: a failed `tofu apply` already exits non-zero; `make` stops
+  before Ansible runs (the `infrastructure` target's EXIT trap only regenerates
+  the inventory, it preserves the failure code). A VM that OpenTofu creates but
+  that fails to boot / cloud-init is caught in the next step.
+- **Ansible**: every setup play (`WaitForVMs` and the `configure` sequence, plus
+  `SetupSandbox`) now carries `any_errors_fatal: true` — the repo's existing
+  pattern (SetupDbAndDashboard), extended to all of them. `WaitForVMs` is the
+  early gate: it waits for SSH + `cloud-init status --wait` on every
+  infrastructure VM, so an unreachable VM or a failed cloud-init aborts the
+  whole run before any configuration starts; a task failing on any host later
+  aborts immediately rather than after the other hosts finish.
+
 ## Round orchestration (second task)
 
 Added the round orchestration (`docs/rounds.md`): the conductor on the

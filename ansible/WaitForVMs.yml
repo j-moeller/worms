@@ -5,6 +5,7 @@
 
 - name: Wait for the infrastructure VMs
   hosts: all:!proxmox_host:!sandbox:!sandbox_gw
+  any_errors_fatal: true
   gather_facts: false
   tasks:
     # First: a VM that was just created refuses SSH until it has booted.

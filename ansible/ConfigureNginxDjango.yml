@@ -1,5 +1,6 @@
 - name: Configures TLS on nginx servers for django
   hosts: django_hosts
+  any_errors_fatal: true
   become: true
 
   pre_tasks:

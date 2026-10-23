@@ -5,6 +5,7 @@
 # database certificate). See docs/rounds.md.
 - name: Configure the round agent
   hosts: proxmox_host
+  any_errors_fatal: true
   become: true
   roles:
     - round_agent

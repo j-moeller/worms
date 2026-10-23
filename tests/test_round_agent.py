@@ -165,7 +165,11 @@ def test_prepare_builds_sandbox_and_reports_topology():
     names = {vm["name"] for vm in result["vms"]}
     assert names == {"sandbox-a", "sandbox-b"}
     assert result["vms"][0]["networks"] == [{"name": "vmbr1000", "cidr": "10.64.0.0/24"}]
-    assert result["topology"]["networks"][0]["name"] == "vmbr1000"
+    # The full generator graph and the generated OpenTofu config are returned
+    # for the round's visualisation.
+    assert result["topology"]["nodes"] and result["topology"]["edges"]
+    assert any(n["type"] == "network" for n in result["topology"]["nodes"])
+    assert result["sandbox_definition"] == ex.installed_hcl
 
 
 def test_prepare_reset_services_runs_first():

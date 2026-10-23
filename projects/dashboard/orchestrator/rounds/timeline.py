@@ -124,4 +124,7 @@ def build(run: RoundRun, flow_limit=20000) -> dict:
         "events": events,
         "flows": flows,
         "captures": captures,
+        # The full generator graph saved at prepare time (every layer, not
+        # just the sandbox VMs): the backdrop the animated view can draw.
+        "architecture": run.topology or {},
     }

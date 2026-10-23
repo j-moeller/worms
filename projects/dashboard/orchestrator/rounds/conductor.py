@@ -327,9 +327,11 @@ class Conductor:
             RunEvent.objects.create(run=run, kind=RunEvent.Kind.SECRET_RELEASED, vm=vm)
 
     def _register_topology(self, run, result):
-        """result from a prepare job: the sandbox as built."""
+        """result from a prepare job: the sandbox as built (full topology and
+        the generated OpenTofu definition, saved for the round's replay)."""
         run.topology = result.get("topology", {})
-        run.save(update_fields=["topology"])
+        run.sandbox_definition = result.get("sandbox_definition", "")
+        run.save(update_fields=["topology", "sandbox_definition"])
         with transaction.atomic():
             for entry in result.get("vms", []):
                 VirtualMachine.objects.update_or_create(

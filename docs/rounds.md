@@ -148,7 +148,14 @@ single clock (seconds from the worm's start):
 - `flows` — connections from the monitor (`network_flows`) between sandbox
   VMs in the run's window: the dots to move between nodes, with transport,
   detected protocol and size;
-- `captures` — when each VM was captured.
+- `captures` — when each VM was captured;
+- `architecture` — the full generator graph saved at prepare time (every
+  layer: internet, edge/core/distribution/access switches, networks and VMs,
+  with all edges): the backdrop to draw behind the sandbox VMs.
+
+The run also stores `sandbox_definition`, the generated OpenTofu
+configuration for the sandbox (the whole stack definition for this run), kept
+for reference and reproducibility; it is not part of the timeline JSON.
 
 The player itself (drawing the graph, moving the dots, the scrubber) is
 front-end work still to come; `/rounds/` lists the runs and links the JSON.

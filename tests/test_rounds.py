@@ -163,7 +163,11 @@ def fake_agent(run, sha):
         result = {}
         if job.kind == HostJob.Kind.PREPARE:
             result = {
-                "topology": {"networks": [{"name": "vmbr1000", "cidr": "10.64.0.0/24"}]},
+                "topology": {
+                    "nodes": [{"id": "network-1000", "label": "vmbr1000", "type": "network", "cidr": "10.64.0.0/24"}],
+                    "edges": [],
+                },
+                "sandbox_definition": "locals { seed = 0 }",
                 "vms": [
                     {
                         "name": f"sandbox-vm{i}",
@@ -279,6 +283,8 @@ def test_conductor_runs_a_full_round(one_run):
     assert run.state == RoundRun.State.ARMED
     assert run.virtual_machines.count() == 4
     assert run.steps.count() > 0
+    # The full topology and the generated OpenTofu config are saved on the run.
+    assert run.topology.get("nodes") and run.sandbox_definition == "locals { seed = 0 }"
     # Start VM's secret is released at deploy.
     start_vm = run.virtual_machines.get(vm_identifier=run.sandbox_params["start_vm"])
     assert start_vm.ctf_flag_hash == sha(start_vm.vm_identifier)

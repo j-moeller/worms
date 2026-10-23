@@ -47,9 +47,13 @@ class RoundRun(models.Model):
 
     # Generator parameters of the sandbox (scripts/generate_sandbox.py).
     sandbox_params = models.JSONField(default=dict)
-    # Networks and VMs as built (from the host's prepare job): what the
-    # timeline view draws.
+    # The sandbox as built (from the host's prepare job), saved for the
+    # round's visualisation: `topology` is the full generator graph (every
+    # layer -- internet, edge/core/distribution/access switches, networks and
+    # VMs, with all edges), `sandbox_definition` is the generated OpenTofu
+    # configuration (the whole sandbox stack definition for this run).
     topology = models.JSONField(default=dict)
+    sandbox_definition = models.TextField(blank=True, default="")
 
     created_at = models.DateTimeField(db_default=Now())
     state_changed_at = models.DateTimeField(null=True, blank=True)

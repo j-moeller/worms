@@ -278,6 +278,34 @@
             ok: "{{ dns.rc == 0 and dns.stdout.split() | first == services_ips.scoring }}"
             detail: "{{ dns.stdout }}"
 
+        # Prove the internal CA is in the sandbox's own trust store
+        # (SetupSandbox.yml): a plain HTTPS request with normal verification
+        # and NO bundled CA. If TLS verifies we get an HTTP status back
+        # (whatever it is); a TLS failure raises and leaves status undefined.
+        - name: Client | HTTPS to the services via the system trust store
+          ansible.builtin.uri:
+            url: "https://{{ item }}.worms.internal/submit"
+            method: POST
+            body_format: json
+            body: {}
+            validate_certs: true
+            status_code: [200, 201, 400, 401, 403, 413, 415, 429]
+            timeout: 10
+          loop: [scoring, logging]
+          register: trust_store
+          failed_when: false
+
+        - name: Check | sandbox trusts the internal CA (HTTPS to the services)
+          ansible.builtin.include_tasks: simulation/record.yml
+          loop: "{{ trust_store.results }}"
+          loop_control:
+            loop_var: t
+            label: "{{ t.item }}"
+          vars:
+            check: "sandbox -> {{ t.item }}: HTTPS verified by the installed CA"
+            ok: "{{ t.status is defined and t.status > 0 }}"
+            detail: "{{ ('TLS error: ' ~ (t.msg | default(''))) if t.status is not defined else ('HTTP ' ~ t.status) }}"
+
         - name: Client | the internal CA (to verify the APIs' certificates)
           ansible.builtin.copy:
             src: "{{ pki_ca_cert_path }}"

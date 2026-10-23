@@ -85,7 +85,7 @@ FINISHED ◀── TEARING_DOWN ◀── ENDING ◀─────────�
 | State | Who | What |
 |---|---|---|
 | PENDING | — | planned, waiting its turn; no upload → SKIPPED |
-| PREPARING | agent (`prepare`) | rebuild ephemeral/PI (optional), generate + apply the sandbox, register its VMs and topology |
+| PREPARING | agent (`prepare`) | rebuild ephemeral/PI (optional), generate + apply the sandbox, install the internal CA into the sandbox guests (SetupSandbox.yml), register its VMs and topology |
 | CHECKING | agent (`check`) | firewalls up, mirror receive-only, every sandbox VM running |
 | DEPLOYING | agent (`deploy`) | fetch + verify the worm, put it on the start VM, release the initial secrets, arm the fuse |
 | ARMED | conductor | wait until `worm_start_at` (the worm starts itself on the VM) |
@@ -192,10 +192,10 @@ themselves are covered offline in `tests/test_rounds.py` and
 ## What is not done here
 
 - **The animation front-end** (the player). The data contract above is ready.
-- **Distributing the internal CA and other config into the sandbox VMs**
-  (README "Round start"): `prepare` builds and registers the sandbox but does
-  not yet configure the guests beyond cloud-init. The worm start assumes the
-  sandbox image has `python3` and `unzip`.
+- **Sandbox guest config beyond the CA.** `prepare` installs the internal CA
+  into the sandbox guests (SetupSandbox.yml), so a worm reaches scoring/logging
+  over verified HTTPS; anything else the guests need (the worm start assumes
+  `python3` and `unzip` in the image) is not configured yet.
 - **The dashboard media path.** The agent reads uploads from
   `round_agent_dashboard_media_root` on the dashboard VM; the dashboard's
   `default_storage` must write there (`MEDIA_ROOT` is not set yet — see

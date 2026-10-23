@@ -1,0 +1,22 @@
+---
+# Configure the sandbox VMs after they are built (round agent, prepare job).
+# Right now this installs the internal CA into their trust store, so a worm
+# can reach the scoring and logging APIs over HTTPS with normal certificate
+# verification (no bundled CA, no --insecure). The sandbox VMs are assumed
+# compromised; trusting the internal CA only lets them *verify* the services,
+# it grants no access the firewall does not already allow.
+- name: Configure the sandbox VMs
+  hosts: sandbox
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Wait for cloud-init completion
+      ansible.builtin.command:
+        cmd: cloud-init status --wait
+      register: cloud_init_status
+      changed_when: false
+      failed_when: cloud_init_status.rc not in [0, 2]
+
+  roles:
+    - role: ca_distribute

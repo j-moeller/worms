@@ -109,7 +109,9 @@ def prepare(ex, cfg, params):
 
     ex.tofu("sandbox", "init", "-input=false", timeout=600)
     ex.tofu("sandbox", "apply", "-auto-approve", "-input=false", "-parallelism=1", timeout=cfg.get("apply_timeout", 5400))
-    ex.make("inventory", timeout=300)
+    # Refresh the inventory and configure the sandbox guests (install the
+    # internal CA, so a worm can reach scoring/logging over verified HTTPS).
+    ex.make("round-configure-sandbox", timeout=cfg.get("configure_timeout", 1800))
 
     topology, vm_networks = _topology(graph)
     vms = _sandbox_vms(ex)

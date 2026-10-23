@@ -7,7 +7,7 @@ stay unique across folders.
 | Folder              | Roles                                                         | Playbook                       | Runs on                         |
 |---------------------|---------------------------------------------------------------|--------------------------------|---------------------------------|
 | `host/`             | `host_network` (nftables, sysctls, internet gate, traffic mirror) | SetupHostNetwork.yml, Internet.yml | Proxmox host (`proxmox_host`) |
-| `pki/`              | `ca_create` (internal root CA), `ca_distribute` (trust store) | CreateCA.yml, DistributeCA.yml | controller, `tls_hosts`         |
+| `pki/`              | `ca_create` (internal root CA), `ca_distribute` (trust store) | CreateCA.yml, DistributeCA.yml, SetupSandbox.yml | controller, `tls_hosts`, `sandbox` |
 | `web/`              | `nginx_tls`, `nginx_tls_django` (TLS reverse proxies)         | ConfigureNginx*.yml            | `nginx_hosts`, `django_hosts`   |
 | `database/`         | `setup_db_base`, `setup_db_permissions`                       | SetupDbAndDashboard.yml        | `database_hosts`                |
 | `applications/`     | `django_app` (dashboard, orchestrator), `sandbox_api`, `network_monitor` (Zeek + zeek-shipper) | SetupDbAndDashboard.yml, SetupSandboxApi.yml, SetupNetworkMonitor.yml | `django_hosts`, `sandbox_api_hosts`, `network_monitor_hosts` |

@@ -60,7 +60,7 @@ endef
 .PHONY: all init secrets platform firewall firewall-migrate host-network infrastructure \
         inventory show-config \
         provision configure offline internet-allow internet-deny ping debug \
-        test test-deps simulate round-reset-services round-reset-apply \
+        test test-deps simulate round-reset-services round-reset-apply round-configure-sandbox \
         destroy destroy_all terminate
 
 all: init secrets platform firewall host-network
@@ -213,6 +213,14 @@ round-reset-apply:
 	cd opentofu/stacks/private_internet && $(MAKE) apply
 	cd opentofu/stacks/infrastructure/ephemeral && $(MAKE) apply
 	$(MAKE) --no-print-directory inventory
+
+# Configure the freshly built sandbox VMs (the round agent runs this in the
+# prepare job, after the sandbox stack is applied): refresh the inventory so
+# the new sandbox hosts appear, then install the internal CA into their trust
+# store (SetupSandbox.yml). No internet window: everything is local.
+round-configure-sandbox:
+	$(MAKE) --no-print-directory inventory
+	cd ansible && $(ANSIBLE) SetupSandbox.yml
 
 # ---- Teardown ---------------------------------------------------------------
 # VM stacks first (they reference the security groups, pools and images),

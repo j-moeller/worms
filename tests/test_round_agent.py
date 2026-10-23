@@ -160,7 +160,7 @@ def test_prepare_builds_sandbox_and_reports_topology():
     result = handlers.prepare(ex, CFG, validation.validate("prepare", {"seed": 5, "sandbox_params": {"vms": 2}}))
     assert ("generate", 5, 2) in ex.calls
     assert any(c[:2] == ("tofu", "sandbox") and "apply" in c for c in ex.calls)
-    assert ("make", "inventory") in ex.calls
+    assert ("make", "round-configure-sandbox") in ex.calls  # inventory + install the CA
     assert ex.installed_hcl is not None
     names = {vm["name"] for vm in result["vms"]}
     assert names == {"sandbox-a", "sandbox-b"}

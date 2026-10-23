@@ -95,6 +95,20 @@ Details: [monitoring.md](monitoring.md), [testing.md](testing.md).
   First steps on the real host: `make` (or `make infrastructure host-network
   provision`), deploy a sandbox, `make simulate`.
 
+## Infrastructure visualization (dashboard topology view)
+
+Extended the topology view to show the network security zones (shaded,
+labelled bands derived dynamically from the live bridge comments), the Linux
+bridges and firewalls, with the firewall rules shown on hover (VM / bridge /
+zone / flow). Built so the planned round/team overlays can layer on top without
+reshaping the data. Details: `docs/visualization.md`. Covered by
+`tests/test_topology.py`.
+
+Bug found and fixed along the way: `.topo-empty` set `display:flex`, which
+overrides the `hidden` attribute, so that overlay stayed on top of the canvas
+(`inset:0`) and swallowed every hover and click over the graph. Fixed with
+`.topo-empty[hidden]{display:none}`.
+
 ## Round orchestration (second task)
 
 Added the round orchestration (`docs/rounds.md`): the conductor on the

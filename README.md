@@ -331,10 +331,16 @@ round's traffic without any per-round step.
 
 # Topology view (dashboard → TOPOLOGY, staff only)
 
-Shows every VM, bridge, NIC and the connections the Proxmox firewall actually
-permits (security groups expanded, first-match evaluation, egress of the source
-AND ingress of the target), with toggles for bridges, pools, services/ports and
-security groups. It also states explicitly who can reach the Proxmox API.
+Shows the whole infrastructure and the sandboxes: the network security zones
+(shaded, labelled bands), the Linux bridges, every VM and NIC, and the
+connections the Proxmox firewall actually permits (security groups expanded,
+first-match evaluation, egress of the source AND ingress of the target), with
+toggles for zones, bridges, pools, services/ports and security groups. Hovering
+a VM, bridge or zone shows its firewall rules (e.g. a VM's ingress on tcp/5432);
+clicking opens the full breakdown. Zones are derived from the live bridge
+comments, so the view always matches what is configured. It also states
+explicitly who can reach the Proxmox API. Details and the plan for the later
+round/team overlays: `docs/visualization.md`.
 
 Data flow: `orchestrator` runs `manage.py collect_topology` every 2 minutes
 (systemd timer `orchestrator-collect-topology.timer`), reads Proxmox with a

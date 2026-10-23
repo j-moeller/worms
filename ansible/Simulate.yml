@@ -54,6 +54,9 @@
           run_id: "{{ run_id }}"
           token: "{{ token }}"
           token_hash: "{{ token | hash('sha256') }}"
+          # The running team's uuid: the scoring/logging servers record it
+          # directly (no token). Deterministic from the run id.
+          team_uuid: "{{ run_id | to_uuid }}"
           flag: "FLAG{simulation-{{ run_id }}}"
           flag_hash: "{{ ('FLAG{simulation-' ~ run_id ~ '}') | hash('sha256') }}"
           client: "{{ groups['sandbox'][0] | default(None) }}"
@@ -200,6 +203,7 @@
           run_id: "{{ sim.run_id }}"
           token_hash: "{{ sim.token_hash }}"
           flag_hash: "{{ sim.flag_hash }}"
+          team_uuid: "{{ sim.team_uuid }}"
       register: team
       failed_when: false
 
@@ -220,6 +224,35 @@
         check: "database: test team simulation-{{ sim.run_id }} created"
         ok: "{{ team.query_result | default([]) | length == 1 }}"
         detail: "{{ team.msg | default('') }}"
+
+# ---------------------------------------------------------------------------
+# The round agent normally tells scoring/logging which team is running (writes
+# the current-team file at deploy). Here there is no agent, so set it to the
+# test team ourselves, so the submissions are recorded against it.
+- name: Simulation | set the current team on scoring/logging
+  hosts: scoring:logging
+  gather_facts: false
+  become: true
+  ignore_unreachable: true
+  vars:
+    sim: "{{ hostvars[groups['proxmox_host'][0]].sim }}"
+  tasks:
+    - name: Write the current-team file
+      ansible.builtin.copy:
+        dest: /etc/sandbox-api/current-team
+        content: "{{ sim.team_uuid }}"
+        owner: root
+        group: www-data
+        mode: "0640"
+      register: current_team
+      failed_when: false
+
+    - name: Check | current team set
+      ansible.builtin.include_tasks: simulation/record.yml
+      vars:
+        check: "{{ group_names | intersect(['scoring', 'logging']) | first }}: current team configured"
+        ok: "{{ current_team is not failed }}"
+        detail: "{{ sim.team_uuid }}"
 
 # ---------------------------------------------------------------------------
 - name: Simulation | a sandbox VM uses the services and makes traffic
@@ -312,26 +345,24 @@
             dest: "{{ sim_dir }}-ca.crt"
             mode: "0644"
 
-        # The token cache of the APIs refreshes every 60 s: retry while 401.
+        # No access token: the scoring/logging servers record the running team
+        # (set on them in the "current team" play above). A plain submit works.
         - name: Client | submit a flag to scoring
           ansible.builtin.uri:
             url: https://scoring.worms.internal/submit
             method: POST
             body_format: json
-            body: {team_api_token: "{{ sim.token }}", vm_flag: "{{ sim.flag }}"}
+            body: {vm_flag: "{{ sim.flag }}"}
             ca_path: "{{ sim_dir }}-ca.crt"
-            status_code: [201, 401]
+            status_code: [201]
             timeout: 10
           register: scoring
-          until: scoring.status != 401
-          retries: 12
-          delay: 10
           failed_when: false
 
         - name: Check | scoring accepts the flag
           ansible.builtin.include_tasks: simulation/record.yml
           vars:
-            check: "sandbox -> scoring: flag submission accepted (201, TLS verified)"
+            check: "sandbox -> scoring: flag submission accepted (201, TLS verified, no token)"
             ok: "{{ scoring.status | default(0) == 201 }}"
             detail: "{{ scoring.status | default('') }} {{ scoring.json | default(scoring.msg | default('')) }}"
 
@@ -341,21 +372,17 @@
             method: POST
             body_format: json
             body:
-              team_api_token: "{{ sim.token }}"
               log_data: {simulation: "{{ sim.run_id }}", message: "hello from the simulation"}
             ca_path: "{{ sim_dir }}-ca.crt"
-            status_code: [201, 401]
+            status_code: [201]
             timeout: 10
           register: logging
-          until: logging.status != 401
-          retries: 12
-          delay: 10
           failed_when: false
 
         - name: Check | logging accepts the log
           ansible.builtin.include_tasks: simulation/record.yml
           vars:
-            check: "sandbox -> logging: log submission accepted (201, TLS verified)"
+            check: "sandbox -> logging: log submission accepted (201, TLS verified, no token)"
             ok: "{{ logging.status | default(0) == 201 }}"
             detail: "{{ logging.status | default('') }} {{ logging.json | default(logging.msg | default('')) }}"
 
@@ -369,8 +396,7 @@
             status_code: "{{ item.expect }}"
             timeout: 10
           loop:
-            - {name: "invalid token -> 401", method: POST, path: /submit, body: {team_api_token: "wrong", vm_flag: "x"}, expect: 401}
-            - {name: "body over the limit -> 413", method: POST, path: /submit, body: {team_api_token: "{{ sim.token }}", vm_flag: "{{ 'x' * 4000 }}"}, expect: 413}
+            - {name: "body over the limit -> 413", method: POST, path: /submit, body: {vm_flag: "{{ 'x' * 4000 }}"}, expect: 413}
             - {name: "GET /submit -> 403", method: GET, path: /submit, expect: 403}
             - {name: "other path -> 404", method: POST, path: /admin, body: {}, expect: 404}
           loop_control:
@@ -671,7 +697,7 @@
     sim: "{{ hostvars[groups['proxmox_host'][0]].sim }}"
     client_vars: "{{ hostvars[sim.client] if sim.client else {} }}"
     params:
-      token_hash: "{{ sim.token_hash }}"
+      team_uuid: "{{ sim.team_uuid }}"
       flag_hash: "{{ sim.flag_hash }}"
       run_id: "{{ sim.run_id }}"
       client: "{{ client_vars.sim_client_ip | default('') or None }}"
@@ -790,7 +816,7 @@
         db: "{{ postgres_db }}"
         query: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/files/simulation/cleanup.sql') }}"
         named_args:
-          token_hash: "{{ sim.token_hash }}"
+          team_uuid: "{{ sim.team_uuid }}"
       register: cleanup
       failed_when: false
 
@@ -800,6 +826,24 @@
         check: "database: test data removed"
         ok: "{{ cleanup.query_result | default([]) | length == 1 and cleanup.query_result[0].competitions == 1 }}"
         detail: "{{ cleanup.query_result | default(cleanup.msg | default('')) }}"
+
+# ---------------------------------------------------------------------------
+# Clear the current team we set, so no stale test team lingers (a real round's
+# deploy would overwrite it anyway, and processing ignores non-live runs).
+- name: Simulation | clear the current team on scoring/logging
+  hosts: scoring:logging
+  gather_facts: false
+  become: true
+  ignore_unreachable: true
+  tasks:
+    - name: Empty the current-team file
+      ansible.builtin.copy:
+        dest: /etc/sandbox-api/current-team
+        content: ""
+        owner: root
+        group: www-data
+        mode: "0640"
+      failed_when: false
 
 # ---------------------------------------------------------------------------
 - name: Simulation | report

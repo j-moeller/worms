@@ -3,9 +3,9 @@
 -- Ports are random per run, so nothing from an earlier run matches.
 SELECT
   (SELECT count(*) FROM flag_capture_attempts
-    WHERE team_token_hash = %(token_hash)s AND vm_flag_hash = %(flag_hash)s) AS flags,
+    WHERE team_uuid = %(team_uuid)s AND vm_flag_hash = %(flag_hash)s) AS flags,
   (SELECT count(*) FROM logging_attempts
-    WHERE team_token_hash = %(token_hash)s AND log_data->>'simulation' = %(run_id)s) AS logs,
+    WHERE team_uuid = %(team_uuid)s AND log_data->>'simulation' = %(run_id)s) AS logs,
   -- Scoring outcome: the submitted flag became a capture of the run's VM, and
   -- the capture is on the run's timeline (processed by the conductor /
   -- manage.py process_captures).
@@ -18,7 +18,7 @@ SELECT
   (SELECT count(*) FROM logging l
      JOIN round_runs rr ON rr.round_id = l.round_id
     WHERE rr.state = 'finished' AND rr.seed = 0
-      AND l.team_id = (SELECT team_id FROM access_tokens WHERE access_token_hash = %(token_hash)s LIMIT 1)) AS logs_scored,
+      AND l.team_id = (SELECT id FROM teams WHERE uuid = %(team_uuid)s::uuid)) AS logs_scored,
   (SELECT count(*) FROM network_flows
     WHERE src_ip = %(client)s::inet AND dst_ip = %(peer)s::inet AND dst_port = %(http_port)s
       AND ts >= %(since)s::timestamptz) AS http_flows,

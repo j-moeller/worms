@@ -128,12 +128,23 @@ reaches the database, so a compromised orchestrator or dashboard cannot hand a
 team its flags. The conductor stores the hash on the VM row and emits a
 `secret_released` timeline event.
 
-A worm captures a VM by submitting its flag to the scoring server. The
-conductor (`orchestrator/rounds/captures.py`) turns a `flag_capture_attempt`
-into a `flag_capture` when the submitted hash is a released secret of a VM in
-**that team's own live run** and the VM was not already captured by the team.
-It also records a `captured` timeline event. Logging attempts are attributed
-the same way.
+A worm captures a VM by submitting its flag to the scoring server. **No access
+token is used at scoring/logging**: only one team runs at a time, so the round
+agent writes the running team's uuid into `/etc/sandbox-api/current-team` on
+the scoring and logging servers at `deploy`, and they record that uuid on every
+attempt (`team_uuid`). Access tokens still exist for teams in general; they are
+just not used by these servers anymore, which no longer touch `access_tokens`
+at all.
+
+A dedicated continuous process on the orchestrator, `manage.py
+process_attempts` (daemon, role `django_app`), is the **single writer** of
+results: it turns a `flag_capture_attempt` into a `flag_capture` when the
+submitted hash is a released secret of a VM in **that team's own live run** and
+the VM was not already captured by the team, and records a `captured` timeline
+event (`orchestrator/rounds/captures.py`). Logging attempts are attributed the
+same way. It runs independently of the conductor (the conductor no longer
+processes attempts), so captures appear within a second or two of a
+submission.
 
 ## Timeline (the animated view's data)
 
@@ -164,7 +175,7 @@ front-end work still to come; `/rounds/` lists the runs and links the JSON.
 
 ```
 # One-time, part of `make provision`:
-#   - orchestrator runs conduct_rounds as a daemon (role django_app)
+#   - orchestrator runs conduct_rounds AND process_attempts as daemons (role django_app)
 #   - the Proxmox host runs the round agent (SetupRoundAgent.yml)
 #   - the orchestrator's power token gets VM.PowerMgmt+VM.Audit on pool sandbox
 
@@ -172,7 +183,8 @@ make provision
 
 # The conductor plans and runs rounds on its own once a round's deadline
 # (round_start) has passed. To watch:
-ssh debian@10.3.0.19 'journalctl -u orchestrator-conduct-rounds -f'   # conductor
+ssh debian@10.3.0.19 'journalctl -u orchestrator-conduct-rounds -f'    # conductor
+ssh debian@10.3.0.19 'journalctl -u orchestrator-process-attempts -f'  # captures/logs
 ssh root@<proxmox>  'journalctl -u worms-round-agent -f'              # host agent
 
 # Inspect state:

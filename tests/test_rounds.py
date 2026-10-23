@@ -325,30 +325,37 @@ def test_capture_is_recorded_when_a_released_secret_is_submitted(one_run):
     conductor.tick()
     run.refresh_from_db()
 
-    # The worm submits the start VM's flag during the run (created_at on the
-    # conductor's clock, as the scoring API would stamp it live).
+    # The worm submits the start VM's flag during the run, recorded with the
+    # running team's uuid (as the scoring API now does), created_at on the
+    # conductor's clock so it is live.
+    from orchestrator.rounds import captures
+
     vm = run.virtual_machines.get(vm_identifier=run.sandbox_params["start_vm"])
     clock.advance(30)
     FlagCaptureAttempt.objects.create(
-        team_token_hash=hashlib.sha256(one_run["token"].encode()).hexdigest(),
+        team_uuid=str(one_run["team"].uuid),
         vm_flag_hash=vm.ctf_flag_hash,
         created_at=clock.now(),
     )
-    conductor.tick()
+    captures.process_flags(conductor.cfg["capture_grace"])
     assert FlagCapture.objects.filter(team=one_run["team"], vm=vm).count() == 1
     assert run.events.filter(kind=RunEvent.Kind.CAPTURED, vm=vm).exists()
 
     # A second submission of the same flag does not count twice.
     FlagCaptureAttempt.objects.create(
-        team_token_hash=hashlib.sha256(one_run["token"].encode()).hexdigest(),
+        team_uuid=str(one_run["team"].uuid),
         vm_flag_hash=vm.ctf_flag_hash,
+        created_at=clock.now(),
     )
-    conductor.tick()
+    captures.process_flags(conductor.cfg["capture_grace"])
     assert FlagCapture.objects.filter(team=one_run["team"], vm=vm).count() == 1
 
 
-def test_wrong_team_token_does_not_capture(one_run):
+def test_wrong_team_does_not_capture(one_run):
+    import uuid as uuidlib
+
     from core.models.scoring import FlagCapture, FlagCaptureAttempt
+    from orchestrator.rounds import captures
 
     run = one_run["run"]
     power, clock = FakePower(), Clock()
@@ -363,9 +370,10 @@ def test_wrong_team_token_does_not_capture(one_run):
     conductor.tick()
     run.refresh_from_db()
     vm = run.virtual_machines.get(vm_identifier=run.sandbox_params["start_vm"])
-    FlagCaptureAttempt.objects.create(team_token_hash=hashlib.sha256(b"someone-else").hexdigest(), vm_flag_hash=vm.ctf_flag_hash, created_at=clock.now())
-    clock.advance(30)
-    conductor.tick()
+    # Some other team's uuid: the flag is right but the team's run does not own
+    # this VM, so it is not scored.
+    FlagCaptureAttempt.objects.create(team_uuid=str(uuidlib.uuid4()), vm_flag_hash=vm.ctf_flag_hash, created_at=clock.now())
+    captures.process_flags(conductor.cfg["capture_grace"])
     assert FlagCapture.objects.count() == 0
 
 
@@ -437,10 +445,11 @@ def test_timeline_export(one_run):
     assert ts == sorted(ts)
 
 
-def test_process_captures_command(one_run):
-    """manage.py process_captures turns a pending attempt into a capture."""
-    import hashlib
-
+@pytest.mark.parametrize("command", ["process_captures", "process_attempts"])
+def test_attempt_processing_commands(one_run, command):
+    """manage.py process_captures / process_attempts --once turn a pending
+    attempt into a capture (both are the single-pass entry points; the daemon
+    just loops the latter)."""
     from core.models.rounds import RoundRun
     from core.models.scoring import FlagCapture, FlagCaptureAttempt
     from django.core.management import call_command
@@ -459,9 +468,12 @@ def test_process_captures_command(one_run):
     run.refresh_from_db()
     vm = run.virtual_machines.get(vm_identifier=run.sandbox_params["start_vm"])
     FlagCaptureAttempt.objects.create(
-        team_token_hash=hashlib.sha256(one_run["token"].encode()).hexdigest(),
+        team_uuid=str(one_run["team"].uuid),
         vm_flag_hash=vm.ctf_flag_hash,
         created_at=clock.now(),
     )
-    call_command("process_captures", "--grace", str(conductor.cfg["capture_grace"]))
+    args = ["--grace", str(conductor.cfg["capture_grace"])]
+    if command == "process_attempts":
+        args.append("--once")
+    call_command(command, *args)
     assert FlagCapture.objects.filter(team=one_run["team"], vm=vm).count() == 1

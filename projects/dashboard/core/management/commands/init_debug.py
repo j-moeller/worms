@@ -1397,8 +1397,6 @@ class Command(BaseCommand):
                 "success": rng.random() < 0.70,
             }
 
-            team_token_hash = rng.choice(access_token_hashes)
-
             attempt = LoggingAttempt.objects.create(
                 uuid=self._uuid(
                     seed,
@@ -1407,7 +1405,7 @@ class Command(BaseCommand):
                     round_obj.pk,
                     index,
                 ),
-                team_token_hash=team_token_hash,
+                team_uuid=str(team.uuid),
                 log_data=log_data,
                 processed=True,
                 processed_at=created_at,
@@ -1466,10 +1464,8 @@ class Command(BaseCommand):
                 wait_between_rounds=timedelta(minutes=1),
             )
 
-            team_token_hash = rng.choice(access_token_hashes)
-
             attempt = FlagCaptureAttempt.objects.create(
-                team_token_hash=team_token_hash,
+                team_uuid=str(team.uuid),
                 vm_flag_hash=vm.ctf_flag_hash,
                 processed=True,
                 processed_at=created_at,

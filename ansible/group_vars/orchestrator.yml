@@ -37,4 +37,9 @@ django_timers:
 django_daemons:
   - name: conduct-rounds
     command: conduct_rounds
-    description: Round conductor (sandbox lifecycle, game plan, captures)
+    description: Round conductor (sandbox lifecycle, game plan)
+  # The single writer of captures/logs: continuously turns the sandbox APIs'
+  # attempts into flag_captures, logging rows and `captured` timeline events.
+  - name: process-attempts
+    command: process_attempts
+    description: Process scoring/logging attempts into captures and logs

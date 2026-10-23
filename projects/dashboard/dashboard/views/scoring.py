@@ -1,6 +1,6 @@
 from core.models.competition import Competition, Round
 from core.models.scoring import FlagCapture, FlagCaptureAttempt
-from core.models.team import AccessTokens, Team
+from core.models.team import Team
 from dashboard.views.decorators import user_in_team_required
 from dashboard.views.util import render_with_base_info
 from django.contrib.auth.decorators import login_required
@@ -10,13 +10,11 @@ from django.http import HttpRequest
 @login_required
 @user_in_team_required
 def flag_capture_attempts(request: HttpRequest, team: Team):
-    team_token_hashes = AccessTokens.objects.filter(
-        team=team,
-    ).values_list("access_token_hash", flat=True)
-
+    # Attempts record the running team's uuid directly (the scoring server no
+    # longer uses access tokens; see docs/rounds.md).
     attempts = list(
         FlagCaptureAttempt.objects.filter(
-            team_token_hash__in=team_token_hashes,
+            team_uuid=str(team.uuid),
         ).order_by("-created_at", "-id")
     )
 

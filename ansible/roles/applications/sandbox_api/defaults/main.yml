@@ -9,6 +9,9 @@ sandbox_api_dir: /opt/sandbox-api
 sandbox_api_user: sandbox-api
 sandbox_api_group: www-data         # shared with nginx (socket access)
 sandbox_api_env_file: /etc/sandbox-api/sandbox-api.env
+# The round agent writes the running team's uuid here at deploy; the API reads
+# it per request. Root-owned, group-readable by the service.
+sandbox_api_current_team_file: /etc/sandbox-api/current-team
 
 # Requests larger than this are rejected by nginx (413) before they reach Python.
 sandbox_api_max_body_bytes: 4096

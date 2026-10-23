@@ -12,6 +12,11 @@ round_agent_python: /usr/bin/python3
 round_agent_dashboard_host: "{{ management_ips.dashboard }}"
 round_agent_dashboard_media_root: /opt/dashboard/media
 
+# Scoring/logging management addresses: the agent writes the running team's
+# uuid to them at deploy (the scoring/logging servers no longer use tokens).
+round_agent_scoring_host: "{{ management_ips.scoring }}"
+round_agent_logging_host: "{{ management_ips.logging }}"
+
 # Rebuild the ephemeral and private-internet VMs at the start of every run
 # (clean slate). Off by default: it needs an internet window and is heavy.
 round_agent_reset_services: false

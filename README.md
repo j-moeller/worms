@@ -294,9 +294,11 @@ Details: `docs/testing.md`. Findings and open issues of this work:
   Check with `journalctl -t worms-firewall-watchdog`.
 - **Sandbox APIs** (Ansible `sandbox_api`, scoring + logging): only `POST
   /submit`; body limits in nginx and Flask; global nginx rate/connection caps;
-  team tokens validated against `access_tokens` (column-level SELECT), per-team
-  token buckets with temporary bans; payload size/depth/item limits; INSERT-only
-  DB roles with connection limits, TLS-verified, statement timeout.
+  no access token (only one team runs at a time, so the round agent tells them
+  the running team's uuid, which they record on each attempt — see
+  `docs/rounds.md`), a token bucket with temporary bans; payload
+  size/depth/item limits; INSERT-only DB roles with connection limits,
+  TLS-verified, statement timeout.
 - **Devices** (all VMs): no QEMU guest agent, no serial console, no display, no
   USB tablet; access is SSH only. `qm stop` (and `stop_on_destroy` in
   OpenTofu) kills a VM without guest cooperation.

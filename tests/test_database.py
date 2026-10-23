@@ -92,8 +92,8 @@ def test_monitor_appends_events(database):
         "SELECT * FROM access_tokens",
         "SELECT * FROM flag_capture_attempts",
         "SELECT * FROM users",
-        "INSERT INTO logging_attempts (team_token_hash, log_data) VALUES ('x', '{}')",
-        "INSERT INTO flag_capture_attempts (team_token_hash, vm_flag_hash) VALUES ('x', 'y')",
+        "INSERT INTO logging_attempts (team_uuid, log_data) VALUES ('x', '{}')",
+        "INSERT INTO flag_capture_attempts (team_uuid, vm_flag_hash) VALUES ('x', 'y')",
         "CREATE TABLE evil (id int)",
     ],
 )
@@ -121,20 +121,21 @@ def test_monitor_cannot_upsert(database):
 
 def test_scoring_appends_attempts(database):
     run(database, "dbuser_scoring",
-        "INSERT INTO flag_capture_attempts (team_token_hash, vm_flag_hash) VALUES ('t', 'f')")  # fmt: skip
-    assert count(database, "flag_capture_attempts", "team_token_hash = 't'") == 1
+        "INSERT INTO flag_capture_attempts (team_uuid, vm_flag_hash) VALUES ('t', 'f')")  # fmt: skip
+    assert count(database, "flag_capture_attempts", "team_uuid = 't'") == 1
 
 
 def test_logging_appends_attempts(database):
     run(database, "dbuser_logging",
-        "INSERT INTO logging_attempts (uuid, team_token_hash, log_data) VALUES (gen_random_uuid(), 't', '{\"a\": 1}')")  # fmt: skip
-    assert count(database, "logging_attempts", "team_token_hash = 't'") == 1
+        "INSERT INTO logging_attempts (uuid, team_uuid, log_data) VALUES (gen_random_uuid(), 't', '{\"a\": 1}')")  # fmt: skip
+    assert count(database, "logging_attempts", "team_uuid = 't'") == 1
 
 
 @pytest.mark.parametrize("role", ["dbuser_scoring", "dbuser_logging"])
-def test_sandbox_apis_read_only_token_hashes(database, role):
-    run(database, role, "SELECT access_token_hash, team_id, revoked FROM access_tokens")
-    denied(database, role, "SELECT name FROM access_tokens")
+def test_sandbox_apis_cannot_touch_access_tokens(database, role):
+    # No access token is used at the scoring/logging servers anymore, so they
+    # have no access to the table at all.
+    denied(database, role, "SELECT access_token_hash, team_id, revoked FROM access_tokens")
     denied(database, role, "SELECT * FROM access_tokens")
 
 
@@ -144,8 +145,9 @@ def test_sandbox_apis_read_only_token_hashes(database, role):
         ("dbuser_scoring", "SELECT * FROM flag_capture_attempts"),
         ("dbuser_scoring", "UPDATE flag_capture_attempts SET processed = true"),
         ("dbuser_scoring", "DELETE FROM flag_capture_attempts"),
-        ("dbuser_scoring", "INSERT INTO flag_capture_attempts (team_token_hash, vm_flag_hash, processed) VALUES ('a', 'b', true)"),
-        ("dbuser_scoring", "INSERT INTO logging_attempts (team_token_hash, log_data) VALUES ('x', '{}')"),
+        ("dbuser_scoring", "INSERT INTO flag_capture_attempts (team_uuid, vm_flag_hash, processed) VALUES ('a', 'b', true)"),
+        ("dbuser_scoring", "INSERT INTO logging_attempts (team_uuid, log_data) VALUES ('x', '{}')"),
+        ("dbuser_scoring", "SELECT access_token_hash FROM access_tokens"),
         ("dbuser_scoring", "INSERT INTO flag_captures (team_id, round_id, vm_id, flag_capture_attempt_id, created_at) VALUES (1, 1, 1, 1, now())"),
         ("dbuser_scoring", "SELECT * FROM users"),
         ("dbuser_scoring", "SELECT * FROM virtual_machines"),
@@ -153,7 +155,8 @@ def test_sandbox_apis_read_only_token_hashes(database, role):
         ("dbuser_logging", "SELECT * FROM logging_attempts"),
         ("dbuser_logging", "UPDATE logging_attempts SET processed = true"),
         ("dbuser_logging", "DELETE FROM logging_attempts"),
-        ("dbuser_logging", "INSERT INTO flag_capture_attempts (team_token_hash, vm_flag_hash) VALUES ('a', 'b')"),
+        ("dbuser_logging", "INSERT INTO flag_capture_attempts (team_uuid, vm_flag_hash) VALUES ('a', 'b')"),
+        ("dbuser_logging", "SELECT access_token_hash FROM access_tokens"),
         ("dbuser_logging", "SELECT * FROM users"),
         ("dbuser_logging", "SELECT * FROM network_flows"),
     ],

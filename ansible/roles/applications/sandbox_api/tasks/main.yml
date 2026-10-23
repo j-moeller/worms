@@ -63,7 +63,7 @@
     path: "{{ sandbox_api_env_file | dirname }}"
     state: directory
     owner: root
-    group: root
+    group: "{{ sandbox_api_group }}"   # the service traverses it for current-team
     mode: "0750"
 
 - name: Install environment file (secrets)
@@ -75,6 +75,18 @@
     mode: "0600"
   no_log: "{{ hide_secrets }}"
   notify: Restart sandbox-api
+
+# The running team's uuid. Created empty (no active round); the round agent
+# overwrites it at deploy (SSH, root:www-data 0640). force:false so
+# re-provisioning never clobbers a value a round has set.
+- name: Create the current-team file
+  ansible.builtin.copy:
+    dest: "{{ sandbox_api_current_team_file }}"
+    content: ""
+    owner: root
+    group: "{{ sandbox_api_group }}"
+    mode: "0640"
+    force: false
 
 - name: Install systemd unit
   ansible.builtin.template:

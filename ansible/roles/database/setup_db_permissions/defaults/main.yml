@@ -47,19 +47,17 @@ postgresql_table_privileges:
       tables: [flag_captures, logging]
 
   # Sandbox-facing APIs (roles/applications/sandbox_api): append one attempt,
-  # validate team tokens. No other table, not even the attempts they wrote.
-  # Only the columns sandbox_api/files/app.py inserts (INSERT constant).
+  # recording the running team's uuid (the round agent tells them which team
+  # runs; no access token is used anymore). No other table, not even the
+  # attempts they wrote, and no access_tokens at all. Only the columns
+  # sandbox_api/files/app.py inserts (INSERT constant).
   dbuser_scoring:
-    - privs: INSERT (team_token_hash, vm_flag_hash)
+    - privs: INSERT (team_uuid, vm_flag_hash)
       tables: [flag_capture_attempts]
-    - privs: SELECT (access_token_hash, team_id, revoked)
-      tables: [access_tokens]
 
   dbuser_logging:
-    - privs: INSERT (uuid, team_token_hash, log_data)
+    - privs: INSERT (uuid, team_uuid, log_data)
       tables: [logging_attempts]
-    - privs: SELECT (access_token_hash, team_id, revoked)
-      tables: [access_tokens]
 
   # Network monitor (roles/applications/network_monitor, zeek_shipper.py):
   # append flows and events; it cannot read anything, not even what it wrote.

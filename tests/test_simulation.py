@@ -99,15 +99,17 @@ def test_simulation_sql_round_trip(database):
     reports all of it (flows inserted as the monitor's INSERT-only role would);
     cleanup.sql removes everything."""
     import hashlib
+    import uuid
 
     from pg import PASSWORD
 
     SIM = ANSIBLE / "files" / "simulation"
     token_hash = hashlib.sha256(b"verify-token").hexdigest()
     flag_hash = hashlib.sha256(b"FLAG{verify}").hexdigest()
+    team_uuid = str(uuid.uuid4())
     client, peer, scoring = "10.64.0.11", "10.64.0.12", "10.2.0.14"
     params = {
-        "token_hash": token_hash, "flag_hash": flag_hash, "run_id": "verify1",
+        "token_hash": token_hash, "flag_hash": flag_hash, "run_id": "verify1", "team_uuid": team_uuid,
         "client": client, "api_client": client, "peer": peer, "scoring": scoring,
         "http_port": 23456, "udp_port": 33456, "udp_sport": 43456, "closed_port": 53456,
         "since": "2000-01-01",
@@ -139,11 +141,11 @@ def test_simulation_sql_round_trip(database):
     with admin.cursor() as cur:
         # The round/team/run/VM, exactly as the live simulation sets them up.
         cur.execute((SIM / "setup.sql").read_text(), params)
-        # The sandbox APIs store the submissions.
-        cur.execute("INSERT INTO flag_capture_attempts (team_token_hash, vm_flag_hash) VALUES (%s, %s) RETURNING id", (token_hash, flag_hash))
+        # The sandbox APIs store the submissions (with the running team uuid).
+        cur.execute("INSERT INTO flag_capture_attempts (team_uuid, vm_flag_hash) VALUES (%s, %s) RETURNING id", (team_uuid, flag_hash))
         attempt_id = cur.fetchone()[0]
-        cur.execute("INSERT INTO logging_attempts (uuid, team_token_hash, log_data) VALUES (gen_random_uuid(), %s, %s) RETURNING id",
-                    (token_hash, json.dumps({"simulation": "verify1"})))  # fmt: skip
+        cur.execute("INSERT INTO logging_attempts (uuid, team_uuid, log_data) VALUES (gen_random_uuid(), %s, %s) RETURNING id",
+                    (team_uuid, json.dumps({"simulation": "verify1"})))  # fmt: skip
         log_attempt_id = cur.fetchone()[0]
         # Capture processing turns them into a capture, a timeline event and a
         # logging row (done here by hand; the real pass is in test_rounds.py).
@@ -182,7 +184,7 @@ def test_simulation_sql_round_trip(database):
     conn = database.connect()
     conn.autocommit = True
     with conn.cursor() as cur:
-        cur.execute((SIM / "cleanup.sql").read_text(), {"token_hash": token_hash})
+        cur.execute((SIM / "cleanup.sql").read_text(), {"team_uuid": team_uuid})
         assert cur.fetchone()[1] == 1  # one competition removed
         for table in ("round_runs", "virtual_machines", "flag_captures", "run_events", "logging", "teams"):
             cur.execute(f"SELECT count(*) FROM {table}")

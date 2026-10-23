@@ -22,6 +22,7 @@ FLAG_PATH = "/etc/worms/flag"
 WORM_DIR = "/home/debian"
 WORM_ZIP = "user-worm.zip"
 WORM_UNIT = "worms-start"
+CURRENT_TEAM_FILE = "/etc/sandbox-api/current-team"
 
 
 def _sandbox_vms(ex):
@@ -41,19 +42,13 @@ def _sandbox_vms(ex):
     return vms
 
 
-def _topology(network_graph):
-    """The generator's graph -> {networks, edges, vm_networks}."""
+def _vm_networks(network_graph):
+    """From the generator's graph, the networks each VM is attached to
+    (keyed by VM name), for the VM rows."""
     nodes = network_graph.get("nodes", [])
-    edges = network_graph.get("edges", [])
-    networks = [
-        {"name": n["label"], "id": n["id"], "cidr": n.get("cidr"), "type": n.get("network_type")}
-        for n in nodes
-        if n.get("type") == "network"
-    ]
     by_id = {n["id"]: n for n in nodes}
     vm_networks = {}
-    topo_edges = []
-    for edge in edges:
+    for edge in network_graph.get("edges", []):
         if edge.get("relationship") == "attached-to":
             vm = by_id.get(edge["source"], {})
             net = by_id.get(edge["target"], {})
@@ -62,8 +57,7 @@ def _topology(network_graph):
                 vm_networks.setdefault(name, []).append(
                     {"name": net.get("label"), "cidr": net.get("cidr")}
                 )
-                topo_edges.append({"vm": name, "network": net.get("label")})
-    return {"networks": networks, "edges": topo_edges}, vm_networks
+    return vm_networks
 
 
 def _release(ex, cfg, vm_names):
@@ -113,10 +107,14 @@ def prepare(ex, cfg, params):
     # internal CA, so a worm can reach scoring/logging over verified HTTPS).
     ex.make("round-configure-sandbox", timeout=cfg.get("configure_timeout", 1800))
 
-    topology, vm_networks = _topology(graph)
+    vm_networks = _vm_networks(graph)
     vms = _sandbox_vms(ex)
+    # The full generator graph (every layer: internet, edge/core/distribution/
+    # access switches, networks and VMs, with all edges) and the generated
+    # OpenTofu definition are saved on the run for later visualisation.
     return {
-        "topology": topology,
+        "topology": graph,
+        "sandbox_definition": hcl,
         "vms": [
             {
                 "name": name,
@@ -163,6 +161,10 @@ def deploy(ex, cfg, params):
         raise validation.Invalid(f"start_vm {start} is not in the sandbox")
     start_ip = vms[start]["maintenance_ip"]
 
+    # Tell the scoring and logging servers which team is running now, so they
+    # record its uuid on every submission (no access token is used anymore).
+    _set_current_team(ex, cfg, params["team_uuid"])
+
     artifact = _fetch_artifact(ex, cfg, params["artifact"])
     # Copy the verified zip onto the start VM, base64 over stdin so the binary
     # survives the text channel and never appears on a command line.
@@ -185,7 +187,20 @@ def deploy(ex, cfg, params):
             "/bin/sh", "-lc", f"unzip -o {WORM_ZIP} && python3 main.py",
         ],
     )
-    return {"released": released, "start_vm": start, "worm_delay": delay}
+    return {"released": released, "start_vm": start, "worm_delay": delay, "team_uuid": params["team_uuid"]}
+
+
+def _set_current_team(ex, cfg, uuid):
+    """Write the running team's uuid into the current-team file on the scoring
+    and logging servers (root:www-data 0640; uuid over stdin, not argv)."""
+    for host in (cfg.get("scoring_host"), cfg.get("logging_host")):
+        if not host:
+            raise validation.Invalid("scoring_host/logging_host not configured for the round agent")
+        ex.ssh(
+            host,
+            ["sudo", "install", "-m", "0640", "-o", "root", "-g", "www-data", "/dev/stdin", CURRENT_TEAM_FILE],
+            input=uuid,
+        )
 
 
 def release_secrets(ex, cfg, params):

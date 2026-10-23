@@ -58,6 +58,10 @@ def config(env):
     return {
         "dashboard_host": env.get("DASHBOARD_HOST", ""),
         "dashboard_media_root": env.get("DASHBOARD_MEDIA_ROOT", "/opt/dashboard/media"),
+        # Scoring/logging management addresses: the agent writes the running
+        # team's uuid to them at deploy (no access token anymore).
+        "scoring_host": env.get("SCORING_HOST", ""),
+        "logging_host": env.get("LOGGING_HOST", ""),
         "reset_services": env.get("RESET_SERVICES", "0") == "1",
         "apply_timeout": int(env.get("APPLY_TIMEOUT", "5400")),
         "reset_timeout": int(env.get("RESET_TIMEOUT", "5400")),

@@ -19,6 +19,8 @@ SHA256 = re.compile(r"^[0-9a-f]{64}$")
 # default_storage key of an uploaded artifact (dashboard/views/uploads.py):
 # malware-artifacts/<2>/<2>/<hash>.zip, no traversal.
 STORAGE_KEY = re.compile(r"^malware-artifacts/[0-9a-f]{2}/[0-9a-f]{2}/[0-9a-f]{64}\.zip$")
+# A team uuid (the running team, recorded by scoring/logging).
+UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
 class Invalid(ValueError):
@@ -80,9 +82,16 @@ def prepare(params):
     }
 
 
+def team_uuid(value, field="team_uuid"):
+    if not isinstance(value, str) or not UUID.match(value):
+        raise Invalid(f"{field} is not a uuid: {value!r}")
+    return value
+
+
 def deploy(params):
     out = {
         "start_vm": vm_name(params.get("start_vm"), "start_vm"),
+        "team_uuid": team_uuid(params.get("team_uuid")),
         "worm_delay": integer(params.get("worm_delay", 300), "worm_delay", 0, 86400),
         "initial_secrets": vm_names(params.get("initial_secrets", []), "initial_secrets", allow_empty=True),
     }

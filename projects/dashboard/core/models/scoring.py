@@ -9,7 +9,11 @@ from django.db.models.aggregates import Count
 
 
 class FlagCaptureAttempt(models.Model):
-    team_token_hash = models.TextField()
+    # Only one team runs at a time, so the scoring API is told which team is
+    # running (its uuid) and records it directly -- no access token is needed
+    # at the scoring server (docs/rounds.md). Nullable: an attempt made while
+    # no round is active carries no team and is never scored.
+    team_uuid = models.TextField(null=True, blank=True)
     vm_flag_hash = models.TextField()
 
     # Database defaults as well: the sandbox API inserts only the columns

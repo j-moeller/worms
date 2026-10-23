@@ -6,25 +6,27 @@ and strict:
 
 - POST /submit only (nginx rejects everything else), JSON object only, size
   capped by nginx and by Flask (MAX_BODY_BYTES).
-- The team token must be a valid, non-revoked access token. Tokens are checked
-  against a cached set of hashes from `access_tokens` (column-level SELECT), so
-  invalid tokens never reach the INSERT, and rate limiting is keyed by team: a
-  bounded key space that attackers cannot inflate with random tokens.
-- Per-team token bucket; teams that keep hammering past the limit are banned
-  for a while (429). IP-based blocking is pointless here: sandbox-gw SNATs all
-  sandbox traffic, so per-VM limits are enforced on the Proxmox host instead.
+- No access token. Only one team runs at a time, so the round agent writes the
+  running team's uuid into CURRENT_TEAM_FILE at deploy; the API records that
+  uuid on every submission. A submission while no round is active (no team
+  file) is refused (409). (Access tokens still exist for teams in general;
+  they are just not used by the scoring/logging servers anymore.)
+- A token-bucket rate limit keyed by the current team; past the limit a short
+  ban (429). IP-based blocking is pointless here: sandbox-gw SNATs all sandbox
+  traffic, so per-VM limits are enforced on the Proxmox host instead.
 - Payload validation (scoring: printable flag <= 64 chars; logging: JSON object
   with bounded size, depth and item count).
 - The database role may only INSERT into one table; statements are time-limited.
 
-State (token cache, buckets, bans) is in memory, so gunicorn runs ONE worker
-process with threads (see the systemd unit).
+State (buckets, bans) is in memory, so gunicorn runs ONE worker process with
+threads (see the systemd unit).
 """
 
 import hashlib
 import json
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -44,7 +46,6 @@ if KIND not in ("scoring", "logging"):
     raise RuntimeError(f"SANDBOX_API_KIND must be scoring or logging, not {KIND!r}")
 
 MAX_BODY_BYTES = env_int("MAX_BODY_BYTES", 4096)
-MAX_TOKEN_LENGTH = 128
 MAX_FLAG_LENGTH = 64
 LOG_MAX_BYTES = env_int("LOG_MAX_BYTES", 8192)
 LOG_MAX_DEPTH = env_int("LOG_MAX_DEPTH", 8)
@@ -54,13 +55,17 @@ TEAM_RATE_PER_MINUTE = env_int("TEAM_RATE_PER_MINUTE", 30)
 TEAM_BURST = env_int("TEAM_BURST", 10)
 TEAM_BAN_AFTER = env_int("TEAM_BAN_AFTER", 100)  # rejected requests per minute
 TEAM_BAN_SECONDS = env_int("TEAM_BAN_SECONDS", 300)
-TOKEN_REFRESH_SECONDS = env_int("TOKEN_REFRESH_SECONDS", 60)
+
+# The round agent writes the running team's uuid here at deploy; read per
+# request (cached by mtime). No file / empty => no active round.
+CURRENT_TEAM_FILE = os.environ.get("CURRENT_TEAM_FILE", "/etc/sandbox-api/current-team")
+UUID_RE = re.compile(r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
 
 # Every other column has a database default (processed, created_at); the
 # logging attempt's uuid is generated here (no database default on SQLite).
 INSERT = {
-    "scoring": "INSERT INTO flag_capture_attempts (team_token_hash, vm_flag_hash) VALUES (%s, %s)",
-    "logging": "INSERT INTO logging_attempts (uuid, team_token_hash, log_data) VALUES (%s, %s, %s)",
+    "scoring": "INSERT INTO flag_capture_attempts (team_uuid, vm_flag_hash) VALUES (%s, %s)",
+    "logging": "INSERT INTO logging_attempts (uuid, team_uuid, log_data) VALUES (%s, %s, %s)",
 }[KIND]
 
 app = Flask(__name__)
@@ -115,31 +120,35 @@ def execute(query, params=()):
 
 
 # ---------------------------------------------------------------------------
-# Teams (valid tokens) and rate limiting
+# Current team and rate limiting
 # ---------------------------------------------------------------------------
 
 
-class Teams:
-    """Cache of valid token hashes -> team id, refreshed periodically."""
+class CurrentTeam:
+    """The running team's uuid, from CURRENT_TEAM_FILE (the round agent writes
+    it at deploy). Cached and only re-read when the file's mtime changes, so
+    the hot path does no I/O once warm. Returns None when no round is active."""
 
-    def __init__(self):
+    def __init__(self, path):
+        self._path = path
         self._lock = threading.Lock()
-        self._teams = {}
-        self._loaded_at = 0.0
+        self._value = None
+        self._mtime = None
 
-    def team_for(self, token_hash):
-        stale = time.monotonic() - self._loaded_at > TOKEN_REFRESH_SECONDS
-        # Block only for the very first load; later refreshes never stall requests.
-        if stale and self._lock.acquire(blocking=self._loaded_at == 0):
-            try:
-                rows = execute("SELECT access_token_hash, team_id FROM access_tokens WHERE NOT revoked")
-                self._teams = dict(rows)
-            except Exception:
-                log.exception("token refresh failed; keeping the previous set")
-            finally:
-                self._loaded_at = time.monotonic()
-                self._lock.release()
-        return self._teams.get(token_hash)
+    def get(self):
+        try:
+            mtime = os.stat(self._path).st_mtime
+        except OSError:
+            return None
+        if mtime != self._mtime:
+            with self._lock:
+                try:
+                    text = open(self._path).read().strip()
+                except OSError:
+                    return self._value
+                self._value = text if UUID_RE.match(text) else None
+                self._mtime = mtime
+        return self._value
 
 
 class TeamLimiter:
@@ -197,7 +206,7 @@ class LimitedLog:
                 log.warning(message, *args)
 
 
-TEAMS = Teams()
+CURRENT_TEAM = CurrentTeam(CURRENT_TEAM_FILE)
 LIMITER = TeamLimiter()
 REJECTS = LimitedLog()
 
@@ -263,15 +272,10 @@ def submit():
     if not isinstance(data, dict):
         return error(400, "Body must be a JSON object.")
 
-    token = data.get("team_api_token")
-    if not isinstance(token, str) or not 0 < len(token) <= MAX_TOKEN_LENGTH:
-        return error(400, f"team_api_token must be a string of 1-{MAX_TOKEN_LENGTH} characters.")
-
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
-    team = TEAMS.team_for(token_hash)
+    team = CURRENT_TEAM.get()
     if team is None:
-        REJECTS.warning("rejected: unknown or revoked token")
-        return error(401, "Invalid team_api_token.")
+        REJECTS.warning("rejected: no active round")
+        return error(409, "No active round.")
 
     allowed, retry_after = LIMITER.allow(team)
     if not allowed:
@@ -283,7 +287,7 @@ def submit():
         return error(400, problem)
 
     try:
-        params = (token_hash, value) if KIND == "scoring" else (str(uuid.uuid4()), token_hash, value)
+        params = (team, value) if KIND == "scoring" else (str(uuid.uuid4()), team, value)
         execute(INSERT, params)
     except Exception:
         log.exception("insert failed")

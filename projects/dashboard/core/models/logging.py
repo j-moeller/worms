@@ -12,7 +12,11 @@ class LoggingAttempt(models.Model):
     # No database default (UUID4() is not available on SQLite, the DEBUG
     # database): the logging API generates it (sandbox_api/files/app.py).
     uuid = models.UUIDField(default=uuid.uuid4, unique=True)
-    team_token_hash = models.TextField()
+    # The running team's uuid, recorded by the logging API directly (only one
+    # team runs at a time, so no access token is needed there; see
+    # docs/rounds.md). Nullable: a log sent while no round is active is not
+    # attributed.
+    team_uuid = models.TextField(null=True, blank=True)
     log_data = models.JSONField()
 
     # Database defaults as well: the sandbox API inserts only the columns

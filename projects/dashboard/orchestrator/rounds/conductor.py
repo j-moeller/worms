@@ -31,7 +31,6 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from orchestrator.rounds import captures
 from orchestrator.rounds.power import ProxmoxPower, PowerError
 
 log = logging.getLogger("orchestrator")
@@ -98,10 +97,11 @@ class Conductor:
 
     def tick(self):
         """Advance the one active run, or start the next pending one. Returns
-        True if anything changed (the loop then ticks again without sleeping)."""
-        captures.process_flags(self.cfg["capture_grace"])
-        captures.process_logs(self.cfg["capture_grace"])
+        True if anything changed (the loop then ticks again without sleeping).
 
+        Processing of the sandbox APIs' attempts into captures/logs is NOT done
+        here: a separate continuous process owns it (manage.py
+        process_attempts), so there is exactly one writer of captures."""
         active = RoundRun.objects.exclude(
             state__in=[RoundRun.State.FINISHED, RoundRun.State.FAILED, RoundRun.State.SKIPPED, RoundRun.State.PENDING]
         ).order_by("round_id", "position").first()
@@ -173,6 +173,7 @@ class Conductor:
         self.request_job(
             run, HostJob.Kind.DEPLOY,
             start_vm=run.sandbox_params.get("start_vm"),
+            team_uuid=str(run.team.uuid),
             artifact={"storage_key": artifact.storage_key, "content_hash": artifact.content_hash},
             initial_secrets=[s.vm.vm_identifier for s in self._initial_secret_steps(run)],
             worm_delay=self.cfg["worm_start_delay"],

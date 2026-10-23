@@ -1,13 +1,13 @@
 -- Remove everything setup.sql created plus whatever the run produced (the
--- attempts submitted with the token, and the captures/logs/events scored from
--- them). Scoped to the test team, which is found from the token hash. Run as
--- postgres. Returns the number of attempts and competitions removed.
+-- attempts recorded with the team's uuid, and the captures/logs/events scored
+-- from them). Scoped to the test team, found by its uuid. Run as postgres.
+-- Returns the number of attempts and competitions removed.
 --
 -- All deletes are data-modifying CTEs in one statement: they see the same
 -- snapshot (so the SELECT CTEs still find the rows) and foreign keys are
 -- checked once at the end, by which point every referencing row is also gone.
 WITH team AS (
-    SELECT team_id AS id FROM access_tokens WHERE access_token_hash = %(token_hash)s
+    SELECT id FROM teams WHERE uuid = %(team_uuid)s::uuid
 ), comp AS (
     SELECT competition_id AS id FROM teams WHERE id IN (SELECT id FROM team)
 ), runs AS (
@@ -31,13 +31,13 @@ WITH team AS (
 ), del_rounds AS (
     DELETE FROM rounds WHERE competition_id IN (SELECT id FROM comp)
 ), flags AS (
-    DELETE FROM flag_capture_attempts WHERE team_token_hash = %(token_hash)s RETURNING 1
+    DELETE FROM flag_capture_attempts WHERE team_uuid = %(team_uuid)s RETURNING 1
 ), logs AS (
-    DELETE FROM logging_attempts WHERE team_token_hash = %(token_hash)s RETURNING 1
+    DELETE FROM logging_attempts WHERE team_uuid = %(team_uuid)s RETURNING 1
 ), tokens AS (
-    DELETE FROM access_tokens WHERE access_token_hash = %(token_hash)s RETURNING team_id, created_by_id
+    DELETE FROM access_tokens WHERE team_id IN (SELECT id FROM team) RETURNING created_by_id
 ), teams_deleted AS (
-    DELETE FROM teams WHERE id IN (SELECT team_id FROM tokens) RETURNING competition_id
+    DELETE FROM teams WHERE id IN (SELECT id FROM team) RETURNING competition_id
 ), users_deleted AS (
     DELETE FROM users WHERE id IN (SELECT created_by_id FROM tokens) RETURNING 1
 ), competitions_deleted AS (

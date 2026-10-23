@@ -51,6 +51,7 @@ def test_validate_deploy_accepts_good_input():
         "deploy",
         {
             "start_vm": "sandbox-site-1-vm-1",
+            "team_uuid": "11111111-2222-3333-4444-555555555555",
             "artifact": {"storage_key": key, "content_hash": "d" * 64},
             "initial_secrets": ["sandbox-site-1-vm-1", "sandbox-site-2-vm-2"],
             "worm_delay": 300,
@@ -58,6 +59,16 @@ def test_validate_deploy_accepts_good_input():
     )
     assert clean["artifact"]["storage_key"] == key
     assert clean["worm_delay"] == 300
+    assert clean["team_uuid"] == "11111111-2222-3333-4444-555555555555"
+
+
+def test_validate_deploy_rejects_bad_team_uuid():
+    key = "malware-artifacts/aa/bb/" + "c" * 64 + ".zip"
+    with pytest.raises(validation.Invalid):
+        validation.validate(
+            "deploy",
+            {"start_vm": "vm", "team_uuid": "not-a-uuid", "artifact": {"storage_key": key, "content_hash": "d" * 64}},
+        )
 
 
 def test_validate_prepare_bounds():
@@ -152,7 +163,8 @@ class FakeExecutor:
         return ""
 
 
-CFG = {"dashboard_host": "10.5.0.18", "dashboard_media_root": "/opt/dashboard/media", "reset_services": False}
+CFG = {"dashboard_host": "10.5.0.18", "dashboard_media_root": "/opt/dashboard/media",
+       "scoring_host": "10.5.0.14", "logging_host": "10.5.0.15", "reset_services": False}
 
 
 def test_prepare_builds_sandbox_and_reports_topology():
@@ -220,6 +232,7 @@ def test_deploy_fetches_verifies_copies_and_arms():
         "deploy",
         {
             "start_vm": "sandbox-a",
+            "team_uuid": "11111111-2222-3333-4444-555555555555",
             "artifact": {"storage_key": key, "content_hash": hashlib.sha256(ex.artifact_bytes).hexdigest()},
             "initial_secrets": ["sandbox-a"],
             "worm_delay": 120,
@@ -229,6 +242,10 @@ def test_deploy_fetches_verifies_copies_and_arms():
     assert result["released"][0]["vm"] == "sandbox-a"
     # Fetched from the dashboard.
     assert any(c["host"] == "10.5.0.18" and c["argv"][0] == "base64" for c in ex.ssh_calls)
+    # Told scoring AND logging which team is running (current-team over stdin).
+    team_writes = [c for c in ex.ssh_calls if "/etc/sandbox-api/current-team" in c["argv"]]
+    assert {c["host"] for c in team_writes} == {"10.5.0.14", "10.5.0.15"}
+    assert all(c["input"] == "11111111-2222-3333-4444-555555555555" for c in team_writes)
     # Armed a one-shot timer with the validated delay.
     arm = next(c for c in ex.ssh_calls if any("systemd-run" in str(a) for a in c["argv"]))
     assert "--on-active=120" in arm["argv"]
@@ -239,7 +256,8 @@ def test_deploy_rejects_tampered_artifact():
     key = "malware-artifacts/aa/bb/" + "c" * 64 + ".zip"
     params = validation.validate(
         "deploy",
-        {"start_vm": "sandbox-a", "artifact": {"storage_key": key, "content_hash": "0" * 64}, "initial_secrets": [], "worm_delay": 60},
+        {"start_vm": "sandbox-a", "team_uuid": "11111111-2222-3333-4444-555555555555",
+         "artifact": {"storage_key": key, "content_hash": "0" * 64}, "initial_secrets": [], "worm_delay": 60},
     )
     with pytest.raises(validation.Invalid, match="hash mismatch"):
         handlers.deploy(ex, CFG, params)
@@ -327,11 +345,12 @@ def test_round_agent_env_renders(render):
     env = render(
         "ansible/roles/host/round_agent", "round-agent.env.j2",
         infrastructure_ips={"database": "10.11.0.16"},
-        management_ips={"dashboard": "10.5.0.18"},
+        management_ips={"dashboard": "10.5.0.18", "scoring": "10.5.0.14", "logging": "10.5.0.15"},
         postgres_db="mydb",
         pki_ca_cert_path="/etc/worms/ca.crt",
         vault_round_agent_db_password="secret",
     )
     assert "DB_USER=round_agent" in env and "DB_SSLMODE=verify-full" in env
     assert "PYTHONPATH=" in env and "/scripts" in env
+    assert "SCORING_HOST=10.5.0.14" in env and "LOGGING_HOST=10.5.0.15" in env
     assert "DASHBOARD_HOST=10.5.0.18" in env

@@ -47,12 +47,19 @@ Details: [monitoring.md](monitoring.md), [testing.md](testing.md).
   `root@pam` set hookscripts, not API tokens.
 - The sandbox VMs do not trust the internal CA (README "Round start":
   "distribute the self-signed CA" is not implemented for the sandbox group).
-  The simulation copies the CA into its own temp file.
+  (Resolved: the sandbox guests now trust the internal CA; SetupSandbox.yml,
+  run by the agent's prepare job.)
 - `opentofu/stacks/sandbox/generated_vms.tf` is an old, fully commented-out
   topology using `10.5.x.0/24`, which overlaps mgmt-exposed. Harmless while
   commented; `generated_vms_01.tf` is not `tofu fmt`-clean (cosmetic).
-- Nobody processes the attempts yet (`processed` stays false; no
-  `flag_captures`/`logging` rows are created).
+  (Note: the round agent now overwrites `generated_vms.tf` and removes other
+  `generated_vms*.tf` at prepare time, so these committed samples are replaced
+  at runtime.)
+- Processing of attempts: **resolved.** The scoring/logging servers record the
+  running team's uuid directly (no access token; the agent writes
+  `/etc/sandbox-api/current-team` at deploy), and a continuous daemon
+  (`manage.py process_attempts`) turns attempts into `flag_captures` / `logging`
+  rows and `captured` timeline events. See docs/rounds.md.
 - Infrastructure VMs have no time synchronisation configured. Flow
   timestamps come from the monitor's clock, submission timestamps from the
   database's.

@@ -23,7 +23,7 @@ WITH competition AS (
     RETURNING id
 ), team AS (
     INSERT INTO teams (uuid, name, competition_id, max_members, created_at)
-    SELECT gen_random_uuid(), 'simulation-' || %(run_id)s, competition.id, 1, now()
+    SELECT %(team_uuid)s::uuid, 'simulation-' || %(run_id)s, competition.id, 1, now()
     FROM competition
     RETURNING id, competition_id
 ), token AS (
@@ -41,10 +41,10 @@ WITH competition AS (
     RETURNING id
 ), run AS (
     INSERT INTO round_runs (uuid, round_id, team_id, position, seed, state, error,
-                            sandbox_params, topology, created_at, state_changed_at,
-                            worm_start_at, ends_at, finished_at)
+                            sandbox_params, topology, sandbox_definition, created_at,
+                            state_changed_at, worm_start_at, ends_at, finished_at)
     SELECT gen_random_uuid(), round.id, team.id, 0, 0, 'finished', '',
-           '{}'::jsonb, '{}'::jsonb, now(), now(),
+           '{}'::jsonb, '{}'::jsonb, '', now(), now(),
            now() - interval '1 minute', now() + interval '30 minutes', now()
     FROM round, team
     RETURNING id, round_id

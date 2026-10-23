@@ -87,3 +87,35 @@ Details: [monitoring.md](monitoring.md), [testing.md](testing.md).
   from the development environment), the systemd hardening in practice.
   First steps on the real host: `make` (or `make infrastructure host-network
   provision`), deploy a sandbox, `make simulate`.
+
+## Round orchestration (second task)
+
+Added the round orchestration (`docs/rounds.md`): the conductor on the
+orchestrator, the round agent on the Proxmox host, the data model, the game
+plan, capture processing and the timeline export.
+
+Bugs found and fixed:
+
+- **`orchestrator/management/commands/deploy_worms.py` was dead code**: it
+  imported `ProductionVirtualMachine` (does not exist), queried a
+  non-existent `virtual_machine__round` relation, and ended in `assert False`
+  with the real work behind `if False:`. Removed; the conductor replaces it.
+- **The release-secret state bug** (caught by `test_rounds.py`): a game-plan
+  step that requested a host job and moved to REQUESTED was never revisited,
+  because the step loop only looked at PENDING steps, so a delayed secret was
+  never applied. `_run_due_steps` now drains REQUESTED steps each tick.
+
+Open issues (noted, not changed here):
+
+- **`MEDIA_ROOT` is not configured.** `dashboard/views/uploads.py` saves
+  artifacts through `default_storage` with no `MEDIA_ROOT`, so they land
+  relative to the process's working directory. The round agent reads them
+  from `round_agent_dashboard_media_root` (`/opt/dashboard/media`); the
+  dashboard must be made to store them there (set `MEDIA_ROOT`) before deploy
+  can fetch a worm. Until then the `deploy` job's artifact fetch fails.
+- **The sandbox guests are not configured** beyond cloud-init: no CA
+  distribution, and the worm start assumes the image has `python3`/`unzip`.
+- The conductor runs **one run at a time** (one sandbox per host). Parallel
+  sandboxes would need per-run bridge/pool namespacing.
+- Still **not run on a real Proxmox host** (see the monitoring section): the
+  tofu/qm/ssh paths of the agent are only validated offline.

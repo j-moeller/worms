@@ -7,8 +7,8 @@
  - [ ] Design
 
 [ ] Start of experiment
- - [ ] Distribution of worms
- - [ ] Activation of worms
+ - [x] Distribution of worms (round agent: deploy job)
+ - [x] Activation of worms (one-shot timer on the start VM)
 
 [ ] GPUs / Inference Engine service
  - [ ] Jailbreaking ?
@@ -78,3 +78,16 @@
  - [x] End-to-end simulation (make simulate)
  - [ ] Run make simulate on the real host (not done yet)
  - [ ] Port-isolation hookscript is not attached (docs/findings.md)
+
+[ ] Round orchestration (docs/rounds.md)
+ - [x] Run planning (one run per team, upload before the deadline)
+ - [x] Conductor state machine (prepare/check/deploy/run/end/teardown)
+ - [x] Game plan (stop VMs, delayed secrets after stops) - least privilege
+ - [x] Privileged host work via the round agent (pull-based, validated)
+ - [x] VM power from the orchestrator (pool-scoped token)
+ - [x] Secrets generated on the host; only hashes in the DB
+ - [x] Capture processing (attempts -> captures, once per team+VM)
+ - [x] Timeline export (JSON for the animated view)
+ - [ ] Animated timeline front-end (player)
+ - [ ] Configure sandbox guests (CA, deps); set dashboard MEDIA_ROOT
+ - [ ] Run on a real Proxmox host

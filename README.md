@@ -301,26 +301,31 @@ Details: `docs/testing.md`. Findings and open issues of this work:
   USB tablet; access is SSH only. `qm stop` (and `stop_on_destroy` in
   OpenTofu) kills a VM without guest cooperation.
 
-# Round start
+# Rounds (orchestration)
 
-- Python generates sandbox, secrets
-- Add round + sandbox (including secrets) to DB
-- OpenTofu sets up:
-    - sandbox
-    - monitor VM
-- `make inventory` — refresh `inventory.generated.yml` so the new sandbox VMs
-  (with the IPs OpenTofu just assigned) appear in Ansible's `sandbox` group.
-- Mirroring of the sandbox bridges to the monitor is automatic
-  (`worms-mirror` on the host picks up every new sandbox NIC)
-- Python generates worm deployment (adds to DB)
-- Ansible sets up (over the sandbox group):
-    - distribute the self-signed CA / certificates
-    - CTF flags in `/etc/flags`, other sandbox config
-- Orchestrator delivers files to the sandboxes
+Each team's worm is evaluated, one team after another, in a freshly built
+sandbox with its own game plan. This is **automated**: the conductor
+(`manage.py conduct_rounds`, a daemon on the orchestrator) plans the runs of
+any round whose deadline has passed and drives them through their lifecycle;
+the privileged host work (building the sandbox, deploying the worm, releasing
+secrets, teardown) is done by the **round agent** on the Proxmox host, which
+pulls jobs from the database. The orchestrator itself only controls sandbox VM
+power (a pool-scoped token), for the game plan.
 
-# Round end
+Full design, lifecycle, game plan, the timeline data for the animated view,
+operations and open items: **`docs/rounds.md`**.
 
-- cd opentofu/stacks/sandbox && tofu destroy
+```
+make provision     # installs the conductor daemon, the round agent and the
+                   # pool-scoped power ACL; then rounds run on their own
+# watch:
+ssh debian@10.3.0.19 journalctl -u orchestrator-conduct-rounds -f
+ssh root@<proxmox>  journalctl -u worms-round-agent -f
+```
+
+Mirroring of the sandbox bridges to the monitor is automatic (`worms-mirror`
+on the host picks up every new sandbox NIC), so the monitor records the
+round's traffic without any per-round step.
 
 # Topology view (dashboard → TOPOLOGY, staff only)
 

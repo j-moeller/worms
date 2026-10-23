@@ -116,3 +116,18 @@ FAIL ("sandbox deployed"); the other checks still run.
 - Load: flood behaviour of the APIs and the monitor (the limits are
   unit-tested, not stress-tested).
 - The private-internet services.
+
+## Round orchestration tests
+
+Two more files, both offline (`make test`), covering the round orchestration
+(`docs/rounds.md`):
+
+| File | What |
+|---|---|
+| `test_rounds.py` | The game plan generator (deterministic; every secret released once; a delayed secret always follows a stop; `min_alive` respected). The conductor driven end to end against the test database with a **fake Proxmox** (records stop/start) and a **fake agent** (completes host jobs as the real one would): a full run reaches FINISHED with every stop and secret done; a released secret submitted by the right team during the run becomes a capture (once); the wrong team's token does not; a failed prepare fails the run without a teardown; a team with no upload is SKIPPED; the timeline export has the nodes, ordered events and captures. This caught a real conductor bug (a `release_secret` step left in REQUESTED was never revisited). |
+| `test_round_agent.py` | The agent's parameter validation (rejects path traversal, bad hashes, out-of-range numbers); each handler's command sequence with a **fake executor** (no Proxmox/SSH): prepare builds and reports the sandbox, check flags a down VM, release writes the flag over stdin and returns its hash, deploy fetches + verifies + copies the worm and arms the fuse (and rejects a tampered artifact), teardown destroys. The claim/run/result loop against the test database, including that a job is claimed once even with two workers (FOR UPDATE SKIP LOCKED). |
+
+The conductor and agent are exercised against a real PostgreSQL with the real
+migrations and grants, but no sandbox is built on a live Proxmox node (none is
+available here), so the actual tofu/qm/ssh calls are only checked at the
+"which commands run" level.

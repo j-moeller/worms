@@ -32,3 +32,9 @@ django_timers:
     command: collect_topology
     description: Collect Proxmox topology for the dashboard (read-only)
     on_calendar: "*:0/2"
+# Round conductor loop (orchestrator/rounds, docs/rounds.md): plans runs for
+# due rounds and drives the active run. One instance; safe to restart.
+django_daemons:
+  - name: conduct-rounds
+    command: conduct_rounds
+    description: Round conductor (sandbox lifecycle, game plan, captures)

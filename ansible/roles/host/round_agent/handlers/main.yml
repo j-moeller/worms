@@ -1,0 +1,6 @@
+---
+- name: Restart round agent
+  ansible.builtin.systemd:
+    name: worms-round-agent
+    state: restarted
+    daemon_reload: true

@@ -1,0 +1,31 @@
+# Managed by Ansible (role django_app). DO NOT EDIT.
+[Unit]
+Description={{ item.description | default(item.name) }} ({{ django_app_name }})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ django_app_user }}
+Group={{ django_app_group }}
+WorkingDirectory={{ django_source_dir }}
+EnvironmentFile={{ django_env_file }}
+ExecStart={{ django_venv_dir }}/bin/python manage.py {{ item.command }}
+Restart=always
+RestartSec={{ item.restart_sec | default(5) }}
+
+# Same hardening as the web service.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=tmpfs
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

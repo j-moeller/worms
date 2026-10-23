@@ -191,3 +191,27 @@
   loop: "{{ django_timers }}"
   loop_control:
     label: "{{ item.name }}"
+
+# Long-running management commands (e.g. the orchestrator's conduct_rounds).
+- name: Install management daemon services
+  ansible.builtin.template:
+    src: django-daemon.service.j2
+    dest: "/etc/systemd/system/{{ django_app_name }}-{{ item.name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ django_daemons }}"
+  loop_control:
+    label: "{{ item.name }}"
+  notify:
+    - Reload systemd
+
+- name: Enable management daemons
+  ansible.builtin.systemd:
+    name: "{{ django_app_name }}-{{ item.name }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  loop: "{{ django_daemons }}"
+  loop_control:
+    label: "{{ item.name }}"

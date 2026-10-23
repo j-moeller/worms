@@ -38,6 +38,8 @@ django_db_sslrootcert: "/etc/ssl/certs/ca-certificates.crt"
 django_extra_pip_packages: []
 django_extra_env: {}
 django_timers: []
+# Long-running management commands (systemd services): [{name, command, description}].
+django_daemons: []
 django_run_migrations: false
 
 required_packages:

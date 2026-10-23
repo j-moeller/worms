@@ -60,7 +60,7 @@ endef
 .PHONY: all init secrets platform firewall firewall-migrate host-network infrastructure \
         inventory show-config \
         provision configure offline internet-allow internet-deny ping debug \
-        test test-deps simulate \
+        test test-deps simulate round-reset-services round-reset-apply \
         destroy destroy_all terminate
 
 all: init secrets platform firewall host-network
@@ -153,6 +153,7 @@ configure:
 	cd ansible && $(ANSIBLE) SetupNetworkMonitor.yml
 	cd ansible && $(ANSIBLE) SetupPrivateInternet.yml
 	cd ansible && $(ANSIBLE) SetupAudit.yml
+	cd ansible && $(ANSIBLE) SetupRoundAgent.yml
 
 # Internet access denied: switch DNS and the private-internet caches to
 # offline mode (both follow the host state, internet_enabled).
@@ -195,6 +196,23 @@ test:
 simulate:
 	$(MAKE) --no-print-directory inventory
 	cd ansible && $(ANSIBLE) Simulate.yml
+
+# Rebuild the ephemeral and private-internet VMs for a clean slate at the
+# start of a round (the round agent calls this when RESET_SERVICES=1). It
+# destroys and recreates them under an internet window (cloud-init installs
+# packages), then reconfigures and returns to offline. A sandbox must not
+# exist (internet-allow refuses otherwise); the conductor tears the previous
+# sandbox down before requesting a prepare with reset.
+round-reset-services:
+	cd opentofu/stacks/infrastructure/ephemeral && $(MAKE) destroy
+	cd opentofu/stacks/private_internet && $(MAKE) destroy
+	$(call online,round-reset-apply configure)
+	$(MAKE) --no-print-directory offline
+
+round-reset-apply:
+	cd opentofu/stacks/private_internet && $(MAKE) apply
+	cd opentofu/stacks/infrastructure/ephemeral && $(MAKE) apply
+	$(MAKE) --no-print-directory inventory
 
 # ---- Teardown ---------------------------------------------------------------
 # VM stacks first (they reference the security groups, pools and images),

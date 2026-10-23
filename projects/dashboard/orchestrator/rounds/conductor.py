@@ -82,6 +82,12 @@ class Conductor:
 
     def request_job(self, run, kind, **params):
         job = HostJob.objects.create(run=run, kind=kind, params=params)
+        # Wake the round agent at once (it also polls, so a missed NOTIFY only
+        # adds a few seconds).
+        from django.db import connection
+
+        with connection.cursor() as cur:
+            cur.execute("NOTIFY host_jobs")
         log.info("run %s requested %s job %s", run.uuid, kind, job.uuid)
         return job
 
@@ -163,11 +169,11 @@ class Conductor:
             return True
         self.set_state(run, RoundRun.State.DEPLOYING)
         self._build_game_plan(run)
-        start_vm = run.steps.filter(action=GamePlanStep.Action.RELEASE_SECRET).first()
+        artifact = run.upload.artifact
         self.request_job(
             run, HostJob.Kind.DEPLOY,
             start_vm=run.sandbox_params.get("start_vm"),
-            upload_id=run.upload_id,
+            artifact={"storage_key": artifact.storage_key, "content_hash": artifact.content_hash},
             initial_secrets=[s.vm.vm_identifier for s in self._initial_secret_steps(run)],
             worm_delay=self.cfg["worm_start_delay"],
         )  # fmt: skip

@@ -1,0 +1,22 @@
+# Managed by Ansible (role round_agent). DO NOT EDIT.
+#
+# Runs as root on the Proxmox node (it drives tofu, ansible, qm and ssh to the
+# sandbox). Its reach is bounded by its database role (job queue only) and by
+# what the fixed job handlers do, not by systemd sandboxing, which would get in
+# the way of managing VMs.
+[Unit]
+Description=worms round agent (executes host jobs from the database)
+After=network-online.target pve-cluster.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ round_agent_user }}
+WorkingDirectory={{ round_agent_repo_root }}
+EnvironmentFile={{ round_agent_env_file }}
+ExecStart={{ round_agent_python }} -m round_agent
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

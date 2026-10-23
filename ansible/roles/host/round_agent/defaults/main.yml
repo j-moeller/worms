@@ -1,0 +1,32 @@
+---
+# Round agent on the Proxmox host (docs/rounds.md). Pulls host_jobs from the
+# database and executes the privileged round operations. Runs as root from the
+# repository checkout, like `make`.
+round_agent_repo_root: "{{ playbook_dir | dirname }}"
+round_agent_user: root
+round_agent_env_file: /etc/worms/round-agent.env
+round_agent_python: /usr/bin/python3
+
+# Where the agent reads uploaded worm artifacts (the dashboard's media dir),
+# over SSH from the host. Must match the dashboard's file storage.
+round_agent_dashboard_host: "{{ management_ips.dashboard }}"
+round_agent_dashboard_media_root: /opt/dashboard/media
+
+# Rebuild the ephemeral and private-internet VMs at the start of every run
+# (clean slate). Off by default: it needs an internet window and is heavy.
+round_agent_reset_services: false
+
+# Database (round_agent role; job queue only). Connects to the core address.
+round_agent_db_host: "{{ infrastructure_ips.database }}"
+round_agent_db_port: 5432
+round_agent_db_name: "{{ postgres_db }}"
+round_agent_db_user: round_agent
+round_agent_db_password: "{{ vault_round_agent_db_password }}"
+round_agent_db_sslrootcert: "{{ pki_ca_cert_path }}"
+
+# Least-privilege Proxmox role for the orchestrator's power token: start/stop
+# of sandbox VMs only. Granted on the sandbox pool.
+round_agent_power_role: WormsSandboxPower
+round_agent_power_privs: "VM.Audit,VM.PowerMgmt"
+round_agent_power_token: "{{ proxmox_api_user }}!{{ proxmox_api_token_name }}"
+round_agent_sandbox_pool: sandbox

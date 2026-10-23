@@ -1,0 +1,73 @@
+---
+# Round agent on the Proxmox host. The agent code lives in the repository
+# checkout (scripts/round_agent); this role installs its dependency, the
+# environment file and the service, and the least-privilege Proxmox ACL for
+# the orchestrator's VM-power token.
+
+- name: Install psycopg2 for the agent
+  ansible.builtin.apt:
+    name: python3-psycopg2
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create the configuration directory
+  ansible.builtin.file:
+    path: "{{ round_agent_env_file | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the environment file (secrets)
+  ansible.builtin.template:
+    src: round-agent.env.j2
+    dest: "{{ round_agent_env_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: "{{ hide_secrets }}"
+  notify: Restart round agent
+
+- name: Install the service
+  ansible.builtin.template:
+    src: worms-round-agent.service.j2
+    dest: /etc/systemd/system/worms-round-agent.service
+    mode: "0644"
+  notify: Restart round agent
+
+# --- Proxmox ACL: power control of the sandbox pool only --------------------
+# The orchestrator's token (proxmox_api_user!proxmox_api_token_name) does VM
+# power for the game plan. It gets exactly VM.PowerMgmt + VM.Audit, and only on
+# the sandbox pool. pveum is idempotent enough; changed_when is conservative.
+
+- name: Define the least-privilege power role
+  ansible.builtin.command:
+    cmd: >-
+      pveum role add {{ round_agent_power_role }}
+      -privs {{ round_agent_power_privs }}
+  register: role_add
+  changed_when: role_add.rc == 0
+  failed_when: role_add.rc != 0 and 'already exists' not in role_add.stderr
+
+- name: Keep the role's privileges in sync
+  ansible.builtin.command:
+    cmd: >-
+      pveum role modify {{ round_agent_power_role }}
+      -privs {{ round_agent_power_privs }}
+  changed_when: true
+
+- name: Grant the orchestrator token power on the sandbox pool
+  ansible.builtin.command:
+    cmd: >-
+      pveum acl modify /pool/{{ round_agent_sandbox_pool }}
+      -roles {{ round_agent_power_role }}
+      -tokens '{{ round_agent_power_token }}'
+  changed_when: true
+
+- name: Enable the round agent
+  ansible.builtin.systemd:
+    name: worms-round-agent
+    enabled: true
+    state: started
+    daemon_reload: true

@@ -1,0 +1,10 @@
+---
+# Round agent on the Proxmox host (role round_agent). Pulls host jobs from the
+# database and runs the privileged round operations. Run after the database is
+# up (it connects as round_agent) and the CA is distributed (it verifies the
+# database certificate). See docs/rounds.md.
+- name: Configure the round agent
+  hosts: proxmox_host
+  become: true
+  roles:
+    - round_agent

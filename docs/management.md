@@ -5,13 +5,17 @@ platform. It **is** the build pipeline — the former Makefile recipes now live
 in `src/worms_cli/pipeline.py`, and the top-level `Makefile` only delegates
 (`make` → `worms build`, `make destroy` / `make destroy_all`). It also shows
 **live status from the one source of truth** (the database VM, plus the Proxmox
-API for infrastructure). You can run it from your laptop with the same access
-tokens you use on the server, instead of developing as root on the production
-host; with `WORMS_SSH` set it runs the build steps over SSH on the node.
+API for infrastructure). It runs on your laptop (`WORMS_SSH=root@<node>`):
+OpenTofu and Ansible run there with the secrets of the vault, and only the
+node's own part (the round agent's sandbox and devbox stacks) runs on the node
+(`docs/accounts.md` §4).
 
 ```
 alias worms='python3 /path/to/worms/src/manage.py'
 
+worms secrets                     # the vault: what is set (never values)
+worms secrets set proxmox-token   # enter a Proxmox token (prompted; or from stdin)
+worms node trust                  # once: the WORMS key may log in to the node
 worms status                      # components, internet, competition, rounds
 worms teams                       # teams + members' login status
 worms teams create "Neural Net"
@@ -31,59 +35,34 @@ run without doing it.
 
 ## Configuration
 
-No secret is hardcoded. The CLI reads `WORMS_*` variables from the environment,
-optionally seeded from `~/.worms/config` (or `--config path`), a file of plain
-`KEY=value` lines. Precedence: real environment > `--config` > `~/.worms/config`.
-The full reference — every variable with its default and where its value
-comes from, plus what OpenTofu and Ansible need, and a ready example for the
-node — is `docs/accounts.md` §4 "Environment".
+One setting and the vault. `~/.worms/config` (or `--config path`, or the
+environment; plain `KEY=value` lines) says where the node is; every secret is
+in the vault (`worms secrets`): the three Proxmox tokens you enter once,
+everything else generated. The full reference — what each tool gets, the
+vault's contents, moving an existing deployment to a laptop — is
+`docs/accounts.md` §4 "Environment".
 
-| Variable | For | Notes |
+| Setting | | Notes |
 |---|---|---|
-| `WORMS_REPO_ROOT` | build | the worms checkout (default: the repo this script lives in) |
-| `WORMS_SSH` | build, internet probe | `user@host` to run `make` and host probes on (e.g. `root@worms-pve`); empty = run locally on the host |
-| `WORMS_DB_HOST/PORT/NAME/USER/PASSWORD` | status, teams, users, leaderboard, reset | a **privileged** DB role (the `admin` superuser or `django_migrator`) |
-| `WORMS_DB_SSLMODE/SSLROOTCERT` | " | default `verify-full` against the checkout's internal CA (`ansible/pki/worms/ca.crt`) |
-| `WORMS_PROXMOX_URL/USER/TOKEN_NAME/TOKEN_VALUE/NODE` | status | read-only API token is enough |
-| `WORMS_PROXMOX_VERIFY_SSL` | status | keep `1` with `REQUESTS_CA_BUNDLE=/etc/pve/pve-root-ca.pem` on the node; `0` only for local experimentation |
+| `WORMS_SSH` | `root@<node>` | this machine is the controller; empty = this machine is the node |
+| `WORMS_PROXMOX_URL` | `https://<WORMS_SSH host>:8006/` | if the node's API has another name from here |
+| `WORMS_REPO_ROOT` | the checkout this script is in | |
 
-Each command needs only the configuration for what it does: `worms build`
-needs just the repo (and `WORMS_SSH` if you are remote); `worms teams` needs
-the database; `worms status` uses whatever is configured and marks the rest
-`n/a`. A feature whose configuration is missing says so instead of failing.
-
-### Reaching the database and Proxmox from your laptop
-
-The database only accepts the `admin` role from the Proxmox host (`pg_hba`,
-`postgres_admin_cidrs` in `group_vars/all.yml`). From your laptop, tunnel:
-
-```
-ssh -L 5432:10.11.0.16:5432 root@worms-pve        # DB over the core bridge
-# then WORMS_DB_HOST=127.0.0.1, and add the host to postgres_admin_cidrs if needed,
-# or simply set WORMS_SSH=root@worms-pve and run status/build over SSH.
-```
-
-The Proxmox tokens are the ones documented in the README (`PROXMOX_API_TOKEN`
-for power/management, `PROXMOX_READONLY_API_TOKEN` for read-only). `worms
-status` only reads, so the read-only token suffices.
-
-### Proxmox tokens assumed to exist
-
-The CLI, like the orchestrator, assumes these API identities exist (document
-only; create them in Proxmox once):
-
-- `orchestrator@pam!orchestrator-prov` — VM power + management (the value is
-  `vault_proxmox_api_token_value`).
-- `topology@pve!readonly` — `PVEAuditor` on `/`, read-only
-  (`vault_proxmox_readonly_api_token_value`). Use this one for `worms status`.
+The database commands (`status`, `teams`, `users`, `leaderboard`, `admin`,
+`reset-database`) connect as `admin` with the vault's password through an SSH
+tunnel via the node (`pg_hba` admits `admin` from the node only), TLS
+`verify-full` against the internal CA; `worms status` reads Proxmox with the
+topology token through a tunnel to the node's API (verified against its PVE
+CA). A feature whose secret is missing says so instead of failing (`n/a`).
+`WORMS_DB_*` / `WORMS_PROXMOX_*` replace the vault-derived connections for
+development and tests.
 
 ## What `worms status` shows
 
 - **Infrastructure** (Proxmox API): firewall enabled; number of Linux bridges;
   running/total VMs per pool — infrastructure (`persistent`+`ephemeral`),
   `private_internet`, `sandbox`, `devbox`; and **internet access** (the host
-  flag `/run/worms/internet-allowed`, read directly on the node, over
-  `WORMS_SSH` from elsewhere).
+  flag `/run/worms/internet-allowed`, read on the node).
 - **Competition** (database): the current competition, the phase
   (registration / active round / next round), the number of rounds and teams,
   and the round-orchestration run states and queued host jobs (docs/rounds.md).
@@ -94,8 +73,10 @@ only; create them in Proxmox once):
 <component>` runs one step (`worms build --list` prints them: secrets, init,
 platform, firewall, host-network, infrastructure, inventory, configure,
 provision, offline, internet-allow/deny, round-*, devbox*, ping, …). Each step
-runs the real tool (tofu, ansible-playbook, the generator scripts) — locally on
-the Proxmox node, or over SSH when `WORMS_SSH` is set. The internet window
+runs the real tool (tofu, ansible-playbook, the generator scripts) on this
+machine; the sandbox and devbox stacks and their playbooks run in the round
+agent's workspace on the node (`worms-node-run` over SSH), after the workspace
+is synced with this checkout (`SetupRoundAgent.yml --tags agent-sync`). The internet window
 around infrastructure setup is handled automatically (allowed for that step,
 always denied again afterwards). `worms test` runs the offline suite and
 `worms simulate` the live simulation; `worms debug <host>` runs the Ansible
@@ -108,11 +89,10 @@ it), and `reset-database` (a Django management command run through the CLI's
 own database connection; it truncates the application tables and re-runs
 `init`). The Makefile's `make destroy` / `make destroy_all` call these.
 
-Tofu reads its Proxmox credentials from the operator's environment on the node
-(`TF_VAR_proxmox_api_url` / `TF_VAR_proxmox_api_token` and an ssh-agent with
-root's key; `docs/accounts.md` §4.1); the CLI does not manage them. The round
-agent gets the same inputs from its env file (the vault keeps a copy of the
-provisioning token).
+OpenTofu gets its Proxmox credentials from the vault: the CLI puts them into
+the `tofu` process's environment only and runs it with a private ssh-agent
+holding the WORMS key (`docs/accounts.md` §4.1). The round agent gets the same
+inputs from its env file, rendered from the same vault.
 
 ## Why the database is the source of truth
 
@@ -128,6 +108,9 @@ Proxmox, not from a local file that can drift.
 `tests/test_manage_cli.py` (offline, part of `worms test`) runs the DB-backed
 commands against a throwaway PostgreSQL with the real migrations and grants:
 team create/rename/delete (and that deleting a team keeps its users), the
-status and leaderboard output, the user listing, and `reset-database`. The
-no-configuration paths (`--help`, and `status` degrading to `n/a`) are checked
-too.
+status and leaderboard output, the user listing, `reset-database` and
+`admin reset-password`. The no-configuration paths (`--help`, and `status`
+degrading to `n/a`) are checked too. `tests/test_secrets.py` covers the vault,
+`tests/test_laptop.py` where each step runs and what it gets, the laptop
+inventory and the round agent's workspace sync, `tests/test_pipeline.py` the
+order of every component's steps.

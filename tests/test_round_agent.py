@@ -207,7 +207,7 @@ class FakeExecutor:
 
 
 CFG = {"dashboard_host": "10.5.0.18", "dashboard_media_root": "/opt/dashboard/media",
-       "scoring_host": "10.5.0.14", "logging_host": "10.5.0.15", "reset_services": False}
+       "scoring_host": "10.5.0.14", "logging_host": "10.5.0.15"}
 
 
 def test_prepare_builds_sandbox_and_reports_topology():
@@ -225,12 +225,6 @@ def test_prepare_builds_sandbox_and_reports_topology():
     assert result["topology"]["nodes"] and result["topology"]["edges"]
     assert any(n["type"] == "network" for n in result["topology"]["nodes"])
     assert result["sandbox_definition"] == ex.installed_hcl
-
-
-def test_prepare_reset_services_runs_first():
-    ex = FakeExecutor()
-    handlers.prepare(ex, {**CFG, "reset_services": True}, validation.validate("prepare", {"seed": 1}))
-    assert ex.calls[0] == ("worms", "round-reset-services")
 
 
 def test_check_reports_ok_when_everything_is_up():
@@ -399,8 +393,9 @@ def test_round_agent_env_renders(render):
     assert "DASHBOARD_HOST=10.5.0.18" in env
     # OpenTofu: without the provisioning token in the vault, no value (and a hint).
     assert "TF_VAR_proxmox_api_url=https://127.0.0.1:8006/" in env
-    assert "TF_VAR_proxmox_api_token=" not in env and "vault_tofu_proxmox_api_token" in env
-    assert "TF_VAR_ssh_public_key=/root/.ssh/id_rsa.pub" in env
+    assert "TF_VAR_proxmox_api_token=" not in env and "worms secrets set proxmox-token" in env
+    assert "TF_VAR_ssh_public_key=/etc/worms/ssh/worms.pub" in env  # the WORMS key, from the vault
+    assert "REPO_ROOT=/opt/worms" in env and "DB_SSLROOTCERT=/opt/worms/ansible/pki/worms/ca.crt" in env
 
 
 def test_round_agent_env_carries_the_opentofu_inputs(render):
@@ -421,15 +416,15 @@ def test_round_agent_env_carries_the_opentofu_inputs(render):
 def test_round_agent_unit_wraps_an_ssh_agent(render, tmp_path):
     """The bpg provider uploads snippets over SSH through an agent (agent =
     true); systemd kills anything ExecStartPre forks, so ssh-agent wraps the
-    service command instead."""
+    service command instead: worms-node-run (tests/test_laptop.py runs it)."""
     import shutil
     import subprocess
 
     unit = render("ansible/roles/host/round_agent", "worms-round-agent.service.j2")
     exec_start = next(line for line in unit.splitlines() if line.startswith("ExecStart="))
-    assert exec_start.startswith("ExecStart=/usr/bin/ssh-agent /bin/sh -c '")
-    assert "ssh-add -q /root/.ssh/id_rsa ||" in exec_start
-    assert exec_start.rstrip().endswith("exec /usr/bin/python3 -m round_agent'")
+    assert exec_start == 'ExecStart=/usr/local/sbin/worms-node-run . "exec /usr/bin/python3 -m round_agent"'
+    wrapper = render("ansible/roles/host/round_agent", "worms-node-run.j2")
+    assert "exec ssh-agent sh -c 'ssh-add -q" in wrapper and "/etc/worms/ssh/worms" in wrapper
     assert "ExecStartPre" not in unit
     path = tmp_path / "worms-round-agent.service"
     path.write_text(unit)

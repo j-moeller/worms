@@ -1,7 +1,7 @@
 ---
 # Host-side network security of the Proxmox node itself: sysctls, the nftables
 # zone firewall (+ boot unit) and the Proxmox host firewall rule for the
-# orchestrator. Runs locally (the node is the Ansible controller), after the
+# orchestrator. Runs on the node (over SSH from the controller), after the
 # platform stack and `make inventory`. Proxmox-level resources (bridges, VM
 # firewall, port-isolation hookscript) are managed by OpenTofu.
 #

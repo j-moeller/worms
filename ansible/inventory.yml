@@ -14,14 +14,12 @@
 all:
   children:
 
-    # The Proxmox node itself (also the Ansible controller). See
-    # SetupHostNetwork.yml; set host_publish_dashboard: true here to expose the
-    # dashboard on <WAN>:443.
+    # The Proxmox node itself. How Ansible reaches it (local on the node, SSH
+    # from a laptop) is in inventory.generated.yml. See SetupHostNetwork.yml;
+    # set host_publish_dashboard: true here to expose the dashboard on <WAN>:443.
     proxmox_host:
       hosts:
         proxmox.local:
-          ansible_host: 127.0.0.1
-          ansible_connection: local
 
     # ---- VM groups (filled by inventory.generated.yml) ----------------------
     database:

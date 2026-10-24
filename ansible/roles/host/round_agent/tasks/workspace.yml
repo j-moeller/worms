@@ -1,0 +1,155 @@
+---
+# The round agent's workspace on the node (docs/accounts.md §4): what the agent
+# runs from -- the sandbox and devbox stacks (their state is the node's and
+# stays here), the OpenTofu modules, the scripts, the CLI and the playbooks it
+# runs -- plus the CA certificate and the platform/firewall state those two
+# stacks read their inputs from. Never the vault, the CA key, or the code or
+# state of the stacks the controller owns. `worms` runs these tasks
+# (--tags agent-sync) before every step it runs on the node, so the node runs
+# the controller's code.
+
+- name: Install rsync (the workspace is synced with it)
+  ansible.builtin.apt:
+    name: rsync
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create the workspace
+  ansible.builtin.file:
+    path: "{{ round_agent_repo_root }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# The agent used to run from a checkout on the node (REPO_ROOT in its env
+# file). The first time, its sandbox and devbox state moves here, or OpenTofu
+# would build those VMs a second time.
+- name: Take over the sandbox and devbox state of the previous checkout
+  ansible.builtin.shell: |
+    set -eu
+    new={{ round_agent_repo_root | quote }}
+    old=$(sed -n 's/^REPO_ROOT=//p' {{ round_agent_env_file | quote }} 2>/dev/null || true)
+    [ -n "$old" ] && [ "$old" != "$new" ] && [ -d "$old" ] || exit 0
+    for stack in sandbox devbox; do
+      from="$old/opentofu/stacks/$stack" to="$new/opentofu/stacks/$stack"
+      [ -e "$from/terraform.tfstate" ] && [ ! -e "$to/terraform.tfstate" ] || continue
+      mkdir -p "$to"
+      cp -a "$from"/terraform.tfstate* "$to"/
+      cp -a "$from"/generated_*.tf "$to"/ 2>/dev/null || true
+      echo "took over $stack from $old"
+    done
+  register: round_agent_takeover
+  changed_when: "'took over' in round_agent_takeover.stdout"
+
+- name: Sync the code
+  ansible.posix.synchronize:
+    src: "{{ round_agent_controller_repo }}/"
+    dest: "{{ round_agent_repo_root }}/"
+    delete: true
+    rsync_opts: "{{ round_agent_sync_rsync_opts }}"
+
+- name: Find the workspace's sandbox and devbox definitions
+  ansible.builtin.find:
+    paths: "{{ round_agent_repo_root }}/opentofu/stacks/{{ item }}"
+    patterns: "generated_*.tf"
+  loop: [sandbox, devbox]
+  register: round_agent_definitions
+
+# A new workspace starts from the repository's; the agent replaces them.
+- name: Start with the repository's sandbox definition
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ round_agent_repo_root }}/opentofu/stacks/sandbox/"
+    mode: "0644"
+  with_fileglob: "{{ round_agent_controller_repo }}/opentofu/stacks/sandbox/generated_vms*.tf"
+  when: round_agent_definitions.results[0].matched == 0
+
+- name: Start with the repository's devbox definition
+  ansible.builtin.copy:
+    src: "{{ round_agent_controller_repo }}/opentofu/stacks/devbox/generated_devboxes.tf"
+    dest: "{{ round_agent_repo_root }}/opentofu/stacks/devbox/"
+    mode: "0644"
+  when: round_agent_definitions.results[1].matched == 0
+
+- name: Create the directories for the controller's outputs
+  ansible.builtin.file:
+    path: "{{ round_agent_repo_root }}/{{ item }}"
+    state: directory
+    mode: "0700"
+  loop: [ansible/pki/worms, opentofu/stacks/platform, opentofu/stacks/firewall]
+
+# State only (outputs for terraform_remote_state), no code: the node cannot
+# apply these stacks.
+- name: Copy the CA certificate and the platform and firewall state
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ round_agent_repo_root }}/{{ item.dest }}"
+    mode: "0600"
+  loop:
+    - { src: "{{ pki_ca_cert_path }}", dest: ansible/pki/worms/ca.crt }
+    - { src: "{{ round_agent_controller_repo }}/opentofu/stacks/platform/terraform.tfstate", dest: opentofu/stacks/platform/terraform.tfstate }
+    - { src: "{{ round_agent_controller_repo }}/opentofu/stacks/firewall/terraform.tfstate", dest: opentofu/stacks/firewall/terraform.tfstate }
+
+- name: Initialise the node's stacks (providers)
+  ansible.builtin.command:
+    cmd: tofu init -input=false -no-color
+    chdir: "{{ round_agent_repo_root }}/opentofu/stacks/{{ item }}"
+  loop: [sandbox, devbox]
+  changed_when: false
+
+- name: Create the key directory
+  ansible.builtin.file:
+    path: "{{ round_agent_ssh_key | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# The one key every VM authorizes (vault, worms_cli/secrets.py): the agent
+# logs in to the VMs with it, OpenTofu uploads snippets to this node with it.
+- name: Install the WORMS SSH key
+  ansible.builtin.copy:
+    content: "{{ item.content }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { content: "{{ vault_worms_ssh_key }}", dest: "{{ round_agent_ssh_key }}", mode: "0600" }
+    - { content: "{{ vault_worms_ssh_public_key }}\n", dest: "{{ round_agent_ssh_key }}.pub", mode: "0644" }
+  no_log: true
+
+# On Proxmox root's authorized_keys is a symlink into /etc/pve: keep it.
+- name: Let the WORMS key log in as root on this node
+  ansible.posix.authorized_key:
+    user: root
+    key: "{{ vault_worms_ssh_public_key }}"
+    follow: true
+
+- name: Create the configuration directory
+  ansible.builtin.file:
+    path: "{{ round_agent_env_file | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the environment file (secrets)
+  ansible.builtin.template:
+    src: round-agent.env.j2
+    dest: "{{ round_agent_env_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: "{{ hide_secrets }}"
+  notify: Restart round agent
+
+- name: Install worms-node-run (runs a command in the workspace as the agent)
+  ansible.builtin.template:
+    src: worms-node-run.j2
+    dest: "{{ round_agent_node_run }}"
+    owner: root
+    group: root
+    mode: "0755"

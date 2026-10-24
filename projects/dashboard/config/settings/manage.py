@@ -5,10 +5,9 @@ scoring logic as the dashboard -- the database is the single source of truth,
 and we never duplicate its schema or the leaderboard formula in the CLI.
 
 Both apps are installed (every model is available) and the database connection
-comes from the environment (WORMS_DB_* / DB_*), typically the admin or migrator
-role so the CLI can create and delete teams. Run it where the database is
-reachable (on the Proxmox host, or through an SSH tunnel to it); see
-docs/management.md.
+comes from the environment (WORMS_DB_* / DB_*): the CLI sets it from the vault
+(the admin role; from a laptop through an SSH tunnel via the node), or from
+explicit WORMS_DB_* settings; see docs/management.md.
 """
 
 import os
@@ -38,3 +37,7 @@ for _key in ("DB_NAME", "DB_HOST", "DB_PORT", "DB_SSLMODE", "DB_SSLROOTCERT"):
         os.environ[_key] = os.environ[_wk]
 
 DATABASES = {"default": postgres_database(_user or "", _password or "")}
+# Through an SSH tunnel (from a laptop): connect to WORMS_DB_HOSTADDR, check the
+# server certificate against DB_HOST (libpq's hostaddr).
+if os.environ.get("WORMS_DB_HOSTADDR"):
+    DATABASES["default"]["OPTIONS"]["hostaddr"] = os.environ["WORMS_DB_HOSTADDR"]

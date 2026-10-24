@@ -1,16 +1,16 @@
 """The build/operate pipeline: every step the top-level Makefile used to run,
 now driven from the CLI. Each step runs the real tools (tofu, ansible-playbook,
-the generator scripts, qm) through a Runner, locally on the Proxmox node or
-over SSH (WORMS_SSH).
+the generator scripts, qm) through a Runner: on this machine (your laptop, or
+the node), and the node's own part (sandbox and devbox stacks) on the node
+(worms_cli/session.py).
 
 The internet window is the one subtle bit: infrastructure setup needs outbound
 internet (cloud-init and Ansible install packages, the caches populate), so it
 is allowed only around that step and ALWAYS denied again afterwards -- on
 success, failure or interrupt -- exactly as the Makefile's `online` trap did.
 
-Tofu reads its Proxmox credentials from the operator's environment on the node
-(TF_VAR_proxmox_api_url / TF_VAR_proxmox_api_token, or a tfvars file), the same
-way the stack Makefiles did; the pipeline does not handle them.
+OpenTofu gets its Proxmox credentials from the vault, through the Runner
+(TF_VAR_* in the tofu process's environment only); see worms_cli/secrets.py.
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ class Pipeline:
     # -- primitives ----------------------------------------------------------
 
     def secrets(self):
-        self.runner.python("scripts/generate_secrets.py")
+        self.runner.secrets()
 
     def init(self):
         for stack in INIT_STACKS:
@@ -89,7 +89,7 @@ class Pipeline:
             "tofu apply -refresh-only -auto-approve -input=false || exit 1; "
             "fi"
         )
-        self.runner.sh(script, cwd="opentofu/stacks/firewall")
+        self.runner.sh(script, cwd="opentofu/stacks/firewall", tofu=True)
 
     def _apply(self, stack: str):
         self._facts_fresh = False
@@ -244,15 +244,15 @@ class Pipeline:
 
     def stop_all(self):
         """Freeze: hard-stop every running VM on the node, destroy nothing."""
-        self.runner.sh("qm list | awk 'NR>1 && $3 == \"running\" {print $1}' | xargs -r -I {} qm stop {}")
+        self.runner.node_sh("qm list | awk 'NR>1 && $3 == \"running\" {print $1}' | xargs -r -I {} qm stop {}")
 
     def terminate(self):
         """Stop, unlock and destroy every VM, then destroy all stacks (the full
         teardown the Makefile's `terminate` did)."""
-        self.runner.sh("qm list | awk 'NR>1 {print $1}' | xargs -r -I {} qm stop {}", check=False)
-        self.runner.sh("qm list | awk 'NR>1 {print $1}' | xargs -r -I {} qm unlock {}", check=False)
+        self.runner.node_sh("qm list | awk 'NR>1 {print $1}' | xargs -r -I {} qm stop {}", check=False)
+        self.runner.node_sh("qm list | awk 'NR>1 {print $1}' | xargs -r -I {} qm unlock {}", check=False)
         self.destroy_all()
-        self.runner.sh("qm list | awk 'NR>1 {print $1}' | xargs -r -I {} qm destroy {}", check=False)
+        self.runner.node_sh("qm list | awk 'NR>1 {print $1}' | xargs -r -I {} qm destroy {}", check=False)
 
 
 # component name -> (Pipeline method name, one-line help). `worms build` with no

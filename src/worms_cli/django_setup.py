@@ -22,11 +22,16 @@ def setup(config) -> None:
     if _READY:
         return
 
-    if not config.has_db():
+    from worms_cli.session import SessionError
+
+    try:
+        db_env = config.db_env()
+    except SessionError as exc:
+        raise NotConfigured(f"database: {exc}") from exc
+    if not db_env:
         raise NotConfigured(
-            "no database configured. Set WORMS_DB_HOST (and WORMS_DB_USER / "
-            "WORMS_DB_PASSWORD) in the environment or ~/.worms/config. See "
-            "docs/management.md."
+            "no database configured: no vault in this checkout (set WORMS_SSH=root@<node> "
+            "in ~/.worms/config, then `worms secrets`). See docs/management.md."
         )
 
     dashboard_src = config.repo_root / "projects" / "dashboard"
@@ -34,7 +39,7 @@ def setup(config) -> None:
         raise NotConfigured(f"dashboard project not found under {dashboard_src}")
     sys.path.insert(0, str(dashboard_src))
 
-    for key, value in config.db_env().items():
+    for key, value in db_env.items():
         os.environ.setdefault(key, value)
     os.environ["DJANGO_SETTINGS_MODULE"] = "config.settings.manage"
     os.environ["PRODUCTION"] = "1"

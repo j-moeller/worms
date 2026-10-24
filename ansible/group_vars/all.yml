@@ -3,8 +3,8 @@
 #
 # SECRETS LIVE IN group_vars/vault.yml (ansible-vault encrypted) and are
 # referenced here as {{ vault_* }}. There are NO plaintext passwords in this
-# file or anywhere in version control. scripts/generate_secrets.py creates the
-# encrypted vault (keys: docs/accounts.md section 4.2; README "Secrets").
+# file or anywhere in version control. The `worms` CLI keeps the encrypted
+# vault (src/worms_cli/secrets.py; docs/accounts.md section 4).
 # -----------------------------------------------------------------------------
 
 # Addressing is the OpenTofu ground truth. `infrastructure_ips`,
@@ -101,9 +101,10 @@ proxmox_readonly_api_user: "topology@pve"
 proxmox_readonly_api_token_name: "readonly"
 proxmox_readonly_api_token_value: "{{ vault_proxmox_readonly_api_token_value | default('') }}"
 
-# Whether internet access is currently allowed (Internet.yml writes
-# this flag on the Proxmox node, which is also the Ansible controller; the
-# `exists` test runs on the controller). Not a switch: it follows the host.
+# Whether internet access is currently allowed (Internet.yml writes this flag
+# on the Proxmox node). Not a switch: it follows the host. The `exists` test
+# runs on the controller, so it is right on the node; from a laptop `worms`
+# probes the node and passes `-e internet_enabled=...` to every playbook.
 #   true  = caches proxy/forward upstream (population), DNS forwards upstream
 #   false = standalone offline caches, no internet anywhere
 internet_enabled: "{{ '/run/worms/internet-allowed' is exists }}"

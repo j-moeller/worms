@@ -1,0 +1,15 @@
+#!/bin/sh
+# Managed by Ansible (role round_agent). DO NOT EDIT.
+#
+#   worms-node-run <directory in the workspace> '<command>'
+#
+# Runs a command in the round agent's workspace ({{ round_agent_repo_root }})
+# with the agent's environment and its SSH key in a private ssh-agent: how the
+# service starts the agent, and how `worms` on the controller runs the node's
+# own steps (the sandbox and devbox stacks and playbooks).
+set -eu
+cd {{ round_agent_repo_root }}/"$1"
+set -a
+. {{ round_agent_env_file }}
+set +a
+exec ssh-agent sh -c 'ssh-add -q "$0" || echo "worms-node-run: could not load $0 into ssh-agent" >&2; exec sh -c "$1"' {{ round_agent_ssh_key }} "$2"

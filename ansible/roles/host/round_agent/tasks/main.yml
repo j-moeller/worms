@@ -1,8 +1,9 @@
 ---
-# Round agent on the Proxmox host. The agent code lives in the repository
-# checkout (scripts/round_agent); this role installs its dependency, the
-# environment file and the service, and the least-privilege Proxmox ACL for
-# the orchestrator's VM-power token.
+# Round agent on the Proxmox host. The agent runs from its workspace on the
+# node (tasks/workspace.yml: synced from the controller's checkout); this role
+# installs its dependency, the workspace, its key, the environment file and the
+# service, and the least-privilege Proxmox ACL for the orchestrator's VM-power
+# token.
 
 - name: Install psycopg2 for the agent
   ansible.builtin.apt:
@@ -11,23 +12,9 @@
     update_cache: true
     cache_valid_time: 3600
 
-- name: Create the configuration directory
-  ansible.builtin.file:
-    path: "{{ round_agent_env_file | dirname }}"
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-
-- name: Install the environment file (secrets)
-  ansible.builtin.template:
-    src: round-agent.env.j2
-    dest: "{{ round_agent_env_file }}"
-    owner: root
-    group: root
-    mode: "0600"
-  no_log: "{{ hide_secrets }}"
-  notify: Restart round agent
+- name: The agent's workspace, key and environment
+  ansible.builtin.import_tasks: workspace.yml
+  tags: [agent-sync]
 
 - name: Install the service
   ansible.builtin.template:
@@ -35,6 +22,7 @@
     dest: /etc/systemd/system/worms-round-agent.service
     mode: "0644"
   notify: Restart round agent
+  tags: [agent-sync]
 
 # --- Proxmox ACL: power control of the sandbox pool only --------------------
 # The orchestrator's token (proxmox_api_user!proxmox_api_token_name) does VM

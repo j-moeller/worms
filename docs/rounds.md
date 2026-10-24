@@ -52,7 +52,10 @@ sandbox VMs (start/stop) fits a least-privilege token (`VM.PowerMgmt` +
   `deploy`, `release_secrets`, `teardown`) with strictly validated
   parameters (integers in ranges, UUIDs, hashes, a storage path matching a
   pattern) and never runs a string taken from the database. Its database role
-  can only read jobs and write their results.
+  can only read jobs and write their results. It runs from its own workspace,
+  `/opt/worms` (role `round_agent`, synced from the controller's checkout):
+  the sandbox and devbox stacks and their state are the node's; the
+  controller's stacks, the vault and the CA key are not there.
 - **Secrets never exist in the database in plaintext.** The agent generates a
   VM's secret when it releases it, writes it into the VM (`/etc/worms/flag`)
   and reports only its SHA-256. The scoring server compares hashes. A
@@ -199,10 +202,10 @@ Timings (`ROUND_CONDUCTOR` in `config/settings/orchestrator.py`, env-tunable):
 `worm_start_delay` (the fuse, 300 s), `round_duration` (3600 s),
 `end_drain`, `job_timeout`, `capture_grace`.
 
-Rebuilding the ephemeral and private-internet VMs each round (a clean slate)
-is opt-in (`round_agent_reset_services`), because it needs an internet window
-and so can only happen while no sandbox exists; the conductor tears the
-previous sandbox down first.
+Rebuilding the ephemeral and private-internet VMs for a clean slate is
+`worms build round-reset-services` on the controller (it owns those stacks; the
+round agent only has the sandbox and devbox stacks). It needs an internet
+window, so run it between rounds, while no sandbox exists.
 
 `worms simulate` (`docs/testing.md`) checks the scoring path end to end: a flag
 submitted through the sandbox API becomes a `FlagCapture` and a `captured`

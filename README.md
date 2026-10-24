@@ -1,20 +1,21 @@
 # Quick start
 
-As root on the Proxmox node, with the three Proxmox API tokens created
+From your laptop (the controller: it runs OpenTofu and Ansible), with root SSH
+access to the Proxmox node and the three Proxmox API tokens created
 (`docs/accounts.md` §1.1 has the `pveum` commands):
 
 ```
-export TF_VAR_proxmox_api_url=https://127.0.0.1:8006/
-export TF_VAR_proxmox_api_token='root@pam!worms=<secret>'   # OpenTofu (provisioning)
-export PROXMOX_API_TOKEN=<secret>                            # orchestrator@pam!orchestrator-prov
-export PROXMOX_READONLY_API_TOKEN=<secret>                   # topology@pve!readonly (optional)
-eval "$(ssh-agent -s)" && ssh-add /root/.ssh/id_rsa          # OpenTofu uploads snippets over SSH
-make                             # idempotent, end to end
+echo 'WORMS_SSH=root@<node>' >> ~/.worms/config
+worms secrets set proxmox-token        # root@pam!worms=<secret>   (OpenTofu)
+worms secrets set orchestrator-token   # orchestrator@pam!orchestrator-prov
+worms secrets set topology-token       # topology@pve!readonly (optional)
+worms node trust                       # once: the WORMS key may log in to the node
+make                                   # = worms build: idempotent, end to end
 ```
 
-Every variable the CLI, OpenTofu, Ansible and the services read — with
-defaults and where each value comes from — is listed in `docs/accounts.md`
-§4 "Environment".
+(`alias worms='python3 /path/to/worms/src/manage.py'`.) No environment
+variables: the vault is the only place secrets enter (`docs/accounts.md` §4,
+which also covers moving an existing node-run deployment to a laptop).
 
 `make` applies the platform and firewall stacks and the host firewall, then **allows internet
 access**, creates the infrastructure VMs (cloud-init: first boot only) and
@@ -27,36 +28,29 @@ fails or you interrupt it — and switches DNS and the caches to offline mode.
 re-run: once everything is in place it changes nothing. `worms build show-config`
 reprints the configuration at any time.
 
-# Secrets (you don't manage these)
+# Secrets: one vault
 
-All internal management credentials — every PostgreSQL role password, the
-Django `SECRET_KEY`s and the internal CA passphrase — are generated **once** by
-`scripts/generate_secrets.py` (run via `worms build secrets`) into
-`ansible/group_vars/vault.yml`, encrypted with ansible-vault using an
-auto-generated `ansible/.vault_pass`. The CA private key
-(`ansible/pki/worms/ca.key`, git-ignored) is always encrypted with that
-passphrase (`pki_ca_passphrase`); `CreateCA.yml` refuses to run without it and
-encrypts a key created before the passphrase existed in place (the CA and its
-certificates stay valid). You never type, see or track them, and
-because they persist, re-running `make` does not rotate them (which would break
-the already-configured database). Both files are git-ignored.
+Every secret lives in one place, `ansible/group_vars/vault.yml` on the
+controller, encrypted with ansible-vault (key `ansible/.vault_pass`, both
+git-ignored; `src/worms_cli/secrets.py`). `worms secrets` shows what is set
+(never a value).
 
-The only secrets you supply are the **Proxmox API tokens** (they must equal the
-tokens Proxmox issued you; `docs/accounts.md` §1.1): OpenTofu's provisioning
-token in `TF_VAR_proxmox_api_token` (kept in the vault too, for the round
-agent), the orchestrator's in `PROXMOX_API_TOKEN` and the optional read-only
-one in `PROXMOX_READONLY_API_TOKEN`. Set them before the first `make`, or add
-them later with:
+- **You enter** only the **Proxmox API tokens**, once (`worms secrets set
+  <name>`, prompted without echo): they must equal what Proxmox issued.
+- **Generated** the first time they are missing, never rotated: every
+  PostgreSQL role password, the Django `SECRET_KEY`s, the internal CA
+  passphrase, the orchestrator API token and the **WORMS SSH key**, the one key
+  every VM and the node accept (OpenTofu, Ansible, the CLI and the round agent
+  log in with it). The CA private key (`ansible/pki/worms/ca.key`, git-ignored)
+  is always encrypted with the passphrase; `CreateCA.yml` refuses to run
+  without it.
 
-```
-cd ansible && ansible-vault edit --vault-password-file .vault_pass group_vars/vault.yml
-```
-
-`group_vars/all.yml` references all of these as `{{ vault_* }}`; the Django
-hosts and the database receive their credentials through root-owned `0600`
-files, so secrets are passed securely at initialization and never land in a
-world-readable location. The keys are listed in `scripts/generate_secrets.py`
-and `docs/accounts.md` §4.2.
+Each consumer reads the vault through one path: OpenTofu gets its token in its
+process environment from the CLI, Ansible with `-e @group_vars/vault.yml`, the
+services (and the round agent on the node) through root-owned `0600` files that
+Ansible renders, the CLI's database and Proxmox access through SSH tunnels via
+the node. The dashboard admin has no stored password at all: `worms admin
+reset-password` prints a one-time password once.
 
 # Addressing: OpenTofu is the single source of truth
 

@@ -13,10 +13,9 @@ Connection settings come from the environment (a root-only file, like the
 other services):
 
     DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD DB_SSLMODE DB_SSLROOTCERT
-    REPO_ROOT                 the worms checkout (default /opt/worms or cwd)
+    REPO_ROOT                 the agent's workspace (default: cwd; /opt/worms)
     DASHBOARD_HOST            where to read uploaded artifacts (ssh)
     DASHBOARD_MEDIA_ROOT      the dashboard's media directory
-    RESET_SERVICES            "1" to rebuild ephemeral/PI each prepare
 """
 
 from __future__ import annotations
@@ -62,9 +61,7 @@ def config(env):
         # team's uuid to them at deploy (no access token anymore).
         "scoring_host": env.get("SCORING_HOST", ""),
         "logging_host": env.get("LOGGING_HOST", ""),
-        "reset_services": env.get("RESET_SERVICES", "0") == "1",
         "apply_timeout": int(env.get("APPLY_TIMEOUT", "5400")),
-        "reset_timeout": int(env.get("RESET_TIMEOUT", "5400")),
     }
 
 

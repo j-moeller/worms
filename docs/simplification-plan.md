@@ -1,9 +1,12 @@
 # Simplification plan
 
-Status: **proposal — nothing here is executed yet.** Goal: fewer moving parts
-for the operator and less code, **without** giving up the security
-properties the platform exists for (untrusted sandbox/devbox VMs contained,
-least privilege for everything internet- or sandbox-facing).
+Status: **partly executed (2026-10-24)** — what was done, what you decided
+against and the two items that are explanations only are in
+[§5 Outcome](#5-outcome-2026-10-24); [§6](#6-regression-tests) lists the tests
+that pass before and after every step. Goal: fewer moving parts for the
+operator and less code, **without** giving up the security properties the
+platform exists for (untrusted sandbox/devbox VMs contained, least privilege
+for everything internet- or sandbox-facing).
 
 Guiding rule: **one owner per concern.**
 
@@ -89,6 +92,9 @@ two tokens/users in Proxmox (`pveum user delete orchestrator@pam`,
 `topology@pve`).
 
 ### B. One secrets directory instead of vault + env + config files (Ansible)
+
+*Superseded by your choice: one vault on the laptop, which runs OpenTofu and
+Ansible ([5.1](#51-b-one-vault-on-the-laptop)). The original proposal:*
 
 **Today.** `generate_secrets.py` writes an ansible-vault file encrypted with a
 key file stored *next to it* (protection at rest is nominal); external tokens
@@ -287,15 +293,152 @@ instead of a generator script, fixed VMs 16 → 9–16 depending on section H.
 
 ---
 
-## 5. Decisions needed before executing
+## 5. Outcome (2026-10-24)
 
-1. **Live deployment:** migrate every step in place (as planned above), or
-   is it disposable (`worms destroy-all` + rebuild) — which would make phases
-   4–5 simpler?
-2. **Wazuh / audit shipping:** keep or drop?
-3. **Private internet:** keep 7 VMs or consolidate to 2?
-4. **Scoring + logging:** keep two VMs or one?
-5. **`init_debug`** (1 700-line demo-data generator): still used for local
-   development?
-6. **Host agent for VM power and topology** (section A): OK that root on the
-   node does these, so the orchestrator VM holds no Proxmox credential?
+| Item | Decision | What happened |
+|---|---|---|
+| **A** tokens 3 → 1 | not requested | unchanged: three Proxmox tokens, now entered only through the vault (B) |
+| **B** secrets | one vault **on the laptop**, which runs OpenTofu and Ansible | done, see [5.1](#51-b-one-vault-on-the-laptop) |
+| **C** cloud-init | do it; packages via Ansible | done: one template (`cloud-config.tftpl`) rendered with `for_each`; every package moved into the role that needs it; same snippet file names (no VM is rebuilt), moved blocks in `platform/migrations.tf` |
+| Ansible speed | do it, keep the per-VM cloud-init waits | done: 20 forks, facts cached per `worms build` run (emptied after every tofu apply/destroy), SSH connections kept 10 min, apt index refreshed at most hourly. Playbooks, order and waits unchanged |
+| **D** one VM module | details first, no change | not changed; proposal in [5.3](#53-d-one-vm-module-proposal-not-changed) |
+| **E** site playbook | explain | not changed; explanation in [5.2](#52-e-what-the-ansible-proposal-meant) |
+| **F.1** orchestrator API | keep pushing the devbox reset through the orchestrator | kept; only its VM power endpoints (no caller) were removed |
+| **F.2** admin | one-time password + a CLI option to reset it | done: `init` creates the admin without a password; `worms admin reset-password` prints a one-time password once on your terminal (stdout), stores only its hash, forces a change at the first login and ends the account's sessions |
+| **F.3** migrations | squash | done: 13 files (1 384 lines) → `0001_squashed_0013_team_api_indexes` (974 lines, `replaces` keeps the live database valid) |
+| **F.4** unused models | remove, and say which | done: **`WormDeploymentPlan`** (`worm_deployment_plans`) and **`WormDeployment`** (`worm_deployments`) — only the demo-data generator wrote them; `0002_drop_worm_deployments` drops the tables; the uploads page and the staff to-do list read `RoundRun.upload` now |
+| **F.5** settings | not requested | unchanged |
+| **G** dead code | remove (incl. `init_debug`, `create_teams`, `dump_database`, `plot_network.py`, the stack Makefiles) | done, plus `setup_db_dashboard`, `vm-printer.tftpl` and the unused `vm-nginx` snippet; `process_captures` stays (`Simulate.yml` runs it) |
+| **H** fewer VMs | keep Wazuh, 7 private-internet VMs, scoring and logging apart | unchanged |
+| stack merge | keep platform / infrastructure / sandbox + devbox separately buildable | unchanged |
+
+### 5.1 B: one vault on the laptop
+
+- **One store**: `ansible/group_vars/vault.yml` (ansible-vault) on the laptop.
+  `worms secrets` shows what is set (never a value); `worms secrets set
+  <name>` is the only way a secret enters: the three Proxmox tokens.
+  Everything else is generated on the fly when missing, never rotated — the
+  DB role passwords, Django keys, CA passphrase, the orchestrator API token,
+  and now also the **WORMS SSH key** that every VM and the node accept.
+- **The laptop runs OpenTofu and Ansible** (`WORMS_SSH=root@<node>`): OpenTofu
+  gets its token in its process environment from the CLI (no `TF_VAR_*` in your
+  shell, no ssh-agent setup: the CLI starts a private one with the WORMS key);
+  Ansible reaches the VMs through the node (ProxyJump in the generated
+  inventory).
+- **The node keeps the round agent's part**: its workspace `/opt/worms` with the
+  sandbox and devbox stacks and their state (synced from your checkout by
+  `SetupRoundAgent.yml --tags agent-sync`, which `worms` runs before every node
+  step; never the vault, the CA key or the other stacks). Steps for those
+  stacks run there (`worms-node-run`).
+- **Removed**: `scripts/generate_secrets.py`, the `TF_VAR_*`/`PROXMOX_*`
+  environment intake, `~/.worms/config` secrets, the per-shell ssh-agent.
+  The CLI's database and Proxmox access come from the vault through SSH tunnels
+  via the node.
+- **Changed for the round agent**: rebuilding the ephemeral and
+  private-internet VMs is `worms build round-reset-services` on the laptop now
+  (the opt-in `round_agent_reset_services` is gone: the node no longer owns
+  those stacks).
+- **Moving the live deployment**: `docs/accounts.md` §4.5 (copy the vault, CA
+  and the controller's state to the laptop; `worms node trust` authorizes the
+  WORMS key on the node and on the existing VMs).
+
+### 5.2 E: what the Ansible proposal meant
+
+Today `worms build configure` runs twelve separate `ansible-playbook`
+processes in an order kept in Python (`CONFIGURE_PLAYBOOKS` in
+`src/worms_cli/pipeline.py`). Most of the twelve files are a few lines: "on
+these hosts, wait for cloud-init, then apply this role". The idea was to put
+those same plays, in the same order, into **one playbook** (`site.yml`) and
+tag each play with its component:
+
+```yaml
+# site.yml (sketch)
+- hosts: all:!proxmox_host:!sandbox:!sandbox_gw
+  gather_facts: false
+  tasks: [{name: wait for cloud-init, command: cloud-init status --wait}]
+- {hosts: dns_hosts, tags: [dns], roles: [setup_dns]}
+- {hosts: localhost, tags: [pki], roles: [ca_create]}
+- {hosts: tls_hosts, tags: [pki], roles: [ca_distribute]}
+# ... the other plays, unchanged
+```
+
+`worms build configure` would become `ansible-playbook site.yml` and `worms
+build dns` `ansible-playbook site.yml --tags dns`. Nothing on the VMs would
+change — same roles, same hosts, same order. What it buys: one process instead
+of twelve (inventory, vault and facts loaded once, SSH connections stay open),
+the order in one YAML file instead of Python plus twelve files, the
+cloud-init wait in one place, and the two nginx roles (`nginx_tls`,
+`nginx_tls_django`) merged into one with an option. What it costs: one long
+file, and running a part means knowing its tag. You chose the speed-ups
+without this restructuring; most of the run-time gain (facts, SSH reuse,
+forks, apt) is achieved without it. (Plan B's `password` lookup is moot: the
+vault stays, on the laptop.)
+
+### 5.3 D: one VM module (proposal, not changed)
+
+**Today** the same five resources — `proxmox_virtual_environment_vm`,
+`…_firewall_options` (DROP both ways, `ipfilter`, `macfilter`),
+`…_firewall_ipset` (one per NIC: the only source address it may use),
+`…_firewall_rules` (security groups per NIC) and `proxmox_pool_membership` —
+are written out **seven times**: the modules `infrastructure_vm`,
+`private_internet_vm`, `network_monitor_vm`, `devbox_vm`, and inline in the
+sandbox stack (sandbox VMs, sandbox-gw) and the devbox stack (SSH gateway).
+They differ only in details: the NIC layout (one to three NICs; the monitor's
+capture NIC has no address and no Proxmox firewall), an optional data disk
+(private internet), the CPU type and datastore, tags, and how the ipsets are
+keyed (`count` vs. `for_each`). The port-isolation hookscript is still
+commented out (`TODO: HOOK`) in four of these copies — a hardening fix has to
+be made in every copy.
+
+**Proposal**: one module `opentofu/modules/vm` (≈ 150 lines) with
+
+```hcl
+name, pool_id, tags, cpu = 2, cpu_type = null, ram = 2048
+disk      = { file_id, size = 5, datastore = "local-zfs" }
+data_disk = null                      # { size } -> virtio1 (private internet)
+nics = [{ bridge, cidr = null, gateway = null, firewall = true }]
+                                      # cidr = null: no address, no ipset (capture NIC)
+firewall_rules     = [{ group, iface }]
+user_data_file_id  = ...
+hookscript_file_id = null             # one place to switch port isolation on
+```
+
+and outputs `vm_id`, `macs`, `management_ip`. Every stack keeps its own
+`for_each` maps (which VMs exist, their NICs and security groups) — the stacks
+and their separate states stay exactly as they are; only the five-resource
+block moves into one module.
+
+**Migration without rebuilding a VM** (the database VM must never be
+destroyed): per stack, `moved {}` blocks from each old address to the new one
+(e.g. `module.infrastructure_vms["database"].proxmox_virtual_environment_vm.infrastructure`
+→ `module.vms["database"].proxmox_virtual_environment_vm.this`, and each
+ipset instance from its `count` index or old key to the new key), and module
+inputs that reproduce today's attributes exactly (CPU type, datastore, tags,
+NIC order). Proof before touching the live system: plan each stack against a
+state of the old layout (as done for cloud-init, `tests/test_cloud_init.py`
+and the moved-block check) — the plan must show only moves: **0 to add,
+0 to change, 0 to destroy**. Order: the ephemeral and sandbox/devbox stacks
+first (rebuildable), the persistent stack last.
+
+**Effect**: ≈ −700 lines (the four modules, 600 lines with variables, and the
+inline copies); a VM hardening change (hookscript, firewall defaults) made
+once. **Risk**: the highest of all items, because it touches every VM's
+resource address; that is why it is only described here.
+
+---
+
+## 6. Regression tests
+
+Written first and passing on the code before any change, then after every
+step (`worms test`: 379 passed, 7 skipped on 2026-10-24, with OpenTofu and its
+provider available; the skips need tcpdump and the nftables bridge family):
+
+| Test | Guards |
+|---|---|
+| `test_migrations.py` | models match the migrations; a database built with the original 13 migration files (from git, commit 6bb490a) upgrades to exactly the fresh schema and keeps its rows; the schema is unchanged apart from the removed tables |
+| `test_cloud_init.py` | the snippets as tofu plans them: every snippet a VM uses keeps its file name, hostname, key-only SSH, hardening, data disk; every VM still gets every package it had (cloud-init or Ansible) |
+| `test_ansible.py` | the configure sequence, the roles each host gets, the per-VM cloud-init waits; the speed settings |
+| `test_pipeline.py` | the tofu/Ansible steps of every `worms build` component, in order; the internet window closes on failure; facts are dropped whenever VMs may have changed |
+| `test_dashboard_pages.py`, `test_orchestrator_api.py` | the uploads and to-do pages, `manage.py init`, the devbox reset API |
+| `test_secrets.py` | `worms build secrets` yields every vault variable Ansible uses; the vault itself |
+| `test_laptop.py` | where each step runs and what it gets from the vault; the laptop inventory; the round agent's workspace sync (copies code, never secrets or the controller's state, keeps the node's state) |

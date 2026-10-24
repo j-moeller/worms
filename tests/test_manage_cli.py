@@ -77,11 +77,13 @@ def test_help_runs_without_db():
     assert proc.returncode == 0 and "worms" in proc.stdout
 
 
-def test_status_degrades_without_config():
+def test_status_degrades_without_config(tmp_path):
+    # A checkout without a vault (a developer's own checkout may have one).
     proc = subprocess.run(
         [sys.executable, str(MANAGE), "status"],
         capture_output=True, text=True,
-        env={k: v for k, v in os.environ.items() if not k.startswith("WORMS_")} | {"NO_COLOR": "1"},
+        env={k: v for k, v in os.environ.items() if not k.startswith("WORMS_")}
+        | {"NO_COLOR": "1", "WORMS_REPO_ROOT": str(tmp_path), "HOME": str(tmp_path)},
     )
     assert proc.returncode == 0
     assert "no Proxmox API configured" in proc.stdout

@@ -4,9 +4,11 @@
 The single tool for building and operating the platform. It IS the build
 pipeline (the top-level Makefile just calls `worms build` / `worms destroy`);
 it also shows live status from the one source of truth -- the database VM and
-the Proxmox API. Run it on the Proxmox node, or from your laptop with WORMS_SSH
-set (it then runs the build steps over SSH).
+the Proxmox API. Run it on your laptop with WORMS_SSH=root@<node> (OpenTofu and
+Ansible run there, with the secrets of the vault), or on the Proxmox node.
 
+    worms secrets [set <name>]        # the vault: enter the Proxmox tokens once
+    worms node trust                  # once: let the WORMS key log in to the node
     worms build                       # full idempotent end-to-end setup (= make)
     worms build <component>           # one step (see `worms build --list`)
     worms status                      # components, internet, competition, rounds
@@ -20,14 +22,17 @@ set (it then runs the build steps over SSH).
     worms destroy / destroy-all       # teardown
     worms emergency-stop              # freeze: hard-stop ALL vms (does NOT destroy)
 
-Configuration (env or ~/.worms/config): see src/worms_cli/config.py and
-docs/management.md. Run `worms <command> --help` for details.
+Configuration (env or ~/.worms/config, no secrets): src/worms_cli/config.py;
+secrets: src/worms_cli/secrets.py; docs/accounts.md §4. Run `worms <command>
+--help` for details.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -58,7 +63,8 @@ def _infra_status(config) -> list[list[str]]:
     rows: list[list[str]] = []
 
     if not infra.configured:
-        return [["infrastructure", output.status_cell("n/a", "no Proxmox API configured (WORMS_PROXMOX_*)")]]
+        reason = infra.error or "no Proxmox API configured (worms secrets set topology-token)"
+        return [["infrastructure", output.status_cell("n/a", reason)]]
 
     try:
         enabled = infra.firewall_enabled()
@@ -103,20 +109,20 @@ PVE_CONFIG_DIR = "/etc/pve"  # exists only on a Proxmox node
 
 
 def _internet_status(config) -> list[str]:
-    """The host internet flag: over WORMS_SSH, or directly when the CLI runs
-    on the Proxmox node itself (as the build steps do without WORMS_SSH)."""
+    """The node's internet flag: read directly on the node, over SSH (with the
+    WORMS key) from a laptop (WORMS_SSH)."""
     if not config.ssh:
         if not os.path.isdir(PVE_CONFIG_DIR):
             return ["internet access", output.status_cell("unknown", "not on the Proxmox node: set WORMS_SSH to probe it")]
         state = "allowed" if os.path.exists(INTERNET_FLAG) else "denied"
         return _internet_cell(state, "")
-    import subprocess
+    from worms_cli.session import SessionError, for_config
 
-    probe = subprocess.run(
-        ["ssh", config.ssh, f"test -e {INTERNET_FLAG} && echo allowed || echo denied"],
-        capture_output=True, text=True, timeout=20,
-    )  # fmt: skip
-    return _internet_cell(probe.stdout.strip(), probe.stderr)
+    try:
+        state = "allowed" if for_config(config).internet_allowed() else "denied"
+    except (SessionError, OSError, subprocess.SubprocessError) as exc:
+        return _internet_cell("unknown", str(exc))
+    return _internet_cell(state, "")
 
 
 def _internet_cell(state, stderr) -> list[str]:
@@ -310,6 +316,92 @@ def cmd_leaderboard(config, args) -> int:
 
 
 # ---------------------------------------------------------------------------
+# secrets / node
+# ---------------------------------------------------------------------------
+
+
+def cmd_secrets(config, args) -> int:
+    """`worms secrets`: what the vault holds (never a value); `worms secrets
+    set <name>`: enter one, prompted without echo or read from stdin."""
+    import getpass
+
+    from worms_cli.secrets import EXTERNAL, Vault, VaultError
+
+    vault = Vault(config.repo_root)
+    try:
+        if args.secrets_action == "set":
+            if sys.stdin.isatty():
+                if args.name == "ssh-key":
+                    output.error("pipe the private key in: worms secrets set ssh-key < key")
+                    return 2
+                value = getpass.getpass(f"{args.name} ({EXTERNAL[args.name][1]}): ")
+            else:
+                value = sys.stdin.read()
+            vault.set(args.name, value)
+            print(f"{args.name}: stored in {vault.file}")
+            return 0
+        vault.ensure()
+        rows = [[name, what, output.status_cell("ok" if state == "set" else ("warn" if "MISSING" in state else "stopped"),
+                                                state)] for name, what, state in vault.status()]  # fmt: skip
+    except (VaultError, KeyError) as exc:
+        output.error(str(exc))
+        return 1
+    print(output.table(rows, headers=["secret", "what", "state"]))
+    print(output.color(f"vault: {vault.file} (key {vault.key_file}); set one with `worms secrets set <name>`", "dim"))
+    return 0
+
+
+def cmd_node(config, args) -> int:
+    """`worms node trust`: authorize the WORMS key (vault) for root on the node,
+    with your own SSH login, and on the VMs that exist already, through the
+    node's own access to them. Run it once (and after importing a new key)."""
+    import shlex
+
+    from worms_cli.secrets import SSH_PUBLIC_KEY
+    from worms_cli.session import SessionError, for_config
+
+    if not config.ssh:
+        output.error("set WORMS_SSH=root@<node> first (~/.worms/config)")
+        return 2
+    session = for_config(config)
+    try:
+        key = session.values()[SSH_PUBLIC_KEY].strip()
+    except SessionError as exc:
+        output.error(str(exc))
+        return 1
+    add = f"grep -qxF {shlex.quote(key)} ~/.ssh/authorized_keys 2>/dev/null || echo {shlex.quote(key)} >> ~/.ssh/authorized_keys"
+    inventory = config.repo_root / "ansible" / "inventory.generated.yml"
+    ips = sorted(set(re.findall(r"ansible_host: (\d+\.\d+\.\d+\.\d+)", inventory.read_text()))) if inventory.exists() else []
+    vm = "ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
+    # The VMs the node knows of: ours, and its own (earlier) inventories.
+    script = rf"""set -u
+umask 077; mkdir -p ~/.ssh; touch ~/.ssh/authorized_keys; {add}
+echo "node: the WORMS key may log in as $(id -un)"
+old=$(sed -n 's/^REPO_ROOT=//p' /etc/worms/round-agent.env 2>/dev/null)
+known=$(cat "$old/ansible/inventory.generated.yml" /opt/worms/ansible/inventory.generated.yml 2>/dev/null \
+  | sed -n 's/^ *ansible_host: \([0-9.]*\)$/\1/p')
+for ip in $(printf '%s\n' {' '.join(ips)} $known | sort -u); do
+  [ "$ip" = 127.0.0.1 ] && continue
+  if {vm} debian@"$ip" {shlex.quote(add)} >/dev/null 2>&1; then echo "vm $ip: ok"; else echo "vm $ip: FAILED (not reachable with root's key)"; fi
+done
+"""
+    print(output.color(f"$ ssh {config.ssh} ...  (your own SSH login)", "dim"))
+    if args.dry_run:
+        print(output.color("  (dry run: not executed)", "yellow"))
+        return 0
+    if subprocess.run(["ssh", config.ssh, script]).returncode != 0:
+        output.error(f"could not add the key on {config.ssh}")
+        return 1
+    try:
+        session.check_node()
+    except SessionError as exc:
+        output.error(str(exc))
+        return 1
+    print(output.color("the WORMS key logs in to the node: ok", "green"))
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # build / destructive
 # ---------------------------------------------------------------------------
 
@@ -423,6 +515,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_reset_pw.add_argument("--username", default="admin")
     p_reset_pw.add_argument("--yes", action="store_true", help="skip confirmation")
 
+    p_secrets = sub.add_parser("secrets", help="the vault: what is set (never values); set the Proxmox tokens")
+    secrets_sub = p_secrets.add_subparsers(dest="secrets_action")
+    p_set = secrets_sub.add_parser("set", help="enter a secret (prompted, or from stdin)")
+    p_set.add_argument("name", choices=["proxmox-token", "orchestrator-token", "topology-token", "ssh-key"])
+
+    p_node = sub.add_parser("node", help="the Proxmox node")
+    node_sub = p_node.add_subparsers(dest="node_action", required=True)
+    node_sub.add_parser("trust", help="once: let the WORMS key log in to the node (and the existing VMs)")
+
     p_build = sub.add_parser("build", help="full pipeline, or one component (--list)")
     p_build.add_argument("component", nargs="?", help="component to build (default: all)")
     p_build.add_argument("--list", action="store_true", help="list components and exit")
@@ -461,6 +562,10 @@ def main(argv=None) -> int:
         return cmd_leaderboard(config, args)
     if args.command == "admin":
         return cmd_admin(config, args)
+    if args.command == "secrets":
+        return cmd_secrets(config, args)
+    if args.command == "node":
+        return cmd_node(config, args)
     if args.command == "build":
         return cmd_build(config, args)
     if args.command == "simulate":

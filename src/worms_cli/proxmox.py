@@ -14,7 +14,13 @@ class ProxmoxUnavailable(RuntimeError):
 
 class Infra:
     def __init__(self, config):
-        self._cfg = config.proxmox()
+        from worms_cli.session import SessionError
+
+        self.error = None
+        try:
+            self._cfg = config.proxmox()
+        except SessionError as exc:  # e.g. the tunnel to the node failed
+            self._cfg, self.error = None, str(exc)
         self._api = None
 
     @property
@@ -23,9 +29,7 @@ class Infra:
 
     def api(self):
         if self._cfg is None:
-            raise ProxmoxUnavailable(
-                "no Proxmox API configured (WORMS_PROXMOX_URL / _TOKEN_NAME / _TOKEN_VALUE)"
-            )
+            raise ProxmoxUnavailable(self.error or "no Proxmox API configured (worms secrets set topology-token)")
         if self._api is None:
             try:
                 from proxmoxer import ProxmoxAPI

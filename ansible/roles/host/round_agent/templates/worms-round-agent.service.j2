@@ -14,11 +14,12 @@ Type=simple
 User={{ round_agent_user }}
 WorkingDirectory={{ round_agent_repo_root }}
 EnvironmentFile={{ round_agent_env_file }}
-# ssh-agent wraps the agent (it lives exactly as long as the service): the
-# OpenTofu provider uploads snippets over SSH through an agent. A key that
-# cannot be loaded is reported, not fatal -- the jobs that need it fail with
-# the provider's error.
-ExecStart=/usr/bin/ssh-agent /bin/sh -c 'ssh-add -q {{ round_agent_ssh_key }} || echo "round agent: could not load {{ round_agent_ssh_key }} into ssh-agent; tofu cannot upload snippets" >&2; exec {{ round_agent_python }} -m round_agent'
+# worms-node-run loads the environment and wraps the agent in an ssh-agent
+# with the WORMS key (it lives exactly as long as the service): the OpenTofu
+# provider uploads snippets over SSH through an agent. A key that cannot be
+# loaded is reported, not fatal -- the jobs that need it fail with the
+# provider's error.
+ExecStart={{ round_agent_node_run }} . "exec {{ round_agent_python }} -m round_agent"
 Restart=always
 RestartSec=5
 

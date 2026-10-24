@@ -31,6 +31,12 @@ inventory.yml only declares groups (no hosts): the role groups (tls_hosts,
 django_hosts, ...) have these VM groups as children, and per-VM settings live
 in group_vars/<vm group>.yml. Re-run after every `tofu apply` (`make inventory`).
 
+How Ansible connects is written here too. On the Proxmox node (WORMS_SSH
+unset) the node is `ansible_connection: local`. On a laptop (WORMS_SSH =
+root@<node>, as the `worms` CLI sets it) the node is reached over SSH, every VM
+through it (ProxyJump), and the node's own stacks (sandbox, devbox: state in
+the round agent's workspace there) are read over SSH.
+
 Standard library only, so it runs with the system Python on the control node.
 """
 
@@ -39,14 +45,35 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 
+# Stacks whose state lives on the node (the round agent's workspace).
+NODE_STACKS = {"sandbox", "devbox"}
+NODE_RUN = "/usr/local/sbin/worms-node-run"
+
+
+def node_output(target: str, stack: str) -> dict:
+    """`tofu output -json` of a node-owned stack, over SSH ({} if unavailable)."""
+    proc = subprocess.run(
+        ["ssh", "-o", "BatchMode=yes", target, f"{NODE_RUN} opentofu/stacks/{stack} 'tofu output -json'"],
+        capture_output=True, text=True,
+    )  # fmt: skip
+    if proc.returncode != 0:
+        print(f"warning: stack {stack} on {target}: {proc.stderr.strip()[:200]}", file=sys.stderr)
+        return {}
+    return json.loads(proc.stdout or "{}")
+
+
 def tofu_output(stack_dir: Path, tofu_bin: str) -> dict:
     """Return the parsed `tofu output -json` map for a stack, or {} if the stack
     has no state yet (not applied)."""
+    controller = os.environ.get("WORMS_SSH", "")
+    if controller and stack_dir.name in NODE_STACKS:
+        return node_output(controller, stack_dir.name)
     if not (stack_dir / "terraform.tfstate").exists():
         # Not applied yet; nothing to read. Caller decides whether that is fatal.
         return {}
@@ -106,11 +133,12 @@ DOMAIN = "worms.internal"
 ANSIBLE_USER = "debian"
 
 
-def build_inventory(infrastructure: dict, stacks: dict, sandbox: dict) -> dict:
+def build_inventory(infrastructure: dict, stacks: dict, sandbox: dict, controller: str = "") -> dict:
     """Assemble the generated-inventory structure from the stack outputs.
 
     `stacks` maps a VM stack name to its `ansible_hosts` output ({} if the
-    stack is not applied)."""
+    stack is not applied). `controller` is the node's SSH target when Ansible
+    runs elsewhere (a laptop), empty on the node itself."""
     proxmox = dict(infrastructure.get("proxmox", {}))
     # Proxmox API port is numeric in HCL but arrives as int; keep it an int.
     if "api_port" in proxmox:
@@ -150,6 +178,8 @@ def build_inventory(infrastructure: dict, stacks: dict, sandbox: dict) -> dict:
                 "proxmox_vm_id": int(vm["vm_id"]),
                 "opentofu_stack": stack,
             }
+            if controller:
+                host["ansible_ssh_common_args"] = f"-o ProxyJump={controller}"
             if key in sandbox_addresses:
                 host["sandbox_addresses"] = sandbox_addresses[key]
             # Optional per-VM facts a stack exports for Ansible (e.g. the
@@ -157,6 +187,15 @@ def build_inventory(infrastructure: dict, stacks: dict, sandbox: dict) -> dict:
             for var, value in sorted((vm.get("host_vars") or {}).items()):
                 host.setdefault(var, value)
             children.setdefault(group, {"hosts": {}})["hosts"][hostname] = host
+
+    # The node itself: local on the node; from a laptop over SSH as root, with
+    # its host key checked (known_hosts), unlike the frequently rebuilt VMs.
+    if controller:
+        user, _, host = controller.rpartition("@")
+        node = {"ansible_host": host, "ansible_user": user or "root", "ansible_host_key_checking": True}
+    else:
+        node = {"ansible_host": "127.0.0.1", "ansible_connection": "local"}
+    children["proxmox_host"] = {"hosts": {"proxmox.local": node}}
 
     return {"all": {"vars": group_vars, "children": children}}
 
@@ -363,7 +402,7 @@ def main() -> None:
     if args.require_sandbox and not sandbox.get("hosts"):
         sys.exit("error: --require-sandbox set but the sandbox stack has no hosts.")
 
-    inventory = build_inventory(infrastructure, stacks, sandbox)
+    inventory = build_inventory(infrastructure, stacks, sandbox, os.environ.get("WORMS_SSH", ""))
     inventory["all"]["vars"]["opentofu_stacks"] = status
     inventory["all"]["vars"]["inventory_generated_at"] = datetime.now().isoformat(timespec="seconds")
 

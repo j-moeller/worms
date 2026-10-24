@@ -89,14 +89,7 @@ def _release(ex, cfg, vm_names):
 
 def prepare(ex, cfg, params):
     """Build the sandbox for this run: generate the architecture from the
-    seed, apply it, refresh the inventory, and report the topology and VMs.
-
-    Optionally (cfg.reset_services) the ephemeral and private-internet VMs are
-    rebuilt first for a clean slate; that needs an internet window and so must
-    happen before the sandbox exists (see docs/rounds.md)."""
-    if cfg.get("reset_services"):
-        ex.worms("round-reset-services", timeout=cfg.get("reset_timeout", 5400))
-
+    seed, apply it, refresh the inventory, and report the topology and VMs."""
     with tempfile.TemporaryDirectory() as tmp:
         network_file = Path(tmp) / "network.json"
         hcl = ex.generate_sandbox(params["seed"], params["sandbox_params"], network_file)

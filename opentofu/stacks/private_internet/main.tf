@@ -48,12 +48,14 @@ locals {
 locals {
   sg = data.terraform_remote_state.firewall.outputs.security_groups
 
-  # net0: serve the services bridge, and use apt-cache/DNS there (apt_client).
+  # net0: serve the services bridge (ingress), and reach ONLY the shared
+  #       apt-cache for the VM's own package installs (apt_client, by IP) --
+  #       a dead end, no other egress to the services bridge.
   # net1: SSH from the host; internet egress while internet access is allowed (Internet.yml);
   #       syslog to wazuh (routed by the host).
   firewall_rules = [
     { group = local.sg.private_internet, iface = "net0" },
-    { group = local.sg.services_client, iface = "net0" },
+    { group = local.sg.pi_apt_client, iface = "net0" },
     { group = local.sg.ssh, iface = "net1" },
     { group = local.sg.provisioning, iface = "net1" },
     { group = local.sg.log_client, iface = "net1" },

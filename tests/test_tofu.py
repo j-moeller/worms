@@ -19,7 +19,7 @@ import yaml
 from conftest import FIXTURES, REPO, require
 
 OPENTOFU = REPO / "opentofu"
-STACKS = ["platform", "firewall", "infrastructure/persistent", "infrastructure/ephemeral", "private_internet", "sandbox"]
+STACKS = ["platform", "firewall", "infrastructure/persistent", "infrastructure/ephemeral", "private_internet", "sandbox", "devbox"]
 
 
 @pytest.fixture(scope="session")

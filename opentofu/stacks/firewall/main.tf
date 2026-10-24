@@ -44,6 +44,17 @@ resource "proxmox_node_firewall" "worms_pve" {
 # same zone boundaries a second time for routed traffic.
 # =============================================================================
 
+locals {
+  # The actual service hosts on the services bridge (what the sandbox/devbox
+  # gateways legitimately reach): DNS, scoring, logging and the private-internet
+  # caches. Used to scope `services_client` to these hosts instead of the whole
+  # services subnet (which also contains the gateways themselves).
+  services_hosts = concat(
+    [local.services_ips.dns, local.services_ips.scoring, local.services_ips.logging],
+    [for name, ips in local.private_internet_ips : ips.network],
+  )
+}
+
 # SSH is only ever initiated by the Proxmox host (Ansible), from
 # its address on the management bridge. Attach on the management NIC only.
 resource "proxmox_virtual_environment_cluster_firewall_security_group" "ssh" {
@@ -236,18 +247,25 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "private_
   }
 }
 
-# Clients on the services bridge (private-internet VMs using apt-cache/DNS,
-# sandbox-gw on its services leg).
+# The sandbox/devbox gateways' egress to the services. They SNAT the (malicious)
+# VMs to their own services-bridge address, so this is attached to the GATEWAYS
+# only (sandbox-gw, devbox-gw) -- never to a service VM. Scoped to the actual
+# service hosts (DNS, scoring, logging, the private-internet caches), not the
+# whole services subnet: the gateways have no business reaching each other
+# (the host nftables also drops gateway<->gateway), and tightening the
+# destination keeps this from being an open "anything on the services bridge"
+# grant.
 resource "proxmox_virtual_environment_cluster_firewall_security_group" "services_client" {
-  name = "services_client"
+  name    = "services_client"
+  comment = "Sandbox/devbox gateways -> the service hosts only"
 
   rule {
     type    = "out"
     action  = "ACCEPT"
     proto   = "tcp"
     dport   = local.private_internet_ports.tcp
-    dest    = local.networks.services
-    comment = "-> services bridge (TCP)"
+    dest    = join(",", local.services_hosts)
+    comment = "-> service hosts (TCP)"
   }
 
   rule {
@@ -255,8 +273,29 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "services
     action  = "ACCEPT"
     proto   = "udp"
     dport   = local.private_internet_ports.udp
-    dest    = local.networks.services
-    comment = "-> services bridge (UDP)"
+    dest    = join(",", local.services_hosts)
+    comment = "-> service hosts (UDP)"
+  }
+}
+
+# Private-internet VMs are a dead end: they SERVE the services bridge (ingress,
+# `private_internet` group) and otherwise initiate nothing -- EXCEPT their own
+# package installs, which the apt_client role routes through the shared
+# apt-cache by IP. So their only egress is to apt-cache:3142; nothing else on
+# the services bridge, no scoring/logging, no other PI VM's services. This is
+# what makes "PI is a dead end, no egress" true (it previously had the broad
+# services_client, reaching the whole services subnet on every service port).
+resource "proxmox_virtual_environment_cluster_firewall_security_group" "pi_apt_client" {
+  name    = "pi_apt_client"
+  comment = "Private-internet VM -> apt-cache only (own package installs)"
+
+  rule {
+    type    = "out"
+    action  = "ACCEPT"
+    proto   = "tcp"
+    dport   = "3142"
+    dest    = local.private_internet_ips.apt_cache.network
+    comment = "-> apt-cache:3142"
   }
 }
 

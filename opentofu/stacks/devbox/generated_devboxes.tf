@@ -21,7 +21,7 @@ locals {
       segments         = ["t1-ab", "t1-bc"]
       segment_cidrs    = { "t1-ab" = "10.128.0.1/24", "t1-bc" = "10.128.1.1/24" }
       services_cidr    = "10.2.0.32/24" # the team's scoring/logging attribution identity
-      maintenance_cidr = "10.6.0.1/16"
+      maintenance_cidr = "10.6.0.2/16"
     }
   }
 

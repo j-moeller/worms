@@ -11,7 +11,8 @@ ranges in opentofu/shared/shared-variables.tf:
     devbox networks   10.128.0.0/10   team i -> 10.128.(2i).0/24 (A-B link),
                                                10.128.(2i+1).0/24 (B-C link)
     devbox SSH fabric 10.7.0.0/16      team i -> 10.7.i.{11,12,13} (A,B,C)
-    devbox maint.     10.6.0.0/16      team i -> 10.6.i.{1,11,12,13} (gw,A,B,C)
+    devbox maint.     10.6.0.0/16      team i -> 10.6.i.{2,11,12,13} (gw,A,B,C)
+                                     (10.6.0.1 is the host's address there)
     services block    10.2.0.32/27     team i -> 10.2.0.(32+i)  (devbox-gw SNAT)
 
 So team 0..31 are supported (the services block holds 32). Each team gets two
@@ -45,7 +46,9 @@ def team_addressing(slug: str, index: int) -> dict:
     bc = ipaddress.ip_network(f"10.128.{2 * index + 1}.0/24")
     if not (ab.subnet_of(DEVBOX_NETWORK) and bc.subnet_of(DEVBOX_NETWORK)):
         raise ValueError(f"team {slug}: networks outside the devbox range")
-    services_ip = str(list(SERVICES_BLOCK.hosts())[index])
+    # Every address of the block (10.2.0.32 + i): it is a range inside the
+    # services /24, not a subnet of its own, so .32 and .63 are usable too.
+    services_ip = str(SERVICES_BLOCK[index])
     return {
         "slug": slug,
         "ab_name": f"vmbr9{2 * index:03d}",
@@ -64,7 +67,7 @@ def team_addressing(slug: str, index: int) -> dict:
         "ssh_a": f"10.7.{index}.11/{SSH_FABRIC_PREFIX}",
         "ssh_b": f"10.7.{index}.12/{SSH_FABRIC_PREFIX}",
         "ssh_c": f"10.7.{index}.13/{SSH_FABRIC_PREFIX}",
-        "maint_gw": f"10.6.{index}.1/{MAINT_PREFIX}",
+        "maint_gw": f"10.6.{index}.2/{MAINT_PREFIX}",
         "maint_a": f"10.6.{index}.11/{MAINT_PREFIX}",
         "maint_b": f"10.6.{index}.12/{MAINT_PREFIX}",
         "maint_c": f"10.6.{index}.13/{MAINT_PREFIX}",

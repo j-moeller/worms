@@ -29,6 +29,26 @@ def test_addressing_is_in_range_and_disjoint():
     assert a0["ssh_a"] != a1["ssh_a"]
 
 
+def test_no_devbox_address_is_a_host_address():
+    """The host's address on every devbox bridge (shared-variables host_ips:
+    mgmt_devbox 10.6.0.1, devbox_ssh 10.7.0.1) and the SSH gateway (10.7.0.2)
+    must never be handed to an (untrusted) devbox VM or gateway."""
+    reserved = {"10.6.0.1", "10.7.0.1", "10.7.0.2"}
+    for index in range(32):
+        a = gen.team_addressing(f"t{index}", index)
+        for key, value in a.items():
+            if key.startswith(("maint_", "ssh_")):
+                assert value.split("/")[0] not in reserved, (index, key, value)
+
+
+def test_services_source_follows_the_documented_block():
+    """team i -> 10.2.0.(32+i) for every supported index (0..31), the same
+    rule provision_devboxes uses for Devbox.services_source_ip."""
+    for index in range(32):
+        a = gen.team_addressing(f"t{index}", index)
+        assert a["services_cidr"] == f"10.2.0.{32 + index}/24"
+
+
 def test_deterministic():
     assert gen.team_addressing("x", 3) == gen.team_addressing("x", 3)
 

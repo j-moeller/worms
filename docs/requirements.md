@@ -37,10 +37,13 @@ a live Proxmox host (the standing caveat — no node is available here).
 - **Prod view**: ✅ leaderboard, round scoring/logging, zip upload, round
   countdown/status (`dashboard/views/leaderboard.py`, `scoring.py`, `logging.py`,
   `uploads.py`, the status presentation in `views/util.py`).
-- **Admin**: ✅ leaderboard + infrastructure/sandbox topology (VMs as nodes,
-  their firewall rules, status, connections) — the TOPOLOGY view, staff-only
-  (`dashboard/views/topology.py`, `dashboard/topology.py`, `docs/visualization.md`),
-  fed by `manage.py collect_topology` (read-only Proxmox token).
+- **Admin**: ✅ leaderboard + infrastructure/sandbox topology (VMs as nodes
+  with their status, firewall groups/rules/bridges on hover, the operational
+  connections) and a round/team replay of every run — the TOPOLOGY view,
+  staff-only (`dashboard/infra_view.py`, `orchestrator/rounds/timeline.py`,
+  `templates/topology/`, `docs/visualization.md`), fed by
+  `manage.py collect_topology` (read-only Proxmox token). Covered in a real
+  browser by `tests/test_topology_page.py`.
 
 ## Sandbox and devbox (malicious, isolated, hardened)
 

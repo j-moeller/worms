@@ -116,8 +116,9 @@ FAIL ("sandbox deployed"); the other checks still run.
 
 ## Not covered (yet)
 
-- Dashboard behaviour (Django views, the topology collector) and the animated
-  timeline player.
+- Most dashboard views (the TOPOLOGY endpoints and page are covered:
+  `test_rounds.py`, `test_topology_page.py`) and the topology collector
+  against a real Proxmox API.
 - A full live round driven by the conductor + agent on a real Proxmox host
   (the simulation checks capture scoring with an injected finished run, not a
   sandbox the conductor built; the lifecycle itself is covered offline in
@@ -134,7 +135,9 @@ Two more files, both offline (`worms test`), covering the round orchestration
 
 | File | What |
 |---|---|
-| `test_rounds.py` | The game plan generator (deterministic; every secret released once; a delayed secret always follows a stop; `min_alive` respected). The conductor driven end to end against the test database with a **fake Proxmox** (records stop/start) and a **fake agent** (completes host jobs as the real one would): a full run reaches FINISHED with every stop and secret done; a released secret submitted by the right team during the run becomes a capture (once); the wrong team's token does not; a failed prepare fails the run without a teardown; a team with no upload is SKIPPED; the timeline export has the nodes, ordered events and captures. This caught a real conductor bug (a `release_secret` step left in REQUESTED was never revisited). |
+| `test_rounds.py` | The game plan generator (deterministic; every secret released once; a delayed secret always follows a stop; `min_alive` respected). The conductor driven end to end against the test database with a **fake Proxmox** (records stop/start) and a **fake agent** (completes host jobs as the real one would): a full run reaches FINISHED with every stop and secret done; a released secret submitted by the right team during the run becomes a capture (once); the wrong team's token does not; a failed prepare fails the run without a teardown; a team with no upload is SKIPPED; the timeline export has the nodes, ordered events, captures and each VM's power state over time; flows are mapped to scoring / the private internet, flag submissions and logs become events attributed to the sending VM; the TOPOLOGY endpoints are staff only. This caught a real conductor bug (a `release_secret` step left in REQUESTED was never revisited). |
+| `test_infra_view.py` | The TOPOLOGY view's infrastructure model on a realistic Proxmox snapshot: roles/status, no management network drawn, database ingress read from its firewall, devbox links never crossing teams, verified service edges (`docs/visualization.md`). |
+| `test_topology_page.py` | The TOPOLOGY page and round player in Chromium (Node Playwright) with fixture data: layout, hover card, tabs, playback, event badges and dots (click pauses), VM state over time, an XSS payload in a log shown as text. Skipped without Node Playwright. |
 | `test_round_agent.py` | The agent's parameter validation (rejects path traversal, bad hashes, out-of-range numbers); each handler's command sequence with a **fake executor** (no Proxmox/SSH): prepare builds and reports the sandbox, check flags a down VM, release writes the flag over stdin and returns its hash, deploy fetches + verifies + copies the worm and arms the fuse (and rejects a tampered artifact), teardown destroys. The claim/run/result loop against the test database, including that a job is claimed once even with two workers (FOR UPDATE SKIP LOCKED). |
 
 The conductor and agent are exercised against a real PostgreSQL with the real

@@ -97,17 +97,26 @@ Details: [monitoring.md](monitoring.md), [testing.md](testing.md).
 
 ## Infrastructure visualization (dashboard topology view)
 
-Extended the topology view to show the network security zones (shaded,
-labelled bands derived dynamically from the live bridge comments), the Linux
-bridges and firewalls, with the firewall rules shown on hover (VM / bridge /
-zone / flow). Built so the planned round/team overlays can layer on top without
-reshaping the data. Details: `docs/visualization.md`. Covered by
-`tests/test_topology.py`.
+Rewritten from scratch: a fixed layout (Proxmox host / orchestrator /
+dashboard, database, scoring / logging, devboxes / sandbox / private
+internet), VMs with their Proxmox status, only operational connections
+(database ingress read from its firewall; sandbox/devbox → services verified
+against the firewall), hover cards with bridges, groups and rules, and a
+round/team player that replays a run (dots for connections, icons for events,
+click to pause and inspect, a seekable timeline). Details:
+`docs/visualization.md`. Covered by `tests/test_infra_view.py`,
+`tests/test_rounds.py` and, in a real browser, `tests/test_topology_page.py`.
 
-Bug found and fixed along the way: `.topo-empty` set `display:flex`, which
-overrides the `hidden` attribute, so that overlay stayed on top of the canvas
-(`inset:0`) and swallowed every hover and click over the graph. Fixed with
-`.topo-empty[hidden]{display:none}`.
+Found while building it (devbox addressing, `scripts/generate_devbox.py`):
+
+- team 0's devbox gateway was given `10.6.0.1/16` on the devbox maintenance
+  bridge — the **Proxmox host's own address** there: an address conflict, and
+  an untrusted gateway configured with the host's address. Gateways now use
+  `10.6.i.2`; a test asserts no devbox address is a host / SSH-gateway address.
+- the per-team SNAT source was taken from the `/27`'s *usable hosts*, skipping
+  `.32`: team *i* got `10.2.0.(33+i)` while `provision_devboxes` records
+  `10.2.0.(32+i)` (the documented rule), and teams 30/31 crashed. It is now
+  `10.2.0.(32+i)` for every index.
 
 ## Early fail when a VM fails to set up
 

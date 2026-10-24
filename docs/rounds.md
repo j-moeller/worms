@@ -146,30 +146,33 @@ same way. It runs independently of the conductor (the conductor no longer
 processes attempts), so captures appear within a second or two of a
 submission.
 
-## Timeline (the animated view's data)
+## Timeline (the round player's data)
 
 `GET /rounds/<uuid>/timeline/` (staff) returns, from
-`orchestrator/rounds/timeline.py`, everything the animated view replays on a
-single clock (seconds from the worm's start):
+`orchestrator/rounds/timeline.py`, everything the TOPOLOGY view's round player
+replays on a single clock (seconds from the worm's start):
 
-- `nodes` (sandbox VMs, which is the start VM, which are captured),
-  `networks`, `edges` — the architecture to draw;
+- `nodes` (sandbox VMs, which is the start VM, when each was captured),
+  `networks`, `edges` — the sandbox to draw; `vm_status` — each VM's power
+  state over time;
 - `events` — state changes, VMs stopped/started, secrets released, worm
-  deployed/started, captures;
-- `flows` — connections from the monitor (`network_flows`) between sandbox
-  VMs in the run's window: the dots to move between nodes, with transport,
-  detected protocol and size;
+  deployed/started, captures, plus the team's flag submissions (on scoring)
+  and logs (on logging), each attributed to the VM whose connection to that
+  server was open at the time (inferred: the servers only see the gateway);
+- `flows` — every connection from the monitor (`network_flows`) with an end
+  in the run, the far end mapped to scoring / logging / DNS / a private
+  internet VM through the live Proxmox snapshot: the dots;
 - `captures` — when each VM was captured;
 - `architecture` — the full generator graph saved at prepare time (every
   layer: internet, edge/core/distribution/access switches, networks and VMs,
-  with all edges): the backdrop to draw behind the sandbox VMs.
+  with all edges).
 
 The run also stores `sandbox_definition`, the generated OpenTofu
 configuration for the sandbox (the whole stack definition for this run), kept
 for reference and reproducibility; it is not part of the timeline JSON.
 
-The player itself (drawing the graph, moving the dots, the scrubber) is
-front-end work still to come; `/rounds/` lists the runs and links the JSON.
+The player is the TOPOLOGY page (pick the round, then the team;
+`docs/visualization.md`); `/rounds/` lists the runs with a "play" link.
 
 ## Operating it
 
@@ -210,7 +213,6 @@ themselves are covered offline in `tests/test_rounds.py` and
 
 ## What is not done here
 
-- **The animation front-end** (the player). The data contract above is ready.
 - **Sandbox guest config beyond the CA.** `prepare` installs the internal CA
   into the sandbox guests (SetupSandbox.yml), so a worm reaches scoring/logging
   over verified HTTPS; anything else the guests need (the worm start assumes

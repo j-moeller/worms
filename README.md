@@ -362,22 +362,25 @@ round's traffic without any per-round step.
 
 # Topology view (dashboard → TOPOLOGY, staff only)
 
-Shows the whole infrastructure and the sandboxes: the network security zones
-(shaded, labelled bands), the Linux bridges, every VM and NIC, and the
-connections the Proxmox firewall actually permits (security groups expanded,
-first-match evaluation, egress of the source AND ingress of the target), with
-toggles for zones, bridges, pools, services/ports and security groups. Hovering
-a VM, bridge or zone shows its firewall rules (e.g. a VM's ingress on tcp/5432);
-clicking opens the full breakdown. Zones are derived from the live bridge
-comments, so the view always matches what is configured. It also states
-explicitly who can reach the Proxmox API. Details and the plan for the later
-round/team overlays: `docs/visualization.md`.
+Shows the infrastructure in a fixed layout (Proxmox host, orchestrator and
+dashboard on top, the database in the middle, scoring and logging below it,
+then the devboxes, the sandbox and the private internet), every VM with its
+Proxmox status, and only the operational connections: the database's ingress
+as its firewall allows it, sandbox/devbox → scoring, logging and the private
+internet (verified against the firewall), the sandbox networks and the devbox
+A–B/B–C links. Hovering a VM shows its bridges, security groups and rules.
+
+Tabs select a round and then a team to **replay that run** like a video:
+connections as dots along the edges, events (worm start, secrets, VMs stopped,
+captures, flag submissions, logs) as icons on the VMs — click one to pause and
+see the details — and a seekable timeline. Details: `docs/visualization.md`.
 
 Data flow: `orchestrator` runs `manage.py collect_topology` every 2 minutes
 (systemd timer `orchestrator-collect-topology.timer`), reads Proxmox with a
 read-only token (GET only, config fields whitelisted, no cloud-init secrets),
 and upserts one row in `topology_snapshots`. The dashboard analyses that row
-(`dashboard/topology.py`) and serves it at `/topology/data/`.
+(`dashboard/infra_view.py`) and serves it at `/topology/data/`; a run's replay
+comes from `/rounds/<uuid>/timeline/` (`orchestrator/rounds/timeline.py`).
 
 Credentials (the user/token are assumed to exist, role `PVEAuditor` on `/`
 for the user and, with privilege separation, for the token):

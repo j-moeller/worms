@@ -448,6 +448,22 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "devbox_a
   }
 }
 
+# Devbox VM, SSH-fabric NIC (vmbr7): accept SSH only from the trusted gateway.
+# Teams never reach a devbox VM directly; they go through the gateway, which
+# ProxyJumps to this address (docs/devbox.md).
+resource "proxmox_virtual_environment_cluster_firewall_security_group" "devbox_ssh_target" {
+  name = "devbox_ssh_target"
+
+  rule {
+    type    = "in"
+    action  = "ACCEPT"
+    proto   = "tcp"
+    dport   = "22"
+    source  = local.ssh_gateway_ips.devbox_ssh
+    comment = "SSH from the devbox SSH gateway only"
+  }
+}
+
 # Trusted devbox SSH gateway: teams connect (host DNAT, public) and it jumps
 # them into their own devbox VMs over the devbox SSH fabric (vmbr7). Hardened
 # infrastructure, not part of the untrusted devbox.

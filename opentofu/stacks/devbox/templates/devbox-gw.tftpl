@@ -1,0 +1,73 @@
+#cloud-config
+# Per-team devbox gateway (docs/devbox.md): routes the team's devbox VMs out to
+# the services bridge (scoring/logging/private-internet) and SNATs them to this
+# gateway's single services address, which the scoring/logging servers map to
+# the team. Assumed compromised; the authoritative limits are the Proxmox
+# firewall on its NICs (host side). Unlike a plain router it does NOT bridge the
+# two devbox segments (A-B and B-C), so VM B is the only pivot between them.
+
+hostname: ${hostname}
+
+ssh_authorized_keys:
+%{ for key in ssh_public_keys ~}
+  - ${key}
+%{ endfor ~}
+
+write_files:
+  - path: /etc/sysctl.d/90-devbox-gw.conf
+    content: |
+      net.ipv4.ip_forward = 1
+      net.ipv6.conf.all.disable_ipv6 = 1
+      net.ipv4.conf.all.rp_filter = 1
+      net.ipv4.conf.default.rp_filter = 1
+
+  - path: /etc/nftables.conf
+    permissions: "0644"
+    content: |
+      #!/usr/sbin/nft -f
+      flush ruleset
+
+      define SERVICES = ${services_network}
+      define MGMT_HOST = ${mgmt_host_ip}
+%{ for cidr in devbox_segments ~}
+      # devbox segment: ${cidr}
+%{ endfor ~}
+
+      table inet devbox_gw {
+        chain input {
+          type filter hook input priority filter; policy drop;
+          iif lo accept
+          ct state established,related accept
+          ip saddr $MGMT_HOST tcp dport 22 accept
+          icmp type echo-request accept
+        }
+
+        chain forward {
+          type filter hook forward priority filter; policy drop;
+          ct state invalid drop
+          ct state established,related accept
+          # Egress to the services bridge only, on the allowed ports. There is
+          # deliberately NO rule routing one devbox segment to another, so the
+          # gateway never bridges A-B and B-C.
+%{ for cidr in devbox_segments ~}
+          ip saddr ${cidr} ip daddr $SERVICES tcp dport { ${services_tcp_ports} } accept
+          ip saddr ${cidr} ip daddr $SERVICES udp dport { ${services_udp_ports} } accept
+%{ endfor ~}
+        }
+
+        chain output {
+          type filter hook output priority filter; policy accept;
+        }
+      }
+
+      table ip devbox_gw_nat {
+        chain postrouting {
+          type nat hook postrouting priority srcnat;
+          ip daddr $SERVICES masquerade
+        }
+      }
+
+runcmd:
+  - sysctl --system
+  - systemctl enable --now nftables
+  - nft -f /etc/nftables.conf

@@ -1,0 +1,13 @@
+#cloud-config
+# Devbox VM (docs/devbox.md): a team-personalised, untrusted clone of a sandbox
+# VM. Assumed rooted. The operator key (Ansible, from the host on vmbr6) is
+# added here; the team's own keys are installed by Ansible (role devbox) so a
+# reset/rebuild can refresh them from the database.
+
+ssh_authorized_keys:
+%{ for key in ssh_public_keys ~}
+  - ${key}
+%{ endfor ~}
+
+runcmd:
+  - echo "done" > /tmp/cloud-config.done

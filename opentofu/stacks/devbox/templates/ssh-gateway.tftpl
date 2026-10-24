@@ -1,0 +1,45 @@
+#cloud-config
+# Trusted devbox SSH gateway (docs/devbox.md). Teams reach it (host DNAT) and
+# jump through it into their OWN devbox VMs on the devbox SSH fabric (vmbr7,
+# port-isolated). This is hardened infrastructure, NOT part of the untrusted
+# devbox: it only forwards the SSH tty, nothing else.
+#
+# The real restriction is per key: Ansible (role ssh_gateway) assembles
+# authorized_keys from the database with `restrict,permitopen="<the team's own
+# devbox VMs>:22"` options, so a key can only ProxyJump to that team's VMs and
+# agent/port/X11/tty forwarding is off. The sshd config below is defense in
+# depth and the global switch for those features.
+
+hostname: ${hostname}
+
+ssh_authorized_keys:
+%{ for key in ssh_public_keys ~}
+  - ${key}
+%{ endfor ~}
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/10-devbox-gateway.conf
+    permissions: "0644"
+    content: |
+      # Locked-down gateway: only the SSH tty / ProxyJump is allowed out.
+      AllowAgentForwarding no
+      AllowTcpForwarding local
+      AllowStreamLocalForwarding no
+      GatewayPorts no
+      X11Forwarding no
+      PermitTunnel no
+      PermitListen none
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+      MaxSessions 10
+      MaxStartups 10:30:60
+      # Teams log in as this single unprivileged account; their key options
+      # (permitopen, restrict) are what actually bound them.
+      AllowUsers ${gateway_user}
+
+runcmd:
+  - id -u ${gateway_user} >/dev/null 2>&1 || useradd -m -s /bin/sh ${gateway_user}
+  - systemctl restart ssh || systemctl restart sshd

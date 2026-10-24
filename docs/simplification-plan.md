@@ -322,16 +322,16 @@ instead of a generator script, fixed VMs 16 → 9–16 depending on section H.
   and now also the **WORMS SSH key** that every VM and the node accept.
 - **The laptop runs OpenTofu and Ansible** (`WORMS_SSH=root@<node>`): OpenTofu
   gets its token in its process environment from the CLI (no `TF_VAR_*` in your
-  shell, no ssh-agent setup: the CLI starts a private one with the WORMS key);
-  Ansible reaches the VMs through the node (ProxyJump in the generated
-  inventory).
+  shell) and logs in to the node with your own ssh-agent, as before; Ansible
+  reaches the VMs through the node (ProxyJump in the generated inventory) with
+  the WORMS key from a private agent of the CLI.
 - **The node keeps the round agent's part**: its workspace `/opt/worms` with the
   sandbox and devbox stacks and their state (synced from your checkout by
   `SetupRoundAgent.yml --tags agent-sync`, which `worms` runs before every node
   step; never the vault, the CA key or the other stacks). Steps for those
   stacks run there (`worms-node-run`).
 - **Removed**: `scripts/generate_secrets.py`, the `TF_VAR_*`/`PROXMOX_*`
-  environment intake, `~/.worms/config` secrets, the per-shell ssh-agent.
+  environment intake, `~/.worms/config` secrets.
   The CLI's database and Proxmox access come from the vault through SSH tunnels
   via the node.
 - **Changed for the round agent**: rebuilding the ephemeral and
@@ -340,7 +340,7 @@ instead of a generator script, fixed VMs 16 → 9–16 depending on section H.
   those stacks).
 - **Moving the live deployment**: `docs/accounts.md` §4.5 (copy the vault, CA
   and the controller's state to the laptop; `worms node trust` authorizes the
-  WORMS key on the node and on the existing VMs).
+  WORMS key on the existing VMs).
 
 ### 5.2 E: what the Ansible proposal meant
 

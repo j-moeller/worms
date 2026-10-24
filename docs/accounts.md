@@ -28,7 +28,7 @@ Three API tokens, three different jobs — do not reuse one for another.
 
 | Token | Minimum privilege | Scope | Used by | Supplied as |
 |---|---|---|---|---|
-| **provisioning token**, e.g. `root@pam!worms` | root-equivalent: `VM.Allocate`, `VM.Config.*`, `VM.PowerMgmt`, `VM.Audit`, `Datastore.Allocate`+`AllocateSpace`, `Sys.Modify` (bridges/SDN), `Pool.Allocate`, `SDN.*`, firewall rights — in practice a **`root@pam`** token without privilege separation, plus SSH as root with the WORMS key (the OpenTofu provider uploads snippets/the hookscript over SSH; `file_mode` requires `root@pam`) | `/` (whole node) | OpenTofu: `worms build` on the controller **and** the round agent on the node (sandbox/devbox stacks) | `worms secrets set proxmox-token` = `root@pam!worms=<secret>` (full form) → vault `vault_tofu_proxmox_api_token` |
+| **provisioning token**, e.g. `root@pam!worms` | root-equivalent: `VM.Allocate`, `VM.Config.*`, `VM.PowerMgmt`, `VM.Audit`, `Datastore.Allocate`+`AllocateSpace`, `Sys.Modify` (bridges/SDN), `Pool.Allocate`, `SDN.*`, firewall rights — in practice a **`root@pam`** token without privilege separation, plus SSH as root through an ssh-agent — yours on the laptop, the WORMS key for the round agent (the OpenTofu provider uploads snippets/the hookscript over SSH; `file_mode` requires `root@pam`) | `/` (whole node) | OpenTofu: `worms build` on the controller **and** the round agent on the node (sandbox/devbox stacks) | `worms secrets set proxmox-token` = `root@pam!worms=<secret>` (full form) → vault `vault_tofu_proxmox_api_token` |
 | **orchestrator power token** `orchestrator@pam!orchestrator-prov` | `VM.PowerMgmt` + `VM.Audit` (role `WormsSandboxPower`) — nothing else | `/pool/sandbox` | orchestrator (game plan) | `worms secrets set orchestrator-token` = the **secret only** → vault `vault_proxmox_api_token_value` |
 | **read-only topology token** `topology@pve!readonly` | `PVEAuditor` (read-only; on the user *and* the token, privilege-separated) | `/` | `collect_topology` (admin topology view); also enough for `worms status` | `worms secrets set topology-token` = the **secret only** → vault `vault_proxmox_readonly_api_token_value` |
 
@@ -91,7 +91,7 @@ VM's `/32`** (`pg_hba`, `roles/database/setup_db_base`). Grants in
 | Credential | Privilege / purpose | Where |
 |---|---|---|
 | **the vault** (`ansible/.vault_pass` + `group_vars/vault.yml`) | every secret: the Proxmox tokens, DB passwords, Django `SECRET_KEY`s, CA passphrase, API tokens, the WORMS SSH key | `worms secrets` (§4.1); on the controller, git-ignored |
-| **WORMS SSH key** | the one key authorised on every VM and for root on the node; OpenTofu, Ansible, the CLI and the round agent connect with it | generated into the vault (§4.1); on VMs via cloud-init; on the node via `worms node trust` / role `round_agent` (`/etc/worms/ssh/worms`) |
+| **WORMS SSH key** | the one key authorised on every VM (and for root on the node, for the round agent's OpenTofu); Ansible and the round agent log in to the VMs with it | generated into the vault (§4.1); on VMs via cloud-init; on the node via role `round_agent` (`/etc/worms/ssh/worms`); existing VMs: `worms node trust` |
 | **internal CA** (`pki_ca_*`, passphrase `vault_pki_ca_passphrase`) | signs the TLS certs the VMs trust; the private key stays on the controller | `roles/pki/ca_create` |
 | **orchestrator API token** (`vault_orchestrator_dashboard_token`) | bearer token for dashboard→orchestrator (devbox reset) | vault; delivered to both VMs' `0600` env files |
 
@@ -235,16 +235,22 @@ reaches the VMs through the node (ProxyJump). `worms` also works on the node
 itself (`WORMS_SSH` empty), which is how the round agent runs its steps.
 
 **What you set: one setting and three secrets, once.** No environment
-variables: no `TF_VAR_*`, no `PROXMOX_*`, no ssh-agent.
+variables: no `TF_VAR_*`, no `PROXMOX_*`. SSH to the node is your own, as for
+`ssh root@<node>`: your ssh-agent with a key root on the node accepts (OpenTofu's
+Proxmox provider logs in with the agent's keys; `worms` checks that before it
+runs tofu).
 
 ```sh
 echo 'WORMS_SSH=root@<node>' >> ~/.worms/config   # the only setting
 worms secrets set proxmox-token        # root@pam!worms=<secret>          (§1.1, token 1)
 worms secrets set orchestrator-token   # secret of orchestrator@pam!orchestrator-prov (token 2)
 worms secrets set topology-token       # secret of topology@pve!readonly (token 3, optional)
-worms node trust                       # once: the WORMS key may log in to the node
 worms build
 ```
+
+`worms node trust` is needed only for VMs that existed before the WORMS key
+(an existing deployment, §4.5), or if you have no ssh-agent of your own (it then
+lets the WORMS key log in to the node as well).
 
 ### 4.1 The vault — `worms secrets`
 
@@ -261,7 +267,7 @@ rotated.
 | `proxmox-token` (`vault_tofu_proxmox_api_token`) | entered | OpenTofu: on the laptop through the CLI, on the node through the agent's env file |
 | `orchestrator-token` (`vault_proxmox_api_token_value`) | entered | the orchestrator: sandbox VM power in the game plan |
 | `topology-token` (`vault_proxmox_readonly_api_token_value`) | entered, optional | the orchestrator's `collect_topology`; `worms status` |
-| `ssh-key` (`vault_worms_ssh_key`, `vault_worms_ssh_public_key`) | generated (ed25519); `worms secrets set ssh-key < key` imports one | the one key every VM authorizes (cloud-init); root on the node (`worms node trust`, role `round_agent`); OpenTofu's snippet uploads, Ansible, the CLI and the round agent log in with it |
+| `ssh-key` (`vault_worms_ssh_key`, `vault_worms_ssh_public_key`) | generated (ed25519); `worms secrets set ssh-key < key` imports one | the one key every VM authorizes (cloud-init); Ansible on the laptop and the round agent log in to the VMs with it; root on the node accepts it for the round agent's own OpenTofu runs (role `round_agent`) |
 | 8 PostgreSQL role passwords, the CA passphrase, 2 Django `SECRET_KEY`s, the orchestrator API token | generated | delivered by Ansible into the services' `0600` env files (§4.6) |
 
 How they reach their consumers — each through exactly one path:
@@ -269,9 +275,11 @@ How they reach their consumers — each through exactly one path:
 - **OpenTofu** (laptop): the CLI puts `TF_VAR_proxmox_api_token`,
   `TF_VAR_proxmox_api_url` (`https://<WORMS_SSH host>:8006/`, or
   `WORMS_PROXMOX_URL`) and `TF_VAR_ssh_public_key` (the WORMS public key, a
-  temporary file) into the `tofu` process's environment only, and runs it with
-  a private ssh-agent holding the WORMS key (the bpg provider uploads snippets
-  over SSH as root). The token never touches the disk outside the vault.
+  temporary file) into the `tofu` process's environment only. The bpg provider
+  uploads snippets over SSH as root with the keys of **your** ssh-agent
+  (`SSH_AUTH_SOCK`); `worms` first checks that such a login works (agent keys
+  only, no prompt) and says what to do if not. The token never touches the disk
+  outside the vault.
 - **Ansible**: `-e @group_vars/vault.yml`, plus `-e internet_enabled=<the
   node's flag>`.
 - **Services**: rendered by Ansible into root-owned `0600` env files (§4.6).
@@ -312,7 +320,12 @@ for the node; both must be reachable from the laptop.
 | `ansible/inventory.generated.yml` | `worms build inventory` (`scripts/generate_inventory.py`) | every VM's addresses. From a laptop: the node as `root@<node>` over SSH (host key checked against your `known_hosts`), every VM through it (`-o ProxyJump=root@<node>`), the sandbox/devbox hosts read from the node's state |
 | `ansible/pki/worms/ca.{crt,key}` | `CreateCA.yml` (key encrypted with `vault_pki_ca_passphrase`) | the internal CA; the key stays on the controller (only `ca.crt` goes to the node and the VMs) |
 
-Ansible logs in with the WORMS key from the CLI's ssh-agent. Collections used
+Ansible logs in to the node (and through it, the ProxyJump hop) with your own
+SSH setup, and to the VMs with the WORMS key: `worms` holds it in a private
+ssh-agent for the run and the generated inventory points the VM connections at
+it (`-o IdentityAgent=${WORMS_SSH_AUTH_SOCK}`, expanded by ssh; OpenSSH ≥ 8.4).
+Without an agent of your own the WORMS key is used for the node too (`worms
+node trust` then lets it in). Collections used
 beyond `ansible.builtin`: `community.crypto`, `community.postgresql`,
 `ansible.posix`. `worms build <component> -- <args>` appends extra
 `ansible-playbook` arguments. Run playbooks through `worms`: by hand, from a
@@ -360,8 +373,11 @@ OpenSSH client, rsync; SSH (22) and the API (8006) of the node reachable.
 2. `worms secrets`: the vault keeps every existing password and gains the
    WORMS key; if `proxmox-token` shows `MISSING`, set it (it used to be
    `TF_VAR_proxmox_api_token` in root's shell).
-3. `worms node trust`: authorizes the WORMS key for root on the node and on
-   every existing VM (through root's old key on the node).
+3. `worms node trust`: the existing VMs only accept root's old key on the node;
+   this authorizes the WORMS key on every one of them (logging in from the node
+   with that old key), and for root on the node as well. Alternatively make the
+   node's old key the WORMS key: `ssh root@<node> cat /root/.ssh/id_rsa | worms
+   secrets set ssh-key` (then that private key lives in the laptop's vault).
 4. `worms build provision`: the round agent moves to `/opt/worms`. Delete the
    old shell setup (`~/.worms/env`, `~/.worms/config` secrets) on the node.
 

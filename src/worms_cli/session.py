@@ -11,9 +11,14 @@ Two modes, chosen by WORMS_SSH (~/.worms/config):
   node    WORMS_SSH empty: everything runs on this machine, the Proxmox node
           (the round agent itself, or an operator logged in on the node).
 
-Every SSH connection the CLI starts (and OpenTofu's provider, and Ansible)
-uses a private ssh-agent holding the WORMS key from the vault; it lives as long
-as the CLI process. The key never touches the disk.
+SSH: the node is reached with your own SSH setup -- your ssh-agent, keys and
+~/.ssh/config, exactly as `ssh root@<node>` -- by the CLI, by Ansible and by
+OpenTofu's Proxmox provider (which logs in with the agent's keys only). The VMs
+accept the WORMS key (vault): it is loaded into a private ssh-agent that lives
+as long as the CLI process (WORMS_SSH_AUTH_SOCK; the generated inventory points
+the VM connections at it) and never touches the disk. Without an agent of your
+own the WORMS key is used for the node too, which then has to accept it
+(`worms node trust`).
 """
 
 from __future__ import annotations
@@ -85,7 +90,8 @@ class Session:
         self.laptop = bool(config.ssh)
         self.vault = Vault(config.repo_root)
         self._values = None
-        self._agent = None  # {"SSH_AUTH_SOCK": ..., "SSH_AGENT_PID": ...}
+        self._agent = None  # the WORMS key's agent: {"SSH_AUTH_SOCK": ..., "SSH_AGENT_PID": ...}
+        self._operator_agent = None
         self._tmp = None
         self._node_ok = False
 
@@ -105,11 +111,22 @@ class Session:
         # on the node only if the operator keeps one there (the agent has none).
         return self.laptop or self.vault.exists()
 
-    # -- ssh-agent with the WORMS key -------------------------------------------
+    # -- ssh-agents ----------------------------------------------------------------
 
-    def agent_env(self) -> dict:
-        if not self.has_vault():
-            return {}
+    def operator_agent(self) -> bool:
+        """Whether your own ssh-agent (SSH_AUTH_SOCK) is there and holds a key."""
+        if self._operator_agent is None:
+            ok = False
+            if os.environ.get("SSH_AUTH_SOCK"):
+                try:
+                    ok = subprocess.run(["ssh-add", "-l"], capture_output=True, timeout=10).returncode == 0
+                except (OSError, subprocess.SubprocessError):
+                    ok = False
+            self._operator_agent = ok
+        return self._operator_agent
+
+    def worms_agent(self) -> dict:
+        """A private ssh-agent holding the WORMS key (started once)."""
         if self._agent is None:
             if not shutil.which("ssh-agent"):
                 raise SessionError("ssh-agent is not installed (OpenSSH client)")
@@ -138,11 +155,17 @@ class Session:
     # -- environments for the tools ---------------------------------------------
 
     def env(self) -> dict:
-        """For ssh, ansible and the generator scripts."""
+        """For ssh, OpenTofu, Ansible and the generator scripts: your SSH_AUTH_SOCK
+        stays (it reaches the node), WORMS_SSH_AUTH_SOCK is the WORMS key's
+        agent (it reaches the VMs)."""
         env = dict(os.environ)
         if self.laptop:
             env["WORMS_SSH"] = self.config.ssh
-        env.update(self.agent_env())
+        if self.has_vault():
+            worms = self.worms_agent()
+            env["WORMS_SSH_AUTH_SOCK"] = worms["SSH_AUTH_SOCK"]
+            if not self.operator_agent():
+                env.update(worms)  # no agent of your own: the WORMS key for the node too
         return env
 
     def proxmox_api_url(self) -> str:
@@ -158,6 +181,9 @@ class Session:
         env = self.env()
         if not self.has_vault():
             return env
+        # The provider logs in to root@<node> with the agent's keys only; say
+        # so here rather than let it fail with "unable to authenticate".
+        self.check_node()
         token = self.values().get("vault_tofu_proxmox_api_token", "")
         if not token:
             raise SessionError("the Proxmox provisioning token is not in the vault: run `worms secrets set proxmox-token`")
@@ -169,25 +195,25 @@ class Session:
     # -- the node ----------------------------------------------------------------
 
     def ssh_opts(self) -> list[str]:
-        """Exactly the WORMS key (from the agent; not ~/.ssh's defaults), as
-        OpenTofu's provider uses it, so a check that passes here holds there."""
-        opts = ["-o", "BatchMode=yes"]
-        if self.has_vault():
-            opts += ["-o", "IdentitiesOnly=yes", "-o", f"IdentityFile={self.public_key_file()}"]
-        return opts
+        """To the node: your own SSH setup, never a prompt."""
+        return ["-o", "BatchMode=yes"]
 
     def ssh_argv(self, command: str) -> list[str]:
         return ["ssh", *self.ssh_opts(), self.config.ssh, command]
 
     def check_node(self) -> None:
-        """Laptop mode: the node must accept the WORMS key (`worms node trust`)."""
+        """Laptop mode: a login to the node without a prompt and with the agent's
+        keys only (IdentityFile=none), as OpenTofu's provider logs in."""
         if not self.laptop or self._node_ok:
             return
-        proc = subprocess.run(self.ssh_argv("true"), env=self.env(), capture_output=True, text=True, timeout=30)
+        argv = ["ssh", *self.ssh_opts(), "-o", "IdentityFile=none", self.config.ssh, "true"]
+        proc = subprocess.run(argv, env=self.env(), capture_output=True, text=True, timeout=30)
         if proc.returncode != 0:
+            agent = "your ssh-agent" if self.operator_agent() else "an ssh-agent (yours: none, or no key in it)"
             raise SessionError(
-                f"cannot log in to {self.config.ssh} with the WORMS key ({proc.stderr.strip()[:200]}). "
-                "Authorize it once with `worms node trust`."
+                f"cannot log in to {self.config.ssh} with the keys of {agent}: {proc.stderr.strip()[:200].rstrip('.')}. "
+                "OpenTofu's Proxmox provider logs in this way. Load your key (`ssh-add`), "
+                "or let the WORMS key in once: `worms node trust`."
             )
         self._node_ok = True
 

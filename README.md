@@ -9,9 +9,13 @@ echo 'WORMS_SSH=root@<node>' >> ~/.worms/config
 worms secrets set proxmox-token        # root@pam!worms=<secret>   (OpenTofu)
 worms secrets set orchestrator-token   # orchestrator@pam!orchestrator-prov
 worms secrets set topology-token       # topology@pve!readonly (optional)
-worms node trust                       # once: the WORMS key may log in to the node
 make                                   # = worms build: idempotent, end to end
 ```
+
+SSH to the node is your own (`ssh root@<node>` must work with a key in your
+ssh-agent: OpenTofu's provider logs in that way). `worms node trust` is only
+needed once for VMs that existed before (moving a node-run deployment to the
+laptop) or without an ssh-agent of your own.
 
 (`alias worms='python3 /path/to/worms/src/manage.py'`.) No environment
 variables: the vault is the only place secrets enter (`docs/accounts.md` §4,

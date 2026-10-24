@@ -15,7 +15,7 @@ alias worms='python3 /path/to/worms/src/manage.py'
 
 worms secrets                     # the vault: what is set (never values)
 worms secrets set proxmox-token   # enter a Proxmox token (prompted; or from stdin)
-worms node trust                  # once: the WORMS key may log in to the node
+worms node trust                  # once, for VMs that predate the WORMS key (or without an agent)
 worms status                      # components, internet, competition, rounds
 worms teams                       # teams + members' login status
 worms teams create "Neural Net"
@@ -90,8 +90,10 @@ own database connection; it truncates the application tables and re-runs
 `init`). The Makefile's `make destroy` / `make destroy_all` call these.
 
 OpenTofu gets its Proxmox credentials from the vault: the CLI puts them into
-the `tofu` process's environment only and runs it with a private ssh-agent
-holding the WORMS key (`docs/accounts.md` §4.1). The round agent gets the same
+the `tofu` process's environment only; the provider logs in to root on the node
+with your ssh-agent's keys, which `worms` checks first (`docs/accounts.md`
+§4.1). The VMs accept the WORMS key, which Ansible gets from a private agent of
+the CLI (the inventory's `IdentityAgent`). The round agent gets the same
 inputs from its env file, rendered from the same vault.
 
 ## Why the database is the source of truth

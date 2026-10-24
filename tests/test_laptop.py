@@ -56,17 +56,23 @@ class Recorded:
         return subprocess.CompletedProcess(argv, 0)
 
 
+OPERATOR_AGENT = "/run/operator-agent"  # your own ssh-agent (SSH_AUTH_SOCK)
+WORMS_AGENT = "/run/worms-agent"  # the CLI's agent with the WORMS key
+
+
 @pytest.fixture
 def recorded(monkeypatch):
     """The Runner's commands are recorded, not run (the vault still uses the
-    real ssh-keygen); no node to talk to."""
+    real ssh-keygen); no node to talk to. You have an ssh-agent of your own."""
     import types
 
     rec = Recorded()
     monkeypatch.setattr(build, "subprocess", types.SimpleNamespace(run=rec))
     monkeypatch.setattr(Session, "check_node", lambda self: None)
     monkeypatch.setattr(Session, "internet_allowed", lambda self: True)
-    monkeypatch.setattr(Session, "agent_env", lambda self: {"SSH_AUTH_SOCK": "/run/fake-agent"} if self.has_vault() else {})
+    monkeypatch.setattr(Session, "worms_agent", lambda self: {"SSH_AUTH_SOCK": WORMS_AGENT, "SSH_AGENT_PID": "1"})
+    monkeypatch.setattr(Session, "operator_agent", lambda self: True)
+    monkeypatch.setenv("SSH_AUTH_SOCK", OPERATOR_AGENT)
     return rec
 
 
@@ -84,7 +90,47 @@ def test_laptop_runs_tofu_here_with_the_vaults_inputs(checkout, recorded):
     assert env["TF_VAR_proxmox_api_token"] == "root@pam!worms=prov-secret"
     assert env["TF_VAR_proxmox_api_url"] == "https://pve.example:8006/"
     assert Path(env["TF_VAR_ssh_public_key"]).read_text().strip() == Vault(checkout).load()[SSH_PUBLIC_KEY].strip()
-    assert env["SSH_AUTH_SOCK"] == "/run/fake-agent" and env["WORMS_SSH"] == NODE
+    assert env["WORMS_SSH"] == NODE
+
+
+def test_tofu_keeps_your_own_ssh_agent(checkout, recorded):
+    """OpenTofu's Proxmox provider logs in to root@<node> with the keys of the
+    agent in SSH_AUTH_SOCK only. Replacing your agent by one with just the
+    WORMS key made it fail ("unable to authenticate user root over SSH")
+    wherever the node knows your key but not the WORMS key."""
+    runner(checkout).tofu("platform", "apply")
+    (_argv, env), = recorded.calls
+    assert env["SSH_AUTH_SOCK"] == OPERATOR_AGENT
+    assert env["WORMS_SSH_AUTH_SOCK"] == WORMS_AGENT  # for the VMs (inventory: IdentityAgent)
+
+
+def test_without_an_agent_of_your_own_the_worms_key_reaches_the_node(checkout, recorded, monkeypatch):
+    monkeypatch.setattr(Session, "operator_agent", lambda self: False)
+    runner(checkout).tofu("platform", "apply")
+    (_argv, env), = recorded.calls
+    assert env["SSH_AUTH_SOCK"] == WORMS_AGENT == env["WORMS_SSH_AUTH_SOCK"]
+
+
+def test_preflight_logs_in_like_the_provider_and_says_what_to_do(checkout, monkeypatch):
+    """Agent keys only (IdentityFile=none), no prompt; a failure names the
+    fixes instead of the provider's "unable to authenticate"."""
+    import types
+
+    calls = []
+
+    def run(argv, **_kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 255, "", "root@pve.example: Permission denied (publickey).")
+
+    monkeypatch.setattr("worms_cli.session.subprocess", types.SimpleNamespace(run=run, SubprocessError=Exception))
+    monkeypatch.setattr(Session, "worms_agent", lambda self: {"SSH_AUTH_SOCK": WORMS_AGENT, "SSH_AGENT_PID": "1"})
+    monkeypatch.setattr(Session, "operator_agent", lambda self: True)
+    session = Session(Config(env={"WORMS_REPO_ROOT": str(checkout), "WORMS_SSH": NODE}))
+    with pytest.raises(build.SessionError) as error:
+        session.tofu_env()
+    assert calls == [["ssh", "-o", "BatchMode=yes", "-o", "IdentityFile=none", NODE, "true"]]
+    message = str(error.value)
+    assert "Permission denied (publickey)" in message and "ssh-add" in message and "worms node trust" in message
 
 
 def test_the_token_only_reaches_tofu(checkout, recorded):
@@ -102,8 +148,9 @@ def test_laptop_runs_the_nodes_stacks_on_the_node(checkout, recorded):
     sync, apply, devbox = recorded.calls
     # The workspace is brought up to date first, once per run.
     assert "SetupRoundAgent.yml --tags agent-sync" in sync[0][2]
-    assert apply[0][0] == "ssh" and apply[0][-2:] == [NODE, f"{NODE_RUN} opentofu/stacks/sandbox 'tofu apply -auto-approve'"]
-    assert "IdentitiesOnly=yes" in apply[0]  # the WORMS key only, as OpenTofu's provider
+    # Your own SSH setup to the node, as `ssh root@<node>`.
+    assert apply[0] == ["ssh", "-o", "BatchMode=yes", NODE, f"{NODE_RUN} opentofu/stacks/sandbox 'tofu apply -auto-approve'"]
+    assert apply[1]["SSH_AUTH_SOCK"] == OPERATOR_AGENT
     assert "TF_VAR_proxmox_api_token" not in apply[1]  # the node has its own (the agent's env file)
     assert devbox[0][0] == "ssh" and devbox[0][-2] == NODE
     assert devbox[0][-1].startswith(f"{NODE_RUN} ansible ") and "ansible-playbook SetupDevbox.yml" in devbox[0][-1]
@@ -171,7 +218,7 @@ def test_on_the_node_without_a_vault_the_environment_is_used(tmp_path, recorded,
     (tofu_argv, tofu_env), (ansible_argv, _) = recorded.calls
     assert tofu_argv[:2] == ["sh", "-c"] and tofu_env["TF_VAR_proxmox_api_token"] == "from-the-agent-env"
     assert "ansible-playbook SetupSandbox.yml" in ansible_argv[2] and "vault.yml" not in ansible_argv[2]
-    assert "SSH_AUTH_SOCK" not in tofu_env or tofu_env["SSH_AUTH_SOCK"] == os.environ.get("SSH_AUTH_SOCK")
+    assert tofu_env["SSH_AUTH_SOCK"] == OPERATOR_AGENT and "WORMS_SSH_AUTH_SOCK" not in tofu_env
 
 
 # --- the inventory from a laptop ----------------------------------------------
@@ -190,7 +237,7 @@ def test_inventory_from_a_laptop(tmp_path):
     )
     (bin_dir / "ssh").chmod(0o755)
     out = tmp_path / "inventory.generated.yml"
-    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "WORMS_SSH": NODE}
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "WORMS_SSH": NODE, "WORMS_SSH_AUTH_SOCK": WORMS_AGENT}
     subprocess.run([sys.executable, str(REPO / "scripts" / "generate_inventory.py"), "--repo-root", str(tmp_path),
                     "--platform-json", str(FIXTURES / "platform-outputs.json"), "--output", str(out), "--quiet"],
                    env=env, check=True, capture_output=True)  # fmt: skip
@@ -198,7 +245,10 @@ def test_inventory_from_a_laptop(tmp_path):
     node = children["proxmox_host"]["hosts"]["proxmox.local"]
     assert node == {"ansible_host": "pve.example", "ansible_user": "root", "ansible_host_key_checking": True}
     vm = children["sandbox"]["hosts"]["sandbox-vm01"]
-    assert vm["ansible_host"] == "10.4.0.11" and vm["ansible_ssh_common_args"] == f"-o ProxyJump={NODE}"
+    # The VM through the node (your agent for that hop), with the WORMS key's
+    # agent (ssh expands the variable; the path differs per run).
+    assert vm["ansible_host"] == "10.4.0.11"
+    assert vm["ansible_ssh_common_args"] == f"-o ProxyJump={NODE} -o IdentityAgent=${{WORMS_SSH_AUTH_SOCK}}"
 
 
 def test_inventory_on_the_node(generated_inventory):

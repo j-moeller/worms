@@ -8,7 +8,7 @@ the Proxmox API. Run it on your laptop with WORMS_SSH=root@<node> (OpenTofu and
 Ansible run there, with the secrets of the vault), or on the Proxmox node.
 
     worms secrets [set <name>]        # the vault: enter the Proxmox tokens once
-    worms node trust                  # once: let the WORMS key log in to the node
+    worms node trust                  # once: the WORMS key on VMs that predate it
     worms build                       # full idempotent end-to-end setup (= make)
     worms build <component>           # one step (see `worms build --list`)
     worms status                      # components, internet, competition, rounds
@@ -352,9 +352,11 @@ def cmd_secrets(config, args) -> int:
 
 
 def cmd_node(config, args) -> int:
-    """`worms node trust`: authorize the WORMS key (vault) for root on the node,
-    with your own SSH login, and on the VMs that exist already, through the
-    node's own access to them. Run it once (and after importing a new key)."""
+    """`worms node trust`: authorize the WORMS key (vault) on the VMs that exist
+    already (they accept root's old key on the node, which logs in to them), and
+    for root on the node, with your own SSH login. Needed once for VMs that
+    predate the WORMS key, and for the node only without an ssh-agent of your
+    own (the node is otherwise reached with your keys)."""
     import shlex
 
     from worms_cli.secrets import SSH_PUBLIC_KEY
@@ -397,7 +399,7 @@ done
     except SessionError as exc:
         output.error(str(exc))
         return 1
-    print(output.color("the WORMS key logs in to the node: ok", "green"))
+    print(output.color("login to the node with the agent's keys (as OpenTofu does): ok", "green"))
     return 0
 
 
@@ -522,7 +524,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_node = sub.add_parser("node", help="the Proxmox node")
     node_sub = p_node.add_subparsers(dest="node_action", required=True)
-    node_sub.add_parser("trust", help="once: let the WORMS key log in to the node (and the existing VMs)")
+    node_sub.add_parser("trust", help="once: authorize the WORMS key on VMs that predate it (and for root on the node)")
 
     p_build = sub.add_parser("build", help="full pipeline, or one component (--list)")
     p_build.add_argument("component", nargs="?", help="component to build (default: all)")

@@ -33,9 +33,12 @@ in group_vars/<vm group>.yml. Re-run after every `tofu apply` (`make inventory`)
 
 How Ansible connects is written here too. On the Proxmox node (WORMS_SSH
 unset) the node is `ansible_connection: local`. On a laptop (WORMS_SSH =
-root@<node>, as the `worms` CLI sets it) the node is reached over SSH, every VM
-through it (ProxyJump), and the node's own stacks (sandbox, devbox: state in
-the round agent's workspace there) are read over SSH.
+root@<node>, as the `worms` CLI sets it) the node is reached over SSH with your
+own SSH setup, every VM through it (ProxyJump), and the node's own stacks
+(sandbox, devbox: state in the round agent's workspace there) are read over SSH.
+When `worms` runs Ansible with the WORMS key's agent (WORMS_SSH_AUTH_SOCK), the
+VM connections use that agent (the VMs accept the WORMS key); the node and the
+ProxyJump hop keep yours.
 
 Standard library only, so it runs with the system Python on the control node.
 """
@@ -133,12 +136,14 @@ DOMAIN = "worms.internal"
 ANSIBLE_USER = "debian"
 
 
-def build_inventory(infrastructure: dict, stacks: dict, sandbox: dict, controller: str = "") -> dict:
+def build_inventory(infrastructure: dict, stacks: dict, sandbox: dict, controller: str = "",
+                    worms_agent: bool = False) -> dict:  # fmt: skip
     """Assemble the generated-inventory structure from the stack outputs.
 
     `stacks` maps a VM stack name to its `ansible_hosts` output ({} if the
     stack is not applied). `controller` is the node's SSH target when Ansible
-    runs elsewhere (a laptop), empty on the node itself."""
+    runs elsewhere (a laptop), empty on the node itself. `worms_agent`: the VM
+    connections use the agent in WORMS_SSH_AUTH_SOCK (expanded by ssh)."""
     proxmox = dict(infrastructure.get("proxmox", {}))
     # Proxmox API port is numeric in HCL but arrives as int; keep it an int.
     if "api_port" in proxmox:
@@ -178,8 +183,11 @@ def build_inventory(infrastructure: dict, stacks: dict, sandbox: dict, controlle
                 "proxmox_vm_id": int(vm["vm_id"]),
                 "opentofu_stack": stack,
             }
-            if controller:
-                host["ansible_ssh_common_args"] = f"-o ProxyJump={controller}"
+            ssh_args = ([f"-o ProxyJump={controller}"] if controller else []) + (
+                ["-o IdentityAgent=${WORMS_SSH_AUTH_SOCK}"] if worms_agent else []
+            )
+            if ssh_args:
+                host["ansible_ssh_common_args"] = " ".join(ssh_args)
             if key in sandbox_addresses:
                 host["sandbox_addresses"] = sandbox_addresses[key]
             # Optional per-VM facts a stack exports for Ansible (e.g. the
@@ -402,7 +410,8 @@ def main() -> None:
     if args.require_sandbox and not sandbox.get("hosts"):
         sys.exit("error: --require-sandbox set but the sandbox stack has no hosts.")
 
-    inventory = build_inventory(infrastructure, stacks, sandbox, os.environ.get("WORMS_SSH", ""))
+    inventory = build_inventory(infrastructure, stacks, sandbox, os.environ.get("WORMS_SSH", ""),
+                                bool(os.environ.get("WORMS_SSH_AUTH_SOCK")))  # fmt: skip
     inventory["all"]["vars"]["opentofu_stacks"] = status
     inventory["all"]["vars"]["inventory_generated_at"] = datetime.now().isoformat(timespec="seconds")
 

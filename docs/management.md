@@ -21,7 +21,7 @@ worms leaderboard                 # the production leaderboard, in the console
 worms build                       # = make (idempotent, end to end)
 worms build firewall              # one component; `worms build --list`
 worms reset-database              # DANGER: wipe + re-migrate-init
-worms emergency-stop              # DANGER: qm stop all VMs, then destroy
+worms emergency-stop              # freeze: hard-stop ALL VMs (does NOT destroy)
 ```
 
 Everything also has `--help`, and `--dry-run` prints the `make`/SQL it would
@@ -89,7 +89,8 @@ on the Proxmox host, or over SSH when `WORMS_SSH` is set. The Makefile stays the
 single implementation of *how* things are built; the CLI is a clearer front
 end. `worms build --list` prints the components. Destructive operations are
 separate subcommands that confirm first (`--yes` to skip): `destroy`,
-`destroy-all`, `emergency-stop` (= `make terminate`), and `reset-database`
+`destroy-all`, `emergency-stop` (freezes everything: `make stop-all`, which
+hard-stops every VM without destroying it), and `reset-database`
 (a Django management command, `reset_database`, run through the CLI's own
 database connection; it truncates the application tables and re-runs `init`).
 

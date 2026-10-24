@@ -31,11 +31,12 @@ COMPONENTS: dict[str, tuple[list[str], str]] = {
     "devbox": (["devbox-apply", "devbox-configure"], "build + configure the team devboxes and SSH gateway"),
 }
 
-# Destructive make targets, reached through dedicated subcommands.
+# Disruptive make targets, reached through dedicated subcommands (each confirms
+# first). emergency-stop only FREEZES (stops) the VMs; it never destroys.
 DESTRUCTIVE = {
+    "emergency-stop": (["stop-all"], "freeze: hard-stop ALL VMs (does NOT destroy them)"),
     "destroy": (["destroy"], "destroy the VM stacks (keeps firewall/platform)"),
     "destroy-all": (["destroy_all"], "destroy everything (VMs, firewall, platform)"),
-    "emergency-stop": (["terminate"], "stop ALL VMs, then destroy everything (qm stop + destroy)"),
 }
 
 

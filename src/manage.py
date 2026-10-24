@@ -18,7 +18,7 @@ over SSH with WORMS_SSH); the CLI just drives it with a clear interface.
     worms build                       # = make (idempotent, end to end)
     worms build <component>           # one component (see `worms build --list`)
     worms reset-database              # DANGER: wipe + re-migrate + re-init
-    worms emergency-stop              # DANGER: stop and destroy ALL vms
+    worms emergency-stop              # freeze: hard-stop ALL vms (does NOT destroy)
 
 Configuration (env or ~/.worms/config): see src/worms_cli/config.py and
 docs/management.md. Run `worms <command> --help` for details.

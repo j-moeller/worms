@@ -62,7 +62,7 @@ endef
         provision configure offline internet-allow internet-deny ping debug \
         test test-deps simulate round-reset-services round-reset-apply round-configure-sandbox \
         devbox-apply devbox-configure devbox-destroy \
-        destroy destroy_all terminate
+        stop-all destroy destroy_all terminate
 
 all: init secrets platform firewall host-network
 	$(call online,infrastructure configure)
@@ -258,6 +258,13 @@ destroy: firewall-migrate
 	cd opentofu/stacks/infrastructure/ephemeral && $(MAKE) destroy
 	cd opentofu/stacks/infrastructure/persistent && $(MAKE) destroy
 	cd opentofu/stacks/private_internet && $(MAKE) destroy
+
+# Freeze everything: hard-stop every VM on the node WITHOUT destroying anything
+# (the VMs, their disks, networks and state all remain; start them again with
+# the platform tooling). This is the emergency "stop the world" switch
+# (`worms emergency-stop`). Already-stopped VMs are skipped.
+stop-all:
+	qm list | awk 'NR>1 && $$3 == "running" {print $$1}' | xargs -r -I {} qm stop {}
 
 terminate:
 	qm list | awk '{print $$1}' | tail -n +2 | xargs -I {} qm stop {}

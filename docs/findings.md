@@ -157,3 +157,61 @@ Open issues (noted, not changed here):
   sandboxes would need per-run bridge/pool namespacing.
 - Still **not run on a real Proxmox host** (see the monitoring section): the
   tofu/qm/ssh paths of the agent are only validated offline.
+
+## Accounts, management CLI and devbox (this work)
+
+Three features added on top of the above; full design in `docs/accounts.md`,
+`docs/management.md` and `docs/devbox.md`.
+
+- **Accounts.** `manage.py init` (idempotent) creates the `admin` account
+  (is_staff + superuser; password from the vault key
+  `vault_django_admin_password`, delivered to the orchestrator and applied
+  after the migrations) and the default competition `WORMS <year>`.
+  `manage.py create_users` imports students from a CSV with one-time passwords;
+  `must_change_password` (migration 0008/0010) + `ForcePasswordChangeMiddleware`
+  force a change on first login. The public dashboard role is granted only
+  `UPDATE(password, must_change_password)` on `users`.
+- **Management CLI** (`src/manage.py`, `src/worms_cli`): status/teams/users/
+  leaderboard/build, reusing the dashboard models and scoring (one source of
+  truth). Building wraps the Makefile locally or over SSH.
+- **Devbox**: team-personalised always-on sandbox clones, dev dashboard view,
+  version-based reset, source-address scoring attribution, per-team SSH keys
+  via a locked-down gateway, and strict devbox⇔sandbox isolation.
+
+Bug found and fixed along the way: `orchestrator/rounds/captures.py` queried a
+`UUIDField` with the attacker-controlled `team_uuid` directly, which raises on
+a malformed value and could stall the attempt processor; it now drops
+non-UUID values before the query (both the round and the devbox paths).
+
+## Remaining security challenges (devbox and general)
+
+Priority items a reviewer should weigh before a live deployment:
+
+1. **devbox⇔sandbox on the shared services bridge.** Isolation rests on three
+   independent layers (disjoint networks/bridges + default-drop host routing;
+   a host nftables drop of gateway↔gateway on the services bridge; each
+   gateway's Proxmox firewall accepting no inbound service connections). This
+   is defense in depth, but it is the one place the two environments share a
+   medium — worth a live packet-level check (extend `make simulate`).
+2. **SSH gateway confinement.** The `restrict,port-forwarding,permitopen=...`
+   per-key options are the real boundary; verify on a live host that a team key
+   can ONLY reach its own VMs and cannot open a shell, a second forward, or
+   another team's VM. The gateway is trusted infrastructure and must stay
+   patched; a gateway compromise would expose the devbox fabric.
+3. **Reset races.** A devbox attempt in flight when a team resets is tagged
+   with whichever version is current at processing time (best effort). Not a
+   containment issue, but note it if dev scores must be exact across a reset.
+4. **The port-isolation hookscript is still not attached** (pre-existing; see
+   above). vmbr6/vmbr7 isolation and the mgmt-bridge isolation depend on it;
+   until it is wired, that isolation rests on the Proxmox firewall alone.
+5. **Root on the untrusted VMs.** Devbox and sandbox VMs are root by design;
+   the gateway→VM and host→VM SSH is to `root`. Containment is the network and
+   firewall, not in-guest privilege — as intended, but it means a guest escape
+   to the hypervisor would be catastrophic (same risk the sandbox already has).
+6. **Not run on a real Proxmox host.** As with the sandbox and rounds, the
+   OpenTofu/qm/ssh/Ansible devbox paths are validated offline only
+   (`tofu validate`, rendered nftables, the agent's command sequences and
+   parameter validation). First live steps: `worms build devbox`, create a
+   team, connect through the gateway, submit a token, reset.
+7. **General, pre-existing**: remove remaining root logins, attach the
+   hookscript, set `MEDIA_ROOT`, and run `make simulate` on the real host.

@@ -19,7 +19,9 @@ reprints the configuration at any time.
 # Secrets (you don't manage these)
 
 All internal management credentials — every PostgreSQL role password, the
-Django `SECRET_KEY`s and the internal CA passphrase — are generated **once** by
+Django `SECRET_KEY`s, the dashboard **admin** password
+(`vault_django_admin_password`, used by `manage.py init`; see
+`docs/accounts.md`) and the internal CA passphrase — are generated **once** by
 `scripts/generate_secrets.py` (run via `make secrets`) into
 `ansible/group_vars/vault.yml`, encrypted with ansible-vault using an
 auto-generated `ansible/.vault_pass`. The CA private key
@@ -145,12 +147,15 @@ Risk zones, each on its own bridge (addresses: `opentofu/shared/shared-variables
 | vmbr21 | core | database, orchestrator | 10.11.0.1 (gateway) |
 | vmbr22 | ingest | scoring/logging/monitor database leg | 10.12.0.1 (gateway) |
 | vmbr24 | siem | wazuh (central log server) | 10.13.0.1 (gateway) |
-| vmbr23 | services | scoring/logging sandbox leg, private internet, DNS, sandbox-gw | none |
+| vmbr23 | services | scoring/logging sandbox leg, private internet, DNS, sandbox-gw, devbox-gws | none |
 | vmbr1xxx | sandbox | generated networks (10.64.0.0/10), sandbox VMs, sandbox-gw | none |
+| vmbr9xxx | devbox | generated per-team devbox networks (10.128.0.0/10), devbox VMs, devbox-gws | none |
 | vmbr3 | mirror | copy of all sandbox traffic, monitor capture NIC (receive-only) | none |
 | vmbr2 | mgmt-trusted | SSH: database, orchestrator | 10.3.0.1 |
-| vmbr5 | mgmt-exposed | SSH: dashboard, scoring, logging, monitor, DNS, private internet, wazuh | 10.5.0.1 |
+| vmbr5 | mgmt-exposed | SSH: dashboard, scoring, logging, monitor, DNS, private internet, wazuh, SSH gateway | 10.5.0.1 |
 | vmbr4 | mgmt-sandbox | SSH: sandbox VMs, sandbox-gw | 10.4.0.1 |
+| vmbr6 | mgmt-devbox | SSH: devbox VMs, devbox-gws (untrusted maintenance) | 10.6.0.1 |
+| vmbr7 | devbox-ssh | devbox SSH fabric: the SSH gateway ↔ devbox VMs (port-isolated) | 10.7.0.1 |
 
 Allowed flows (everything else is dropped twice: by the per-VM Proxmox firewall,
 input and output policy DROP with `ipfilter`, and for routed traffic by the
@@ -302,6 +307,33 @@ Details: `docs/testing.md`. Findings and open issues of this work:
 - **Devices** (all VMs): no QEMU guest agent, no serial console, no display, no
   USB tablet; access is SSH only. `qm stop` (and `stop_on_destroy` in
   OpenTofu) kills a VM without guest cooperation.
+
+# Devbox (team development environments)
+
+Each team gets its own always-on, untrusted clone of the sandbox VMs (three VMs
+A–B–C) to develop against, reachable only by that team over a locked-down SSH
+gateway, completely isolated from the sandbox and from other teams' devboxes.
+Teams see it in the dashboard's **development view** (devbox score, logs, SSH
+keys, reset); scoring/logging attribute a devbox submission to its team by
+source address, so it never interferes with a running round. Full design,
+the devbox⇔sandbox isolation and the SSH gateway: **`docs/devbox.md`**.
+
+```
+worms build devbox                 # build + configure devboxes and the SSH gateway
+worms teams create "Neural Net"    # creating a team also provisions its devbox
+ssh -J team@<proxmox-wan>:2222 root@<devbox VM>
+```
+
+# Accounts and the management CLI
+
+- **Admin + competition**: `manage.py init` (idempotent) creates the `admin`
+  account (password from the vault key `vault_django_admin_password`) and the
+  default competition `WORMS <year>`. Student accounts come from a CSV with
+  one-time passwords (`manage.py create_users`), and the dashboard forces a
+  password change on first login. See **`docs/accounts.md`**.
+- **`worms` CLI** (`src/manage.py`): one tool for status, teams, users,
+  leaderboard and building — run from your laptop with access tokens, with live
+  status from the database and Proxmox. See **`docs/management.md`**.
 
 # Rounds (orchestration)
 

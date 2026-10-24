@@ -68,7 +68,26 @@
 [ ] SSH only login
 [ ] Firewall rules
 [ ] Remove root users
-[ ] Remove hardcoded passwords
+[x] Remove hardcoded passwords (admin password from the vault; students get
+    one-time passwords + forced change on first login; see docs/accounts.md)
+
+[ ] Accounts (docs/accounts.md)
+ - [x] Idempotent admin + default competition (manage.py init, vault password)
+ - [x] Student accounts from CSV with one-time passwords (manage.py create_users)
+ - [x] Forced password change on first login
+
+[ ] Management CLI (docs/management.md)
+ - [x] worms status / teams / users / leaderboard / build (src/manage.py)
+ - [x] Single source of truth: the database VM + the Proxmox API
+ - [ ] Run against a live deployment from a laptop (tunnel/tokens)
+
+[ ] Devbox (docs/devbox.md)
+ - [x] Data model, dev dashboard view, reset via devbox version
+ - [x] Source-address scoring/logging attribution (no round interference)
+ - [x] Per-team SSH keys + locked-down SSH gateway; devbox<->sandbox isolation
+ - [x] OpenTofu stack/module + generator (tofu validate), Ansible roles, agent jobs
+ - [x] Provisioning on team creation
+ - [ ] Run on a real Proxmox host (VM build, -replace rebuild, key plumbing)
 
 [x] Limit request size, limit request frequency
 

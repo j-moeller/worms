@@ -1,12 +1,13 @@
 # `worms` — the management CLI
 
-`src/manage.py` is a single command-line tool for operating the WORMS platform.
-It replaces the growing set of Makefile incantations with a discoverable
-interface, shows **live status from the one source of truth** (the database VM,
-plus the Proxmox API for infrastructure), and still drives the real build
-through the Makefile. You can run it from your laptop with the same access
+`src/manage.py` is the single command-line tool for operating the WORMS
+platform. It **is** the build pipeline — the former Makefile recipes now live
+in `src/worms_cli/pipeline.py`, and the top-level `Makefile` only delegates
+(`make` → `worms build`, `make destroy` / `make destroy_all`). It also shows
+**live status from the one source of truth** (the database VM, plus the Proxmox
+API for infrastructure). You can run it from your laptop with the same access
 tokens you use on the server, instead of developing as root on the production
-host.
+host; with `WORMS_SSH` set it runs the build steps over SSH on the node.
 
 ```
 alias worms='python3 /path/to/worms/src/manage.py'
@@ -18,7 +19,7 @@ worms teams rename "Old" "New"
 worms teams delete "Neural Net"   # users are NOT affected
 worms users                       # all users: team, login, one-time password
 worms leaderboard                 # the production leaderboard, in the console
-worms build                       # = make (idempotent, end to end)
+worms build                       # full idempotent end-to-end setup (= make)
 worms build firewall              # one component; `worms build --list`
 worms reset-database              # DANGER: wipe + re-migrate-init
 worms emergency-stop              # freeze: hard-stop ALL VMs (does NOT destroy)
@@ -84,15 +85,27 @@ only; create them in Proxmox once):
 
 ## Building
 
-`worms build [<component>]` runs the corresponding Makefile target(s) — locally
-on the Proxmox host, or over SSH when `WORMS_SSH` is set. The Makefile stays the
-single implementation of *how* things are built; the CLI is a clearer front
-end. `worms build --list` prints the components. Destructive operations are
-separate subcommands that confirm first (`--yes` to skip): `destroy`,
-`destroy-all`, `emergency-stop` (freezes everything: `make stop-all`, which
-hard-stops every VM without destroying it), and `reset-database`
-(a Django management command, `reset_database`, run through the CLI's own
-database connection; it truncates the application tables and re-runs `init`).
+`worms build` (no component) runs the full pipeline end to end; `worms build
+<component>` runs one step (`worms build --list` prints them: secrets, init,
+platform, firewall, host-network, infrastructure, inventory, configure,
+provision, offline, internet-allow/deny, round-*, devbox*, ping, …). Each step
+runs the real tool (tofu, ansible-playbook, the generator scripts) — locally on
+the Proxmox node, or over SSH when `WORMS_SSH` is set. The internet window
+around infrastructure setup is handled automatically (allowed for that step,
+always denied again afterwards). `worms test` runs the offline suite and
+`worms simulate` the live simulation; `worms debug <host>` runs the Ansible
+connection diagnostics.
+
+Destructive operations are separate subcommands that confirm first (`--yes` to
+skip): `destroy`, `destroy-all`, `terminate` (stop + destroy everything),
+`emergency-stop` (freezes everything: hard-stops every VM without destroying
+it), and `reset-database` (a Django management command run through the CLI's
+own database connection; it truncates the application tables and re-runs
+`init`). The Makefile's `make destroy` / `make destroy_all` call these.
+
+Tofu reads its Proxmox credentials from the operator's environment on the node
+(`TF_VAR_proxmox_api_url` / `TF_VAR_proxmox_api_token`, or a tfvars file), the
+same way the old stack Makefiles did; the CLI does not manage them.
 
 ## Why the database is the source of truth
 
@@ -105,7 +118,7 @@ Proxmox, not from a local file that can drift.
 
 ## Tests
 
-`tests/test_manage_cli.py` (offline, part of `make test`) runs the DB-backed
+`tests/test_manage_cli.py` (offline, part of `worms test`) runs the DB-backed
 commands against a throwaway PostgreSQL with the real migrations and grants:
 team create/rename/delete (and that deleting a team keeps its users), the
 status and leaderboard output, the user listing, and `reset-database`. The

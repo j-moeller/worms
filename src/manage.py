@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
 """worms -- one CLI for the WORMS platform.
 
-Replaces the growing set of Makefile incantations with a single, discoverable
-tool you can run from your laptop with the same access tokens you use on the
-server. Status information comes from the one source of truth -- the database
-VM (and the Proxmox API for live infrastructure state) -- never from guesswork.
-Building still goes through the Makefile (run locally on the Proxmox host, or
-over SSH with WORMS_SSH); the CLI just drives it with a clear interface.
+The single tool for building and operating the platform. It IS the build
+pipeline (the top-level Makefile just calls `worms build` / `worms destroy`);
+it also shows live status from the one source of truth -- the database VM and
+the Proxmox API. Run it on the Proxmox node, or from your laptop with WORMS_SSH
+set (it then runs the build steps over SSH).
 
+    worms build                       # full idempotent end-to-end setup (= make)
+    worms build <component>           # one step (see `worms build --list`)
     worms status                      # components, internet, competition, rounds
-    worms teams                       # teams and their members' login status
-    worms teams create "Team Name"
-    worms teams rename "Old" "New"
-    worms teams delete "Team Name"    # users are not affected
-    worms users                       # all users: team, login, must-change-pw
-    worms leaderboard                 # the production leaderboard, in the console
-    worms build                       # = make (idempotent, end to end)
-    worms build <component>           # one component (see `worms build --list`)
+    worms teams [create|rename|delete]
+    worms users / worms leaderboard
+    worms simulate                    # end-to-end simulation (was make simulate)
+    worms test                        # the offline test suite (was make test)
+    worms debug <host>                # Ansible connection diagnostics
     worms reset-database              # DANGER: wipe + re-migrate + re-init
+    worms destroy / destroy-all       # teardown
     worms emergency-stop              # freeze: hard-stop ALL vms (does NOT destroy)
 
 Configuration (env or ~/.worms/config): see src/worms_cli/config.py and
@@ -27,13 +26,23 @@ docs/management.md. Run `worms <command> --help` for details.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from worms_cli import build, output  # noqa: E402
+from worms_cli import build, output, pipeline  # noqa: E402
 from worms_cli.config import Config  # noqa: E402
+
+# Disruptive pipeline operations, each a confirm-first subcommand. emergency-stop
+# only freezes (stops) the VMs; terminate is the full teardown.
+DESTRUCTIVE = {
+    "emergency-stop": ("stop_all", "freeze: hard-stop ALL VMs (does NOT destroy them)"),
+    "destroy": ("destroy", "destroy the VM stacks (keeps firewall/platform)"),
+    "destroy-all": ("destroy_all", "destroy everything (VMs, firewall, platform)"),
+    "terminate": ("terminate", "stop, unlock and destroy every VM and all stacks"),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -271,16 +280,47 @@ def cmd_leaderboard(config, args) -> int:
 
 def cmd_build(config, args) -> int:
     if args.list:
-        rows = [[name, help_text] for name, (_, help_text) in build.COMPONENTS.items()]
+        rows = [[name, help_text] for name, (_, help_text) in pipeline.COMPONENTS.items()]
         print(output.table(rows, headers=["component", "what"]))
         return 0
-    runner = build.Runner(config, dry_run=args.dry_run)
+    component = args.component or "all"
+    if component not in pipeline.COMPONENTS:
+        output.error(f"unknown component {component!r}. Try `worms build --list`.")
+        return 1
+    method_name, _ = pipeline.COMPONENTS[component]
+    pipe = pipeline.Pipeline(config, dry_run=args.dry_run, ansible_args=" ".join(args.make_args))
     try:
-        runner.component(args.component, extra=args.make_args)
+        getattr(pipe, method_name)()
     except build.BuildError as exc:
         output.error(str(exc))
         return 1
     return 0
+
+
+def cmd_debug(config, args) -> int:
+    pipe = pipeline.Pipeline(config, dry_run=args.dry_run)
+    try:
+        pipe.debug(args.host)
+    except build.BuildError as exc:
+        output.error(str(exc))
+        return 1
+    return 0
+
+
+def cmd_test(config, args) -> int:
+    """Run the offline test suite (was `make test`): a .venv-test venv +
+    pytest. Runs on this machine (the repo), not over SSH."""
+    import subprocess
+
+    repo = str(config.repo_root)
+    venv = f"{repo}/.venv-test"
+    pytest = f"{venv}/bin/pytest"
+    if not os.path.exists(pytest):
+        print(output.color("creating .venv-test ...", "dim"))
+        subprocess.run([sys.executable, "-m", "venv", venv], check=True)
+        subprocess.run([f"{venv}/bin/pip", "install", "-q", "-r", f"{repo}/tests/requirements.txt"], check=True)
+    env = {**os.environ, "PATH": f"{venv}/bin:" + os.environ.get("PATH", "")}
+    return subprocess.run([pytest, *args.pytest_args], cwd=repo, env=env).returncode
 
 
 def cmd_reset_database(config, args) -> int:
@@ -302,12 +342,12 @@ def cmd_reset_database(config, args) -> int:
 
 
 def cmd_destroy(config, args, key: str) -> int:
-    targets, help_text = build.DESTRUCTIVE[key]
+    method_name, help_text = DESTRUCTIVE[key]
     if not build.confirm(f"{help_text}. Proceed?", args.yes):
         return 1
-    runner = build.Runner(config, dry_run=args.dry_run)
+    pipe = pipeline.Pipeline(config, dry_run=args.dry_run)
     try:
-        runner.make(*targets)
+        getattr(pipe, method_name)()
     except build.BuildError as exc:
         output.error(str(exc))
         return 1
@@ -341,16 +381,24 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("users", help="all users: team, login status, one-time password")
     sub.add_parser("leaderboard", help="the production leaderboard, in the console")
 
-    p_build = sub.add_parser("build", help="run the build (make), all or one component")
+    p_build = sub.add_parser("build", help="full pipeline, or one component (--list)")
     p_build.add_argument("component", nargs="?", help="component to build (default: all)")
     p_build.add_argument("--list", action="store_true", help="list components and exit")
-    p_build.add_argument("make_args", nargs="*", help="extra args passed to make (e.g. ARGS=...)")
+    p_build.add_argument("make_args", nargs="*", help="extra args passed to ansible-playbook (e.g. --limit db -vvv)")
+
+    sub.add_parser("simulate", help="end-to-end simulation against the deployed platform")
+
+    p_test = sub.add_parser("test", help="run the offline test suite (.venv-test + pytest)")
+    p_test.add_argument("pytest_args", nargs="*", help="extra args passed to pytest (e.g. -k shipper -x)")
+
+    p_dbg = sub.add_parser("debug", help="Ansible connection diagnostics for a host/group")
+    p_dbg.add_argument("host")
 
     p_reset = sub.add_parser("reset-database", help="DANGER: wipe + re-migrate + re-init the database")
     p_reset.add_argument("--yes", action="store_true")
 
-    for key in build.DESTRUCTIVE:
-        p = sub.add_parser(key, help="DANGER: " + build.DESTRUCTIVE[key][1])
+    for key, (_, help_text) in DESTRUCTIVE.items():
+        p = sub.add_parser(key, help=help_text)
         p.add_argument("--yes", action="store_true")
 
     return parser
@@ -371,9 +419,15 @@ def main(argv=None) -> int:
         return cmd_leaderboard(config, args)
     if args.command == "build":
         return cmd_build(config, args)
+    if args.command == "simulate":
+        return cmd_build(config, argparse.Namespace(component="simulate", list=False, make_args=[], dry_run=args.dry_run))
+    if args.command == "test":
+        return cmd_test(config, args)
+    if args.command == "debug":
+        return cmd_debug(config, args)
     if args.command == "reset-database":
         return cmd_reset_database(config, args)
-    if args.command in build.DESTRUCTIVE:
+    if args.command in DESTRUCTIVE:
         return cmd_destroy(config, args, args.command)
     parser.error(f"unknown command {args.command!r}")
     return 2

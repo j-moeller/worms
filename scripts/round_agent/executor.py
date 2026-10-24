@@ -52,10 +52,15 @@ class Executor:
             raise CommandError(argv, proc.returncode, proc.stderr)
         return proc.stdout
 
-    def make(self, target, timeout=3600, args=None):
-        argv = ["make", target]
+    def worms(self, component, timeout=3600, args=None):
+        """Run a build component through the worms CLI (src/manage.py), which is
+        where the former Makefile logic now lives. `args` are passed through to
+        ansible-playbook (after `--`)."""
+        import shlex
+
+        argv = ["python3", "src/manage.py", "build", component]
         if args:
-            argv.append(f"ARGS={args}")
+            argv += ["--", *shlex.split(args)]
         return self.run(argv, timeout=timeout)
 
     def generate_devbox(self, teams, output_file):

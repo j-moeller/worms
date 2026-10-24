@@ -10,10 +10,10 @@ access**, creates the infrastructure VMs (cloud-init installs packages) and
 configures them with Ansible (the private-internet caches populate in online
 mode). Afterwards it **denies internet access again** — always, also when a step
 fails or you interrupt it — and switches DNS and the caches to offline mode.
-`make provision` does the same for the Ansible part only.
+`worms build provision` does the same for the Ansible part only.
 
 `make` prints the VM names and IP addresses it is configuring, and is safe to
-re-run: once everything is in place it changes nothing. `make show-config`
+re-run: once everything is in place it changes nothing. `worms build show-config`
 reprints the configuration at any time.
 
 # Secrets (you don't manage these)
@@ -22,7 +22,7 @@ All internal management credentials — every PostgreSQL role password, the
 Django `SECRET_KEY`s, the dashboard **admin** password
 (`vault_django_admin_password`, used by `manage.py init`; see
 `docs/accounts.md`) and the internal CA passphrase — are generated **once** by
-`scripts/generate_secrets.py` (run via `make secrets`) into
+`scripts/generate_secrets.py` (run via `worms build secrets`) into
 `ansible/group_vars/vault.yml`, encrypted with ansible-vault using an
 auto-generated `ansible/.vault_pass`. The CA private key
 (`ansible/pki/worms/ca.key`, git-ignored) is always encrypted with that
@@ -63,7 +63,7 @@ Ansible does not define IPs at all. It is generated from OpenTofu:
 
 ```
 # after `tofu apply` on the platform stack (and sandbox, if deploying sandboxes):
-make inventory        # runs scripts/generate_inventory.py
+worms build inventory        # runs scripts/generate_inventory.py
 ```
 
 This reads `tofu output -json` and writes `ansible/inventory.generated.yml`:
@@ -79,7 +79,7 @@ This reads `tofu output -json` and writes `ansible/inventory.generated.yml`:
 
 `ansible/inventory.yml` contains **groups only**: it maps the VM groups to role
 groups (`tls_hosts`, `django_hosts`, ...). Per-VM settings live in
-`ansible/group_vars/<vm group>.yml`. `make configure`/`make provision`
+`ansible/group_vars/<vm group>.yml`. `worms build configure`/`worms build provision`
 regenerate the inventory first, so Ansible always follows the current state.
 
 Both inventories and the vault key are wired up in `ansible/ansible.cfg`, so a
@@ -92,13 +92,13 @@ cd ansible && ansible-playbook -e @group_vars/vault.yml <playbook>.yml
 # Debugging
 
 ```
-make inventory                      # hosts Ansible will contact + VMs it skips
-make ping                           # one line per host: reachable or not
-make debug HOST=database                # step by step: resolved address, TCP 22,
+worms build inventory                      # hosts Ansible will contact + VMs it skips
+worms build ping                           # one line per host: reachable or not
+worms debug database                # step by step: resolved address, TCP 22,
                                     # SSH login, Python, sudo, cloud-init
-make debug HOST=database ARGS=-vvv    # ... with the full SSH command and error
-make provision ARGS="--limit database -vvv"        # run only against one VM
-make provision ARGS="--limit orchestrator -e hide_secrets=false"
+worms debug database -- -vvv    # ... with the full SSH command and error
+worms build provision -- --limit database -vvv        # run only against one VM
+worms build provision -- --limit orchestrator -e hide_secrets=false
                                     # show output of no_log tasks (secrets!)
 ```
 
@@ -108,20 +108,20 @@ Every host carries `proxmox_vm_id` (`qm status <vmid>`) and `opentofu_stack`.
 
 `make` runs these in order; each step is safe to re-run:
 
-- `make secrets` — generate management secrets once (no-op if already present).
+- `worms build secrets` — generate management secrets once (no-op if already present).
 - `tofu apply` the base stacks. Addressing comes from
   `opentofu/shared/shared-variables.tf` (the single source of truth).
     - platform: bridges, images, cloud-init snippets, pools, hookscript; emits
       the `infrastructure` output (addressing for Ansible)
     - firewall: Proxmox cluster/node firewall and all security groups; emits
       `security_groups`, which every VM stack attaches
-    - `SetupHostNetwork.yml` (host sysctls + nftables, `make host-network`)
+    - `SetupHostNetwork.yml` (host sysctls + nftables, `worms build host-network`)
     - private_internet: the private-internet VMs
     - persistent: database, dashboard, orchestrator, wazuh
     - ephemeral: DNS, scoring, logging, monitor
-- `make inventory` — generate `ansible/inventory.generated.yml` from OpenTofu
+- `worms build inventory` — generate `ansible/inventory.generated.yml` from OpenTofu
   and print the VM/IP configuration.
-- `make provision` — Ansible sets up:
+- `worms build provision` — Ansible sets up:
     - DNS
     - CA
     - DB (creates least-privilege users, TLS-only)
@@ -181,8 +181,8 @@ host nftables FORWARD chain):
 
 No VM has internet access unless it is allowed (package installs and cache
 population for the dmz/core/ingest/mgmt-exposed VMs through host NAT): `make`
-allows it only while provisioning, and `make internet-allow` /
-`make internet-deny` toggle it by hand (`ansible/Internet.yml`). Allowing is
+allows it only while provisioning, and `worms build internet-allow` /
+`worms build internet-deny` toggle it by hand (`ansible/Internet.yml`). Allowing is
 refused while sandbox VMs exist; while it is allowed, the sandbox stack refuses
 to deploy. The state lives in
 `/run/worms/internet-allowed` and runtime-only nftables rules, so a reboot
@@ -212,12 +212,11 @@ Stack dependencies (each reads the others' local state via
 `terraform_remote_state`): `platform` and `firewall` are independent; the VM
 stacks (`private_internet`, `infrastructure/*`, `sandbox`) need both. Destroy in
 reverse (`make destroy_all`). Existing deployments made before the firewall
-stack are migrated by `make firewall-migrate` (run automatically by `make
-platform` / `make firewall`; state only).
+stack are migrated by handled automatically by `worms build platform` / `worms build firewall` (state only).
 
 # Central logging (Wazuh + auditd)
 
-`SetupAudit.yml` (part of `make provision`):
+`SetupAudit.yml` (part of `worms build provision`):
 
 - **wazuh** VM (persistent stack, siem bridge, 4 vCPU / 2 GB / 50 GB; Wazuh recommends
   8 GB, so the indexer heap is capped at 512 MB): Wazuh
@@ -270,9 +269,9 @@ SELECT * FROM network_flows ORDER BY ts DESC LIMIT 20;
 # Testing
 
 ```
-make test        # offline suite: OpenTofu/Ansible checks, DB privileges, APIs,
+worms test        # offline suite: OpenTofu/Ansible checks, DB privileges, APIs,
                  # zeek-shipper, worms-mirror (network namespaces); no Proxmox needed
-make simulate    # end to end on the deployed platform: a sandbox VM submits to
+worms simulate    # end to end on the deployed platform: a sandbox VM submits to
                  # scoring/logging and makes traffic; checks the database
                  # (submissions, flows exactly once with exact sizes), services
                  # and containment; PASS/FAIL report
@@ -350,7 +349,7 @@ Full design, lifecycle, game plan, the timeline data for the animated view,
 operations and open items: **`docs/rounds.md`**.
 
 ```
-make provision     # installs the conductor daemon, the round agent and the
+worms build provision     # installs the conductor daemon, the round agent and the
                    # pool-scoped power ACL; then rounds run on their own
 # watch:
 ssh debian@10.3.0.19 journalctl -u orchestrator-conduct-rounds -f
@@ -393,5 +392,5 @@ for the user and, with privilege separation, for the token):
 
   (or export `PROXMOX_READONLY_API_TOKEN` before the very first `make`).
 
-Then `make provision` (or `ansible-playbook -e @group_vars/vault.yml
+Then `worms build provision` (or `ansible-playbook -e @group_vars/vault.yml
 SetupDbAndDashboard.yml`) delivers it to the orchestrator's 0600 env file.

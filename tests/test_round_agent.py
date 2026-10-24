@@ -157,8 +157,8 @@ class FakeExecutor:
         self.systemctl = {}
         self.qm = {}
 
-    def make(self, target, timeout=3600):
-        self.calls.append(("make", target))
+    def worms(self, component, timeout=3600, args=None):
+        self.calls.append(("worms", component))
 
     def tofu(self, stack, *args, timeout=3600):
         self.calls.append(("tofu", stack, *args))
@@ -215,7 +215,7 @@ def test_prepare_builds_sandbox_and_reports_topology():
     result = handlers.prepare(ex, CFG, validation.validate("prepare", {"seed": 5, "sandbox_params": {"vms": 2}}))
     assert ("generate", 5, 2) in ex.calls
     assert any(c[:2] == ("tofu", "sandbox") and "apply" in c for c in ex.calls)
-    assert ("make", "round-configure-sandbox") in ex.calls  # inventory + install the CA
+    assert ("worms", "round-configure-sandbox") in ex.calls  # inventory + install the CA
     assert ex.installed_hcl is not None
     names = {vm["name"] for vm in result["vms"]}
     assert names == {"sandbox-a", "sandbox-b"}
@@ -230,7 +230,7 @@ def test_prepare_builds_sandbox_and_reports_topology():
 def test_prepare_reset_services_runs_first():
     ex = FakeExecutor()
     handlers.prepare(ex, {**CFG, "reset_services": True}, validation.validate("prepare", {"seed": 1}))
-    assert ex.calls[0] == ("make", "round-reset-services")
+    assert ex.calls[0] == ("worms", "round-reset-services")
 
 
 def test_check_reports_ok_when_everything_is_up():

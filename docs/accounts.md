@@ -43,7 +43,7 @@ ansible-vault edit --vault-password-file .vault_pass group_vars/vault.yml   # ch
 
 The orchestrator receives it as `DJANGO_ADMIN_PASSWORD` in its root-owned
 `0600` env file (`group_vars/orchestrator.yml` → `django_extra_env`), and runs
-`manage.py init` once per `make provision` (the `django_post_migrate_commands`
+`manage.py init` once per `worms build provision` (the `django_post_migrate_commands`
 hook of the `django_app` role, right after the migrations). If the password is
 not set yet, the admin is created with login **disabled**; set the key and
 re-provision to enable it.
@@ -103,7 +103,7 @@ grant itself staff or touch any other column (checked in
 
 ## Tests
 
-`tests/test_accounts.py` (offline, part of `make test`) runs both commands
+`tests/test_accounts.py` (offline, part of `worms test`) runs both commands
 against a throwaway PostgreSQL with the real migrations and least-privilege
 grants: `init` creates the admin and competition and is idempotent;
 `create_users` creates one account per row with a one-time password and

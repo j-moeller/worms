@@ -95,7 +95,7 @@ def prepare(ex, cfg, params):
     rebuilt first for a clean slate; that needs an internet window and so must
     happen before the sandbox exists (see docs/rounds.md)."""
     if cfg.get("reset_services"):
-        ex.make("round-reset-services", timeout=cfg.get("reset_timeout", 5400))
+        ex.worms("round-reset-services", timeout=cfg.get("reset_timeout", 5400))
 
     with tempfile.TemporaryDirectory() as tmp:
         network_file = Path(tmp) / "network.json"
@@ -107,7 +107,7 @@ def prepare(ex, cfg, params):
     ex.tofu("sandbox", "apply", "-auto-approve", "-input=false", "-parallelism=1", timeout=cfg.get("apply_timeout", 5400))
     # Refresh the inventory and configure the sandbox guests (install the
     # internal CA, so a worm can reach scoring/logging over verified HTTPS).
-    ex.make("round-configure-sandbox", timeout=cfg.get("configure_timeout", 1800))
+    ex.worms("round-configure-sandbox", timeout=cfg.get("configure_timeout", 1800))
 
     vm_networks = _vm_networks(graph)
     vms = _sandbox_vms(ex)
@@ -211,7 +211,7 @@ def release_secrets(ex, cfg, params):
 
 def teardown(ex, cfg, params):
     ex.tofu("sandbox", "destroy", "-auto-approve", "-input=false", timeout=cfg.get("apply_timeout", 5400))
-    ex.make("inventory", timeout=300)
+    ex.worms("inventory", timeout=300)
     return {"destroyed": True}
 
 
@@ -311,7 +311,7 @@ def devbox_provision(ex, cfg, params):
     Returns the devbox records for the orchestrator to register."""
     teams = params["teams"]
     ex.generate_devbox(teams, ex.repo_root / DEVBOX_GENERATED)
-    ex.make("devbox-apply", timeout=cfg.get("apply_timeout", 5400))
+    ex.worms("devbox-apply", timeout=cfg.get("apply_timeout", 5400))
     _configure_devbox(ex, teams)
     report, sources = _devbox_report(ex, teams)
     _write_devbox_map(ex, cfg, teams)
@@ -335,7 +335,7 @@ def devbox_rebuild(ex, cfg, params):
         for role in ("a", "b", "c")
     )
     ex.tofu("devbox", "apply", "-auto-approve", "-input=false", "-parallelism=1", *replaces.split(), timeout=cfg.get("apply_timeout", 5400))
-    ex.make("inventory", timeout=300)
+    ex.worms("inventory", timeout=300)
     _configure_devbox(ex, teams)
 
     # Rewrite this team's tokens only.
@@ -365,7 +365,7 @@ def _configure_devbox(ex, teams):
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
         json.dump(extra, fh)
         varfile = fh.name
-    ex.make("devbox-configure", timeout=1800, args=f"-e @{varfile}")
+    ex.worms("devbox-configure", timeout=1800, args=f"-e @{varfile}")
 
 
 HANDLERS = {

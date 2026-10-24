@@ -2,17 +2,17 @@
 
 Two layers:
 
-| | `make test` | `make simulate` |
+| | `worms test` | `worms simulate` |
 |---|---|---|
 | Runs | anywhere (laptop, CI, the Proxmox host) | on the Proxmox host, against the deployed platform |
 | Needs | Python 3; optionally PostgreSQL server binaries, `tofu` (+ provider), `ip`/`tc`/`tcpdump` and root, `nft`, `systemd-analyze` | a provisioned platform; a deployed sandbox for the traffic part |
 | Covers | configuration, code, privileges, mirror logic | the running system end to end: features, configuration, containment |
 | Changes things | nothing outside temp dirs and private network namespaces | creates a test team/token, removes it afterwards |
 
-## `make test`: offline suite
+## `worms test`: offline suite
 
-`make test` creates `.venv-test` from `tests/requirements.txt` on first use
-and runs `pytest` (`PYTEST_ARGS="-k shipper -x"` to narrow it down). A test
+`worms test` creates `.venv-test` from `tests/requirements.txt` on first use
+and runs `pytest` (`worms test -k shipper -x` to narrow it down). A test
 whose tool is missing is **skipped with the reason** (`-ra` summary), so the
 suite runs everywhere and does as much as it can. On the development machine:
 138 passed, 2 skipped (its kernel lacks the nftables bridge family and the tc
@@ -40,12 +40,12 @@ tests/fixtures/platform-outputs.json`.
 set `TF_CLI_CONFIG_FILE` to a config with a `filesystem_mirror` that holds
 the provider binary.
 
-## `make simulate`: end-to-end simulation
+## `worms simulate`: end-to-end simulation
 
 ```
-cd opentofu/stacks/sandbox && make apply      # a sandbox, ideally >= 2 VMs
-make simulate                                  # = make inventory + ansible-playbook Simulate.yml
-make simulate ARGS="-e sim_wait_seconds=600"   # wait longer for the records
+# deploy a sandbox first (ideally >= 2 VMs), then:
+worms simulate                                 # = inventory + ansible-playbook Simulate.yml
+worms simulate -- -e sim_wait_seconds=600      # wait longer for the records
 ```
 
 The playbook plays a sandbox VM (`groups.sandbox[0]`, peer
@@ -129,7 +129,7 @@ FAIL ("sandbox deployed"); the other checks still run.
 
 ## Round orchestration tests
 
-Two more files, both offline (`make test`), covering the round orchestration
+Two more files, both offline (`worms test`), covering the round orchestration
 (`docs/rounds.md`):
 
 | File | What |

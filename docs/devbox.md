@@ -191,7 +191,7 @@ INSERT. (`tests/test_devbox.py`.)
   a `devbox_provision` host job; the round agent (`scripts/round_agent`,
   handlers `devbox_provision` / `devbox_rebuild`) generates + applies the stack,
   configures the VMs and the gateway (CA, team keys), writes the tokens and
-  publishes the source→team map. `make devbox-apply` / `make devbox-configure`
+  publishes the source→team map. `worms build devbox-apply` / `worms build devbox-configure`
   are the underlying targets.
 
 ## Operating it
@@ -208,7 +208,7 @@ key they registered on the dashboard.
 
 ## Status / not done here
 
-Built and covered offline (`make test`): the data model, scoring/logging
+Built and covered offline (`worms test`): the data model, scoring/logging
 attribution and the processor (`tests/test_devbox.py`,
 `tests/test_sandbox_api.py`), the generator (`tests/test_generate_devbox.py`),
 the agent parameter validation (`tests/test_round_agent.py`), the CLI

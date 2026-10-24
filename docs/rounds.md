@@ -174,12 +174,12 @@ front-end work still to come; `/rounds/` lists the runs and links the JSON.
 ## Operating it
 
 ```
-# One-time, part of `make provision`:
+# One-time, part of `worms build provision`:
 #   - orchestrator runs conduct_rounds AND process_attempts as daemons (role django_app)
 #   - the Proxmox host runs the round agent (SetupRoundAgent.yml)
 #   - the orchestrator's power token gets VM.PowerMgmt+VM.Audit on pool sandbox
 
-make provision
+worms build provision
 
 # The conductor plans and runs rounds on its own once a round's deadline
 # (round_start) has passed. To watch:
@@ -201,7 +201,7 @@ is opt-in (`round_agent_reset_services`), because it needs an internet window
 and so can only happen while no sandbox exists; the conductor tears the
 previous sandbox down first.
 
-`make simulate` (`docs/testing.md`) checks the scoring path end to end: a flag
+`worms simulate` (`docs/testing.md`) checks the scoring path end to end: a flag
 submitted through the sandbox API becomes a `FlagCapture` and a `captured`
 timeline event after `manage.py process_captures` runs, and it checks that the
 conductor daemon and the round agent are up. The conductor and agent
@@ -221,6 +221,6 @@ themselves are covered offline in `tests/test_rounds.py` and
   `docs/findings.md`).
 - **Scoring/standing display** of captures over the round.
 - **Running it on a real Proxmox host.** Everything here was built and tested
-  offline (`make test`): the conductor and agent are exercised end to end with
+  offline (`worms test`): the conductor and agent are exercised end to end with
   a fake Proxmox and a fake agent / fake executor against a real PostgreSQL,
   but no sandbox has been built on a live node.

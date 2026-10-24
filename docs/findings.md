@@ -43,7 +43,7 @@ Details: [monitoring.md](monitoring.md), [testing.md](testing.md).
   so the README's "management bridges are port-isolated" does not hold. The
   isolation on the management bridges currently rests on the Proxmox firewall
   alone (output policy DROP, `ssh` group inbound only), and
-  `make simulate` checks that from a sandbox VM. Possibly because Proxmox lets only
+  `worms simulate` checks that from a sandbox VM. Possibly because Proxmox lets only
   `root@pam` set hookscripts, not API tokens.
 - The sandbox VMs do not trust the internal CA (README "Round start":
   "distribute the self-signed CA" is not implemented for the sandbox group).
@@ -75,9 +75,9 @@ Details: [monitoring.md](monitoring.md), [testing.md](testing.md).
    inserts:* Django models/migrations `0003`/`0004`, grants, `zeek_shipper.py`,
    the scoring/logging fix, database/API/shipper tests.
 3. *Ansible role network_monitor:* Zeek + capture NIC + shipper + archive
-   cleanup, `SetupNetworkMonitor.yml` in `make provision`, Ansible tests.
+   cleanup, `SetupNetworkMonitor.yml` in `worms build provision`, Ansible tests.
 4. *Test suite and end-to-end simulation:* `Simulate.yml` + helper scripts,
-   `make test`, `make simulate`, tofu/simulation tests.
+   `worms test`, `worms simulate`, tofu/simulation tests.
 5. *Documentation:* this file, monitoring.md, testing.md, README, TODO.
 
 ## How it was verified, and what was not
@@ -92,8 +92,8 @@ Details: [monitoring.md](monitoring.md), [testing.md](testing.md).
 - **Not run on a Proxmox host** (none available): VM creation, the Proxmox
   side of the firewall, Zeek itself (its OBS repository was not reachable
   from the development environment), the systemd hardening in practice.
-  First steps on the real host: `make` (or `make infrastructure host-network
-  provision`), deploy a sandbox, `make simulate`.
+  First steps on the real host: `make` (or `worms build infrastructure`, `worms build host-network`,
+  `worms build provision`), deploy a sandbox, `worms simulate`.
 
 ## Infrastructure visualization (dashboard topology view)
 
@@ -192,7 +192,7 @@ Priority items a reviewer should weigh before a live deployment:
    a host nftables drop of gateway↔gateway on the services bridge; each
    gateway's Proxmox firewall accepting no inbound service connections). This
    is defense in depth, but it is the one place the two environments share a
-   medium — worth a live packet-level check (extend `make simulate`).
+   medium — worth a live packet-level check (extend `worms simulate`).
 2. **SSH gateway confinement.** The `restrict,port-forwarding,permitopen=...`
    per-key options are the real boundary; verify on a live host that a team key
    can ONLY reach its own VMs and cannot open a shell, a second forward, or
@@ -214,4 +214,4 @@ Priority items a reviewer should weigh before a live deployment:
    parameter validation). First live steps: `worms build devbox`, create a
    team, connect through the gateway, submit a token, reset.
 7. **General, pre-existing**: remove remaining root logins, attach the
-   hookscript, set `MEDIA_ROOT`, and run `make simulate` on the real host.
+   hookscript, set `MEDIA_ROOT`, and run `worms simulate` on the real host.

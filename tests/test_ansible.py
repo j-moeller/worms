@@ -61,10 +61,27 @@ def test_every_vm_group_is_in_the_inventory():
     assert "monitor" in groups["network_monitor_hosts"]["children"]
 
 
-def test_monitor_role_in_make_provision():
+def test_monitor_role_in_configure_sequence():
+    # The build pipeline (src/worms_cli/pipeline.py) owns the configure order
+    # now; the monitor is set up after the database/dashboard.
+    pipeline = (REPO / "src" / "worms_cli" / "pipeline.py").read_text()
+    assert "SetupNetworkMonitor.yml" in pipeline
+    assert pipeline.index("SetupDbAndDashboard.yml") < pipeline.index("SetupNetworkMonitor.yml")
+
+
+def test_makefile_is_a_thin_wrapper_over_the_cli():
+    # All functionality lives in src/manage.py; the Makefile only delegates.
+    import re
+
     makefile = (REPO / "Makefile").read_text()
-    assert "SetupNetworkMonitor.yml" in makefile
-    assert makefile.index("SetupDbAndDashboard.yml") < makefile.index("SetupNetworkMonitor.yml")
+    targets = set(re.findall(r"^([A-Za-z0-9_-]+):", makefile, re.MULTILINE))
+    assert targets == {"all", "destroy", "destroy_all"}, targets
+    # Each target calls the CLI (python3 src/manage.py), nothing else builds.
+    assert "src/manage.py" in makefile
+    assert "$(WORMS) build" in makefile
+    assert "$(WORMS) destroy" in makefile
+    assert "$(WORMS) destroy-all" in makefile
+    assert "tofu" not in makefile and "ansible" not in makefile
 
 
 # --- rendered templates ------------------------------------------------------

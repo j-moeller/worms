@@ -21,7 +21,7 @@ details and its own heartbeats (`network_events`).
 | Monitor VM | `opentofu/modules/network_monitor_vm`, ephemeral stack (`module "monitor"`) | net0 ingest `10.12.0.100` (default route; `db_client`, `log_client`, `provisioning`), net1 mgmt-exposed `10.5.0.100` (`ssh`), net2 mirror bridge (no address, Proxmox firewall off). 2 vCPU, 2 GB, 20 GB. The capture NIC's MAC goes into the inventory (`monitor_capture_mac`). |
 | Mirroring | `ansible/roles/host/host_network`: `worms-mirror` (service on the Proxmox host) | Copies the ingress of every port of every `vmbr1*` bridge into `vmbr3`. Re-applied on every link event and every 10 s. `worms-mirror status` shows each port. |
 | Receive-only capture NIC | `worms-mirror` (tc drop on the mirror bridge's ports) + `worms.nft` (bridge table drops what enters `vmbr3`) | Whatever the monitor sends on net2 goes nowhere. |
-| Zeek | `ansible/roles/applications/network_monitor` (`SetupNetworkMonitor.yml`, part of `make provision`) | Standalone Zeek on net2, JSON logs in `/var/lib/zeek/logs`, rotated hourly into `/var/lib/zeek/archive`, deleted after 48 h. |
+| Zeek | `ansible/roles/applications/network_monitor` (`SetupNetworkMonitor.yml`, part of `worms build provision`) | Standalone Zeek on net2, JSON logs in `/var/lib/zeek/logs`, rotated hourly into `/var/lib/zeek/archive`, deleted after 48 h. |
 | zeek-shipper | same role, `files/zeek_shipper.py` | Reads the logs, inserts into the database as `dbuser_network_monitor`. |
 | Schema | `projects/dashboard/core/models/monitoring.py`, migration `0003` | `network_flows`, `network_events`. |
 | Grants | `ansible/roles/database/setup_db_permissions/defaults/main.yml` | `dbuser_network_monitor`: INSERT on the data columns of the two tables, nothing else. Connection limit 4. |
@@ -153,13 +153,13 @@ SELECT log, max(ts) FROM network_events WHERE log IN ('shipper', 'stats') GROUP 
 ## Operations
 
 ```
-make host-network                 # worms-mirror on the host (part of make)
-make infrastructure               # the monitor VM (ephemeral stack, part of make)
-make provision                    # Zeek + shipper (SetupNetworkMonitor.yml, needs internet)
+worms build host-network                 # worms-mirror on the host (part of make)
+worms build infrastructure        # the monitor VM (ephemeral stack, part of the full build)
+worms build provision                    # Zeek + shipper (SetupNetworkMonitor.yml, needs internet)
 worms-mirror status               # on the host: every sandbox port and what it mirrors
 journalctl -t worms-mirror        # changes it made
 ssh debian@10.5.0.100 'systemctl status zeek zeek-shipper; journalctl -u zeek-shipper -n 20'
-make simulate                     # end-to-end check (docs/testing.md)
+worms simulate                     # end-to-end check (docs/testing.md)
 ```
 
 Tuning: `ansible/roles/applications/network_monitor/defaults/main.yml`
@@ -189,5 +189,5 @@ Tuning: `ansible/roles/applications/network_monitor/defaults/main.yml`
   (e.g. delete or partition by `ts` per round).
 - **Not run live yet.** This was built and tested without a Proxmox host.
   Zeek could not be installed here (OBS was not reachable). On the first
-  `make provision`, Zeek parses the configuration before it is installed
-  (`zeek --parse-only`); `make simulate` then verifies the whole chain.
+  `worms build provision`, Zeek parses the configuration before it is installed
+  (`zeek --parse-only`); `worms simulate` then verifies the whole chain.

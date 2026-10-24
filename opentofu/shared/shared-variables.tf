@@ -64,8 +64,12 @@ variable "ssh_public_key" {
 # opentofu/stacks/sandbox (generated_vms*.tf) and surfaced via its own output.
 # =============================================================================
 locals {
-  # Bridge names. vmbr1* is reserved for the generated sandbox networks, so the
-  # host firewall can match them with a prefix; infrastructure bridges avoid it.
+  # Bridge names. vmbr1* is reserved for the generated sandbox networks and
+  # vmbr9* for the generated devbox networks (docs/devbox.md), so the host
+  # firewall can match each family with a prefix; infrastructure bridges avoid
+  # both. Devbox and sandbox share only the services bridge (both reach
+  # scoring/logging/private-internet there, never each other -- see the host
+  # nftables ruleset and docs/devbox.md).
   bridges = {
     dmz          = "vmbr20"
     core         = "vmbr21"
@@ -76,7 +80,10 @@ locals {
     mgmt_trusted = "vmbr2"
     mgmt_exposed = "vmbr5"
     mgmt_sandbox = "vmbr4"
+    mgmt_devbox  = "vmbr6" # untrusted devbox maintenance (host SSH, port-isolated)
+    devbox_ssh   = "vmbr7" # devbox SSH fabric (teams reach VMs via the gateway, port-isolated)
     sandbox_glob = "vmbr1*"
+    devbox_glob  = "vmbr9*"
   }
 
   networks = {
@@ -86,9 +93,12 @@ locals {
     services     = "10.2.0.0/24"
     siem         = "10.13.0.0/24"
     sandbox_vms  = "10.64.0.0/10"
+    devbox_vms   = "10.128.0.0/10" # 10.128-10.191; disjoint from sandbox 10.64/10
     mgmt_trusted = "10.3.0.0/24"
     mgmt_exposed = "10.5.0.0/24"
     mgmt_sandbox = "10.4.0.0/16"
+    mgmt_devbox  = "10.6.0.0/16"
+    devbox_ssh   = "10.7.0.0/16"
   }
 
   # Proxmox host addresses (the gateway of each routed zone, the SSH source on
@@ -101,6 +111,8 @@ locals {
     mgmt_trusted = "10.3.0.1"
     mgmt_exposed = "10.5.0.1"
     mgmt_sandbox = "10.4.0.1"
+    mgmt_devbox  = "10.6.0.1"
+    devbox_ssh   = "10.7.0.1"
   }
 
   # Data-plane address of each infrastructure VM: what other VMs connect to, and
@@ -155,6 +167,21 @@ locals {
     udp = "53,123"
   }
 
+  # Trusted SSH gateway (docs/devbox.md): teams reach it (host DNAT) and it
+  # jumps them into their own devbox VMs over the port-isolated devbox SSH
+  # fabric. It is hardened infrastructure, NOT part of the untrusted devbox.
+  ssh_gateway_ips = {
+    devbox_ssh  = "10.7.0.2"  # on vmbr7 (reaches every devbox VM; ports isolated)
+    maintenance = "10.5.0.40" # mgmt-exposed (Ansible)
+  }
+  # TCP port teams connect to on the host WAN; DNATed to the gateway:22.
+  ssh_gateway_public_port = 2222
+
+  # Services-bridge addresses reserved for per-team devbox gateways (their SNAT
+  # source, which the scoring/logging servers map to the team). The generated
+  # devbox stack assigns within this block; sandbox-gw (10.2.0.2) is outside it.
+  devbox_services_block = "10.2.0.32/27" # 10.2.0.32 - 10.2.0.63
+
   # Proxmox API, reached by the orchestrator on its core gateway address.
   proxmox_host_ip  = local.host_ips.core
   proxmox_api_port = 8006
@@ -165,5 +192,6 @@ locals {
     local.host_ips.mgmt_trusted,
     local.host_ips.mgmt_exposed,
     local.host_ips.mgmt_sandbox,
+    local.host_ips.mgmt_devbox,
   ]
 }

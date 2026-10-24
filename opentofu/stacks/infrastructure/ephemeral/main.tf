@@ -87,6 +87,9 @@ module "sandbox_apis" {
   ]
   firewall_rules = [
     { group = local.sg.sandbox_api, iface = "net0" },
+    # Devbox submissions arrive on the same services NIC, from the per-team
+    # devbox gateways' SNAT block (docs/devbox.md).
+    { group = local.sg.devbox_api, iface = "net0" },
     { group = local.sg.db_client, iface = "net1" },
     { group = local.sg.provisioning, iface = "net1" },
     { group = local.sg.log_client, iface = "net1" },

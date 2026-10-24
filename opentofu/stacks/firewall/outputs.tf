@@ -16,5 +16,9 @@ output "security_groups" {
     sandbox_gw       = proxmox_virtual_environment_cluster_firewall_security_group.sandbox_gw.name
     wazuh            = proxmox_virtual_environment_cluster_firewall_security_group.wazuh.name
     log_client       = proxmox_virtual_environment_cluster_firewall_security_group.log_client.name
+    devbox             = proxmox_virtual_environment_cluster_firewall_security_group.devbox.name
+    devbox_gw          = proxmox_virtual_environment_cluster_firewall_security_group.devbox_gw.name
+    devbox_api         = proxmox_virtual_environment_cluster_firewall_security_group.devbox_api.name
+    devbox_ssh_gateway = proxmox_virtual_environment_cluster_firewall_security_group.devbox_ssh_gateway.name
   }
 }

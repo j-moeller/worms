@@ -1,254 +1,268 @@
 {
-  "infrastructure": {
-    "sensitive": false,
-    "type": [
-      "object",
-      {
-        "bridges": [
-          "object",
-          {
-            "core": "string",
-            "dmz": "string",
-            "ingest": "string",
-            "mgmt_exposed": "string",
-            "mgmt_sandbox": "string",
-            "mgmt_trusted": "string",
-            "mirror": "string",
-            "sandbox_glob": "string",
-            "services": "string",
-            "siem": "string"
-          }
-        ],
-        "host_ips": [
-          "object",
-          {
-            "core": "string",
-            "dmz": "string",
-            "ingest": "string",
-            "mgmt_exposed": "string",
-            "mgmt_sandbox": "string",
-            "mgmt_trusted": "string",
-            "siem": "string"
-          }
-        ],
-        "infrastructure_ips": [
-          "object",
-          {
-            "dashboard": "string",
-            "database": "string",
-            "logging": "string",
-            "monitor": "string",
-            "orchestrator": "string",
-            "scoring": "string",
-            "wazuh": "string"
-          }
-        ],
-        "management_ips": [
-          "object",
-          {
-            "dashboard": "string",
-            "database": "string",
-            "dns": "string",
-            "logging": "string",
-            "monitor": "string",
-            "orchestrator": "string",
-            "sandbox_gw": "string",
-            "scoring": "string",
-            "wazuh": "string"
-          }
-        ],
-        "networks": [
-          "object",
-          {
-            "core": "string",
-            "dmz": "string",
-            "ingest": "string",
-            "mgmt_exposed": "string",
-            "mgmt_sandbox": "string",
-            "mgmt_trusted": "string",
-            "sandbox_vms": "string",
-            "services": "string",
-            "siem": "string"
-          }
-        ],
-        "private_internet_ips": [
-          "object",
-          {
-            "apt_cache": [
-              "object",
-              {
-                "maintenance": "string",
-                "network": "string"
-              }
-            ],
-            "cve_search": [
-              "object",
-              {
-                "maintenance": "string",
-                "network": "string"
-              }
-            ],
-            "devpi": [
-              "object",
-              {
-                "maintenance": "string",
-                "network": "string"
-              }
-            ],
-            "docker_registry": [
-              "object",
-              {
-                "maintenance": "string",
-                "network": "string"
-              }
-            ],
-            "manpages": [
-              "object",
-              {
-                "maintenance": "string",
-                "network": "string"
-              }
-            ],
-            "ntp": [
-              "object",
-              {
-                "maintenance": "string",
-                "network": "string"
-              }
-            ],
-            "wikipedia": [
-              "object",
-              {
-                "maintenance": "string",
-                "network": "string"
-              }
-            ]
-          }
-        ],
-        "proxmox": [
-          "object",
-          {
-            "api_port": "number",
-            "host": "string",
-            "node": "string"
-          }
-        ],
-        "services_ips": [
-          "object",
-          {
-            "dns": "string",
-            "logging": "string",
-            "sandbox_gw": "string",
-            "scoring": "string"
-          }
-        ],
-        "services_ports": [
-          "object",
-          {
-            "tcp": "string",
-            "udp": "string"
-          }
-        ]
-      }
+ "infrastructure": {
+  "sensitive": false,
+  "type": [
+   "object",
+   {
+    "bridges": [
+     "object",
+     {
+      "core": "string",
+      "dmz": "string",
+      "ingest": "string",
+      "mgmt_exposed": "string",
+      "mgmt_sandbox": "string",
+      "mgmt_trusted": "string",
+      "mirror": "string",
+      "sandbox_glob": "string",
+      "services": "string",
+      "siem": "string"
+     }
     ],
-    "value": {
-      "bridges": {
-        "core": "vmbr21",
-        "dmz": "vmbr20",
-        "ingest": "vmbr22",
-        "mgmt_exposed": "vmbr5",
-        "mgmt_sandbox": "vmbr4",
-        "mgmt_trusted": "vmbr2",
-        "mirror": "vmbr3",
-        "sandbox_glob": "vmbr1*",
-        "services": "vmbr23",
-        "siem": "vmbr24"
-      },
-      "host_ips": {
-        "core": "10.11.0.1",
-        "dmz": "10.10.0.1",
-        "ingest": "10.12.0.1",
-        "mgmt_exposed": "10.5.0.1",
-        "mgmt_sandbox": "10.4.0.1",
-        "mgmt_trusted": "10.3.0.1",
-        "siem": "10.13.0.1"
-      },
-      "infrastructure_ips": {
-        "dashboard": "10.10.0.18",
-        "database": "10.11.0.16",
-        "logging": "10.12.0.15",
-        "monitor": "10.12.0.100",
-        "orchestrator": "10.11.0.19",
-        "scoring": "10.12.0.14",
-        "wazuh": "10.13.0.30"
-      },
-      "management_ips": {
-        "dashboard": "10.5.0.18",
-        "database": "10.3.0.16",
-        "dns": "10.5.0.11",
-        "logging": "10.5.0.15",
-        "monitor": "10.5.0.100",
-        "orchestrator": "10.3.0.19",
-        "sandbox_gw": "10.4.0.2",
-        "scoring": "10.5.0.14",
-        "wazuh": "10.5.0.30"
-      },
-      "networks": {
-        "core": "10.11.0.0/24",
-        "dmz": "10.10.0.0/24",
-        "ingest": "10.12.0.0/24",
-        "mgmt_exposed": "10.5.0.0/24",
-        "mgmt_sandbox": "10.4.0.0/16",
-        "mgmt_trusted": "10.3.0.0/24",
-        "sandbox_vms": "10.64.0.0/10",
-        "services": "10.2.0.0/24",
-        "siem": "10.13.0.0/24"
-      },
-      "private_internet_ips": {
-        "apt_cache": {
-          "maintenance": "10.5.0.20",
-          "network": "10.2.0.20"
-        },
-        "cve_search": {
-          "maintenance": "10.5.0.25",
-          "network": "10.2.0.25"
-        },
-        "devpi": {
-          "maintenance": "10.5.0.21",
-          "network": "10.2.0.21"
-        },
-        "docker_registry": {
-          "maintenance": "10.5.0.22",
-          "network": "10.2.0.22"
-        },
-        "manpages": {
-          "maintenance": "10.5.0.23",
-          "network": "10.2.0.23"
-        },
-        "ntp": {
-          "maintenance": "10.5.0.24",
-          "network": "10.2.0.24"
-        },
-        "wikipedia": {
-          "maintenance": "10.5.0.26",
-          "network": "10.2.0.26"
-        }
-      },
-      "proxmox": {
-        "api_port": 8006,
-        "host": "10.11.0.1",
-        "node": "worms-pve"
-      },
-      "services_ips": {
-        "dns": "10.2.0.11",
-        "logging": "10.2.0.15",
-        "sandbox_gw": "10.2.0.2",
-        "scoring": "10.2.0.14"
-      },
-      "services_ports": {
-        "tcp": "53,80,443,3141,3142,5000,8888",
-        "udp": "53,123"
-      }
+    "host_ips": [
+     "object",
+     {
+      "core": "string",
+      "dmz": "string",
+      "ingest": "string",
+      "mgmt_exposed": "string",
+      "mgmt_sandbox": "string",
+      "mgmt_trusted": "string",
+      "siem": "string"
+     }
+    ],
+    "infrastructure_ips": [
+     "object",
+     {
+      "dashboard": "string",
+      "database": "string",
+      "logging": "string",
+      "monitor": "string",
+      "orchestrator": "string",
+      "scoring": "string",
+      "wazuh": "string"
+     }
+    ],
+    "management_ips": [
+     "object",
+     {
+      "dashboard": "string",
+      "database": "string",
+      "dns": "string",
+      "logging": "string",
+      "monitor": "string",
+      "orchestrator": "string",
+      "sandbox_gw": "string",
+      "scoring": "string",
+      "wazuh": "string"
+     }
+    ],
+    "networks": [
+     "object",
+     {
+      "core": "string",
+      "dmz": "string",
+      "ingest": "string",
+      "mgmt_exposed": "string",
+      "mgmt_sandbox": "string",
+      "mgmt_trusted": "string",
+      "sandbox_vms": "string",
+      "services": "string",
+      "siem": "string"
+     }
+    ],
+    "private_internet_ips": [
+     "object",
+     {
+      "apt_cache": [
+       "object",
+       {
+        "maintenance": "string",
+        "network": "string"
+       }
+      ],
+      "cve_search": [
+       "object",
+       {
+        "maintenance": "string",
+        "network": "string"
+       }
+      ],
+      "devpi": [
+       "object",
+       {
+        "maintenance": "string",
+        "network": "string"
+       }
+      ],
+      "docker_registry": [
+       "object",
+       {
+        "maintenance": "string",
+        "network": "string"
+       }
+      ],
+      "manpages": [
+       "object",
+       {
+        "maintenance": "string",
+        "network": "string"
+       }
+      ],
+      "ntp": [
+       "object",
+       {
+        "maintenance": "string",
+        "network": "string"
+       }
+      ],
+      "wikipedia": [
+       "object",
+       {
+        "maintenance": "string",
+        "network": "string"
+       }
+      ]
+     }
+    ],
+    "proxmox": [
+     "object",
+     {
+      "api_port": "number",
+      "host": "string",
+      "node": "string"
+     }
+    ],
+    "services_ips": [
+     "object",
+     {
+      "dns": "string",
+      "logging": "string",
+      "sandbox_gw": "string",
+      "scoring": "string"
+     }
+    ],
+    "services_ports": [
+     "object",
+     {
+      "tcp": "string",
+      "udp": "string"
+     }
+    ]
+   }
+  ],
+  "value": {
+   "bridges": {
+    "core": "vmbr21",
+    "devbox_glob": "vmbr9*",
+    "devbox_ssh": "vmbr7",
+    "dmz": "vmbr20",
+    "ingest": "vmbr22",
+    "mgmt_devbox": "vmbr6",
+    "mgmt_exposed": "vmbr5",
+    "mgmt_sandbox": "vmbr4",
+    "mgmt_trusted": "vmbr2",
+    "mirror": "vmbr3",
+    "sandbox_glob": "vmbr1*",
+    "services": "vmbr23",
+    "siem": "vmbr24"
+   },
+   "devbox_services_block": "10.2.0.32/27",
+   "host_ips": {
+    "core": "10.11.0.1",
+    "devbox_ssh": "10.7.0.1",
+    "dmz": "10.10.0.1",
+    "ingest": "10.12.0.1",
+    "mgmt_devbox": "10.6.0.1",
+    "mgmt_exposed": "10.5.0.1",
+    "mgmt_sandbox": "10.4.0.1",
+    "mgmt_trusted": "10.3.0.1",
+    "siem": "10.13.0.1"
+   },
+   "infrastructure_ips": {
+    "dashboard": "10.10.0.18",
+    "database": "10.11.0.16",
+    "logging": "10.12.0.15",
+    "monitor": "10.12.0.100",
+    "orchestrator": "10.11.0.19",
+    "scoring": "10.12.0.14",
+    "wazuh": "10.13.0.30"
+   },
+   "management_ips": {
+    "dashboard": "10.5.0.18",
+    "database": "10.3.0.16",
+    "dns": "10.5.0.11",
+    "logging": "10.5.0.15",
+    "monitor": "10.5.0.100",
+    "orchestrator": "10.3.0.19",
+    "sandbox_gw": "10.4.0.2",
+    "scoring": "10.5.0.14",
+    "wazuh": "10.5.0.30"
+   },
+   "networks": {
+    "core": "10.11.0.0/24",
+    "devbox_ssh": "10.7.0.0/16",
+    "devbox_vms": "10.128.0.0/10",
+    "dmz": "10.10.0.0/24",
+    "ingest": "10.12.0.0/24",
+    "mgmt_devbox": "10.6.0.0/16",
+    "mgmt_exposed": "10.5.0.0/24",
+    "mgmt_sandbox": "10.4.0.0/16",
+    "mgmt_trusted": "10.3.0.0/24",
+    "sandbox_vms": "10.64.0.0/10",
+    "services": "10.2.0.0/24",
+    "siem": "10.13.0.0/24"
+   },
+   "private_internet_ips": {
+    "apt_cache": {
+     "maintenance": "10.5.0.20",
+     "network": "10.2.0.20"
+    },
+    "cve_search": {
+     "maintenance": "10.5.0.25",
+     "network": "10.2.0.25"
+    },
+    "devpi": {
+     "maintenance": "10.5.0.21",
+     "network": "10.2.0.21"
+    },
+    "docker_registry": {
+     "maintenance": "10.5.0.22",
+     "network": "10.2.0.22"
+    },
+    "manpages": {
+     "maintenance": "10.5.0.23",
+     "network": "10.2.0.23"
+    },
+    "ntp": {
+     "maintenance": "10.5.0.24",
+     "network": "10.2.0.24"
+    },
+    "wikipedia": {
+     "maintenance": "10.5.0.26",
+     "network": "10.2.0.26"
     }
+   },
+   "proxmox": {
+    "api_port": 8006,
+    "host": "10.11.0.1",
+    "node": "worms-pve"
+   },
+   "services_ips": {
+    "dns": "10.2.0.11",
+    "logging": "10.2.0.15",
+    "sandbox_gw": "10.2.0.2",
+    "scoring": "10.2.0.14"
+   },
+   "services_ports": {
+    "tcp": "53,80,443,3141,3142,5000,8888",
+    "udp": "53,123"
+   },
+   "ssh_gateway_ips": {
+    "devbox_ssh": "10.7.0.2",
+    "maintenance": "10.5.0.40"
+   },
+   "ssh_gateway_public_port": 2222
   }
+ }
 }

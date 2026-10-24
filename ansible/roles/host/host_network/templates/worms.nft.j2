@@ -18,16 +18,20 @@
 #   `internet_wan`, which is empty here. Only Internet.yml (internet=allowed) fills it,
 #   at runtime (a reboot or a reload empties it again).
 {% set b = bridges %}
-{% set same_bridge = [b.services, b.mirror, b.dmz, b.core, b.ingest, b.siem, b.mgmt_trusted, b.mgmt_exposed, b.mgmt_sandbox] %}
+{% set same_bridge = [b.services, b.mirror, b.dmz, b.core, b.ingest, b.siem, b.mgmt_trusted, b.mgmt_exposed, b.mgmt_sandbox, b.mgmt_devbox, b.devbox_ssh] %}
 
 table inet worms
 delete table inet worms
 
 table inet worms {
-  # Bridges on which the host has an address (routed zones, management).
+  # Bridges on which the host has an address (routed zones, management). The
+  # devbox management (vmbr6) and SSH-fabric (vmbr7) bridges are here: the host
+  # has an address and SSHes VMs on them, but (like the other management
+  # bridges) never routes between them -- port isolation keeps devbox VMs from
+  # reaching each other there.
   set vm_bridges {
     type ifname
-    elements = { "{{ b.dmz }}", "{{ b.core }}", "{{ b.ingest }}", "{{ b.siem }}", "{{ b.mgmt_trusted }}", "{{ b.mgmt_exposed }}", "{{ b.mgmt_sandbox }}" }
+    elements = { "{{ b.dmz }}", "{{ b.core }}", "{{ b.ingest }}", "{{ b.siem }}", "{{ b.mgmt_trusted }}", "{{ b.mgmt_exposed }}", "{{ b.mgmt_sandbox }}", "{{ b.mgmt_devbox }}", "{{ b.devbox_ssh }}" }
   }
 
   # Bridges on which the host has NO address and never accepts anything.
@@ -52,6 +56,7 @@ table inet worms {
   chain input {
     type filter hook input priority filter - 5; policy accept;
     iifname "{{ b.sandbox_glob }}" counter drop comment "sandbox bridges: never"
+    iifname "{{ b.devbox_glob }}" counter drop comment "devbox bridges: never"
     iifname @dark_bridges counter drop comment "services/mirror: never"
     iifname @vm_bridges jump from_vms
   }
@@ -72,8 +77,11 @@ table inet worms {
 
     # Bridged traffic that stays on its bridge (only visible here with
     # br_netfilter); the Proxmox VM firewall filters it. The host has no route
-    # between two sandbox bridges, so this never permits routing.
+    # between two sandbox (or two devbox) bridges, so this never permits
+    # routing -- and crucially never between a devbox and a sandbox bridge
+    # (default-drop below), so the two can never reach each other.
     iifname "{{ b.sandbox_glob }}" oifname "{{ b.sandbox_glob }}" accept
+    iifname "{{ b.devbox_glob }}" oifname "{{ b.devbox_glob }}" accept
 {% for bridge in same_bridge %}
     iifname "{{ bridge }}" oifname "{{ bridge }}" accept
 {% endfor %}
@@ -88,6 +96,11 @@ table inet worms {
 {% if host_publish_dashboard %}
     iifname "{{ host_wan_interface }}" oifname "{{ b.dmz }}" ip daddr {{ infrastructure_ips.dashboard }} tcp dport 443 ct status dnat accept comment "internet -> dashboard"
 {% endif %}
+{% if host_publish_ssh_gateway | default(false) and ssh_gateway_ips.devbox_ssh is defined %}
+    # Teams reach the trusted devbox SSH gateway (host DNAT on the WAN). The
+    # gateway jumps them into their own devbox VMs over vmbr7 (docs/devbox.md).
+    iifname "{{ host_wan_interface }}" oifname "{{ b.devbox_ssh }}" ip daddr {{ ssh_gateway_ips.devbox_ssh }} tcp dport 22 ct status dnat accept comment "internet -> devbox SSH gateway"
+{% endif %}
 
     # Internet access (gated, see internet_wan).
     iifname @internet_zones oifname @internet_wan tcp dport { 80, 443, 53 } accept comment "internet allowed"
@@ -101,6 +114,9 @@ table inet worms {
     type nat hook prerouting priority dstnat;
 {% if host_publish_dashboard %}
     iifname "{{ host_wan_interface }}" fib daddr type local tcp dport 443 dnat ip to {{ infrastructure_ips.dashboard }}:443 comment "publish dashboard"
+{% endif %}
+{% if host_publish_ssh_gateway | default(false) and ssh_gateway_ips.devbox_ssh is defined %}
+    iifname "{{ host_wan_interface }}" fib daddr type local tcp dport {{ ssh_gateway_public_port | default(2222) }} dnat ip to {{ ssh_gateway_ips.devbox_ssh }}:22 comment "publish devbox SSH gateway"
 {% endif %}
   }
 
@@ -147,11 +163,35 @@ table bridge worms_bridge {
     timeout 1m
   }
 
+  # Devbox gets its own per-VM rate sets (same limits as sandbox), so devbox
+  # and sandbox never share a rate budget (docs/devbox.md).
+  set devbox_services_syn {
+    type ipv4_addr
+    size 65535
+    flags dynamic,timeout
+    timeout 1m
+  }
+
+  set devbox_syn {
+    type ipv4_addr
+    size 65535
+    flags dynamic,timeout
+    timeout 1m
+  }
+
+  set devbox_udp {
+    type ipv4_addr
+    size 65535
+    flags dynamic,timeout
+    timeout 1m
+  }
+
   chain forward {
     type filter hook forward priority filter; policy accept;
     meta ibrname "{{ b.mirror }}" counter drop comment "mirror: receive-only"
     meta ibrname "{{ b.services }}" jump services
     meta ibrname "{{ b.sandbox_glob }}" jump sandbox
+    meta ibrname "{{ b.devbox_glob }}" jump devbox
   }
 
   # The mirror bridge only carries the copies worms-mirror sends out of the
@@ -170,12 +210,34 @@ table bridge worms_bridge {
     ether type ip6 drop
     ip saddr != {{ networks.services }} counter drop
     ip daddr != {{ networks.services }} counter drop
+    # Devbox/sandbox isolation on the shared services bridge: the SNAT sources
+    # (sandbox-gw and the per-team devbox gateways) may reach the service VMs,
+    # never one another. Without this, two gateways sit in the same services
+    # subnet and could exchange traffic on a services port (docs/devbox.md).
+{% if devbox_services_block %}
+    ip saddr { {{ services_ips.sandbox_gw }}, {{ devbox_services_block }} } ip daddr { {{ services_ips.sandbox_gw }}, {{ devbox_services_block }} } counter drop comment "no gateway<->gateway: devbox/sandbox isolation"
+{% endif %}
     icmp type { echo-request, echo-reply, destination-unreachable, time-exceeded } accept
     tcp dport { {{ tcp_ports }} } accept
     tcp sport { {{ tcp_ports }} } accept
     udp dport { {{ udp_ports }} } accept
     udp sport { {{ udp_ports }} } accept
     counter drop
+  }
+
+  # Devbox networks: identical restrictions to the sandbox chain, keyed by the
+  # devbox VM's own address (before the per-team devbox-gw SNAT). Only devbox
+  # and services addresses exist here; a devbox VM can never address a sandbox
+  # VM (different subnet, and the host never bridges the two).
+  chain devbox {
+    ether type arp accept
+    ether type ip6 drop
+    ip saddr != { {{ networks.devbox_vms }}, {{ networks.services }} } counter drop
+    ip daddr != { {{ networks.devbox_vms }}, {{ networks.services }} } counter drop
+    ip saddr {{ networks.devbox_vms }} ip daddr {{ networks.services }} tcp flags & (syn | ack) == syn update @devbox_services_syn { ip saddr limit rate over {{ l.services_syn_per_second }}/second burst {{ l.services_syn_burst }} packets } counter drop
+    ip saddr {{ networks.devbox_vms }} tcp flags & (syn | ack) == syn update @devbox_syn { ip saddr limit rate over {{ l.syn_per_second }}/second burst {{ l.syn_burst }} packets } counter drop
+    ip saddr {{ networks.devbox_vms }} meta l4proto udp update @devbox_udp { ip saddr limit rate over {{ l.udp_pps }}/second burst {{ l.udp_burst }} packets } counter drop
+    accept
   }
 
   chain sandbox {

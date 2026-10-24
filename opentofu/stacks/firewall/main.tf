@@ -344,6 +344,134 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "sandbox_
   }
 }
 
+# =============================================================================
+# Devbox (docs/devbox.md). Mirrors the sandbox groups on the devbox networks,
+# plus a trusted SSH gateway. Devbox and sandbox never share a security group,
+# a bridge (except services, where gateway<->gateway is dropped by the host
+# nftables) or a network, so they cannot reach each other.
+# =============================================================================
+
+# Devbox VMs (assumed root-compromised). Free traffic among a team's own devbox
+# networks, plus the services bridge on the allowed ports (via the team's
+# devbox-gw). Scoped to the devbox network, so never the sandbox network.
+resource "proxmox_virtual_environment_cluster_firewall_security_group" "devbox" {
+  name    = "devbox"
+  comment = "Devbox VMs: own networks + services (docs/devbox.md)"
+
+  rule {
+    type    = "in"
+    action  = "ACCEPT"
+    source  = local.networks.devbox_vms
+    dest    = local.networks.devbox_vms
+    comment = "Within the devbox networks"
+  }
+  rule {
+    type    = "out"
+    action  = "ACCEPT"
+    source  = local.networks.devbox_vms
+    dest    = local.networks.devbox_vms
+    comment = "Within the devbox networks"
+  }
+  rule {
+    type    = "out"
+    action  = "ACCEPT"
+    proto   = "tcp"
+    dport   = local.private_internet_ports.tcp
+    dest    = local.networks.services
+    comment = "-> services bridge (TCP, via devbox-gw)"
+  }
+  rule {
+    type    = "out"
+    action  = "ACCEPT"
+    proto   = "udp"
+    dport   = local.private_internet_ports.udp
+    dest    = local.networks.services
+    comment = "-> services bridge (UDP, via devbox-gw)"
+  }
+}
+
+# Per-team devbox-gw, devbox legs. Routes within the team's devbox networks and
+# towards the services bridge. The router itself is assumed compromised; these
+# host-side rules bound it (its cloud-init declines to bridge the two devbox
+# segments, so B is the only pivot -- docs/devbox.md).
+resource "proxmox_virtual_environment_cluster_firewall_security_group" "devbox_gw" {
+  name    = "devbox_gw"
+  comment = "Devbox gateway, devbox legs"
+
+  rule {
+    type    = "in"
+    action  = "ACCEPT"
+    source  = local.networks.devbox_vms
+    dest    = local.networks.devbox_vms
+    comment = "Route between devbox networks"
+  }
+  rule {
+    type    = "out"
+    action  = "ACCEPT"
+    source  = local.networks.devbox_vms
+    dest    = local.networks.devbox_vms
+    comment = "Route between devbox networks"
+  }
+  rule {
+    type    = "in"
+    action  = "ACCEPT"
+    proto   = "tcp"
+    dport   = local.private_internet_ports.tcp
+    source  = local.networks.devbox_vms
+    dest    = local.networks.services
+    comment = "Devbox -> services bridge (TCP)"
+  }
+  rule {
+    type    = "in"
+    action  = "ACCEPT"
+    proto   = "udp"
+    dport   = local.private_internet_ports.udp
+    source  = local.networks.devbox_vms
+    dest    = local.networks.services
+    comment = "Devbox -> services bridge (UDP)"
+  }
+}
+
+# Sandbox/devbox leg of scoring/logging: inbound 443 from the per-team devbox
+# gateways' SNAT block. The scoring/logging servers attribute a devbox
+# submission to its team by the source address (docs/devbox.md).
+resource "proxmox_virtual_environment_cluster_firewall_security_group" "devbox_api" {
+  name = "devbox_api"
+
+  rule {
+    type    = "in"
+    action  = "ACCEPT"
+    proto   = "tcp"
+    dport   = "443"
+    source  = local.devbox_services_block
+    comment = "Devbox (via per-team devbox-gw) -> REST API"
+  }
+}
+
+# Trusted devbox SSH gateway: teams connect (host DNAT, public) and it jumps
+# them into their own devbox VMs over the devbox SSH fabric (vmbr7). Hardened
+# infrastructure, not part of the untrusted devbox.
+resource "proxmox_virtual_environment_cluster_firewall_security_group" "devbox_ssh_gateway" {
+  name    = "devbox_ssh_gateway"
+  comment = "Devbox SSH gateway (teams -> gateway -> devbox VMs)"
+
+  rule {
+    type    = "in"
+    action  = "ACCEPT"
+    proto   = "tcp"
+    dport   = "22"
+    comment = "Teams -> gateway:22 (public, via host DNAT)"
+  }
+  rule {
+    type    = "out"
+    action  = "ACCEPT"
+    proto   = "tcp"
+    dport   = "22"
+    dest    = local.networks.devbox_ssh
+    comment = "Gateway -> devbox VMs:22 on the devbox SSH fabric"
+  }
+}
+
 # Central log server (wazuh, siem bridge): syslog from the infrastructure VMs
 # (routed by the host), the dashboard from the host only (SSH tunnel).
 resource "proxmox_virtual_environment_cluster_firewall_security_group" "wazuh" {

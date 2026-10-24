@@ -9,6 +9,11 @@ host_wan_interface: vmbr0
 # DNAT <WAN>:443 -> dashboard:443 (expose the dashboard to the internet).
 host_publish_dashboard: false
 
+# DNAT <WAN>:<ssh_gateway_public_port> -> devbox SSH gateway:22, so teams can
+# reach the gateway and jump into their devbox VMs (docs/devbox.md). Off by
+# default; turn on where the devbox is deployed.
+host_publish_ssh_gateway: false
+
 host_nft_file: /etc/worms/worms.nft
 
 # Internet access for the VMs (tasks/internet.yml, playbook Internet.yml).

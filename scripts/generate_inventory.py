@@ -112,6 +112,12 @@ def build_inventory(infrastructure: dict, stacks: dict, sandbox: dict) -> dict:
         "services_ports": infrastructure.get("services_ports", {}),
         "networks": infrastructure.get("networks", {}),
         "bridges": infrastructure.get("bridges", {}),
+        # Devbox (docs/devbox.md): the trusted SSH gateway and the services
+        # block reserved for the per-team devbox gateways. Defaulted so an older
+        # platform output (without them) still produces a usable inventory.
+        "ssh_gateway_ips": infrastructure.get("ssh_gateway_ips", {}),
+        "ssh_gateway_public_port": infrastructure.get("ssh_gateway_public_port", 2222),
+        "devbox_services_block": infrastructure.get("devbox_services_block", ""),
         "proxmox": proxmox,
     }
 

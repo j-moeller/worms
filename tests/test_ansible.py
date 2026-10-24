@@ -206,3 +206,14 @@ def test_orchestrator_power_acl_covers_user_and_token():
     cmd = grant["ansible.builtin.command"]["cmd"]
     assert "/pool/{{ round_agent_sandbox_pool }}" in cmd
     assert "-users '{{ proxmox_api_user }}'" in cmd and "-tokens '{{ round_agent_power_token }}'" in cmd
+
+
+def test_django_nginx_forwards_the_host_with_its_port(render):
+    """Django's CSRF check compares Origin (https://name:port) with the Host it
+    receives; `$host` drops the port and broke every login through a forwarded
+    port (tests/test_dashboard_login.py)."""
+    for api in (True, False):
+        conf = render(NGINX_DJANGO, "worms-tls.conf.j2", nginx_team_api=api, tls_dns_name="dashboard.worms.internal")
+        hosts = [line.strip() for line in conf.splitlines() if "proxy_set_header Host" in line]
+        assert hosts and all(line == "proxy_set_header Host $http_host;" for line in hosts), hosts
+        assert conf.count("proxy_pass ") == len(hosts)  # every location forwards it

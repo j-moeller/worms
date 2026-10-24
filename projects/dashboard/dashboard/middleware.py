@@ -49,7 +49,8 @@ def get_competition_state(
         return CompetitionState("registration")
 
     for round_id, round in enumerate(rounds):
-        if now < round.round_start:
+        # A round without dates is always active (Round.is_active).
+        if round.round_start is not None and now < round.round_start:
             if round_id > 0:
                 prev_round_idx = round_id - 1
                 prev_round = rounds[prev_round_idx]

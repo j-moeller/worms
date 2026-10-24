@@ -81,8 +81,18 @@ else:
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
     X_FRAME_OPTIONS = "DENY"
+    # Same-origin form posts need no entry here: nginx forwards the Host
+    # header with its port, so Django's origin check (Origin == https://Host)
+    # passes for whatever name/port the browser used. These are for origins
+    # that differ from the Host Django sees (another proxy in front that
+    # rewrites Host): DJANGO_CSRF_TRUSTED_ORIGINS, full origins with scheme
+    # and port, comma-separated (e.g. https://worms.example.org:8443).
     CSRF_TRUSTED_ORIGINS = [
         f"https://{host}" for host in ALLOWED_HOSTS if not host[0].isdigit()
+    ] + [
+        origin.strip()
+        for origin in env("DJANGO_CSRF_TRUSTED_ORIGINS", "").split(",")
+        if origin.strip()
     ]
 
 INSTALLED_APPS = [

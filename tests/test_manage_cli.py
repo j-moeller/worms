@@ -231,3 +231,24 @@ def test_proxmox_url_keeps_its_port(monkeypatch):
                           "WORMS_PROXMOX_TOKEN_NAME": "readonly", "WORMS_PROXMOX_TOKEN_VALUE": "x"})).api()
         assert (seen["host"], seen["port"]) == (host, port), url
         assert seen["user"] == "topology@pve" and seen["token_name"] == "readonly"
+
+
+def test_worms_db_settings_win_over_a_service_env(initialised):
+    """DB_* left in the shell (e.g. a sourced service env file) must not send
+    the CLI to another database: WORMS_DB_* win."""
+    import os as _os
+
+    stale = dict(DB_HOST="192.0.2.1", DB_PORT="1", DB_NAME="elsewhere", DB_SSLMODE="require")
+    old = {k: _os.environ.get(k) for k in stale}
+    _os.environ.update(stale)
+    try:
+        out = worms(initialised, "status").stdout
+        # Reached the test database (192.0.2.1:1 would not answer).
+        assert "competition  ● WORMS" in out and "error" not in out.lower()
+    finally:
+        for k, v in old.items():
+            if v is None:
+                _os.environ.pop(k, None)
+            else:
+                _os.environ[k] = v
+

@@ -28,12 +28,13 @@ INSTALLED_APPS = INSTALLED_APPS + ["dashboard", "orchestrator"]
 
 # The CLI connects as a privileged role (admin/migrator) so it can read
 # everything and manage teams. WORMS_DB_* take precedence over DB_* so the CLI
-# config does not collide with a service env that may be present.
+# config does not collide with a service env that may be present (a DB_HOST
+# left in the shell must not send the CLI to another database).
 _user = os.environ.get("WORMS_DB_USER") or os.environ.get("DB_USER")
 _password = os.environ.get("WORMS_DB_PASSWORD") or os.environ.get("DB_PASSWORD")
 for _key in ("DB_NAME", "DB_HOST", "DB_PORT", "DB_SSLMODE", "DB_SSLROOTCERT"):
     _wk = "WORMS_" + _key
-    if os.environ.get(_wk) and not os.environ.get(_key):
+    if os.environ.get(_wk):
         os.environ[_key] = os.environ[_wk]
 
 DATABASES = {"default": postgres_database(_user or "", _password or "")}

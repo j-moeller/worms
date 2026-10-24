@@ -3,11 +3,23 @@ from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest
 from django.shortcuts import redirect
+from django.utils.http import url_has_allowed_host_and_scheme
+
+
+def _next_or_profile(request: HttpRequest):
+    """Back to the page that sent the user to the login (?next=, set by
+    login_required), if it is a path on this site; else the profile."""
+    target = request.POST.get("next") or request.GET.get("next") or ""
+    if target and url_has_allowed_host_and_scheme(
+        target, allowed_hosts={request.get_host()}, require_https=request.is_secure()
+    ):
+        return redirect(target)
+    return redirect("profile")
 
 
 def login_view(request: HttpRequest):
     if request.user.is_authenticated:
-        return redirect("profile")
+        return _next_or_profile(request)
 
     if request.method == "POST":
         username = request.POST.get("username", "").strip()
@@ -21,7 +33,7 @@ def login_view(request: HttpRequest):
 
         if user is not None:
             login(request, user)
-            return redirect("profile")
+            return _next_or_profile(request)
 
         return render_with_base_info(
             request,

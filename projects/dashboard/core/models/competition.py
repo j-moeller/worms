@@ -36,6 +36,10 @@ class Competition(models.Model):
     def is_registration_period(self):
         if self.is_dev_competition:
             return False
+        # No registration window set (e.g. the default competition that
+        # `manage.py init` creates): there is no registration period.
+        if self.registration_starts_at is None or self.registration_ends_at is None:
+            return False
 
         return self.registration_starts_at <= clock.now() <= self.registration_ends_at
 

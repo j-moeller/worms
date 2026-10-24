@@ -270,3 +270,33 @@ Writing down every environment variable the tools read (`docs/accounts.md`
   `10.11.0.1`, the address the orchestrator uses. Issue the node's API
   certificate for that address (e.g. from the internal CA the VMs trust), or
   set `PROXMOX_CA_BUNDLE` / `PROXMOX_VERIFY_SSL` via `django_extra_env`.
+
+## Dashboard login: "CSRF verification failed" behind a forwarded port
+
+Reproduced over the real stack (nginx with the rendered `worms-tls` site,
+gunicorn with the dashboard's production settings, PostgreSQL, Chromium):
+reached through a forwarded port (an SSH tunnel, `https://<name>:8443`), the
+login POST was refused with "CSRF verification failed". nginx forwarded
+`Host $host`, which drops the port, while Django compares the browser's
+`Origin` (`https://<name>:8443`) with `https://<Host>`. nginx now forwards
+`$http_host`; the name is still validated by `ALLOWED_HOSTS`.
+
+Right behind it: every page after a successful login answered 500, because
+`Competition.is_registration_period()` compared `None` dates (the default
+competition `manage.py init` creates has none) and the navigation calls it on
+every page; the competition-state middleware had the same problem with a
+round without dates. Both now treat missing dates as "no registration window"
+/ "always active". The login also returns to the page that asked for it
+(`?next=`, same site only) instead of always the profile.
+
+`dashboard_public_hosts` (`group_vars/dashboard.yml`) adds the node's public
+name to `ALLOWED_HOSTS` when the dashboard is published on the WAN;
+`DJANGO_CSRF_TRUSTED_ORIGINS` covers a proxy in front that rewrites the Host.
+Tests: `tests/test_dashboard_login.py`, `tests/test_ansible.py`.
+
+Found with it: the CLI's `config/settings/manage.py` let a `DB_HOST` /
+`DB_PORT` / `DB_NAME` / `DB_SSLMODE` / `DB_SSLROOTCERT` already in the
+environment win over `WORMS_DB_*` (the opposite of its own comment), so a
+shell with a service's `DB_*` variables (e.g. after sourcing an env file)
+sent `worms` to another database. `WORMS_DB_*` now always win
+(`tests/test_manage_cli.py`).

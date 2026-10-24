@@ -7,7 +7,11 @@ django_settings_module: config.settings.dashboard
 django_db_user: django_dashboard
 django_db_password: "{{ vault_django_dashboard_password }}"
 django_secret_key: "{{ vault_dashboard_secret_key }}"
-django_allowed_hosts: "dashboard.worms.internal,{{ infrastructure_ips.dashboard }}"
+# Names the dashboard answers to. Add the node's public name(s) here when it is
+# published on the WAN (host_publish_dashboard), e.g. ["worms.example.org"];
+# anything else gets "400 Bad Request".
+dashboard_public_hosts: []
+django_allowed_hosts: "{{ (['dashboard.worms.internal', infrastructure_ips.dashboard] + dashboard_public_hosts) | join(',') }}"
 # The team API (/api/v1/, docs/team_api.md) is served here, rate-limited by nginx.
 nginx_team_api: true
 # Public facing: no migrator credentials, migrations run on the orchestrator.

@@ -15,9 +15,17 @@
  * the edges, events as icons on the VMs (click: pause + details), VM power
  * state and captures as they happen, with a seekable timeline.
  *
+ * Everything the view shows can be saved as one JSON file ("Download JSON":
+ * the infrastructure model + the selected run's timeline) and viewed again
+ * later ("Open JSON…", read locally, nothing is uploaded): the replay bundle,
+ * docs/visualization.md.
+ *
  * SECURITY: flows, logs and submitted flags come from the (malicious)
- * sandbox. Every string is rendered with textContent / text nodes; nothing
- * from the data is ever parsed as HTML.
+ * sandbox, and an opened file can come from anywhere. Every string is
+ * rendered with textContent / text nodes; nothing from the data is ever
+ * parsed as HTML. Server responses and files alike pass through the same
+ * sanitizer (cleanModel / cleanTimeline): known fields only, coerced types,
+ * capped sizes.
  */
 (function () {
     "use strict";
@@ -98,6 +106,17 @@
         return `${n.toFixed(i ? 1 : 0)} ${units[i]}`;
     }
 
+    // A date for display; a string that is not one is shown as it is.
+    function fmtDate(iso) {
+        const d = new Date(iso);
+        return Number.isNaN(d.getTime()) ? String(iso) : d.toLocaleString();
+    }
+
+    function shorten(text, max) {
+        text = String(text || "");
+        return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+    }
+
     function ago(iso) {
         if (!iso) return "never";
         const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
@@ -133,6 +152,248 @@
             throw error;
         }
         return body;
+    }
+
+    // ------------------------------------------------------------------
+    // The replay bundle: sanitizer, export, import
+    // ------------------------------------------------------------------
+
+    const BUNDLE_FORMAT = "worms-topology-replay";
+    const BUNDLE_VERSION = 1;
+    const MAX_FILE_BYTES = Number(root.dataset.maxFileBytes) || 64 * 1024 * 1024;
+    const CAP = { nodes: 10000, list: 100000, events: 200000, flows: 500000, rules: 4000, small: 512, status: 10000 };
+    const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+    const KNOWN_ROLES = new Set(["proxmox", "orchestrator", "dashboard", "database", "scoring", "logging", "monitor", "wazuh",
+        "dns", "private_internet", "sandbox", "sandbox_gw", "devbox", "devbox_gw", "ssh_gateway", "other"]);
+    const T_LIMIT = 1e8; // seconds; anything beyond is not a round
+
+    const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+    const bool = (v) => v === true || v === 1 || v === "1" || v === "true";
+
+    function txt(v, max = 4096) {
+        if (v === null || v === undefined) return "";
+        const s = typeof v === "string" ? v : typeof v === "number" || typeof v === "boolean" ? String(v) : "";
+        return s.length > max ? s.slice(0, max) : s;
+    }
+
+    function optTxt(v, max) {
+        return v === null || v === undefined || v === "" ? null : txt(v, max);
+    }
+
+    function num(v, fallback = null) {
+        const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
+        return Number.isFinite(n) && Math.abs(n) <= T_LIMIT * 1000 ? n : fallback;
+    }
+
+    function time(v) {
+        const t = num(v);
+        return t !== null && Math.abs(t) <= T_LIMIT ? t : null;
+    }
+
+    function list(v, name, max, fn) {
+        if (v === null || v === undefined) return [];
+        if (!Array.isArray(v)) throw new Error(`${name} must be a list`);
+        if (v.length > max) throw new Error(`${name} has more than ${max} entries`);
+        const out = [];
+        for (const item of v) {
+            const x = fn(item);
+            if (x !== null && x !== undefined) out.push(x);
+        }
+        return out;
+    }
+
+    function dict(v, max, fn) {
+        const out = {};
+        if (!isObj(v)) return out;
+        let n = 0;
+        for (const [key, value] of Object.entries(v)) {
+            if (UNSAFE_KEYS.has(key)) continue;
+            if (++n > max) break;
+            const x = fn(value);
+            if (x !== null && x !== undefined) out[key] = x;
+        }
+        return out;
+    }
+
+    const strings = (v, name, max = CAP.small) => list(v, name, max, (x) => (typeof x === "string" || typeof x === "number" ? txt(x, 256) : null));
+
+    const cleanRule = (r) => (isObj(r) ? {
+        direction: txt(r.direction, 16), action: txt(r.action, 16), proto: txt(r.proto, 16), dport: txt(r.dport, 256),
+        sport: txt(r.sport, 256), source: txt(r.source, 1024), dest: txt(r.dest, 1024), macro: txt(r.macro, 64),
+        iface: txt(r.iface, 32), group: optTxt(r.group, 128), comment: txt(r.comment, 512),
+    } : null);
+
+    function cleanFirewall(f) {
+        f = isObj(f) ? f : {};
+        return {
+            enabled: bool(f.enabled), policy_in: txt(f.policy_in, 16), policy_out: txt(f.policy_out, 16), ipfilter: bool(f.ipfilter),
+            groups: list(f.groups, "firewall.groups", CAP.small, (g) => (isObj(g) ? { name: txt(g.name, 128), iface: txt(g.iface, 32), comment: txt(g.comment, 512) } : null)),
+            rules: list(f.rules, "firewall.rules", CAP.rules, cleanRule),
+        };
+    }
+
+    // The infrastructure model (dashboard/infra_view.py + the view's metadata).
+    function cleanModel(m) {
+        if (!isObj(m)) throw new Error("model must be an object");
+        if (!Array.isArray(m.nodes)) throw new Error("model.nodes must be a list");
+        const host = isObj(m.host) ? m.host : {};
+        return {
+            host: {
+                node: optTxt(host.node, 256), version: optTxt(host.version, 64),
+                firewall_services: list(host.firewall_services, "host.firewall_services", CAP.small,
+                    (x) => (isObj(x) ? { name: txt(x.name, 64), state: txt(x.state, 64), active_state: txt(x.active_state, 64) } : null)),
+                errors: list(host.errors, "host.errors", CAP.list, (e) => (isObj(e) ? { path: txt(e.path, 512), error: txt(e.error, 1024) } : null)),
+            },
+            nodes: list(m.nodes, "model.nodes", CAP.nodes, (n) => (isObj(n) && n.id !== undefined && n.id !== null ? {
+                id: txt(n.id, 256), name: txt(n.name, 256) || txt(n.id, 256), role: KNOWN_ROLES.has(n.role) ? n.role : "other",
+                status: txt(n.status, 64) || "unknown", active: bool(n.active), vmid: num(n.vmid), type: optTxt(n.type, 16),
+                pool: txt(n.pool, 128), tags: strings(n.tags, "tags"), aux: bool(n.aux), team: optTxt(n.team, 128),
+                devbox_role: ["a", "b", "c"].includes(n.devbox_role) ? n.devbox_role : null,
+                addresses: strings(n.addresses, "addresses"),
+                nics: list(n.nics, "nics", CAP.small, (c) => (isObj(c) ? {
+                    name: txt(c.name, 32), bridge: txt(c.bridge, 64), kind: txt(c.kind, 32) || "other", ip: txt(c.ip, 64),
+                    cidr: txt(c.cidr, 64), network: txt(c.network, 64), firewall: bool(c.firewall), link_down: bool(c.link_down),
+                } : null)),
+                firewall: cleanFirewall(n.firewall),
+            } : null)),
+            groups: list(m.groups, "model.groups", CAP.nodes, (g) => (isObj(g) && (g.kind === "sandbox" || g.kind === "devbox") ? {
+                id: txt(g.id, 256), kind: g.kind, team: optTxt(g.team, 128), team_name: optTxt(g.team_name, 256),
+                label: txt(g.label, 256), gateway: optTxt(g.gateway, 256), members: strings(g.members, "members", CAP.nodes),
+            } : null)),
+            networks: list(m.networks, "model.networks", CAP.nodes, (n) => (isObj(n) && (n.kind === "sandbox" || n.kind === "devbox") ? {
+                id: txt(n.id, 256), bridge: txt(n.bridge, 64), kind: n.kind, team: optTxt(n.team, 128), group: optTxt(n.group, 256),
+                cidr: txt(n.cidr, 64), comment: txt(n.comment, 512), members: strings(n.members, "members", CAP.nodes),
+            } : null)),
+            edges: list(m.edges, "model.edges", CAP.list, (e) => (isObj(e) ? {
+                id: txt(e.id, 600), source: txt(e.source, 256), target: txt(e.target, 256), kind: txt(e.kind, 32),
+                verified: bool(e.verified), label: optTxt(e.label, 128), group: optTxt(e.group, 128), comment: txt(e.comment, 512),
+                network: optTxt(e.network, 256), targets: strings(e.targets, "targets"),
+            } : null)),
+            security_groups: dict(m.security_groups, 2000, (g) => (isObj(g) ? { comment: txt(g.comment, 512), rules: list(g.rules, "security group rules", CAP.rules, cleanRule) } : null)),
+            unresolved: { database_sources: strings(isObj(m.unresolved) ? m.unresolved.database_sources : [], "unresolved") },
+            collected_at: optTxt(m.collected_at, 64), stale: bool(m.stale), collection_error: txt(m.collection_error, 2048),
+        };
+    }
+
+    // One run's timeline (orchestrator/rounds/timeline.py), sorted, with
+    // event ids and the time range recomputed.
+    function cleanTimeline(tl) {
+        if (!isObj(tl)) throw new Error("timeline must be an object");
+        const r = isObj(tl.run) ? tl.run : {};
+        const events = list(tl.events, "timeline.events", CAP.events, (e) => {
+            const t = isObj(e) ? time(e.t) : null;
+            return t === null ? null : { t, kind: txt(e.kind, 64), node: optTxt(e.node, 256), vm: optTxt(e.vm, 256), data: isObj(e.data) ? e.data : {} };
+        }).sort((a, b) => a.t - b.t);
+        events.forEach((e, i) => { e.id = i; });
+        const flows = list(tl.flows, "timeline.flows", CAP.flows, (f) => {
+            const t = isObj(f) ? time(f.t) : null;
+            return t === null ? null : {
+                t, d: clamp(num(f.d, 0), 0, T_LIMIT), src: txt(f.src, 256), dst: txt(f.dst, 256), src_role: txt(f.src_role, 64),
+                dst_role: txt(f.dst_role, 64), src_name: txt(f.src_name, 256), dst_name: txt(f.dst_name, 256), kind: txt(f.kind, 32) || "other",
+                src_port: num(f.src_port), dst_port: num(f.dst_port), transport: txt(f.transport, 32), service: optTxt(f.service, 128),
+                conn_state: optTxt(f.conn_state, 16), bytes: num(f.bytes, 0), pkts: num(f.pkts, 0), uid: txt(f.uid, 128),
+            };
+        }).sort((a, b) => a.t - b.t);
+        let lo = Math.min(0, time(r.t_min) ?? 0);
+        let hi = Math.max(time(r.duration) ?? 0, time(r.t_max) ?? 0);
+        for (const e of events) { lo = Math.min(lo, e.t); hi = Math.max(hi, e.t); }
+        for (const f of flows) { lo = Math.min(lo, f.t); hi = Math.max(hi, f.t + f.d); }
+        return {
+            run: {
+                uuid: txt(r.uuid, 64), team: txt(r.team, 256), team_uuid: txt(r.team_uuid, 64), team_slug: optTxt(r.team_slug, 128),
+                round: txt(r.round, 256), state: txt(r.state, 32), position: num(r.position, 0),
+                worm_start_at: optTxt(r.worm_start_at, 64), ends_at: optTxt(r.ends_at, 64), start_vm: optTxt(r.start_vm, 256),
+                duration: time(r.duration), t_min: lo, t_max: hi,
+            },
+            nodes: list(tl.nodes, "timeline.nodes", CAP.nodes, (n) => (isObj(n) && n.id !== undefined && n.id !== null ? {
+                id: txt(n.id, 256), label: txt(n.label, 256) || txt(n.id, 256), vmid: num(n.vmid), addresses: strings(n.addresses, "addresses"),
+                networks: list(n.networks, "networks", CAP.small, (x) => (isObj(x) ? { name: txt(x.name, 64), cidr: optTxt(x.cidr, 64) } : null)),
+                start_vm: bool(n.start_vm), captured: bool(n.captured), captured_at: time(n.captured_at),
+            } : null)),
+            networks: list(tl.networks, "timeline.networks", CAP.nodes, (n) => (isObj(n) ? { id: txt(n.id, 64), label: txt(n.label, 64), cidr: optTxt(n.cidr, 64) } : null)),
+            edges: list(tl.edges, "timeline.edges", CAP.list, (e) => (isObj(e) ? { source: txt(e.source, 256), target: txt(e.target, 64), network: txt(e.network, 64) } : null)),
+            vm_status: dict(tl.vm_status, CAP.nodes, (points) => (Array.isArray(points) ? points.slice(0, CAP.status)
+                .map((x) => (Array.isArray(x) && time(x[0]) !== null ? [time(x[0]), txt(x[1], 32)] : null))
+                .filter(Boolean).sort((a, b) => a[0] - b[0]) : null)),
+            events,
+            flows,
+            captures: list(tl.captures, "timeline.captures", CAP.list, (c) => (isObj(c) && time(c.t) !== null ? { t: time(c.t), vm: optTxt(c.vm, 256), team: num(c.team) } : null)),
+            truncated: isObj(tl.truncated) ? { flows: bool(tl.truncated.flows), flag_submissions: bool(tl.truncated.flag_submissions), logs: bool(tl.truncated.logs) } : {},
+        };
+    }
+
+    // A replay bundle, as written by makeBundle (any source: validate it).
+    function readBundle(raw) {
+        if (!isObj(raw)) throw new Error("not a JSON object");
+        if (raw.format !== BUNDLE_FORMAT) throw new Error(`not a WORMS topology file (format must be "${BUNDLE_FORMAT}")`);
+        if (!Number.isInteger(raw.version) || raw.version < 1 || raw.version > BUNDLE_VERSION) {
+            throw new Error(`unsupported version ${txt(raw.version, 16) || "?"} (this page reads version ${BUNDLE_VERSION})`);
+        }
+        const source = isObj(raw.source) ? raw.source : {};
+        return {
+            model: cleanModel(raw.model),
+            timeline: raw.timeline === null || raw.timeline === undefined ? null : cleanTimeline(raw.timeline),
+            exported_at: optTxt(raw.exported_at, 64),
+            source: { mode: optTxt(source.mode, 16), run: optTxt(source.run, 64), from_file: optTxt(source.from_file, 256) },
+        };
+    }
+
+    function makeBundle() {
+        return {
+            format: BUNDLE_FORMAT,
+            version: BUNDLE_VERSION,
+            exported_at: new Date().toISOString(),
+            source: {
+                mode: S.mode,
+                run: S.mode === "round" ? S.runUuid : S.mode === "file" && S.file ? S.file.source.run : null,
+                from_file: S.mode === "file" && S.file ? S.file.name : null,
+            },
+            model: S.model || cleanModel({ nodes: [] }),
+            timeline: S.mode === "live" ? null : S.timeline,
+        };
+    }
+
+    function bundleName() {
+        const tl = S.mode === "live" ? null : S.timeline;
+        const parts = tl ? ["worms", tl.run.round, tl.run.team] : ["worms", "infrastructure"];
+        parts.push(new Date().toISOString().slice(0, 19));
+        return `${parts.join("-").replace(/[^A-Za-z0-9._-]+/g, "_")}.json`;
+    }
+
+    function downloadBundle() {
+        if (!S.model && !S.timeline) return notice("Nothing to download yet.", true);
+        const blob = new Blob([JSON.stringify(makeBundle())], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = el("a", { href: url, download: bundleName(), style: "display: none" });
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 30000);
+    }
+
+    async function openFile(file) {
+        if (!file) return;
+        try {
+            if (file.size > MAX_FILE_BYTES) throw new Error(`too large (${fmtBytes(file.size)}; at most ${fmtBytes(MAX_FILE_BYTES)})`);
+            let raw;
+            try {
+                raw = JSON.parse(await file.text());
+            } catch (e) {
+                throw new Error("not valid JSON");
+            }
+            S.file = Object.assign({ name: txt(file.name, 200) || "replay.json" }, readBundle(raw));
+            notice(null);
+            selectFile();
+        } catch (error) {
+            notice(`Could not open ${txt(file.name, 200)}: ${error.message}`, true);
+        }
+    }
+
+    function notice(text, isError) {
+        const banner = $("topo-banner");
+        banner.hidden = !text;
+        banner.classList.toggle("error", !!isError);
+        banner.textContent = text || "";
     }
 
     // ------------------------------------------------------------------
@@ -223,11 +484,13 @@
     // ------------------------------------------------------------------
 
     const S = {
-        model: null,
+        model: null, // the model shown (live, or from the opened file)
+        liveModel: null, // the latest snapshot from the server
         modelError: null,
+        file: null, // an opened replay bundle {name, model, timeline, exported_at, source}
         runs: null,
         runsError: null,
-        mode: "live", // "live" | "round"
+        mode: "live", // "live" | "round" | "file"
         roundId: null,
         runUuid: null,
         timeline: null,
@@ -250,6 +513,9 @@
         lastStatusKey: "",
         feedIndex: -1,
     };
+
+    // The player is on: a run (from the server or a file) is shown.
+    const replaying = () => S.mode !== "live" && !!S.timeline;
 
     function readColors() {
         const style = getComputedStyle(root);
@@ -365,7 +631,7 @@
         const hubY = sbBox.y + sbBox.h / 2 + 8;
         sbNets.forEach((net, i) => {
             const hx = sbBox.x + (sbBox.w / (sbNets.length + 1)) * (i + 1);
-            const hub = { id: net.id, kind: "hub", net, x: hx, y: hubY, w: Math.max(92, 7 * String(net.bridge).length + 30), h: 24, group: sbBox.id };
+            const hub = { id: net.id, kind: "hub", net, x: hx, y: hubY, w: clamp(7 * String(net.bridge).length + 30, 92, 150), h: 24, group: sbBox.id };
             scene.hubs.set(hub.id, hub);
         });
         const bary = (vm) => {
@@ -686,11 +952,12 @@
             const vms = S.scene.order.filter((n) => n.group === g.id).length;
             label = `${g.label} · ${vms} VM${vms === 1 ? "" : "s"} · ${[...S.scene.hubs.values()].filter((h) => h.group === g.id).length} networks`;
         }
-        node.appendChild(sv("text", { class: `group-label ${g.kind}`, x: g.x + 12, y: g.y + 20, text: label }));
+        // The PI box has its subtitle; other boxes have the gateway on their edge.
+        node.appendChild(sv("text", { class: `group-label ${g.kind}`, x: g.x + 12, y: g.y + 20, text: fitText(label, g.w - (g.kind === "pi" ? 24 : 40), 12, true) }));
         if (g.kind === "sandbox" && g.empty) {
             node.appendChild(sv("text", {
                 class: "muted", x: g.x + g.w / 2, y: g.y + g.h / 2 + 4, "text-anchor": "middle",
-                text: S.mode === "round" ? "No VMs recorded for this run." : "No sandbox right now (no run in progress).",
+                text: replaying() ? "No VMs recorded for this run." : "No sandbox right now (no run in progress).",
             }));
         }
         if (g.kind === "pi") {
@@ -723,8 +990,8 @@
     function drawHub(hub) {
         const node = sv("g", { class: `hub ${hub.net.kind}`, transform: `translate(${hub.x},${hub.y})`, tabindex: 0 });
         node.appendChild(sv("rect", { x: -hub.w / 2, y: -hub.h / 2, width: hub.w, height: hub.h, rx: hub.h / 2 }));
-        node.appendChild(sv("text", { class: "mono", y: -1, "text-anchor": "middle", "font-size": 11, text: hub.net.bridge }));
-        node.appendChild(sv("text", { class: "muted mono", y: 9, "text-anchor": "middle", "font-size": 8.5, text: hub.net.cidr || "" }));
+        node.appendChild(sv("text", { class: "mono", y: -1, "text-anchor": "middle", "font-size": 11, text: fitText(hub.net.bridge, hub.w - 12, 11, true) }));
+        node.appendChild(sv("text", { class: "muted mono", y: 9, "text-anchor": "middle", "font-size": 8.5, text: fitText(hub.net.cidr || "", hub.w - 12, 8.5, true) }));
         node.addEventListener("mouseenter", (ev) => showTip(ev, hubTip(hub)));
         node.addEventListener("mousemove", moveTip);
         node.addEventListener("mouseleave", hideTip);
@@ -737,7 +1004,7 @@
         node.appendChild(sv("path", { d: "M0,-9 L9,0 L0,9 L-9,0 Z" }));
         node.appendChild(sv("text", {
             class: "muted mono halo", x: a.labelLeft ? -13 : 13, y: a.labelLeft ? -10 : -6, "font-size": 10,
-            "text-anchor": a.labelLeft ? "end" : "start", text: a.gw ? a.gw.name : g.kind === "sandbox" ? "sandbox-gw" : "devbox-gw",
+            "text-anchor": a.labelLeft ? "end" : "start", text: fitText(a.gw ? a.gw.name : g.kind === "sandbox" ? "sandbox-gw" : "devbox-gw", 160, 10, true),
         }));
         node.addEventListener("mouseenter", (ev) => showTip(ev, anchorTip(g)));
         node.addEventListener("mousemove", moveTip);
@@ -1031,7 +1298,7 @@
         const parts = [el("div", { class: "tt" }, a.gw ? a.gw.name : g.kind === "sandbox" ? "sandbox-gw" : "devbox-gw")];
         parts.push(el("div", { class: "ts" }, `${ROLE_LABEL[g.kind === "sandbox" ? "sandbox_gw" : "devbox_gw"]} · routes the group's networks to the services (SNAT)`));
         if (!a.gw) {
-            parts.push(el("div", { class: "tn" }, S.mode === "round" ? "Built per run; not in the live snapshot." : "Not in the live snapshot."));
+            parts.push(el("div", { class: "tn" }, S.mode !== "live" ? "Built per run; not in the snapshot." : "Not in the live snapshot."));
             return el("div", null, parts);
         }
         const st = a.gw.active ? "running" : a.gw.status;
@@ -1129,7 +1396,7 @@
         const r = stage.getBoundingClientRect();
         ctx.clearRect(0, 0, r.width, r.height);
         S.dots = [];
-        if (S.mode !== "round" || !S.timeline || !S.scene) return;
+        if (!replaying() || !S.scene) return;
         const { k, x: vx, y: vy } = S.view;
         const selectedUid = S.selected && S.selected.type === "flow" ? S.selected.flow.uid : null;
         for (const f of activeFlows(S.t)) {
@@ -1227,7 +1494,7 @@
     }
 
     function updateBadges(t) {
-        if (S.mode !== "round" || !S.timeline) {
+        if (!replaying()) {
             if (layers.badges) clear(layers.badges);
             S.badges.clear();
             return;
@@ -1316,7 +1583,7 @@
         if (sel && sel.type === "node") return renderNodeDetails(sel.id);
         if (sel && sel.type === "event") return renderEventDetails(sel.event);
         if (sel && sel.type === "flow") return renderFlowDetails(sel.flow);
-        if (S.mode === "round") return renderRunSummary();
+        if (replaying() || S.mode === "round") return renderRunSummary();
         return renderLiveSummary();
     }
 
@@ -1333,7 +1600,7 @@
         const vms = m.nodes.filter((n) => n.role !== "proxmox");
         const off = vms.filter((n) => !n.active);
         append(side, [
-            el("h3", null, "Infrastructure"),
+            el("h3", null, S.mode === "file" ? "Infrastructure (from the file)" : "Infrastructure"),
             el("div", { class: "sub" }, `${m.host.node || "?"} · Proxmox ${m.host.version || "?"}`),
             kvTable([
                 ["VMs", `${vms.length} (${vms.length - off.length} running)`],
@@ -1582,7 +1849,7 @@
         updateStatuses(S.t);
         updateBadges(S.t);
         drawFrame();
-        if (S.mode === "round" && S.timeline) {
+        if (replaying()) {
             const [lo, hi] = range();
             const frac = (S.t - lo) / (hi - lo);
             $("topo-knob").style.left = `${(frac * 100).toFixed(3)}%`;
@@ -1727,7 +1994,7 @@
             }
         });
         document.addEventListener("keydown", (ev) => {
-            if (S.mode !== "round" || !S.timeline) return;
+            if (!replaying()) return;
             const tag = (ev.target && ev.target.tagName) || "";
             if (["INPUT", "SELECT", "TEXTAREA"].includes(tag)) return;
             // A focused button handles space/enter itself; the other keys still work.
@@ -1781,7 +2048,7 @@
             if (S.selected) select(null);
         });
         stage.addEventListener("mousemove", (ev) => {
-            if (S.mode !== "round") return;
+            if (!replaying()) return;
             const dot = dotAt(ev.clientX, ev.clientY);
             stage.style.cursor = dot ? "pointer" : "";
             if (dot) showTip(ev, flowTip(dot.f));
@@ -1802,7 +2069,11 @@
         const rounds = clear($("topo-rounds"));
         rounds.appendChild(tabButton("Infrastructure (live)", S.mode === "live", () => selectLive()));
         const list = (S.runs && S.runs.rounds) || [];
-        for (const r of list) rounds.appendChild(tabButton(r.name, S.mode === "round" && S.roundId === r.id, () => selectRound(r.id)));
+        for (const r of list) rounds.appendChild(tabButton(shorten(r.name, 40), S.mode === "round" && S.roundId === r.id, () => selectRound(r.id)));
+        if (S.file) {
+            const what = S.file.timeline ? `${S.file.timeline.run.round} · ${S.file.timeline.run.team}` : "infrastructure";
+            rounds.appendChild(tabButton(`File: ${shorten(S.file.name, 40)}`, S.mode === "file", () => selectFile(), el("span", { class: "state" }, shorten(what, 48))));
+        }
         if (S.runsError) rounds.appendChild(el("span", { class: "topo-tabs-empty is-warn" }, `rounds: ${S.runsError.message}`));
         else if (S.runs && !list.length) rounds.appendChild(el("span", { class: "topo-tabs-empty" }, "No round has been evaluated yet."));
 
@@ -1811,7 +2082,7 @@
         const round = list.find((r) => r.id === S.roundId);
         if (!round) return;
         for (const run of round.runs) {
-            teams.appendChild(tabButton(run.team, S.runUuid === run.uuid, () => selectRun(run.uuid), el("span", { class: "state" }, run.state)));
+            teams.appendChild(tabButton(shorten(run.team, 40), S.runUuid === run.uuid, () => selectRun(run.uuid), el("span", { class: "state" }, run.state)));
         }
     }
 
@@ -1819,6 +2090,7 @@
         pause();
         S.needsFit = true;
         S.mode = "live";
+        S.model = S.liveModel;
         S.roundId = null;
         S.runUuid = null;
         S.timeline = null;
@@ -1847,6 +2119,7 @@
         pause();
         S.needsFit = true;
         S.mode = "round";
+        S.model = S.liveModel;
         S.runUuid = uuid;
         S.timeline = null;
         S.timelineError = null;
@@ -1854,10 +2127,8 @@
         renderTabs();
         rebuild();
         try {
-            const tl = await getJSON(cfg.timeline.replace(ZERO_UUID, uuid));
-            if (S.runUuid !== uuid) return; // another tab was picked meanwhile
-            tl.events.sort((a, b) => a.t - b.t);
-            tl.flows.sort((a, b) => a.t - b.t);
+            const tl = cleanTimeline(await getJSON(cfg.timeline.replace(ZERO_UUID, uuid)));
+            if (S.runUuid !== uuid || S.mode !== "round") return; // another tab was picked meanwhile
             S.timeline = tl;
             S.teamName = tl.run.team;
             S.needsFit = true;
@@ -1869,14 +2140,33 @@
         writeHash();
     }
 
+    // The opened file: its own infrastructure and timeline; nothing is fetched.
+    function selectFile() {
+        if (!S.file) return;
+        pause();
+        S.needsFit = true;
+        S.mode = "file";
+        S.roundId = null;
+        S.runUuid = null;
+        S.model = S.file.model;
+        S.timeline = S.file.timeline;
+        S.timelineError = null;
+        S.selected = null;
+        S.playerFor = null;
+        if (S.timeline) S.t = Math.min(0, S.timeline.run.t_min);
+        renderTabs();
+        rebuild();
+        writeHash();
+    }
+
     // ------------------------------------------------------------------
     // Building / refreshing
     // ------------------------------------------------------------------
 
     function rebuild() {
-        const tl = S.mode === "round" ? S.timeline : null;
+        const tl = S.mode !== "live" ? S.timeline : null;
         S.scene = buildScene(S.model, tl, {
-            mode: S.mode, showAux: S.showAux, teamSlug: tl ? tl.run.team_slug : null,
+            mode: tl ? "round" : "live", showAux: S.showAux, teamSlug: tl ? tl.run.team_slug : null,
         });
         drawScene();
         if (S.needsFit) fit();
@@ -1889,7 +2179,7 @@
         if (S.mode === "round" && S.timelineError) {
             empty.hidden = false;
             empty.textContent = `Could not load the run: ${S.timelineError.message}`;
-        } else if (!S.model && S.modelError) {
+        } else if (S.mode !== "file" && !S.model && S.modelError) {
             empty.hidden = false;
             empty.textContent = S.modelError.message;
         } else {
@@ -1901,6 +2191,13 @@
     function renderMeta() {
         const meta = clear($("topo-meta"));
         const m = S.model;
+        if (S.mode === "file" && S.file) {
+            meta.appendChild(document.createTextNode(`File ${shorten(S.file.name, 80)}`));
+            if (S.file.exported_at) meta.appendChild(document.createTextNode(`, exported ${shorten(fmtDate(S.file.exported_at), 40)}`));
+            if (m && m.collected_at) meta.appendChild(document.createTextNode(` · snapshot of ${shorten(m.host.node || "?", 60)} from ${shorten(fmtDate(m.collected_at), 40)}`));
+            meta.appendChild(document.createTextNode(" · viewed locally, nothing is fetched"));
+            return;
+        }
         if (!m) {
             meta.appendChild(el("span", { class: "err" }, S.modelError ? S.modelError.message : "Loading the snapshot…"));
             return;
@@ -1922,7 +2219,7 @@
             item("", "--c-devbox", "devbox link"),
             item("dash", "--muted", "by design, not verified"),
         ]);
-        if (S.mode === "round") {
+        if (replaying()) {
             append(legend, [
                 item("dot", "--c-lan", "VM ↔ VM"),
                 item("dot", "--c-scoring", "→ scoring"),
@@ -1934,7 +2231,7 @@
     }
 
     function writeHash() {
-        const hash = S.mode === "round" && S.runUuid ? `#run=${S.runUuid}&t=${S.t.toFixed(1)}` : "#live";
+        const hash = S.mode === "round" && S.runUuid ? `#run=${S.runUuid}&t=${S.t.toFixed(1)}` : S.mode === "file" ? "#file" : "#live";
         if (location.hash !== hash) history.replaceState(null, "", hash);
     }
 
@@ -1945,12 +2242,12 @@
 
     async function loadModel() {
         try {
-            S.model = await getJSON(cfg.model);
+            S.liveModel = cleanModel(await getJSON(cfg.model));
             S.modelError = null;
         } catch (error) {
             S.modelError = error;
-            if (!S.model) S.model = null;
         }
+        if (S.mode !== "file") S.model = S.liveModel;
     }
 
     async function loadRuns() {
@@ -1965,7 +2262,7 @@
     async function reload() {
         await Promise.all([loadModel(), loadRuns()]);
         renderTabs();
-        rebuild();
+        if (S.mode !== "file") rebuild();
     }
 
     async function init() {
@@ -1980,6 +2277,27 @@
             rebuild();
         });
         $("topo-reload").addEventListener("click", reload);
+        $("topo-download").addEventListener("click", downloadBundle);
+        $("topo-open").addEventListener("click", () => $("topo-file").click());
+        $("topo-file").addEventListener("change", (ev) => {
+            openFile(ev.target.files && ev.target.files[0]);
+            ev.target.value = ""; // the same file can be opened again
+        });
+        // Drop a file anywhere on the view.
+        root.addEventListener("dragover", (ev) => {
+            if (!ev.dataTransfer || !Array.from(ev.dataTransfer.types || []).includes("Files")) return;
+            ev.preventDefault();
+            root.classList.add("dragging");
+        });
+        root.addEventListener("dragleave", (ev) => {
+            if (ev.target === root || !root.contains(ev.relatedTarget)) root.classList.remove("dragging");
+        });
+        root.addEventListener("drop", (ev) => {
+            if (!ev.dataTransfer || !ev.dataTransfer.files.length) return;
+            ev.preventDefault();
+            root.classList.remove("dragging");
+            openFile(ev.dataTransfer.files[0]);
+        });
         if (window.matchMedia) {
             window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
                 readColors();
@@ -2000,7 +2318,7 @@
         }
         // The snapshot is refreshed every few minutes on the orchestrator.
         setInterval(async () => {
-            if (document.hidden) return;
+            if (document.hidden || S.mode === "file") return;
             await loadModel();
             rebuild(); // keeps the view: needsFit is only set when the picture changes
         }, cfg.refreshMs);

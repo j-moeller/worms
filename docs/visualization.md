@@ -108,6 +108,55 @@ the sender of a flag or a log is **inferred** from the monitor: the run VM
 whose connection to that server was open at the time. It is marked
 "(inferred)"; with no matching connection the sender is "unknown".
 
+### Download and open a JSON file (the replay bundle)
+
+- **Download JSON** saves what is on screen as one self-contained file: the
+  infrastructure model and — on a round/team tab — that run's timeline (on
+  the live tab, the infrastructure only). It is built in the browser from
+  the data the page shows; nothing else is needed to show it again.
+- **Open JSON…** (or drop a file onto the view) shows such a file in its own
+  tab, `File: <name>`, with the full player: the same picture, hover cards,
+  dots, icons, details and slider. The file is read locally — it is never
+  uploaded, and nothing is fetched while it is shown (the page works as a
+  viewer even when the dashboard has no snapshot or the run is gone).
+  Downloading again from a file tab gives the same data back.
+
+Format (`version` 1):
+
+```json
+{
+  "format": "worms-topology-replay",
+  "version": 1,
+  "exported_at": "2026-10-24T17:05:07.000Z",
+  "source": {"mode": "round", "run": "<run uuid>", "from_file": null},
+  "model":    { "host": {…}, "nodes": […], "groups": […], "networks": […],
+                "edges": […], "security_groups": {…}, "unresolved": {…},
+                "collected_at": "…", "stale": false, "collection_error": "" },
+  "timeline": { "run": {…}, "nodes": […], "networks": […], "edges": […],
+                "vm_status": {…}, "events": […], "flows": […],
+                "captures": […], "truncated": {…} }
+}
+```
+
+`model` is the infrastructure model below, `timeline` the run timeline below
+(or `null`), each restricted to the fields the view uses (the address
+index and the generator graph are not included). A file can come from
+anywhere, so the page validates it like untrusted input — and so does every
+server response, through the same code (`cleanModel` / `cleanTimeline` in
+`app.js`):
+
+- the envelope must match (`format`, a `version` the page knows);
+- only known fields are kept, each coerced to its type (strings capped,
+  numbers finite, times within ±10⁸ s, unknown roles → `other`), entries that
+  are not objects or have no time are dropped, events and flows are sorted
+  and event ids reassigned, the time range is recomputed;
+- list sizes are capped (e.g. 500 000 flows, 200 000 events, 10 000 nodes)
+  and the file is refused above 64 MiB (`data-max-file-bytes`);
+- `__proto__` / `constructor` / `prototype` keys are ignored;
+- everything is rendered as text, as always.
+
+A file that fails is refused with a message; the view stays as it was.
+
 ## Data and code
 
 ```
@@ -183,6 +232,10 @@ characters per log record.
   payload in a log record to prove it (`tests/test_topology_page.py`).
 - The timeline caps what it returns (flows, submissions, logs, log size) so a
   noisy worm cannot blow up the page.
+- A downloaded bundle contains the same staff-only data as the page
+  (addresses, firewall rules, the run's traffic): handle it like the page.
+  An opened file is untrusted input: validated, size-capped, rendered as
+  text, never uploaded (above).
 
 ## Tests
 
@@ -190,7 +243,7 @@ characters per log record.
 |---|---|
 | `tests/test_infra_view.py` | The model on a realistic snapshot (`tests/infra_fixture.py`): roles and status, no management network as an edge, database ingress from its firewall (and following rule changes), unresolvable sources reported, groups and networks, devbox A–B/B–C links never crossing teams, sandbox hubs, verified / unverified service edges, hover data, the address index, firewall-spec resolution and port matching. |
 | `tests/test_rounds.py` | The timeline against PostgreSQL with the real conductor: VM status over time, flows mapped to scoring / the private internet, flag submissions (captured / invalid, the other team's not shown) and logs attributed to the VM whose connection was open, attacker text passed through as data, log truncation; the three endpoints (staff only, 503 before a snapshot, team names). It also pins the browser test's fixture to the builder's real schema. |
-| `tests/test_topology_page.py` | The page in Chromium (Node Playwright, `tests/browser/topology_player.js`) with fixture data: the layout rules above, live status, the hover card, round/team tabs, playback and dots, a badge click pauses and opens the event, a captured VM is marked, a VM stopped and restarted by the game plan, a dot click, next-event and the URL hash, the live refresh keeping the chosen speed and zoom, the XSS payload shown as text, a run that fails to load, back to live, no script errors. `WORMS_SCREENSHOTS=<dir>` keeps the screenshots. |
+| `tests/test_topology_page.py` | The page in Chromium (Node Playwright, `tests/browser/topology_player.js`) with fixture data: the layout rules above, live status, the hover card, round/team tabs, playback and dots, a badge click pauses and opens the event, a captured VM is marked, a VM stopped and restarted by the game plan, a dot click, next-event and the URL hash, the live refresh keeping the chosen speed and zoom, the XSS payload shown as text, a run that fails to load, back to live, no script errors. The replay bundle (`tests/browser/topology_replay.js`): download from a round and from the live tab, open the file in a page whose endpoints all fail (offline viewer: playback, badges, nothing fetched), a lossless round trip, an infrastructure-only file, broken files refused with the view kept (not JSON, wrong format, unknown version, bad structure, too large), and a hostile file (XSS strings, `__proto__` keys, unknown roles, junk entries, non-finite times) opened without executing anything. `WORMS_SCREENSHOTS=<dir>` keeps the screenshots. |
 
 Not covered: a real Proxmox snapshot and a real round's traffic (no node
 here); the layout with very large sandboxes or many teams is only exercised

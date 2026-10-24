@@ -382,7 +382,10 @@ A–B/B–C links. Hovering a VM shows its bridges, security groups and rules.
 Tabs select a round and then a team to **replay that run** like a video:
 connections as dots along the edges, events (worm start, secrets, VMs stopped,
 captures, flag submissions, logs) as icons on the VMs — click one to pause and
-see the details — and a seekable timeline. Details: `docs/visualization.md`.
+see the details — and a seekable timeline. **Download JSON** saves the
+infrastructure and the selected run as one file; **Open JSON…** views such a
+file again, offline (read locally, validated, never uploaded). Details:
+`docs/visualization.md`.
 
 Data flow: `orchestrator` runs `manage.py collect_topology` every 2 minutes
 (systemd timer `orchestrator-collect-topology.timer`), reads Proxmox with a

@@ -109,6 +109,8 @@
     }
     .topo-banner[hidden] { display: none; }
     .topo-banner b { font-weight: 700; }
+    .topo-banner.error { border-color: var(--bad); color: var(--bad); pointer-events: auto; }
+    .topo.dragging .topo-stage { outline: 3px dashed var(--accent); outline-offset: -3px; }
     .topo-zoom { position: absolute; right: 10px; top: 10px; display: flex; gap: 4px; }
     .topo-zoom button { padding: 2px 8px; }
     .topo-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; color: var(--muted); pointer-events: none; }
@@ -197,6 +199,7 @@
     .topo svg .vm.host text { fill: var(--panel); }
     .topo svg .vm.host text.muted { fill: var(--panel); opacity: .7; }
     .topo svg .vm.inactive rect.card { stroke-dasharray: 4 3; fill: var(--bg); }
+    .topo svg .vm.host.inactive text, .topo svg .vm.host.inactive text.muted { fill: var(--ink); }
     .topo svg .vm.inactive text { opacity: .55; }
     .topo svg .vm.absent { opacity: .45; }
     .topo svg .vm.captured rect.card { stroke: var(--c-flag); stroke-width: 2.4; }
@@ -255,6 +258,9 @@
         <label title="Gateways' own cards, wazuh, the devbox SSH gateway and unclassified VMs"><input type="checkbox" id="topo-aux"> auxiliary VMs</label>
         <button type="button" id="topo-fit" title="Fit the picture (F)">Fit</button>
         <button type="button" id="topo-reload" title="Reload the snapshot and the round list">Reload</button>
+        <button type="button" id="topo-download" title="Save what is shown (infrastructure + the selected run's timeline) as one JSON file">Download JSON</button>
+        <button type="button" id="topo-open" title="View a downloaded JSON file (read locally; nothing is uploaded)">Open JSON…</button>
+        <input type="file" id="topo-file" accept=".json,application/json" hidden>
     </div>
 </header>
 

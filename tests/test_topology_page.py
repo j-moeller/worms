@@ -178,3 +178,147 @@ def test_failed_run_and_back_to_live(observed):
     checks = observed["checks"]
     assert "Could not load the run" in checks["errorText"]
     assert checks["backLive"]["mode"] == "live" and checks["playerHiddenLive"]
+
+
+# --- the replay bundle: download, offline viewer, broken and hostile files ----
+
+REPLAY_DRIVER = REPO / "tests" / "browser" / "topology_replay.js"
+FORMAT = "worms-topology-replay"
+XSS = topology_fixtures.XSS
+
+
+def hostile_bundle() -> dict:
+    """Valid envelope, everything inside odd or malicious."""
+    return {
+        "format": FORMAT, "version": 1, "exported_at": "not a date", "source": {"mode": {"evil": 1}},
+        "model": {
+            "host": {"node": XSS, "errors": [{"path": XSS, "error": 5}], "firewall_services": []},
+            "nodes": [
+                {"id": "vm:1", "name": XSS, "role": "__proto__", "status": XSS, "active": "yes", "aux": True,
+                 "addresses": [XSS, {"x": 1}], "nics": [{"name": XSS, "bridge": 7, "kind": XSS}],
+                 "firewall": {"groups": [{"name": XSS, "iface": XSS}], "rules": [{"direction": "in", "action": XSS, "source": XSS}]}},
+                {"id": "vm:2", "name": "database", "role": "database", "active": True},
+                "junk", None, 5,
+            ],
+            "groups": [{"id": "group:sandbox", "kind": "sandbox", "members": ["s1"]}, {"id": "x", "kind": "<script>"}],
+            "networks": [{"id": "net:x", "kind": XSS, "members": ["s1"]}],
+            "edges": [{"id": XSS, "source": "vm:1", "target": "vm:2", "kind": "db", "verified": "true"}],
+            "security_groups": {"__proto__": {"polluted": True}, "constructor": {"rules": []},
+                                "sandbox": {"rules": [{"direction": "in", "action": "ACCEPT", "source": XSS}]}},
+        },
+        "timeline": {
+            "run": {"team": XSS, "round": XSS, "t_min": "abc", "t_max": 1e30, "duration": 100, "team_slug": XSS},
+            "nodes": [{"id": "s1", "label": XSS, "networks": [{"name": "vmbr1000", "cidr": XSS}], "addresses": ["10.64.0.1"]}],
+            "networks": [{"id": "vmbr1000", "label": XSS, "cidr": XSS}],
+            "edges": [{"source": "s1", "target": "vmbr1000", "network": "vmbr1000"}],
+            "vm_status": {"__proto__": [[0, "running"]], "s1": [[0, "running"], ["x", "stopped"], [50, XSS]]},
+            "events": [
+                {"t": 5, "kind": "log_received", "node": "role:logging", "vm": "s1",
+                 "data": {"log": {"data": XSS}, "source_vm": "s1", "source_label": XSS}},
+                {"t": "NaN", "kind": "state"}, {"t": 1e20, "kind": "state"},
+                {"t": "12", "kind": XSS, "node": "s1", "data": "not an object"}, None,
+            ],
+            "flows": [{"t": 1, "d": -5, "src": "s1", "dst": "vm:2", "src_name": XSS, "dst_name": XSS, "kind": XSS, "conn_state": XSS},
+                      {"t": "x"}],
+        },
+    }
+
+
+@pytest.fixture(scope="module")
+def replayed(tmp_path_factory):
+    work = tmp_path_factory.mktemp("topology-replay")
+    # A small file limit, so the "too large" path can be tested cheaply.
+    html = page_html().replace("data-refresh-ms='700'", "data-refresh-ms='600000' data-max-file-bytes='200000'")
+    (work / "page.html").write_text(html)
+    (work / "model.json").write_text(json.dumps(topology_fixtures.model()))
+    (work / "runs.json").write_text(json.dumps(topology_fixtures.runs()))
+    (work / "timeline.json").write_text(json.dumps(topology_fixtures.timeline()))
+    (work / "notjson.json").write_text("{this is not json")
+    (work / "wrongformat.json").write_text(json.dumps({"format": "something-else", "version": 1}))
+    (work / "version99.json").write_text(json.dumps({"format": FORMAT, "version": 99, "model": {"nodes": []}}))
+    (work / "nodesnotlist.json").write_text(json.dumps({"format": FORMAT, "version": 1, "model": {"nodes": {}}}))
+    (work / "big.json").write_text(json.dumps({"format": FORMAT, "version": 1, "pad": "x" * 300000}))
+    (work / "hostile.json").write_text(json.dumps(hostile_bundle()))
+    out = work / "out"
+    out.mkdir()
+    proc = subprocess.run(["node", str(REPLAY_DRIVER), str(work / "page.html"), str(work), str(out)],
+                          capture_output=True, text=True, timeout=180, cwd=REPO)
+    lines = [line for line in proc.stdout.splitlines() if line.startswith("{")]
+    assert lines, proc.stdout + proc.stderr
+    result = json.loads(lines[-1])
+    assert "fatal" not in result, (result["fatal"], result.get("errors"), result.get("checks"))
+    keep = os.environ.get("WORMS_SCREENSHOTS")
+    if keep:
+        os.makedirs(keep, exist_ok=True)
+        for shot in out.glob("*.png"):
+            shutil.copy(shot, keep)
+    return result
+
+
+def test_replay_no_script_errors(replayed):
+    assert replayed["errors"] == []
+
+
+def test_download_is_a_self_contained_bundle(replayed):
+    d = replayed["checks"]["download"]
+    assert d["keys"] == ["exported_at", "format", "model", "source", "timeline", "version"]
+    assert d["format"] == FORMAT and d["version"] == 1
+    assert d["source"] == {"mode": "round", "run": topology_fixtures.RUN_UUID, "from_file": None}
+    fixture = topology_fixtures.timeline()
+    assert d["flows"] == len(fixture["flows"]) and d["events"] == len(fixture["events"]) and d["sandboxVMs"] == 6
+    assert d["modelNodes"] == len(topology_fixtures.model()["nodes"])
+    for key in ("nodes", "edges", "groups", "networks", "security_groups", "host"):
+        assert key in d["modelKeys"]
+    assert d["replayName"].startswith("worms-R1-team-a-") and d["replayName"].endswith(".json")
+    # From the live tab: the infrastructure only.
+    assert d["infraTimeline"] is None and d["infraNodes"] == d["modelNodes"]
+    assert d["infraName"].startswith("worms-infrastructure-")
+
+
+def test_opened_file_is_viewed_offline(replayed):
+    c = replayed["checks"]
+    assert c["offlineBefore"]["mode"] == "live"  # every endpoint failed
+    assert c["opened"]["mode"] == "file" and c["opened"]["timeline"] and c["opened"]["sandboxVMs"] == 6
+    assert c["fileTab"].startswith("File: replay.json")
+    assert "viewed locally" in c["meta"]
+    assert c["playerVisible"]
+    assert c["playing"]["dots"] > 0
+    assert c["badge"]["selected"] == "event" and c["badge"]["playing"] is False
+    assert "Continue" in c["badgeSide"]
+    assert c["requestsWhileViewing"] == []  # nothing fetched for the file
+
+
+def test_bundle_round_trip_is_lossless(replayed):
+    rt = replayed["checks"]["roundTrip"]
+    assert rt["model"] and rt["timeline"]
+    assert rt["source"] == {"mode": "file", "run": topology_fixtures.RUN_UUID, "from_file": "replay.json"}
+
+
+def test_infrastructure_only_file(replayed):
+    c = replayed["checks"]
+    assert c["infraOpened"]["mode"] == "file" and not c["infraOpened"]["timeline"] and c["infraOpened"]["nodes"] > 10
+    assert c["infraPlayerHidden"]
+
+
+def test_broken_files_are_refused_and_the_view_stays(replayed):
+    broken = replayed["checks"]["broken"]
+    expect = {
+        "notjson.json": "not valid JSON",
+        "wrongformat.json": "not a WORMS topology file",
+        "version99.json": "unsupported version 99",
+        "nodesnotlist.json": "model.nodes must be a list",
+        "big.json": "too large",
+    }
+    for name, text in expect.items():
+        assert text in broken[name]["banner"], (name, broken[name]["banner"])
+        assert broken[name]["state"]["file"] == "infrastructure.json"  # still the previous file
+
+
+def test_hostile_file_is_contained(replayed):
+    h = replayed["checks"]["hostile"]
+    assert h["state"]["mode"] == "file" and h["banner"]
+    assert h["xss"] is False and h["imgs"] == 0 and h["protoPolluted"] is False
+    assert XSS in h["svgText"]  # shown, as text
+    assert h["events"] == [5, 12]  # NaN / 1e20 / null dropped, "12" coerced
+    assert h["roles"] == ["other", "database"]  # unknown role -> other; junk entries dropped
+    assert replayed["checks"]["hostilePlayed"]["mode"] == "file"

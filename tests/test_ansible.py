@@ -282,3 +282,29 @@ def test_plays_still_wait_for_cloud_init():
                 waiting.add((playbook, play["hosts"]))
     assert CLOUD_INIT_WAITS <= waiting
     assert configure_playbooks()[0] == "WaitForVMs.yml"
+
+
+# --- speed (ansible.cfg, apt) --------------------------------------------------
+
+
+def test_speed_settings():
+    cfg = configparser.ConfigParser(interpolation=None)
+    cfg.read(ANSIBLE / "ansible.cfg")
+    defaults, ssh = cfg["defaults"], cfg["ssh_connection"]
+    assert int(defaults["forks"]) >= 16
+    assert defaults["gathering"] == "smart" and defaults["fact_caching"] == "jsonfile"
+    assert defaults["fact_caching_connection"] == ".facts"
+    assert ".facts/" in (ANSIBLE / ".gitignore").read_text()
+    assert ssh["pipelining"] == "true" and "ControlPersist=10m" in ssh["ssh_args"]
+
+
+def test_apt_refreshes_its_index_at_most_hourly():
+    """apt-get update on every run costs seconds per host and task; each apt
+    task that refreshes the index says how old it may be."""
+    for path in (ANSIBLE / "roles").rglob("*.yml"):
+        for task in yaml.safe_load(path.read_text()) or []:
+            if not isinstance(task, dict):
+                continue
+            apt = task.get("ansible.builtin.apt") or task.get("apt")
+            if isinstance(apt, dict) and apt.get("update_cache") not in (None, False):
+                assert "cache_valid_time" in apt, f"{path.relative_to(ANSIBLE)}: {task.get('name')}"

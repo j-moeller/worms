@@ -77,6 +77,8 @@ vault.yml
 # Inventory generated from OpenTofu outputs (scripts/generate_inventory.py).
 # Rebuild with `make inventory`; it is a derived artifact, not source.
 inventory.generated.yml
+# Fact cache of the current `worms build` run (ansible.cfg).
+.facts/
 # test output
 *.retry
 *.out

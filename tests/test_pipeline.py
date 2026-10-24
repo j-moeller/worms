@@ -75,7 +75,12 @@ class Recorder:
         self._record(("ansible", playbook, *internet))
         return 0
 
-    def __getattr__(self, name):  # sh, python, flag_exists, ...: no tool step
+    def sh(self, command, cwd=".", **_kwargs):
+        if command == "rm -rf .facts" and cwd == "ansible":
+            self.calls.append(("flush facts",))
+        return 0
+
+    def __getattr__(self, name):  # python, flag_exists, ...: no tool step
         return lambda *a, **k: 0 if name != "flag_exists" else False
 
 
@@ -112,3 +117,20 @@ def test_failed_step_still_closes_the_window(monkeypatch):
         assert ("ansible", "SetupSandboxApi.yml") not in steps  # stopped at the failure
     finally:
         Recorder.fail_on = None
+
+
+def test_facts_are_dropped_whenever_vms_may_have_changed(monkeypatch):
+    """Ansible caches facts for a run (ansible.cfg); the cache is emptied
+    before the run's first playbook and after every tofu apply or destroy, so
+    no play sees the facts (MACs, addresses) of a VM that was rebuilt."""
+    monkeypatch.setattr(pipeline, "Runner", Recorder)
+    pipe = pipeline.Pipeline(config=None)
+    pipe.round_reset_services()
+    calls = [c for c in pipe.runner.calls if c[0] in ("tofu", "ansible", "flush facts")]
+    first_playbook = next(i for i, c in enumerate(calls) if c[0] == "ansible")
+    assert calls[first_playbook - 1] == ("flush facts",)
+    for i, call in enumerate(calls):
+        if call[0] == "tofu" and call[2] in ("apply", "destroy"):
+            following = next((c for c in calls[i + 1:] if c[0] in ("ansible", "flush facts")), None)
+            assert following in (None, ("flush facts",)), (call, following)
+    assert calls.count(("flush facts",)) == 2  # the start of the run, after the applies

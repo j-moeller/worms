@@ -40,12 +40,15 @@
     uris: "{{ network_monitor_zeek_repo }}"
     suites: /
     signed_by: "{{ network_monitor_zeek_repo }}Release.key"
+  register: network_monitor_zeek_repository
 
 - name: Install Zeek
   ansible.builtin.apt:
     name: "{{ network_monitor_zeek_package }}"
     state: present
     update_cache: true
+    # The index right after the repository was (re)written, else at most hourly.
+    cache_valid_time: "{{ 0 if network_monitor_zeek_repository is changed else 3600 }}"
     install_recommends: false
   notify: Restart zeek
 

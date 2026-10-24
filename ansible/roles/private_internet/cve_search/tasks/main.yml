@@ -90,6 +90,7 @@
       - ca-certificates
     state: present
     update_cache: true
+    cache_valid_time: 3600
   when: internet_enabled | bool
 
 - name: Create apt keyrings directory
@@ -120,6 +121,7 @@
       - redis-server
     state: present
     update_cache: true
+    cache_valid_time: 3600  # adding the repository above refreshed it already
   when: internet_enabled | bool
 
 - name: Enable and start Redis

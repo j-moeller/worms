@@ -272,7 +272,7 @@ that delivers it: `SetupRoundAgent.yml` for the provisioning token,
 
 | File | From | Purpose |
 |---|---|---|
-| `ansible/ansible.cfg` | the repo | inventories, `vault_password_file = .vault_pass`, roles path, no host-key prompts |
+| `ansible/ansible.cfg` | the repo | inventories, `vault_password_file = .vault_pass`, roles path, no host-key prompts; speed: 20 forks, facts cached for one `worms build` run (`ansible/.facts`, emptied by the CLI at the start and after every tofu apply/destroy), SSH connections reused for 10 min |
 | `ansible/.vault_pass` | `generate_secrets.py` (0600, git-ignored) | decrypts the vault — never prompts |
 | `ansible/group_vars/vault.yml` | `generate_secrets.py` (encrypted, git-ignored) | every secret; passed as `-e @group_vars/vault.yml` |
 | `ansible/inventory.generated.yml` | `worms build inventory` (`scripts/generate_inventory.py` reads `tofu output -json`; needs no credentials) | every VM's addresses; re-generated after each `tofu apply` |

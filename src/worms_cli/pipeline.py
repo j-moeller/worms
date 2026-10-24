@@ -53,8 +53,14 @@ class Pipeline:
         self.runner = Runner(config, dry_run=dry_run)
         # Extra args appended to every ansible-playbook call (was make ARGS=...).
         self.ansible_args = ansible_args
+        # Ansible caches facts for the run (ansible.cfg); start without any,
+        # and drop them again whenever tofu may have rebuilt VMs.
+        self._facts_fresh = False
 
     def _ansible(self, playbook: str, *args: str, vault: bool = True):
+        if not self._facts_fresh:
+            self.runner.sh("rm -rf .facts", cwd="ansible", quiet=True)
+            self._facts_fresh = True
         extra = list(args)
         if self.ansible_args:
             extra.append(self.ansible_args)
@@ -86,7 +92,12 @@ class Pipeline:
         self.runner.sh(script, cwd="opentofu/stacks/firewall")
 
     def _apply(self, stack: str):
+        self._facts_fresh = False
         self.runner.tofu(stack, "apply", "-auto-approve", "-parallelism=1", "-input=false")
+
+    def _destroy(self, stack: str):
+        self._facts_fresh = False
+        self.runner.tofu(stack, "destroy", "-auto-approve")
 
     def platform(self):
         self.firewall_migrate()
@@ -172,8 +183,8 @@ class Pipeline:
     # -- rounds / devbox -----------------------------------------------------
 
     def round_reset_services(self):
-        self.runner.tofu("infrastructure/ephemeral", "destroy", "-auto-approve")
-        self.runner.tofu("private_internet", "destroy", "-auto-approve")
+        self._destroy("infrastructure/ephemeral")
+        self._destroy("private_internet")
         self.online(self._round_reset_apply_and_configure)
         self.offline()
 
@@ -201,7 +212,7 @@ class Pipeline:
         self.devbox_configure()
 
     def devbox_destroy(self):
-        self.runner.tofu("devbox", "destroy", "-auto-approve")
+        self._destroy("devbox")
 
     # -- debugging / tests ---------------------------------------------------
 
@@ -210,7 +221,7 @@ class Pipeline:
 
     def debug(self, host: str):
         extra = (" " + self.ansible_args) if self.ansible_args else ""
-        self.runner.sh(f"ansible-playbook Debug.yml -e target={host}{extra}", cwd="ansible")
+        self.runner.sh(f"ansible-playbook Debug.yml --flush-cache -e target={host}{extra}", cwd="ansible")
 
     def simulate(self):
         self.inventory()
@@ -223,13 +234,13 @@ class Pipeline:
         destroy, so migrate first). Keeps the firewall and platform."""
         self.firewall_migrate()
         for stack in ["sandbox", "devbox", "infrastructure/ephemeral", "infrastructure/persistent", "private_internet"]:
-            self.runner.tofu(stack, "destroy", "-auto-approve")
+            self._destroy(stack)
 
     def destroy_all(self):
         """Destroy everything: the VM stacks, then the firewall and platform."""
         self.destroy()
-        self.runner.tofu("firewall", "destroy", "-auto-approve")
-        self.runner.tofu("platform", "destroy", "-auto-approve")
+        self._destroy("firewall")
+        self._destroy("platform")
 
     def stop_all(self):
         """Freeze: hard-stop every running VM on the node, destroy nothing."""

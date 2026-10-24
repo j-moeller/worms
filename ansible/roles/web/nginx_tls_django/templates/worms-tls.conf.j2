@@ -1,0 +1,62 @@
+# {{ ansible_managed | default('Managed by Ansible') }}
+{% if nginx_team_api %}
+# Team API (dashboard/api.py, docs/team_api.md): rate limits per client
+# address and per bearer token. The host DNATs the dashboard without SNAT, so
+# $binary_remote_addr is the real client. The token zone keys on the raw
+# Authorization header; it lives only in nginx's shared memory (nothing is
+# logged), the same trust as the request itself.
+limit_req_zone $binary_remote_addr zone=team_api_ip:10m rate={{ nginx_team_api_rate_per_ip }};
+limit_req_zone $http_authorization zone=team_api_token:10m rate={{ nginx_team_api_rate_per_token }};
+limit_conn_zone $binary_remote_addr zone=team_api_conn:10m;
+
+{% endif %}
+server {
+    listen 80;
+    listen [::]:80;
+
+    server_name {{ tls_dns_name }};
+
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+
+    server_name {{ tls_dns_name }};
+
+    ssl_certificate {{ tls_cert_path }};
+    ssl_certificate_key {{ tls_key_path }};
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+{% if nginx_team_api %}
+    location /api/ {
+        limit_except GET {
+            deny all;
+        }
+        limit_req zone=team_api_ip burst={{ nginx_team_api_burst_per_ip }} nodelay;
+        limit_req zone=team_api_token burst={{ nginx_team_api_burst_per_token }} nodelay;
+        limit_conn team_api_conn {{ nginx_team_api_connections_per_ip }};
+        limit_req_status 429;
+        limit_conn_status 429;
+        client_max_body_size 1k;
+        proxy_read_timeout {{ nginx_team_api_timeout }};
+        # The bearer token is a credential: never in the access log's URL
+        # (it is a header), and responses are not cached.
+        proxy_pass http://unix:/run/django/django.sock;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+{% endif %}
+    location / {
+        proxy_pass http://unix:/run/django/django.sock;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}

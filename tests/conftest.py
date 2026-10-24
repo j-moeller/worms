@@ -114,3 +114,76 @@ def database(render):
         yield cluster
     finally:
         cluster.stop()
+
+
+# --- in-process Django --------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def django_env(request):
+    """In-process Django (orchestrator settings) against a throwaway
+    PostgreSQL with the real migrations; Django connects as the superuser so
+    tests can build fixtures freely. Session scope: Django can only be set up
+    once per process, so every test module shares it (test_rounds.py,
+    test_team_api.py)."""
+    pytest.importorskip("django")
+    pytest.importorskip("psycopg2")
+    sys.path.insert(0, str(REPO / "projects" / "dashboard"))
+    from pg import pg_bindir
+
+    if pg_bindir() is None:
+        pytest.skip("PostgreSQL server binaries not installed")
+    import pg
+
+    bindir = pg_bindir()
+    cluster = pg.Cluster(bindir)
+    cluster.start()
+    try:
+        import django
+
+        os.environ.update(
+            PRODUCTION="1",
+            DJANGO_SETTINGS_MODULE="config.settings.orchestrator",
+            DJANGO_SECRET_KEY="test",
+            DJANGO_ALLOWED_HOSTS="localhost",
+            DB_MIGRATOR_USER=pg.MIGRATOR,
+            DB_MIGRATOR_PASSWORD=pg.PASSWORD,
+            DB_USER="postgres",
+            DB_PASSWORD="trust",
+            DB_HOST="127.0.0.1",
+            DB_PORT=str(cluster.port),
+            DB_NAME=pg.DB_NAME,
+            DB_SSLMODE="disable",
+            PROXMOX_HOST="x", PROXMOX_USER="x", PROXMOX_TOKEN_NAME="x", PROXMOX_TOKEN_VALUE="x",
+        )
+        # Create the database and schema (migrations) as the migrator, like the
+        # real deployment; then let Django connect as postgres (superuser) so
+        # the test can set up fixtures without juggling grants.
+        admin = cluster.connect(dbname="postgres")
+        with admin.cursor() as cur:
+            cur.execute(f"CREATE DATABASE {pg.DB_NAME}")
+            cur.execute(f"CREATE ROLE {pg.MIGRATOR} LOGIN PASSWORD %s SUPERUSER", (pg.PASSWORD,))
+        admin.close()
+        django.setup()
+        from django.core.management import call_command
+
+        call_command("migrate", "--no-input", database="migrator", verbosity=0)
+        yield cluster
+    finally:
+        cluster.stop()
+
+
+@pytest.fixture
+def db_clean(django_env):
+    """A clean set of tables for each test."""
+    from django.db import connection
+
+    with connection.cursor() as cur:
+        cur.execute(
+            "TRUNCATE run_events, game_plan_steps, host_jobs, flag_captures, logging,"
+            " flag_capture_attempts, logging_attempts, virtual_machines, round_runs,"
+            " access_tokens, rounds, team_memberships, teams, uploads, malware_artifacts,"
+            " application_setting, competitions, users, network_flows, topology_snapshots,"
+            " django_session RESTART IDENTITY CASCADE"
+        )
+    return django_env

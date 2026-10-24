@@ -18,7 +18,7 @@
  - [x] Monitoring server (Zeek)
  - [x] Monitoring of multiple vmbr (worms-mirror: every sandbox bridge port)
  - [x] Writing to DB (network_flows, network_events)
- - [ ] Display of network activity on webpage
+ - [x] Display of network activity on webpage (TOPOLOGY round player)
 
 [ ] Heartbeat
  - [ ] Definition of "vital" services (per VM)
@@ -31,6 +31,7 @@
  - [x] Connect to DB
  - [x] Writing to DB (fixed: database defaults, docs/findings.md)
  - [x] Display of team points on webpage
+ - [x] Team API: round scoring as JSON with a bearer token (docs/team_api.md)
 
 [ ] Database
  - [x] Create VM
@@ -47,7 +48,7 @@
  - [x] Connect to DB
  - [x] Writing to DB (fixed: database defaults, docs/findings.md)
  - [ ] Display in web server
- - [ ] Download
+ - [x] Download (team API: /api/v1/rounds/<id>/logging/, docs/team_api.md)
 
 [ ] Topology
  - [ ] Dynamic generation of complex network topology
@@ -90,6 +91,8 @@
  - [ ] Run on a real Proxmox host (VM build, -replace rebuild, key plumbing)
 
 [x] Limit request size, limit request frequency
+ - [x] sandbox APIs; team API (/api/ on the dashboard: nginx per address + token)
+ - [ ] dashboard HTML pages (login etc.): no nginx rate limit yet
 
 [ ] Watch dog, failsafe, killswitch
 [ ] Testing
@@ -107,6 +110,6 @@
  - [x] Secrets generated on the host; only hashes in the DB
  - [x] Capture processing (attempts -> captures, once per team+VM)
  - [x] Timeline export (JSON for the animated view)
- - [ ] Animated timeline front-end (player)
+ - [x] Animated timeline front-end (player: TOPOLOGY view, docs/visualization.md)
  - [ ] Configure sandbox guests (CA, deps); set dashboard MEDIA_ROOT
  - [ ] Run on a real Proxmox host

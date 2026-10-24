@@ -163,6 +163,32 @@
 
     </section>
 
+    <section class="access-panel">
+
+        <div class="access-panel-header">
+
+            <div class="access-panel-title">
+                // TEAM DATA API
+            </div>
+
+        </div>
+
+        <p style="padding: 0 25px; color: var(--muted); font-family: 'Share Tech Mono', monospace; font-size: 0.72rem; line-height: 1.7;">
+            Your team's scoring and logs of a round as JSON, with an access token
+            (in the header, never in the URL). Pages hold up to 500 submissions or
+            200 logs (1 MiB); follow <code>page.next</code> until it is null.
+            Requests are rate-limited (HTTP 429: slow down).
+        </p>
+
+        <div class="access-viewer-wrapper">
+            <pre class="access-viewer"><code>TOKEN=...   # an access token of your team
+curl -H "Authorization: Bearer $TOKEN" {{ request.scheme }}://{{ request.get_host }}/api/v1/rounds/
+curl -H "Authorization: Bearer $TOKEN" "{{ request.scheme }}://{{ request.get_host }}/api/v1/rounds/ROUND_ID/scoring/?limit=500"
+curl -H "Authorization: Bearer $TOKEN" "{{ request.scheme }}://{{ request.get_host }}/api/v1/rounds/ROUND_ID/logging/?limit=200&amp;cursor=NEXT_CURSOR"</code></pre>
+        </div>
+
+    </section>
+
         <!-- =====================================================
              EXISTING TOKENS
              ===================================================== -->

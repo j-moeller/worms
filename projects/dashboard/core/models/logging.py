@@ -38,6 +38,8 @@ class LoggingAttempt(models.Model):
                 condition=Q(processed=False),
             ),
             models.Index(fields=["uuid"], name="pending_logging_attempts_uuid"),
+            # A team's logs in a time window (the round timeline).
+            models.Index(fields=["team_uuid", "created_at", "id"], name="logging_attempts_team_time"),
         ]
 
 
@@ -64,6 +66,8 @@ class Logging(models.Model):
         indexes = [
             models.Index(fields=["team"]),
             models.Index(fields=["created_at"]),
+            # A team's logs of one round, in order: the team API's keyset pages.
+            models.Index(fields=["team", "round", "id"], name="logging_team_round"),
         ]
         constraints = [
             models.UniqueConstraint(

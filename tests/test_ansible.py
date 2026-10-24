@@ -173,3 +173,26 @@ def test_zeek_config(render):
         path = Path(os.environ.get("TMPDIR", "/tmp")) / "worms-local.zeek"
         path.write_text(config)
         subprocess.run([zeek, "--parse-only", str(path)], check=True)
+
+
+NGINX_DJANGO = "ansible/roles/web/nginx_tls_django"
+
+
+def test_dashboard_nginx_rate_limits_the_team_api(render):
+    """The team API (docs/team_api.md) is rate-limited by nginx per client
+    address and per token, GET only, before Django -- on the dashboard only."""
+    dashboard = yaml.safe_load((REPO / "ansible" / "group_vars" / "dashboard.yml").read_text())
+    orchestrator = yaml.safe_load((REPO / "ansible" / "group_vars" / "orchestrator.yml").read_text())
+    assert dashboard.get("nginx_team_api") is True
+    assert not orchestrator.get("nginx_team_api")
+
+    conf = render(NGINX_DJANGO, "worms-tls.conf.j2", nginx_team_api=True, tls_dns_name="dashboard.worms.internal")
+    assert "limit_req_zone $binary_remote_addr zone=team_api_ip:10m rate=5r/s;" in conf
+    assert "limit_req_zone $http_authorization zone=team_api_token:10m rate=3r/s;" in conf
+    api = conf[conf.index("location /api/"):conf.index("location / {")]
+    for directive in ("limit_except GET", "limit_req zone=team_api_ip", "limit_req zone=team_api_token",
+                      "limit_conn team_api_conn", "limit_req_status 429", "proxy_read_timeout 15s"):
+        assert directive in api, directive
+
+    off = render(NGINX_DJANGO, "worms-tls.conf.j2", tls_dns_name="orchestrator.worms.internal")
+    assert "limit_req" not in off and "location /api/" not in off and "location / {" in off

@@ -24,69 +24,6 @@ DASHBOARD = REPO / "projects" / "dashboard"
 sys.path.insert(0, str(DASHBOARD))
 
 
-@pytest.fixture(scope="module")
-def django_env(request):
-    """Django set up against the test database (module scope: one setup)."""
-    from pg import pg_bindir
-
-    if pg_bindir() is None:
-        pytest.skip("PostgreSQL server binaries not installed")
-    import pg
-
-    bindir = pg_bindir()
-    cluster = pg.Cluster(bindir)
-    cluster.start()
-    try:
-        import django
-
-        os.environ.update(
-            PRODUCTION="1",
-            DJANGO_SETTINGS_MODULE="config.settings.orchestrator",
-            DJANGO_SECRET_KEY="test",
-            DJANGO_ALLOWED_HOSTS="localhost",
-            DB_MIGRATOR_USER=pg.MIGRATOR,
-            DB_MIGRATOR_PASSWORD=pg.PASSWORD,
-            DB_USER="postgres",
-            DB_PASSWORD="trust",
-            DB_HOST="127.0.0.1",
-            DB_PORT=str(cluster.port),
-            DB_NAME=pg.DB_NAME,
-            DB_SSLMODE="disable",
-            PROXMOX_HOST="x", PROXMOX_USER="x", PROXMOX_TOKEN_NAME="x", PROXMOX_TOKEN_VALUE="x",
-        )
-        # Create the database and schema (migrations) as the migrator, like the
-        # real deployment; then let Django connect as postgres (superuser) so
-        # the test can set up fixtures without juggling grants.
-        admin = cluster.connect(dbname="postgres")
-        with admin.cursor() as cur:
-            cur.execute(f"CREATE DATABASE {pg.DB_NAME}")
-            cur.execute(f"CREATE ROLE {pg.MIGRATOR} LOGIN PASSWORD %s SUPERUSER", (pg.PASSWORD,))
-        admin.close()
-        django.setup()
-        from django.core.management import call_command
-
-        call_command("migrate", "--no-input", database="migrator", verbosity=0)
-        yield cluster
-    finally:
-        cluster.stop()
-
-
-@pytest.fixture
-def db_clean(django_env):
-    """A clean set of round tables for each test."""
-    from django.db import connection
-
-    with connection.cursor() as cur:
-        cur.execute(
-            "TRUNCATE run_events, game_plan_steps, host_jobs, flag_captures, logging,"
-            " flag_capture_attempts, logging_attempts, virtual_machines, round_runs,"
-            " access_tokens, rounds, team_memberships, teams, uploads, malware_artifacts,"
-            " application_setting, competitions, users, network_flows, topology_snapshots"
-            " RESTART IDENTITY CASCADE"
-        )
-    return django_env
-
-
 # --- game plan ---------------------------------------------------------------
 
 

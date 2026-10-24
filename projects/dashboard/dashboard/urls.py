@@ -15,6 +15,7 @@ from dashboard.views.scoring import flag_capture_attempts
 from dashboard.views.teams import join_team, leave_team, team_registration
 from dashboard.views.uploads import upload
 from dashboard.views.todos import todos
+from dashboard import api
 from dashboard.views.rounds import rounds, round_timeline_data
 from dashboard.views.topology import topology, topology_data, topology_runs
 from django.conf import settings
@@ -55,6 +56,10 @@ urlpatterns = [
     #
     path("rounds/", rounds, name="rounds"),
     path("rounds/<uuid:uuid>/timeline/", round_timeline_data, name="round_timeline_data"),
+    # Team API (bearer token; docs/team_api.md).
+    path("api/v1/rounds/", api.rounds, name="api_rounds"),
+    path("api/v1/rounds/<int:round_id>/scoring/", api.round_scoring, name="api_round_scoring"),
+    path("api/v1/rounds/<int:round_id>/logging/", api.round_logging, name="api_round_logging"),
     path("topology/", topology, name="topology"),
     path("topology/data/", topology_data, name="topology_data"),
     path("topology/runs/", topology_runs, name="topology_runs"),

@@ -37,6 +37,9 @@ a live Proxmox host (the standing caveat — no node is available here).
 - **Prod view**: ✅ leaderboard, round scoring/logging, zip upload, round
   countdown/status (`dashboard/views/leaderboard.py`, `scoring.py`, `logging.py`,
   `uploads.py`, the status presentation in `views/util.py`).
+- **Team API**: ✅ teams download their round scoring and logs as JSON with
+  an access token (bearer), paged, with item/byte/time/rate limits
+  (`dashboard/api.py`, `docs/team_api.md`, `tests/test_team_api.py`).
 - **Admin**: ✅ leaderboard + infrastructure/sandbox topology (VMs as nodes
   with their status, firewall groups/rules/bridges on hover, the operational
   connections) and a round/team replay of every run — the TOPOLOGY view,

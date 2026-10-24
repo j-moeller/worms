@@ -35,6 +35,9 @@ class FlagCaptureAttempt(models.Model):
                 name="pending_flag_capture_attempts",
                 condition=Q(processed=False),
             ),
+            # A team's submissions in a time window, in order: the team API's
+            # keyset pages (dashboard/api.py) and the round timeline.
+            models.Index(fields=["team_uuid", "created_at", "id"], name="flag_attempts_team_time"),
         ]
 
 

@@ -360,6 +360,15 @@ Mirroring of the sandbox bridges to the monitor is automatic (`worms-mirror`
 on the host picks up every new sandbox NIC), so the monitor records the
 round's traffic without any per-round step.
 
+# Team API (scoring and logs as JSON)
+
+Teams download their own scoring (every flag their worm submitted in a round,
+with the result) and logs of a round as JSON with an access token from the
+ACCESS page: `GET /api/v1/rounds/`, `/api/v1/rounds/<id>/scoring/`,
+`/api/v1/rounds/<id>/logging/` with `Authorization: Bearer <token>`. Paged
+with an opaque cursor; page sizes, bytes per page, query time and request
+rates are capped (nginx + the app). Details: `docs/team_api.md`.
+
 # Topology view (dashboard → TOPOLOGY, staff only)
 
 Shows the infrastructure in a fixed layout (Proxmox host, orchestrator and

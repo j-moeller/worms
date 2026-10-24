@@ -52,7 +52,7 @@ from core.models.logging import Logging, LoggingAttempt
 from core.models.monitoring import NetworkFlow
 from core.models.rounds import RoundRun, RunEvent
 from core.models.scoring import FlagCapture, FlagCaptureAttempt
-from django.db.models import Q
+from django.db.models import Max, Min, Q
 
 FLOW_DRAIN = timedelta(seconds=300)  # flows are written when they end
 ATTRIBUTION_SLACK = 2.0  # seconds of clock skew between the monitor and the API
@@ -93,6 +93,37 @@ def _vm_status(vms, events, t_min):
     for points in status.values():
         points.sort(key=lambda p: p[0])
     return status
+
+
+def run_window(run: RoundRun, event_times=None):
+    """(start, end) of a run's activity: from its first event (prepare) or the
+    worm's start, to its end plus the monitor's drain. (None, None) before the
+    run began. Flows, flag submissions and logs of the run fall in here."""
+    if event_times is None:
+        agg = run.events.aggregate(first=Min("ts"), last=Max("ts"))
+        event_times = [t for t in (agg["first"], agg["last"]) if t is not None]
+    starts = list(event_times) + ([run.worm_start_at] if run.worm_start_at else [])
+    if not starts:
+        return None, None
+    end = run.ends_at or max(event_times, default=min(starts))
+    return min(starts), end + FLOW_DRAIN
+
+
+def classify_submission(attempt, capture, vm, captured_vm_ids):
+    """(result, vm) for a flag submission of the run's team.
+
+    capture: its FlagCapture (or None); vm: the run VM whose flag hash it is
+    (or None); captured_vm_ids: uuids (str) of the run's captured VMs.
+    result: captured | pending (not processed yet) | duplicate (that VM was
+    already captured) | not_counted (a run VM's flag outside the live window)
+    | invalid (no VM of the run has that flag)."""
+    if capture is not None:
+        return "captured", capture.vm
+    if not attempt.processed:
+        return "pending", vm
+    if vm is not None:
+        return ("duplicate" if str(vm.uuid) in captured_vm_ids else "not_counted"), vm
+    return "invalid", None
 
 
 def build(run: RoundRun, flow_limit=20000, infra: dict | None = None) -> dict:
@@ -156,11 +187,7 @@ def build(run: RoundRun, flow_limit=20000, infra: dict | None = None) -> dict:
         if e["kind"] == RunEvent.Kind.CAPTURED
     ]
 
-    # The run's window: from the first event (prepare) or the worm's start,
-    # to the end plus the monitor's drain.
-    window_start = min([e.ts for e in run_events] + ([run.worm_start_at] if run.worm_start_at else []), default=None)
-    window_end = (run.ends_at or max([e.ts for e in run_events], default=window_start)) if window_start else None
-    window_end = window_end + FLOW_DRAIN if window_end else None
+    window_start, window_end = run_window(run, [e.ts for e in run_events])
 
     def endpoint(address):
         address = str(address)
@@ -243,18 +270,10 @@ def build(run: RoundRun, flow_limit=20000, infra: dict | None = None) -> dict:
         }
         for attempt in attempts[:ATTEMPT_LIMIT]:
             t = _seconds(attempt.created_at, zero)
-            capture = captures_by_attempt.get(attempt.id)
-            vm = by_hash.get(attempt.vm_flag_hash)
-            if capture is not None:
-                result, target = "captured", str(capture.vm.uuid)
-            elif not attempt.processed:
-                result, target = "pending", str(vm.uuid) if vm is not None else None
-            elif vm is not None:
-                # A run VM's flag that did not count: already captured, or
-                # submitted outside the run's live window.
-                result, target = ("duplicate" if str(vm.uuid) in captured_at else "not_counted"), str(vm.uuid)
-            else:
-                result, target = "invalid", None
+            result, target_vm = classify_submission(
+                attempt, captures_by_attempt.get(attempt.id), by_hash.get(attempt.vm_flag_hash), captured_at
+            )
+            target = str(target_vm.uuid) if target_vm is not None else None
             source = inferred_source("scoring", t)
             events.append(
                 {

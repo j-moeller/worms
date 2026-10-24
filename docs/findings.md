@@ -224,3 +224,14 @@ Priority items a reviewer should weigh before a live deployment:
    team, connect through the gateway, submit a token, reset.
 7. **General, pre-existing**: remove remaining root logins, attach the
    hookscript, set `MEDIA_ROOT`, and run `worms simulate` on the real host.
+
+## Team API (bearer token)
+
+Teams can download their round scoring and logs as JSON (`docs/team_api.md`).
+Found while building it: the dashboard's `EnvironmentTransitionMiddleware`
+writes to the session on **every** request, so any anonymous request creates
+a `django_session` row — a database-write amplifier for anyone on the
+internet. The API paths now bypass the session middlewares (a test fails if a
+call writes a session row); the rest of the site is unchanged. The dashboard's
+nginx had no rate limiting at all; `/api/` now has per-address and per-token
+limits (the HTML pages are still unlimited — see TODO).

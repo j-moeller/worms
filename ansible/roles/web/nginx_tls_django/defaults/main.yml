@@ -1,3 +1,15 @@
 tls_key_path: /etc/nginx/tls/server.key
 tls_cert_path: /etc/nginx/tls/server.crt
 tls_ca_path: /etc/nginx/tls/ca.crt
+
+# The team API (/api/, dashboard only: group_vars/dashboard.yml). A team
+# paging through a round's logs needs a few requests per second; anything
+# beyond the burst gets 429 before it reaches Django.
+nginx_team_api: false
+nginx_team_api_rate_per_ip: 5r/s
+nginx_team_api_burst_per_ip: 20
+nginx_team_api_rate_per_token: 3r/s
+nginx_team_api_burst_per_token: 10
+nginx_team_api_connections_per_ip: 8
+nginx_team_api_timeout: 15s
+

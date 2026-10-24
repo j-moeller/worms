@@ -8,6 +8,8 @@ django_db_user: django_dashboard
 django_db_password: "{{ vault_django_dashboard_password }}"
 django_secret_key: "{{ vault_dashboard_secret_key }}"
 django_allowed_hosts: "dashboard.worms.internal,{{ infrastructure_ips.dashboard }}"
+# The team API (/api/v1/, docs/team_api.md) is served here, rate-limited by nginx.
+nginx_team_api: true
 # Public facing: no migrator credentials, migrations run on the orchestrator.
 django_run_migrations: false
 django_extra_env:

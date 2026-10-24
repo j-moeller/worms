@@ -71,11 +71,19 @@ def get_competition_state(
     return CompetitionState("finished")
 
 
+# The team API (dashboard/api.py) is token-authenticated and must not create
+# or touch a session: an anonymous call would otherwise insert a session row
+# per request (a database-write amplifier for anyone on the internet).
+API_PREFIX = "/api/"
+
+
 class UserMetadataMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request: HttpRequest):
+        if request.path.startswith(API_PREFIX):
+            return self.get_response(request)
         request.time_now = clock.now()
         request.is_dev_environment = request.session["is_dev_environment"]
 
@@ -114,6 +122,8 @@ class EnvironmentTransitionMiddleware:
         self.get_response = get_response
 
     def __call__(self, request: HttpRequest):
+        if request.path.startswith(API_PREFIX):
+            return self.get_response(request)
         request.session.setdefault("is_dev_environment", False)
 
         env_toggle = request.GET.get("live")

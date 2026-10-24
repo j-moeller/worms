@@ -81,7 +81,8 @@ def db_clean(django_env):
             "TRUNCATE run_events, game_plan_steps, host_jobs, flag_captures, logging,"
             " flag_capture_attempts, logging_attempts, virtual_machines, round_runs,"
             " access_tokens, rounds, team_memberships, teams, uploads, malware_artifacts,"
-            " application_setting, competitions, users RESTART IDENTITY CASCADE"
+            " application_setting, competitions, users, network_flows, topology_snapshots"
+            " RESTART IDENTITY CASCADE"
         )
     return django_env
 
@@ -443,6 +444,167 @@ def test_timeline_export(one_run):
     # The event timeline is ordered by t.
     ts = [e["t"] for e in data["events"]]
     assert ts == sorted(ts)
+    assert [e["id"] for e in data["events"]] == list(range(len(data["events"])))
+    # Every VM is running once built, stopped at ENDING, destroyed at the end.
+    for vm_id, points in data["vm_status"].items():
+        states = [state for _, state in points]
+        assert states[0] == "running" and states[-1] == "destroyed", (vm_id, states)
+        assert "stopped" in states
+    assert data["run"]["t_min"] <= 0 <= data["run"]["t_max"]
+
+
+def test_timeline_maps_flows_and_derives_submissions(one_run):
+    """The player's data: flows to scoring / the private internet are mapped
+    to infrastructure nodes through the live snapshot's address index; flag
+    submissions and logs become events on scoring / logging, attributed to the
+    VM that connected just before (the server itself only sees sandbox-gw)."""
+    import infra_fixture
+    from core.models.logging import LoggingAttempt
+    from core.models.monitoring import NetworkFlow
+    from core.models.rounds import RoundRun
+    from core.models.scoring import FlagCaptureAttempt
+    from dashboard.infra_view import address_index, analyze
+    from django.core.management import call_command
+    from django.utils import timezone
+    from orchestrator.rounds import timeline
+
+    run = one_run["run"]
+    power, clock = FakePower(), Clock()
+    conductor = make_conductor(power, clock)
+    for _ in range(6):
+        conductor.tick()
+        fake_agent(run, sha)
+        run.refresh_from_db()
+        if run.state == RoundRun.State.ARMED:
+            break
+    clock.advance(11)
+    conductor.tick()
+    run.refresh_from_db()
+    start = run.worm_start_at
+    at = lambda s: start + timezone.timedelta(seconds=s)  # noqa: E731
+    vm0 = run.virtual_machines.get(vm_identifier="sandbox-vm0")
+    vm1 = run.virtual_machines.get(vm_identifier="sandbox-vm1")
+
+    def flow(uid, s, src, dst, dport, **kw):
+        NetworkFlow.objects.create(uid=uid, ts=at(s), src_ip=src, dst_ip=dst, src_port=40000, dst_port=dport,
+                                   transport="tcp", conn_state="SF", duration=0.5, **kw)
+
+    flow("C1", 5, "10.64.0.10", "10.64.0.11", 22)  # vm0 -> vm1 (lan)
+    flow("C2", 7, "10.64.0.11", "10.2.0.14", 443, service="ssl")  # vm1 -> scoring
+    flow("C3", 8, "10.64.0.10", "10.2.0.20", 3142)  # vm0 -> apt-cache
+    flow("C4", 9, "10.64.0.10", "10.2.0.15", 443)  # vm0 -> logging
+    flow("C5", 6, "10.99.0.1", "10.99.0.2", 80)  # not this run
+    FlagCaptureAttempt.objects.create(team_uuid=str(one_run["team"].uuid), vm_flag_hash=vm0.ctf_flag_hash or sha("sandbox-vm0"), created_at=at(7.5))
+    FlagCaptureAttempt.objects.create(team_uuid=str(one_run["team"].uuid), vm_flag_hash="0" * 64, created_at=at(20))
+    FlagCaptureAttempt.objects.create(team_uuid="someone-else", vm_flag_hash="1" * 64, created_at=at(21))
+    LoggingAttempt.objects.create(team_uuid=str(one_run["team"].uuid), log_data={"msg": "<img src=x onerror=alert(1)>"}, created_at=at(9.2))
+    call_command("process_attempts", "--once", "--grace", "120")
+
+    infra = address_index(analyze(infra_fixture.snapshot()))
+    data = timeline.build(run, infra=infra)
+
+    by_uid = {f["uid"]: f for f in data["flows"]}
+    assert set(by_uid) == {"C1", "C2", "C3", "C4"}
+    assert by_uid["C1"]["kind"] == "lan" and by_uid["C1"]["dst"] == str(vm1.uuid)
+    assert by_uid["C2"]["kind"] == "scoring" and by_uid["C2"]["dst"] == "vm:104" and by_uid["C2"]["src"] == str(vm1.uuid)
+    assert by_uid["C3"]["kind"] == "private_internet" and by_uid["C3"]["dst_name"] == "apt-cache"
+    assert by_uid["C2"]["t"] == 7.0 and by_uid["C2"]["d"] == 0.5
+
+    flags = [e for e in data["events"] if e["kind"] == "flag_submitted"]
+    assert [f["data"]["result"] for f in flags] == ["captured", "invalid"]  # the other team's is not shown
+    assert flags[0]["node"] == "role:scoring"
+    assert flags[0]["data"]["flag_of"] == str(vm0.uuid)
+    # Submitted by vm1 (its connection to scoring at t=7, just before 7.5).
+    assert flags[0]["data"]["source_vm"] == str(vm1.uuid) and flags[0]["data"]["source_inferred"]
+    assert flags[1]["data"]["source_vm"] is None  # no connection within the window
+    captured = [e for e in data["events"] if e["kind"] == "captured"]
+    assert captured and captured[0]["node"] == str(vm0.uuid)
+    assert next(n for n in data["nodes"] if n["id"] == str(vm0.uuid))["captured"]
+
+    logs = [e for e in data["events"] if e["kind"] == "log_received"]
+    assert len(logs) == 1 and logs[0]["node"] == "role:logging"
+    assert logs[0]["data"]["source_vm"] == str(vm0.uuid) and logs[0]["data"]["stored"]
+    # Attacker-controlled content is passed through as data (the player
+    # renders it as text), never interpreted here.
+    assert logs[0]["data"]["log"]["data"] == {"msg": "<img src=x onerror=alert(1)>"}
+
+    # Without the live index the far end is still reported, by address.
+    bare = {f["uid"]: f for f in timeline.build(run)["flows"]}
+    assert bare["C2"]["dst"] == "ip:10.2.0.14" and bare["C2"]["kind"] == "other"
+
+
+def test_topology_endpoints_are_staff_only_and_serve_the_player(one_run):
+    """/topology/data/, /topology/runs/ and the run timeline: staff only; the
+    model comes from the stored snapshot; the runs feed the round/team tabs;
+    the timeline resolves service addresses through the live snapshot."""
+    import json as _json
+
+    import infra_fixture
+    from core.models.monitoring import NetworkFlow
+    from core.models.rounds import RoundRun
+    from core.models.topology import TopologySnapshot
+    from core.models.user import User
+    from dashboard.views import rounds as rounds_views
+    from dashboard.views import topology as topology_views
+    from django.contrib.auth.models import AnonymousUser
+    from django.test import RequestFactory
+    from django.utils import timezone
+
+    run = one_run["run"]
+    power, clock = FakePower(), Clock()
+    conductor = make_conductor(power, clock)
+    for _ in range(6):
+        conductor.tick()
+        fake_agent(run, sha)
+        run.refresh_from_db()
+        if run.state == RoundRun.State.ARMED:
+            break
+    staff = User.objects.create(username="staff", is_staff=True)
+    student = User.objects.create(username="student")
+    factory = RequestFactory()
+
+    def call(view, user, *args):
+        request = factory.get("/", HTTP_HOST="localhost")
+        request.user = user
+        return view(request, *args)
+
+    # No snapshot yet: a clear 503, not a crash.
+    response = call(topology_views.topology_data, staff)
+    assert response.status_code == 503 and "collect_topology" in _json.loads(response.content)["error"]
+
+    TopologySnapshot.objects.create(source="proxmox", data=infra_fixture.snapshot(), collected_at=timezone.now())
+    topology_views._cache.clear()
+
+    for view, args in [(topology_views.topology_data, ()), (topology_views.topology_runs, ()),
+                       (rounds_views.round_timeline_data, (run.uuid,))]:
+        assert call(view, student, *args).status_code == 403
+        assert call(view, AnonymousUser(), *args).status_code == 302  # to the login
+        assert call(view, staff, *args).status_code == 200
+
+    data = _json.loads(call(topology_views.topology_data, staff).content)
+    assert {"nodes", "edges", "groups", "networks", "collected_at", "stale"} <= set(data)
+    assert data["stale"] is False
+
+    runs = _json.loads(call(topology_views.topology_runs, staff).content)
+    assert runs["rounds"][0]["name"] == "R1"
+    assert runs["rounds"][0]["runs"][0] == {
+        "uuid": str(run.uuid), "team": "team-a", "state": run.state, "position": run.position,
+        "worm_start_at": run.worm_start_at.isoformat(),
+    }
+
+    NetworkFlow.objects.create(uid="V1", ts=run.worm_start_at + timezone.timedelta(seconds=3), src_ip="10.64.0.10",
+                               dst_ip="10.2.0.14", dst_port=443, transport="tcp")
+    timeline = _json.loads(call(rounds_views.round_timeline_data, staff, run.uuid).content)
+    assert timeline["flows"][0]["dst"] == "vm:104" and timeline["flows"][0]["kind"] == "scoring"
+
+
+def test_timeline_truncates_large_logs(one_run):
+    from orchestrator.rounds import timeline
+
+    small = timeline._preview({"a": 1})
+    assert small == {"data": {"a": 1}, "truncated": False}
+    big = timeline._preview({"a": "x" * 10000})
+    assert big["truncated"] and len(big["data"]) == timeline.LOG_PREVIEW and big["size"] > 10000
 
 
 @pytest.mark.parametrize("command", ["process_captures", "process_attempts"])

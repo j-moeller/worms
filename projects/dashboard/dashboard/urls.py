@@ -1,5 +1,6 @@
 from dashboard.views.access import access, create_access_token, revoke_access_token
 from dashboard.views.auth import login_view, logout_view
+from dashboard.views.password import change_password
 from dashboard.views.debug import debug_login_as
 from dashboard.views.leaderboard import leaderboard
 from dashboard.views.logging import logging_event_data, logs
@@ -31,6 +32,7 @@ urlpatterns = [
     #
     path("login/", login_view, name="login"),
     path("logout/", logout_view, name="logout"),
+    path("change-password/", change_password, name="change_password"),
     #
     path("teams/", team_registration, name="team_registration"),
     path("join_team/<uuid:uuid>", join_team, name="join_team"),

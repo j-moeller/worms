@@ -37,4 +37,7 @@ LOGGING["loggers"]["dashboard"] = {
 MIDDLEWARE += [
     "dashboard.middleware.EnvironmentTransitionMiddleware",
     "dashboard.middleware.UserMetadataMiddleware",
+    # After UserMetadataMiddleware (needs request.user): force students off
+    # their one-time password before they can use anything else.
+    "dashboard.middleware.ForcePasswordChangeMiddleware",
 ]

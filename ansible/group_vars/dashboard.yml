@@ -15,7 +15,6 @@ django_extra_env:
   ORCHESTRATOR_URL: "https://{{ infrastructure_ips.orchestrator }}"
   ORCHESTRATOR_TLS_NAME: orchestrator.worms.internal
   ORCHESTRATOR_API_TOKEN: "{{ vault_orchestrator_dashboard_token }}"
-
-django_superuser_username: admin
-django_superuser_email: admin@worms.internal
-django_superuser_password: "{{ vault_django_superuser_password }}"
+# The admin account (is_staff + superuser) and the default competition are
+# created by the orchestrator's `manage.py init` after the migrations (the
+# dashboard holds no migrator credentials). See group_vars/orchestrator.yml.

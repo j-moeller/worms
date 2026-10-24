@@ -135,6 +135,35 @@
       DB_MIGRATOR_USER: "{{ postgres_migrator_name }}"
       DB_MIGRATOR_PASSWORD: "{{ postgres_migrator_password }}"
 
+# Idempotent post-migration commands run once provisioning (e.g. the
+# orchestrator's `init`: the admin account and the default competition). Same
+# environment as the migrations (writes go through the migrator connection),
+# so they run only where django_run_migrations is set.
+- name: Run post-migration management commands
+  when: django_run_migrations | bool
+  ansible.builtin.command:
+    cmd: "{{ django_venv_dir }}/bin/python manage.py {{ item }}"
+    chdir: "{{ django_source_dir }}"
+  become_user: "{{ django_app_user }}"
+  no_log: "{{ hide_secrets }}"
+  loop: "{{ django_post_migrate_commands }}"
+  environment: "{{ django_migrate_env | combine(django_extra_env) }}"
+  vars:
+    django_migrate_env:
+      PRODUCTION: "1"
+      DJANGO_SETTINGS_MODULE: "{{ django_settings_module }}"
+      DJANGO_SECRET_KEY: "{{ django_secret_key }}"
+      DJANGO_ALLOWED_HOSTS: "{{ django_allowed_hosts }}"
+      DB_NAME: "{{ django_db_name }}"
+      DB_HOST: "{{ django_db_host }}"
+      DB_PORT: "{{ django_db_port | string }}"
+      DB_SSLMODE: "{{ django_db_sslmode }}"
+      DB_SSLROOTCERT: "{{ django_db_sslrootcert }}"
+      DB_USER: "{{ django_db_user }}"
+      DB_PASSWORD: "{{ django_db_password }}"
+      DB_MIGRATOR_USER: "{{ postgres_migrator_name }}"
+      DB_MIGRATOR_PASSWORD: "{{ postgres_migrator_password }}"
+
 - name: Install systemd service
   ansible.builtin.template:
     src: django.service.j2

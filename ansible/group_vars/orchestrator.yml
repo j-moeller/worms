@@ -26,6 +26,13 @@ django_extra_env:
   PROXMOX_READONLY_TOKEN_VALUE: "{{ proxmox_readonly_api_token_value }}"
   # REST API callers (orchestrator/api.py).
   ORCHESTRATOR_DASHBOARD_TOKEN: "{{ vault_orchestrator_dashboard_token }}"
+  # Admin account password for `manage.py init` (post-migration). Delivered
+  # only to the orchestrator, which creates the account via the migrator.
+  DJANGO_ADMIN_PASSWORD: "{{ vault_django_admin_password }}"
+# Post-migration init: the admin account (is_staff + superuser) and the
+# default competition "WORMS <year>". Idempotent; see core/.../commands/init.py.
+django_post_migrate_commands:
+  - init
 # Periodic management commands (systemd timers, same env file).
 django_timers:
   - name: collect-topology

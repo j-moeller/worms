@@ -37,6 +37,9 @@ django_db_sslrootcert: "/etc/ssl/certs/ca-certificates.crt"
 
 django_extra_pip_packages: []
 django_extra_env: {}
+# Management commands run once after the migrations (idempotent), e.g. the
+# orchestrator's `init` (admin account + default competition).
+django_post_migrate_commands: []
 django_timers: []
 # Long-running management commands (systemd services): [{name, command, description}].
 django_daemons: []

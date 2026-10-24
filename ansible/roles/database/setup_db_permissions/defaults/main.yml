@@ -24,6 +24,10 @@ postgresql_table_privileges:
     # Login and sessions (django.contrib.auth / sessions).
     - privs: UPDATE (last_login)
       tables: [users]
+    # First-login password change for students (dashboard/views/password.py):
+    # set their own password and clear the one-time flag.
+    - privs: UPDATE (password, must_change_password)
+      tables: [users]
     - privs: INSERT, UPDATE, DELETE
       tables: [django_session]
 

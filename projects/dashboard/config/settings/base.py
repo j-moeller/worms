@@ -1,5 +1,6 @@
 import os
 import socket
+import sys
 from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
@@ -50,10 +51,12 @@ CHUNK_SIZE = 1024 * 1024  # 1 MiB
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get("PRODUCTION", None) != "1"
 
+# To stderr: stdout is reserved for machine-readable command output (e.g.
+# `manage.py create_users` prints an email,password CSV there).
 if DEBUG:
-    print("[DEBUG] We are running in DEBUG mode")
+    print("[DEBUG] We are running in DEBUG mode", file=sys.stderr)
 else:
-    print("[PRODUCTION] We are running in PRODUCTION mode")
+    print("[PRODUCTION] We are running in PRODUCTION mode", file=sys.stderr)
 
 # SECRET_KEY and ALLOWED_HOSTS: a throwaway value for local development, and
 # strictly environment-provided values in production (no hardcoded secrets).

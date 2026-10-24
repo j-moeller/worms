@@ -7,6 +7,8 @@ from core.models.competition import ApplicationSetting, Competition, Round
 from core.models.team import TeamMembership
 from django.conf import settings
 from django.http import HttpRequest
+from django.shortcuts import redirect
+from django.urls import reverse
 
 # Before competition (now < registration_start)
 # Registration open (registration_start <= now < registration_end)
@@ -117,5 +119,32 @@ class EnvironmentTransitionMiddleware:
         env_toggle = request.GET.get("live")
         if env_toggle is not None:
             request.session["is_dev_environment"] = env_toggle == "0"
+
+        return self.get_response(request)
+
+
+class ForcePasswordChangeMiddleware:
+    """Hold a student on the change-password page until the one-time password
+    from create_users is replaced (user.must_change_password). Everything but
+    the change-password page itself, logout, and static files is redirected."""
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request: HttpRequest):
+        user = getattr(request, "user", None)
+        if (
+            user is not None
+            and user.is_authenticated
+            and getattr(user, "must_change_password", False)
+        ):
+            allowed = {
+                reverse("change_password"),
+                reverse("logout"),
+            }
+            static_prefix = "/" + settings.STATIC_URL.lstrip("/")
+            path = request.path
+            if path not in allowed and not path.startswith(static_prefix):
+                return redirect("change_password")
 
         return self.get_response(request)

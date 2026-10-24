@@ -5,7 +5,6 @@ from core.models import (
     Round,
     Team,
     User,
-    Student,
     VirtualMachine,
     FlagCaptureAttempt,
     FlagCapture,
@@ -42,10 +41,6 @@ class Command(BaseCommand):
         print()
         print("User:")
         for a in User.objects.all():
-            print(a)
-        print()
-        print("Student:")
-        for a in Student.objects.all():
             print(a)
         print()
         print("VirtualMachine:")

@@ -10,7 +10,9 @@ Two things, kept separate:
    **not** least-privilege flagged.
 
 The operational how-to for the dashboard accounts (create the admin, import
-students) is at the end: [Managing dashboard accounts](#3-managing-dashboard-accounts).
+students) is in [Managing dashboard accounts](#3-managing-dashboard-accounts),
+and **every environment variable** the CLI, OpenTofu, Ansible and the
+services expect is in [Environment](#4-environment).
 
 Nothing is hardcoded: internal secrets are generated into the encrypted Ansible
 vault (`scripts/generate_secrets.py`); the Proxmox tokens are the external
@@ -22,18 +24,40 @@ secrets you supply.
 
 ### 1.1 Proxmox
 
-| Account | Minimum privilege | Scope | Used by |
-|---|---|---|---|
-| **provisioning token** (`vault_proxmox_api_token_value`, supplied as `PROXMOX_API_TOKEN`) | root-equivalent: `VM.Allocate`, `VM.Config.*`, `VM.PowerMgmt`, `VM.Audit`, `Datastore.Allocate`+`AllocateSpace`, `Sys.Modify` (bridges/SDN), `Pool.Allocate`, `SDN.*`, firewall rights — in practice a **`root@pam`** token, plus a **root SSH key on the node** (the OpenTofu provider uploads snippets/the hookscript, whose `file_mode` requires `root@pam`). | `/` (whole node) | OpenTofu, on the node only |
-| **orchestrator power token** `orchestrator@pam!orchestrator-prov` | `VM.PowerMgmt` + `VM.Audit` (role `WormsSandboxPower`) — nothing else | `/pool/sandbox` | orchestrator (game plan) + dashboard→orchestrator VM power |
-| **read-only topology token** `topology@pve!readonly` | `PVEAuditor` (read-only; on the user *and* the token, privilege-separated) | `/` | `collect_topology` (admin topology view) |
+Three API tokens, three different jobs — do not reuse one for another.
+
+| Token | Minimum privilege | Scope | Used by | Supplied as |
+|---|---|---|---|---|
+| **provisioning token**, e.g. `root@pam!worms` | root-equivalent: `VM.Allocate`, `VM.Config.*`, `VM.PowerMgmt`, `VM.Audit`, `Datastore.Allocate`+`AllocateSpace`, `Sys.Modify` (bridges/SDN), `Pool.Allocate`, `SDN.*`, firewall rights — in practice a **`root@pam`** token without privilege separation, plus **root's SSH key in an ssh-agent** (the OpenTofu provider uploads snippets/the hookscript over SSH; `file_mode` requires `root@pam`) | `/` (whole node) | OpenTofu, on the node only: your `make` / `worms build` **and** the round agent (sandbox/devbox stacks) | `TF_VAR_proxmox_api_token` = `root@pam!worms=<secret>` (full form); vault copy for the agent: `vault_tofu_proxmox_api_token` |
+| **orchestrator power token** `orchestrator@pam!orchestrator-prov` | `VM.PowerMgmt` + `VM.Audit` (role `WormsSandboxPower`) — nothing else | `/pool/sandbox` | orchestrator (game plan) + dashboard→orchestrator VM power | `PROXMOX_API_TOKEN` = the **secret only** → vault `vault_proxmox_api_token_value` |
+| **read-only topology token** `topology@pve!readonly` | `PVEAuditor` (read-only; on the user *and* the token, privilege-separated) | `/` | `collect_topology` (admin topology view); also enough for `worms status` | `PROXMOX_READONLY_API_TOKEN` = the **secret only** → vault `vault_proxmox_readonly_api_token_value` |
 
 The provisioning token is root-equivalent **by necessity** (it builds the whole
 platform) — keep it on the node, never on a VM. The orchestrator VM only ever
 holds the pool-scoped power token, so "orchestrator compromised" ≠ "node
-compromised". The round agent on the node needs no token (it is already root
-there). Identities are in `ansible/group_vars/all.yml`; the sandbox-pool ACL is
-created by `roles/host/round_agent`.
+compromised". Identities are in `ansible/group_vars/all.yml`; the sandbox-pool
+ACL (user and token) is created by `roles/host/round_agent`.
+
+Create them once, as root on the node (`pveum` prints each token's secret
+**once**):
+
+```sh
+# 1. provisioning (OpenTofu): root@pam, no privilege separation
+pveum user token add root@pam worms --privsep 0
+#    -> TF_VAR_proxmox_api_token='root@pam!worms=<secret>'
+
+# 2. orchestrator power (VM power on the sandbox pool; the ACL is set by SetupRoundAgent.yml)
+pveum user add orchestrator@pam --comment "WORMS orchestrator: sandbox VM power"
+pveum user token add orchestrator@pam orchestrator-prov --privsep 1
+#    -> PROXMOX_API_TOKEN=<secret>
+
+# 3. read-only topology (PVEAuditor on the user AND the privilege-separated token)
+pveum user add topology@pve --comment "WORMS topology: read-only"
+pveum acl modify / --users topology@pve --roles PVEAuditor
+pveum user token add topology@pve readonly --privsep 1
+pveum acl modify / --tokens 'topology@pve!readonly' --roles PVEAuditor
+#    -> PROXMOX_READONLY_API_TOKEN=<secret>
+```
 
 ### 1.2 Database (PostgreSQL)
 
@@ -179,3 +203,160 @@ exactly `UPDATE(password, must_change_password)` on `users` for this and nothing
 more.
 
 Covered offline by `tests/test_accounts.py` (`worms test`).
+
+
+---
+
+## 4. Environment
+
+Everything the tools read from the environment, who needs it, and where the
+value comes from. Secrets you **supply** are only the three Proxmox tokens
+(§1.1); everything else is generated into the vault and delivered by Ansible.
+
+Where things run: `make` / `worms build`, OpenTofu and Ansible run **as root on
+the Proxmox node** (it is the Ansible controller: `proxmox_host` is
+`ansible_connection: local`). The `worms` CLI runs there too, or on a laptop
+with `WORMS_SSH` (build steps then run on the node over SSH).
+
+### 4.1 OpenTofu — `make`, `worms build` (`tofu` in `opentofu/stacks/*`)
+
+| Variable | Required | Value | Notes |
+|---|---|---|---|
+| `TF_VAR_proxmox_api_url` | **yes** | `https://127.0.0.1:8006/` on the node (or `https://<node>:8006/`) | bpg provider endpoint; TLS is not verified (`insecure = true` in every stack) |
+| `TF_VAR_proxmox_api_token` | **yes** | `root@pam!worms=<secret>` — the **full** provisioning token (§1.1) | sensitive; without it `tofu apply -input=false` stops with "No value for required variable" |
+| `SSH_AUTH_SOCK` | **yes** | an ssh-agent holding root's key for the node: `eval "$(ssh-agent)" && ssh-add /root/.ssh/id_rsa` | the provider uploads snippets/the hookscript over SSH as root (`ssh { agent = true, username = "root" }`) |
+| `TF_VAR_ssh_public_key` | no (`~/.ssh/id_rsa.pub`) | path of the public key cloud-init installs on every VM | must be the public half of the key Ansible and the round agent log in with (root's default identity on the node) |
+| `TF_VAR_proxmox_instance` | no (`worms-pve`) | the Proxmox node name | becomes `proxmox.node` in the inventory |
+| `TF_VAR_datastore_id` | no (`local`) | datastore for images and snippets | must allow the `snippets` content type |
+| `TF_VAR_gateway_user` | no (`team`) | devbox stack: the SSH gateway's login user | |
+| `TF_CLI_CONFIG_FILE` | no | an OpenTofu CLI config (e.g. a provider mirror for an offline node) | |
+
+The variables apply to every stack (they share `shared-variables.tf`); a
+`terraform.tfvars` per stack works too but has to be repeated six times.
+
+### 4.2 Secrets generation — `worms build secrets` (first `make`)
+
+`scripts/generate_secrets.py` creates `ansible/.vault_pass` and the encrypted
+`ansible/group_vars/vault.yml` once, and on later runs only **adds** keys that
+are missing (it never rotates). It reads:
+
+| Variable | Value | Stored as | If unset |
+|---|---|---|---|
+| `PROXMOX_API_TOKEN` | the **secret** of `orchestrator@pam!orchestrator-prov` | `vault_proxmox_api_token_value` | placeholder + a notice; the orchestrator cannot stop/start VMs |
+| `PROXMOX_READONLY_API_TOKEN` | the **secret** of `topology@pve!readonly` | `vault_proxmox_readonly_api_token_value` | empty; the TOPOLOGY view says "not configured" |
+| `TF_VAR_proxmox_api_token` | the **full** provisioning token (as in §4.1) | `vault_tofu_proxmox_api_token` | empty; the round agent's `tofu apply` (sandbox, devbox) fails |
+
+Set or change them later with
+`cd ansible && ansible-vault edit group_vars/vault.yml` (the key file comes
+from `ansible.cfg`), then re-run `worms build provision` (or the one playbook
+that delivers it: `SetupRoundAgent.yml` for the provisioning token,
+`SetupDbAndDashboard.yml` for the two others).
+
+### 4.3 Ansible — `worms build <component>` (`ansible-playbook` in `ansible/`)
+
+**No environment variables are needed**; everything is in files:
+
+| File | From | Purpose |
+|---|---|---|
+| `ansible/ansible.cfg` | the repo | inventories, `vault_password_file = .vault_pass`, roles path, no host-key prompts |
+| `ansible/.vault_pass` | `generate_secrets.py` (0600, git-ignored) | decrypts the vault — never prompts |
+| `ansible/group_vars/vault.yml` | `generate_secrets.py` (encrypted, git-ignored) | every secret; passed as `-e @group_vars/vault.yml` |
+| `ansible/inventory.generated.yml` | `worms build inventory` (`scripts/generate_inventory.py` reads `tofu output -json`; needs no credentials) | every VM's addresses; re-generated after each `tofu apply` |
+| `/root/.ssh/id_rsa` | you (the node's root key) | Ansible logs in to the VMs as `debian` with the default identity — the private half of `TF_VAR_ssh_public_key` |
+| `ansible/pki/worms/ca.{crt,key}` | `CreateCA.yml` (key encrypted with `vault_pki_ca_passphrase`) | the internal CA |
+
+Collections used beyond `ansible.builtin`: `community.crypto`,
+`community.postgresql`, `ansible.posix`. Standard `ANSIBLE_*` variables
+still work but override `ansible.cfg`; `worms build <component> -- <args>`
+appends extra `ansible-playbook` arguments.
+
+### 4.4 The `worms` CLI (`src/manage.py`)
+
+Read from the environment or `~/.worms/config` (`--config` for another file):
+`KEY=value` lines, `#` only at the start of a line (no inline comments, no
+quotes). Real environment > `--config` > `~/.worms/config`. Only `WORMS_*` keys
+are taken from a config file.
+
+| Variable | Needed for | Default | Value |
+|---|---|---|---|
+| `WORMS_DB_HOST` | `teams`, `users`, `leaderboard`, `reset-database`, the competition part of `status` | — (unset: "no database configured") | `10.11.0.16` (the database's core address) |
+| `WORMS_DB_PORT` | " | `5432` | |
+| `WORMS_DB_NAME` | " | `mydb` | `postgres_db` in `group_vars/all.yml` |
+| `WORMS_DB_USER` | " | `admin` | `admin` (superuser; `pg_hba` admits it only from the node's own address `10.11.0.1`) |
+| `WORMS_DB_PASSWORD` | " | — | `vault_postgres_admin_password` |
+| `WORMS_DB_SSLMODE` | " | `verify-full` | `verify-ca` through an SSH tunnel (the certificate names `10.11.0.16`, not `127.0.0.1`) |
+| `WORMS_DB_SSLROOTCERT` | " | the checkout's `ansible/pki/worms/ca.crt` (system bundle if absent) | the internal CA |
+| `WORMS_PROXMOX_URL` | the infrastructure part of `status` | — (unset: "no Proxmox API configured") | `https://127.0.0.1:8006` on the node |
+| `WORMS_PROXMOX_USER` | " | `root@pam` | `topology@pve` |
+| `WORMS_PROXMOX_TOKEN_NAME` | " | — | `readonly` |
+| `WORMS_PROXMOX_TOKEN_VALUE` | " | — | `vault_proxmox_readonly_api_token_value` (read-only is enough) |
+| `WORMS_PROXMOX_NODE` | " | `worms-pve` | the node name |
+| `WORMS_PROXMOX_VERIFY_SSL` | " | `1` | keep `1` and point `REQUESTS_CA_BUNDLE` at PVE's CA (below); `0` only for local experiments |
+| `REQUESTS_CA_BUNDLE` | " (environment only, not the config file) | — | `/etc/pve/pve-root-ca.pem` on the node: the CA of PVE's own API certificate, which names `localhost`/`127.0.0.1` |
+| `WORMS_SSH` | build steps and the internet probe from a laptop | empty = this machine is the node | `root@<node>` |
+| `WORMS_REPO_ROOT` | build | the checkout the CLI runs from | the checkout **on the node** (build steps `cd` there) |
+| `NO_COLOR` | output | colours on a TTY | any value: no colours |
+
+On the node with `WORMS_SSH` empty, `status` reads the internet flag
+(`/run/worms/internet-allowed`) directly; elsewhere it needs `WORMS_SSH`.
+
+### 4.5 Example: root's environment on the node
+
+```sh
+# ~/.worms/env -- source it from ~/.bashrc (chmod 600)
+export TF_VAR_proxmox_api_url=https://127.0.0.1:8006/
+export TF_VAR_proxmox_api_token='root@pam!worms=<provisioning secret>'
+export PROXMOX_API_TOKEN='<orchestrator-prov secret>'        # read by the first `make`
+export PROXMOX_READONLY_API_TOKEN='<readonly secret>'         # read by the first `make`
+export REQUESTS_CA_BUNDLE=/etc/pve/pve-root-ca.pem
+[ -n "$SSH_AUTH_SOCK" ] || { eval "$(ssh-agent -s)" >/dev/null && ssh-add -q /root/.ssh/id_rsa; }
+```
+
+```ini
+# ~/.worms/config (chmod 600) -- the CLI
+WORMS_DB_HOST=10.11.0.16
+WORMS_DB_USER=admin
+WORMS_DB_PASSWORD=<vault_postgres_admin_password>
+WORMS_PROXMOX_URL=https://127.0.0.1:8006
+WORMS_PROXMOX_USER=topology@pve
+WORMS_PROXMOX_TOKEN_NAME=readonly
+WORMS_PROXMOX_TOKEN_VALUE=<vault_proxmox_readonly_api_token_value>
+```
+
+The two vault values, after the first `make`:
+
+```sh
+cd ansible && ansible-vault view group_vars/vault.yml \
+  | grep -E '^(vault_postgres_admin_password|vault_proxmox_readonly_api_token_value):'
+```
+
+From a laptop: `WORMS_SSH=root@<node>` for the build and the internet probe,
+and an SSH tunnel for the database — the connection then comes from the node's
+address, which `pg_hba` admits for `admin`:
+
+```sh
+ssh -N -L 5432:10.11.0.16:5432 root@<node> &
+WORMS_DB_HOST=127.0.0.1 WORMS_DB_SSLMODE=verify-ca \
+WORMS_DB_SSLROOTCERT=<copy of ansible/pki/worms/ca.crt> worms teams
+```
+
+### 4.6 Generated for the services (never set by hand)
+
+Rendered by Ansible from the vault and the inventory into root-owned `0600`
+files read by systemd; listed so you know what each service sees.
+
+| Service | File | Variables |
+|---|---|---|
+| round agent (node) | `/etc/worms/round-agent.env` | `REPO_ROOT`, `PYTHONPATH`; `DB_HOST/PORT/NAME/USER/PASSWORD/SSLMODE/SSLROOTCERT` (role `round_agent`); `DASHBOARD_HOST`, `DASHBOARD_MEDIA_ROOT`, `SCORING_HOST`, `LOGGING_HOST`, `RESET_SERVICES`; **OpenTofu**: `TF_VAR_proxmox_api_url` (`https://127.0.0.1:8006/`), `TF_VAR_proxmox_api_token` (`vault_tofu_proxmox_api_token`), `TF_VAR_proxmox_instance`, `TF_VAR_ssh_public_key`. The service runs under its own `ssh-agent` with `/root/.ssh/id_rsa` (`round_agent_ssh_key`). |
+| dashboard, orchestrator (Django) | `django.env` (role `django_app`) | `PRODUCTION=1`, `DJANGO_SETTINGS_MODULE`, `DJANGO_SECRET_KEY`, `DJANGO_ALLOWED_HOSTS`, `DB_NAME/HOST/PORT/SSLMODE/SSLROOTCERT`, `DB_USER/PASSWORD` (the VM's own role); orchestrator also `DB_MIGRATOR_USER/PASSWORD`, `DJANGO_ADMIN_PASSWORD`, `ORCHESTRATOR_DASHBOARD_TOKEN`, `PROXMOX_HOST/PORT/NODE/USER/TOKEN_NAME/TOKEN_VALUE` (power token), `PROXMOX_READONLY_USER/TOKEN_NAME/TOKEN_VALUE`, optional `PROXMOX_VERIFY_SSL`, `PROXMOX_CA_BUNDLE`, `PROXMOX_TIMEOUT`; dashboard also `ORCHESTRATOR_URL`, `ORCHESTRATOR_TLS_NAME`, `ORCHESTRATOR_API_TOKEN` |
+| scoring, logging (sandbox API) | `sandbox-api.env` (role `sandbox_api`) | `SANDBOX_API_KIND`, `DB_HOST/PORT/NAME/USER/PASSWORD/SSLMODE/SSLROOTCERT` (the INSERT-only `dbuser_scoring` / `dbuser_logging`), `DB_POOL_SIZE`, `CURRENT_TEAM_FILE`, `DEVBOX_TEAMS_FILE`, `CLIENT_IP_HEADER`, the limits (`MAX_BODY_BYTES`, `LOG_MAX_BYTES/DEPTH/ITEMS`, `TEAM_RATE_PER_MINUTE`, `TEAM_BURST`, `TEAM_BAN_AFTER/SECONDS`) |
+| monitor (zeek-shipper) | `zeek-shipper.env` (role `network_monitor`) | `DB_*` (the INSERT-only `dbuser_network_monitor`), `ZEEK_LOG_DIR`, `ZEEK_ARCHIVE_DIR`, `STATE_FILE`, `EVENT_LOGS`, the rate limits (`MAX_FLOWS_PER_SECOND`, `FLOW_BURST`, `MAX_EVENTS_PER_SECOND`, `EVENT_BURST`, `MAX_EVENT_BYTES`), `REPORT_SECONDS` |
+
+Open item: the orchestrator verifies the Proxmox API certificate
+(`PROXMOX_VERIFY_SSL=1` by default), but PVE's default certificate is
+self-signed by PVE's own CA and does not name `10.11.0.1`, the address the
+orchestrator connects to. Until the node's API certificate is issued for that
+address (e.g. by the internal CA, which the VMs trust) — or
+`PROXMOX_CA_BUNDLE` / `PROXMOX_VERIFY_SSL` are set through `django_extra_env`
+— the orchestrator's Proxmox calls fail TLS verification (`docs/findings.md`).
+

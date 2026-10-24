@@ -97,22 +97,33 @@ def _infra_status(config) -> list[list[str]]:
     return rows
 
 
+INTERNET_FLAG = "/run/worms/internet-allowed"
+PVE_CONFIG_DIR = "/etc/pve"  # exists only on a Proxmox node
+
+
 def _internet_status(config) -> list[str]:
-    """The host internet flag (/run/worms/internet-allowed) via SSH, if set up."""
+    """The host internet flag: over WORMS_SSH, or directly when the CLI runs
+    on the Proxmox node itself (as the build steps do without WORMS_SSH)."""
     if not config.ssh:
-        return ["internet access", output.status_cell("unknown", "set WORMS_SSH to probe the host flag")]
+        if not os.path.isdir(PVE_CONFIG_DIR):
+            return ["internet access", output.status_cell("unknown", "not on the Proxmox node: set WORMS_SSH to probe it")]
+        state = "allowed" if os.path.exists(INTERNET_FLAG) else "denied"
+        return _internet_cell(state, "")
     import subprocess
 
     probe = subprocess.run(
-        ["ssh", config.ssh, "test -e /run/worms/internet-allowed && echo allowed || echo denied"],
+        ["ssh", config.ssh, f"test -e {INTERNET_FLAG} && echo allowed || echo denied"],
         capture_output=True, text=True, timeout=20,
     )  # fmt: skip
-    state = probe.stdout.strip()
+    return _internet_cell(probe.stdout.strip(), probe.stderr)
+
+
+def _internet_cell(state, stderr) -> list[str]:
     if state == "allowed":
         return ["internet access", output.status_cell("warn", "ALLOWED (deny before deploying a sandbox)")]
     if state == "denied":
         return ["internet access", output.status_cell("ok", "denied")]
-    return ["internet access", output.status_cell("unknown", probe.stderr.strip()[:60] or "could not probe")]
+    return ["internet access", output.status_cell("unknown", stderr.strip()[:60] or "could not probe")]
 
 
 def _competition_status(config) -> list[list[str]]:

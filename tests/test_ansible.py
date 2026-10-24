@@ -196,3 +196,13 @@ def test_dashboard_nginx_rate_limits_the_team_api(render):
 
     off = render(NGINX_DJANGO, "worms-tls.conf.j2", tls_dns_name="orchestrator.worms.internal")
     assert "limit_req" not in off and "location /api/" not in off and "location / {" in off
+
+
+def test_orchestrator_power_acl_covers_user_and_token():
+    """A privilege-separated Proxmox token gets the intersection of its own
+    and its user's ACL: granting the token alone would give it nothing."""
+    tasks = yaml.safe_load((REPO / "ansible" / "roles" / "host" / "round_agent" / "tasks" / "main.yml").read_text())
+    grant = next(t for t in tasks if "acl modify" in str(t.get("ansible.builtin.command", {}).get("cmd", "")))
+    cmd = grant["ansible.builtin.command"]["cmd"]
+    assert "/pool/{{ round_agent_sandbox_pool }}" in cmd
+    assert "-users '{{ proxmox_api_user }}'" in cmd and "-tokens '{{ round_agent_power_token }}'" in cmd

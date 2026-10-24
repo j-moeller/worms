@@ -31,10 +31,13 @@ class Infra:
                 from proxmoxer import ProxmoxAPI
             except ModuleNotFoundError as exc:
                 raise ProxmoxUnavailable("proxmoxer is not installed (pip install proxmoxer)") from exc
-            host = self._cfg["url"].replace("https://", "").replace("http://", "").split("/")[0]
-            host = host.split(":")[0]
+            from urllib.parse import urlsplit
+
+            url = self._cfg["url"]
+            parts = urlsplit(url if "://" in url else f"https://{url}")
             self._api = ProxmoxAPI(
-                host,
+                parts.hostname,
+                port=parts.port or 8006,
                 user=self._cfg["user"],
                 token_name=self._cfg["token_name"],
                 token_value=self._cfg["token_value"],

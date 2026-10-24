@@ -169,3 +169,65 @@ def test_reset_database(initialised):
     assert sql(cluster, "SELECT count(*) FROM teams")[0][0] == 0
     assert sql(cluster, "SELECT count(*) FROM users WHERE username = 'admin'")[0][0] == 1
     assert sql(cluster, "SELECT count(*) FROM competitions")[0][0] == 1
+
+
+# --- configuration defaults (no database needed) ---------------------------------
+
+
+def _cli_module():
+    import importlib.util
+
+    sys.path.insert(0, str(REPO / "src"))
+    spec = importlib.util.spec_from_file_location("worms_manage", MANAGE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_internet_probe_runs_locally_on_the_node(tmp_path, monkeypatch):
+    """Without WORMS_SSH the CLI is on the node (the build steps run locally
+    too), so `status` reads the host flag directly."""
+    cli = _cli_module()
+    from worms_cli.config import Config
+
+    config = Config(env={})
+    monkeypatch.setattr(cli, "PVE_CONFIG_DIR", str(tmp_path / "missing"))
+    assert "set WORMS_SSH" in cli._internet_status(config)[1]
+    monkeypatch.setattr(cli, "PVE_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setattr(cli, "INTERNET_FLAG", str(tmp_path / "internet-allowed"))
+    assert "denied" in cli._internet_status(config)[1]
+    (tmp_path / "internet-allowed").touch()
+    assert "ALLOWED" in cli._internet_status(config)[1]
+
+
+def test_database_ca_defaults_to_the_internal_ca(tmp_path):
+    sys.path.insert(0, str(REPO / "src"))
+    from worms_cli.config import Config
+
+    config = Config(env={"WORMS_REPO_ROOT": str(tmp_path), "WORMS_DB_HOST": "10.11.0.16"})
+    assert config.db_env()["WORMS_DB_SSLROOTCERT"] == "/etc/ssl/certs/ca-certificates.crt"
+    ca = tmp_path / "ansible" / "pki" / "worms" / "ca.crt"
+    ca.parent.mkdir(parents=True)
+    ca.write_text("x")
+    assert config.db_env()["WORMS_DB_SSLROOTCERT"] == str(ca)
+    assert config.db_env()["WORMS_DB_USER"] == "admin" and config.db_env()["WORMS_DB_NAME"] == "mydb"
+
+
+def test_proxmox_url_keeps_its_port(monkeypatch):
+    import types
+
+    sys.path.insert(0, str(REPO / "src"))
+    from worms_cli.config import Config
+    from worms_cli.proxmox import Infra
+
+    seen = {}
+    fake = types.ModuleType("proxmoxer")
+    fake.ProxmoxAPI = lambda host, **kw: seen.update(host=host, **kw) or object()
+    monkeypatch.setitem(sys.modules, "proxmoxer", fake)
+    for url, host, port in [("https://10.11.0.1:8006/", "10.11.0.1", 8006), ("https://pve.lab:9443", "pve.lab", 9443),
+                            ("127.0.0.1", "127.0.0.1", 8006)]:
+        seen.clear()
+        Infra(Config(env={"WORMS_PROXMOX_URL": url, "WORMS_PROXMOX_USER": "topology@pve",
+                          "WORMS_PROXMOX_TOKEN_NAME": "readonly", "WORMS_PROXMOX_TOKEN_VALUE": "x"})).api()
+        assert (seen["host"], seen["port"]) == (host, port), url
+        assert seen["user"] == "topology@pve" and seen["token_name"] == "readonly"

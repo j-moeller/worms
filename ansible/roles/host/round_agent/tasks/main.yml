@@ -39,7 +39,11 @@
 # --- Proxmox ACL: power control of the sandbox pool only --------------------
 # The orchestrator's token (proxmox_api_user!proxmox_api_token_name) does VM
 # power for the game plan. It gets exactly VM.PowerMgmt + VM.Audit, and only on
-# the sandbox pool. pveum is idempotent enough; changed_when is conservative.
+# the sandbox pool. The role goes to the user AND the token: a privilege-
+# separated token's rights are the intersection of both ACLs (a token-only
+# grant gives it nothing), a non-separated one has the user's. Either way the
+# result is this role on this pool. pveum is idempotent enough; changed_when
+# is conservative.
 
 - name: Define the least-privilege power role
   ansible.builtin.command:
@@ -57,11 +61,12 @@
       -privs {{ round_agent_power_privs }}
   changed_when: true
 
-- name: Grant the orchestrator token power on the sandbox pool
+- name: Grant the orchestrator user and token power on the sandbox pool
   ansible.builtin.command:
     cmd: >-
       pveum acl modify /pool/{{ round_agent_sandbox_pool }}
       -roles {{ round_agent_power_role }}
+      -users '{{ proxmox_api_user }}'
       -tokens '{{ round_agent_power_token }}'
   changed_when: true
 

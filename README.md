@@ -1,9 +1,20 @@
 # Quick start
 
+As root on the Proxmox node, with the three Proxmox API tokens created
+(`docs/accounts.md` §1.1 has the `pveum` commands):
+
 ```
-export PROXMOX_API_TOKEN=<the value of your Proxmox API token>   # the one external secret
-make                             # idempotent, end to end (as root on the Proxmox node)
+export TF_VAR_proxmox_api_url=https://127.0.0.1:8006/
+export TF_VAR_proxmox_api_token='root@pam!worms=<secret>'   # OpenTofu (provisioning)
+export PROXMOX_API_TOKEN=<secret>                            # orchestrator@pam!orchestrator-prov
+export PROXMOX_READONLY_API_TOKEN=<secret>                   # topology@pve!readonly (optional)
+eval "$(ssh-agent -s)" && ssh-add /root/.ssh/id_rsa          # OpenTofu uploads snippets over SSH
+make                             # idempotent, end to end
 ```
+
+Every variable the CLI, OpenTofu, Ansible and the services read — with
+defaults and where each value comes from — is listed in `docs/accounts.md`
+§4 "Environment".
 
 `make` applies the platform and firewall stacks and the host firewall, then **allows internet
 access**, creates the infrastructure VMs (cloud-init installs packages) and
@@ -32,9 +43,12 @@ certificates stay valid). You never type, see or track them, and
 because they persist, re-running `make` does not rotate them (which would break
 the already-configured database). Both files are git-ignored.
 
-The only secret you must supply is the **Proxmox API token** (it must equal the
-token Proxmox issued you). Set `PROXMOX_API_TOKEN` before the first `make`, or
-add it later with:
+The only secrets you supply are the **Proxmox API tokens** (they must equal the
+tokens Proxmox issued you; `docs/accounts.md` §1.1): OpenTofu's provisioning
+token in `TF_VAR_proxmox_api_token` (kept in the vault too, for the round
+agent), the orchestrator's in `PROXMOX_API_TOKEN` and the optional read-only
+one in `PROXMOX_READONLY_API_TOKEN`. Set them before the first `make`, or add
+them later with:
 
 ```
 cd ansible && ansible-vault edit --vault-password-file .vault_pass group_vars/vault.yml
@@ -43,8 +57,8 @@ cd ansible && ansible-vault edit --vault-password-file .vault_pass group_vars/va
 `group_vars/all.yml` references all of these as `{{ vault_* }}`; the Django
 hosts and the database receive their credentials through root-owned `0600`
 files, so secrets are passed securely at initialization and never land in a
-world-readable location. `group_vars/vault.yml.example` lists the keys for
-reference.
+world-readable location. The keys are listed in `scripts/generate_secrets.py`
+and `docs/accounts.md` §4.2.
 
 # Addressing: OpenTofu is the single source of truth
 

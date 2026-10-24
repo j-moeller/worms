@@ -29,6 +29,18 @@ round_agent_db_user: round_agent
 round_agent_db_password: "{{ vault_round_agent_db_password }}"
 round_agent_db_sslrootcert: "{{ pki_ca_cert_path }}"
 
+# OpenTofu from the agent (sandbox / devbox stacks): the same inputs the
+# operator's `make` gets from its shell (docs/accounts.md, "Environment").
+# The provisioning token is the vault copy of TF_VAR_proxmox_api_token; the
+# SSH key (root's, authorised for root on this node) is loaded into an
+# ssh-agent that wraps the service, because the bpg provider uploads
+# snippets over SSH with `agent = true`. Its .pub is what cloud-init puts on
+# the sandbox VMs, so the agent can SSH into them.
+round_agent_tofu_api_url: "https://127.0.0.1:{{ proxmox.api_port | default(8006) }}/"
+round_agent_tofu_api_token: "{{ vault_tofu_proxmox_api_token | default('') }}"
+round_agent_tofu_node: "{{ proxmox.node | default('worms-pve') }}"
+round_agent_ssh_key: /root/.ssh/id_rsa
+
 # Least-privilege Proxmox role for the orchestrator's power token: start/stop
 # of sandbox VMs only. Granted on the sandbox pool.
 round_agent_power_role: WormsSandboxPower

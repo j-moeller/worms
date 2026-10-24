@@ -3,8 +3,8 @@
 #
 # SECRETS LIVE IN group_vars/vault.yml (ansible-vault encrypted) and are
 # referenced here as {{ vault_* }}. There are NO plaintext passwords in this
-# file or anywhere in version control. See group_vars/vault.yml.example and the
-# "Secrets" section of the README for how to create the encrypted vault.
+# file or anywhere in version control. scripts/generate_secrets.py creates the
+# encrypted vault (keys: docs/accounts.md section 4.2; README "Secrets").
 # -----------------------------------------------------------------------------
 
 # Addressing is the OpenTofu ground truth. `infrastructure_ips`,

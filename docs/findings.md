@@ -235,3 +235,38 @@ internet. The API paths now bypass the session middlewares (a test fails if a
 call writes a session row); the rest of the site is unchanged. The dashboard's
 nginx had no rate limiting at all; `/api/` now has per-address and per-token
 limits (the HTML pages are still unlimited — see TODO).
+
+## Environment audit (CLI, OpenTofu, Ansible)
+
+Writing down every environment variable the tools read (`docs/accounts.md`
+§4) turned up:
+
+- **The round agent could not run OpenTofu.** It applies the sandbox and
+  devbox stacks from a systemd service, whose env file had neither
+  `TF_VAR_proxmox_api_url` nor `TF_VAR_proxmox_api_token` (both required) nor
+  an ssh-agent (the provider uploads snippets over SSH with `agent = true`):
+  every round's prepare and every devbox build would have failed at
+  `tofu apply`. Fixed: the provisioning token is kept in the vault
+  (`vault_tofu_proxmox_api_token`, from `TF_VAR_proxmox_api_token`), the env
+  file carries the `TF_VAR_*`, and `ssh-agent` wraps the service with root's
+  key (systemd kills anything `ExecStartPre` forks, so it cannot start there).
+- **The orchestrator's power token had no rights.** `SetupRoundAgent.yml`
+  granted the sandbox-pool role to the token only; a privilege-separated
+  token gets the intersection of its own and its user's ACL. Now both are
+  granted.
+- **The quick start was incomplete**: it set only `PROXMOX_API_TOKEN` (the
+  orchestrator's token), while every OpenTofu stack requires
+  `TF_VAR_proxmox_api_url` / `TF_VAR_proxmox_api_token` (a different, root
+  token) and an ssh-agent. `docs/accounts.md` §1.1 conflated the two tokens.
+  Both fixed; §1.1 has the `pveum` commands for all three tokens.
+- **CLI defaults**: `worms status` asked for `WORMS_SSH` even on the node
+  (where the build steps run locally without it) — it now reads the internet
+  flag directly there; the database CA defaulted to the system bundle, which
+  cannot verify the internal CA's certificate — it now defaults to the
+  checkout's `ansible/pki/worms/ca.crt`; a port in `WORMS_PROXMOX_URL` was
+  dropped — it is now used.
+- **Open**: the orchestrator verifies the Proxmox API certificate, but PVE's
+  default certificate is signed by PVE's own CA and does not name
+  `10.11.0.1`, the address the orchestrator uses. Issue the node's API
+  certificate for that address (e.g. from the internal CA the VMs trust), or
+  set `PROXMOX_CA_BUNDLE` / `PROXMOX_VERIFY_SSL` via `django_extra_env`.

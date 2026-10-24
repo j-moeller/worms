@@ -33,15 +33,18 @@ run without doing it.
 No secret is hardcoded. The CLI reads `WORMS_*` variables from the environment,
 optionally seeded from `~/.worms/config` (or `--config path`), a file of plain
 `KEY=value` lines. Precedence: real environment > `--config` > `~/.worms/config`.
+The full reference — every variable with its default and where its value
+comes from, plus what OpenTofu and Ansible need, and a ready example for the
+node — is `docs/accounts.md` §4 "Environment".
 
 | Variable | For | Notes |
 |---|---|---|
 | `WORMS_REPO_ROOT` | build | the worms checkout (default: the repo this script lives in) |
 | `WORMS_SSH` | build, internet probe | `user@host` to run `make` and host probes on (e.g. `root@worms-pve`); empty = run locally on the host |
 | `WORMS_DB_HOST/PORT/NAME/USER/PASSWORD` | status, teams, users, leaderboard, reset | a **privileged** DB role (the `admin` superuser or `django_migrator`) |
-| `WORMS_DB_SSLMODE/SSLROOTCERT` | " | default `verify-full` against the internal CA |
+| `WORMS_DB_SSLMODE/SSLROOTCERT` | " | default `verify-full` against the checkout's internal CA (`ansible/pki/worms/ca.crt`) |
 | `WORMS_PROXMOX_URL/USER/TOKEN_NAME/TOKEN_VALUE/NODE` | status | read-only API token is enough |
-| `WORMS_PROXMOX_VERIFY_SSL` | status | `0` only for local experimentation |
+| `WORMS_PROXMOX_VERIFY_SSL` | status | keep `1` with `REQUESTS_CA_BUNDLE=/etc/pve/pve-root-ca.pem` on the node; `0` only for local experimentation |
 
 Each command needs only the configuration for what it does: `worms build`
 needs just the repo (and `WORMS_SSH` if you are remote); `worms teams` needs
@@ -78,7 +81,8 @@ only; create them in Proxmox once):
 - **Infrastructure** (Proxmox API): firewall enabled; number of Linux bridges;
   running/total VMs per pool — infrastructure (`persistent`+`ephemeral`),
   `private_internet`, `sandbox`, `devbox`; and **internet access** (the host
-  flag `/run/worms/internet-allowed`, probed over `WORMS_SSH`).
+  flag `/run/worms/internet-allowed`, read directly on the node, over
+  `WORMS_SSH` from elsewhere).
 - **Competition** (database): the current competition, the phase
   (registration / active round / next round), the number of rounds and teams,
   and the round-orchestration run states and queued host jobs (docs/rounds.md).
@@ -104,8 +108,10 @@ own database connection; it truncates the application tables and re-runs
 `init`). The Makefile's `make destroy` / `make destroy_all` call these.
 
 Tofu reads its Proxmox credentials from the operator's environment on the node
-(`TF_VAR_proxmox_api_url` / `TF_VAR_proxmox_api_token`, or a tfvars file), the
-same way the old stack Makefiles did; the CLI does not manage them.
+(`TF_VAR_proxmox_api_url` / `TF_VAR_proxmox_api_token` and an ssh-agent with
+root's key; `docs/accounts.md` §4.1); the CLI does not manage them. The round
+agent gets the same inputs from its env file (the vault keeps a copy of the
+provisioning token).
 
 ## Why the database is the source of truth
 

@@ -12,9 +12,14 @@ Keys (all optional; a feature that needs one it does not have says so):
   WORMS_REPO_ROOT     the worms checkout (default: the repo this script is in)
   WORMS_SSH           user@host to run `make`/host commands on (e.g. root@worms-pve);
                       empty = run locally (you are on the Proxmox host)
+  NO_COLOR            set: no colours in the output
+
+The full list (with OpenTofu's and Ansible's environment): docs/accounts.md,
+"Environment".
   WORMS_DB_HOST/PORT/NAME/USER/PASSWORD/SSLMODE/SSLROOTCERT
                       database connection for status/teams/leaderboard (a
-                      privileged role: admin or migrator)
+                      privileged role: admin or migrator); SSLROOTCERT defaults
+                      to the checkout's internal CA (ansible/pki/worms/ca.crt)
   WORMS_PROXMOX_URL/USER/TOKEN_NAME/TOKEN_VALUE/NODE/VERIFY_SSL
                       Proxmox API for infrastructure status (VMs, bridges, firewall)
 """
@@ -88,10 +93,15 @@ class Config:
             "WORMS_DB_USER": self.get("WORMS_DB_USER", "admin"),
             "WORMS_DB_PASSWORD": self.get("WORMS_DB_PASSWORD", ""),
             "WORMS_DB_SSLMODE": self.get("WORMS_DB_SSLMODE", "verify-full"),
-            "WORMS_DB_SSLROOTCERT": self.get(
-                "WORMS_DB_SSLROOTCERT", "/etc/ssl/certs/ca-certificates.crt"
-            ),
+            "WORMS_DB_SSLROOTCERT": self.get("WORMS_DB_SSLROOTCERT", str(self.default_ca())),
         }
+
+    def default_ca(self) -> Path:
+        """The internal CA that signed the database's certificate
+        (ansible/pki/worms/ca.crt, created by CreateCA.yml on the node); the
+        system bundle if this checkout has none (e.g. on a laptop)."""
+        ca = self.repo_root / "ansible" / "pki" / "worms" / "ca.crt"
+        return ca if ca.exists() else Path("/etc/ssl/certs/ca-certificates.crt")
 
     def has_db(self) -> bool:
         return bool(self.get("WORMS_DB_HOST"))

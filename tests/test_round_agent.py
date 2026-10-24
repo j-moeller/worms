@@ -397,3 +397,42 @@ def test_round_agent_env_renders(render):
     assert "PYTHONPATH=" in env and "/scripts" in env
     assert "SCORING_HOST=10.5.0.14" in env and "LOGGING_HOST=10.5.0.15" in env
     assert "DASHBOARD_HOST=10.5.0.18" in env
+    # OpenTofu: without the provisioning token in the vault, no value (and a hint).
+    assert "TF_VAR_proxmox_api_url=https://127.0.0.1:8006/" in env
+    assert "TF_VAR_proxmox_api_token=" not in env and "vault_tofu_proxmox_api_token" in env
+    assert "TF_VAR_ssh_public_key=/root/.ssh/id_rsa.pub" in env
+
+
+def test_round_agent_env_carries_the_opentofu_inputs(render):
+    """The agent runs `tofu apply` for the sandbox and devbox stacks from a
+    systemd service: it needs the same inputs as the operator's `make`."""
+    env = render(
+        "ansible/roles/host/round_agent", "round-agent.env.j2",
+        infrastructure_ips={"database": "10.11.0.16"},
+        management_ips={"dashboard": "10.5.0.18", "scoring": "10.5.0.14", "logging": "10.5.0.15"},
+        postgres_db="mydb", pki_ca_cert_path="/etc/worms/ca.crt", vault_round_agent_db_password="secret",
+        vault_tofu_proxmox_api_token="root@pam!worms=0000-1111",
+        proxmox={"host": "10.11.0.1", "api_port": 8006, "node": "pve-lab"},
+    )
+    assert "TF_VAR_proxmox_api_token=root@pam!worms=0000-1111" in env
+    assert "TF_VAR_proxmox_instance=pve-lab" in env
+
+
+def test_round_agent_unit_wraps_an_ssh_agent(render, tmp_path):
+    """The bpg provider uploads snippets over SSH through an agent (agent =
+    true); systemd kills anything ExecStartPre forks, so ssh-agent wraps the
+    service command instead."""
+    import shutil
+    import subprocess
+
+    unit = render("ansible/roles/host/round_agent", "worms-round-agent.service.j2")
+    exec_start = next(line for line in unit.splitlines() if line.startswith("ExecStart="))
+    assert exec_start.startswith("ExecStart=/usr/bin/ssh-agent /bin/sh -c '")
+    assert "ssh-add -q /root/.ssh/id_rsa ||" in exec_start
+    assert exec_start.rstrip().endswith("exec /usr/bin/python3 -m round_agent'")
+    assert "ExecStartPre" not in unit
+    path = tmp_path / "worms-round-agent.service"
+    path.write_text(unit)
+    if shutil.which("systemd-analyze"):
+        proc = subprocess.run(["systemd-analyze", "verify", "--man=no", str(path)], capture_output=True, text=True)
+        assert "ExecStart" not in proc.stderr, proc.stderr

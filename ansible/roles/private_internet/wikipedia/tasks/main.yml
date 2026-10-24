@@ -1,4 +1,11 @@
 ---
+- name: Install kiwix-tools and the download tools
+  ansible.builtin.apt:
+    name: [kiwix-tools, aria2, curl, ca-certificates]
+    state: present
+    update_cache: "{{ internet_enabled | bool }}"
+    cache_valid_time: 3600
+
 - name: Create kiwix user
   ansible.builtin.user:
     name: "{{ wikipedia_user }}"

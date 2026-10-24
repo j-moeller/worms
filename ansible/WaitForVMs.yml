@@ -1,7 +1,7 @@
 ---
 # Wait until freshly created VMs are reachable and cloud-init has finished
-# (it installs base packages such as nginx at first boot), so the following
-# playbooks never race the first boot.
+# (first boot: hostname, SSH key and hardening, data disk), so the following
+# playbooks never race the first boot. Packages come from the roles.
 
 - name: Wait for the infrastructure VMs
   hosts: all:!proxmox_host:!sandbox:!sandbox_gw

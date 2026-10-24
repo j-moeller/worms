@@ -6,6 +6,14 @@
 # reach PyPI/GitHub/repo.mongodb.org, which are sealed off. feedformatter is a
 # GitHub zip (not on PyPI), so a from-scratch offline build is not supported by
 # design: populate in prep, then seal.
+- name: Install the build tools
+  ansible.builtin.apt:
+    name: [git, python3-pip, python3-venv, python3-dev, build-essential, ca-certificates]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  when: internet_enabled | bool
+
 - name: Create cve-search user
   ansible.builtin.user:
     name: "{{ cve_search_user }}"

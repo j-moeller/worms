@@ -17,9 +17,9 @@ defaults and where each value comes from — is listed in `docs/accounts.md`
 §4 "Environment".
 
 `make` applies the platform and firewall stacks and the host firewall, then **allows internet
-access**, creates the infrastructure VMs (cloud-init installs packages) and
-configures them with Ansible (the private-internet caches populate in online
-mode). Afterwards it **denies internet access again** — always, also when a step
+access**, creates the infrastructure VMs (cloud-init: first boot only) and
+installs and configures them with Ansible (the private-internet caches
+populate in online mode). Afterwards it **denies internet access again** — always, also when a step
 fails or you interrupt it — and switches DNS and the caches to offline mode.
 `worms build provision` does the same for the Ansible part only.
 

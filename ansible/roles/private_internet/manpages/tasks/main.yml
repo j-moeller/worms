@@ -1,13 +1,12 @@
 ---
 # apt sources (path-style apt-cacher-ng, non-free enabled) are configured by the
 # apt_client role, which runs first in SetupPrivateInternet.yml.
-- name: Install POSIX man pages (non-free)
+- name: Install apache2, man2html and the man pages (POSIX ones are non-free)
   ansible.builtin.apt:
-    name:
-      - manpages-posix
-      - manpages-posix-dev
+    name: [apache2, man2html, man-db, manpages, manpages-dev, manpages-posix, manpages-posix-dev, ca-certificates]
     state: present
     update_cache: "{{ internet_enabled | bool }}"  # offline re-runs: no index refresh
+    cache_valid_time: 3600
 
 - name: Enable CGI module
   ansible.builtin.command: a2enmod cgi

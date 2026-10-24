@@ -1,265 +1,50 @@
-resource "proxmox_virtual_environment_file" "blank_vm_static" {
-  content_type = "snippets"
-  datastore_id = var.datastore_id
-  node_name    = var.node_name
+# One cloud-init snippet per kind of VM, all from templates/cloud-config.tftpl.
+#
+# The file names are fixed: a VM's user_data_file_id is
+# "<datastore>:snippets/<file>", and the provider rebuilds a VM whose
+# user_data_file_id changes (the database VM included). Hostnames and file
+# names are those of the former per-VM templates (tests/test_cloud_init.py).
+locals {
+  snippets = {
+    blank           = { file = "vm-blank.yml", hostname = "vm" }
+    postgresql      = { file = "vm-postgresq.yml", hostname = "postgresql" }
+    django          = { file = "vm-django.yml", hostname = "django" }
+    wazuh           = { file = "vm-wazuh.yml", hostname = "wazuh" }
+    dns             = { file = "vm-dns.yml", hostname = "dns" }
+    flask           = { file = "vm-flask.yml", hostname = "flask" }
+    network_monitor = { file = "vm-network-monitor.yml", hostname = "network-monitor" }
+    apt_cache       = { file = "vm-apt-cache.yml", hostname = "apt-cache" }
+    devpi           = { file = "vm-devpi.yml", hostname = "devpi" }
+    docker_registry = { file = "vm-docker-registry.yml", hostname = "docker-registry" }
+    manpages        = { file = "vm-manpages.yml", hostname = "manpages" }
+    ntp             = { file = "vm-ntp.yml", hostname = "ntp" }
+    cve_search      = { file = "vm-cve-search.yml", hostname = "cve-search" }
+    wikipedia       = { file = "vm-wikipedia.yml", hostname = "wikipedia" }
+  }
 
-  source_raw {
-    data = templatefile(
-      "${path.module}/templates/vm-blank.tftpl",
-      {
-        ssh_public_key = trimspace(file("${var.ssh_public_key}")),
-        hostname       = "vm"
-      }
-    )
-    file_name = "vm-blank.yml"
+  # Private-internet services with a data disk: where it is mounted.
+  data_mounts = {
+    apt_cache       = "/var/cache/apt-cacher-ng"
+    devpi           = "/var/lib/devpi"
+    docker_registry = "/var/lib/docker-registry"
+    cve_search      = "/var/lib/mongodb"
+    wikipedia       = "/var/lib/kiwix"
   }
 }
 
-resource "proxmox_virtual_environment_file" "dns_vm_static" {
+resource "proxmox_virtual_environment_file" "snippet" {
+  for_each = local.snippets
+
   content_type = "snippets"
   datastore_id = var.datastore_id
   node_name    = var.node_name
 
   source_raw {
-    data = templatefile(
-      "${path.module}/templates/vm-dns.tftpl",
-      {
-        ssh_public_key = trimspace(file("${var.ssh_public_key}")),
-        hostname       = "dns"
-      }
-    )
-    file_name = "vm-dns.yml"
-  }
-}
-
-resource "proxmox_virtual_environment_file" "network_monitor_vm_static" {
-  content_type = "snippets"
-  datastore_id = var.datastore_id
-  node_name    = var.node_name
-
-  source_raw {
-    data = templatefile(
-      "${path.module}/templates/vm-network-monitor.tftpl",
-      {
-        ssh_public_key = trimspace(file("${var.ssh_public_key}")),
-        hostname       = "network-monitor"
-      }
-    )
-    file_name = "vm-network-monitor.yml"
-  }
-}
-
-resource "proxmox_virtual_environment_file" "flask_vm_static" {
-  content_type = "snippets"
-  datastore_id = var.datastore_id
-  node_name    = var.node_name
-
-  source_raw {
-    data = templatefile(
-      "${path.module}/templates/vm-flask.tftpl",
-      {
-        ssh_public_key = trimspace(file("${var.ssh_public_key}")),
-        hostname       = "flask"
-      }
-    )
-    file_name = "vm-flask.yml"
-  }
-}
-
-resource "proxmox_virtual_environment_file" "django_vm_static" {
-  content_type = "snippets"
-  datastore_id = var.datastore_id
-  node_name    = var.node_name
-
-  source_raw {
-    data = templatefile(
-      "${path.module}/templates/vm-django.tftpl",
-      {
-        ssh_public_key = trimspace(file("${var.ssh_public_key}")),
-        hostname       = "django"
-      }
-    )
-    file_name = "vm-django.yml"
-  }
-}
-
-/**
- * VMs (= VMs that can be hacked by users)
- */
-
-resource "proxmox_virtual_environment_file" "nginx_vm_static" {
-  content_type = "snippets"
-  datastore_id = var.datastore_id
-  node_name    = var.node_name
-
-  source_raw {
-    data = templatefile(
-      "${path.module}/templates/vm-nginx.tftpl",
-      {
-        ssh_public_key = trimspace(file("${var.ssh_public_key}")),
-        hostname       = "nginx"
-      }
-    )
-    file_name = "vm-nginx.yml"
-  }
-}
-
-resource "proxmox_virtual_environment_file" "postgresql_vm_static" {
-  content_type = "snippets"
-  datastore_id = var.datastore_id
-  node_name    = var.node_name
-
-  source_raw {
-    data = templatefile(
-      "${path.module}/templates/vm-postgresql.tftpl",
-      {
-        ssh_public_key = trimspace(file("${var.ssh_public_key}")),
-        hostname       = "postgresql"
-      }
-    )
-    file_name = "vm-postgresq.yml"
-  }
-}
-
-/**
- * Private-internet service snippets
- */
-resource "proxmox_virtual_environment_file" "apt_cache_vm_static" {
-  content_type = "snippets"
-  datastore_id = var.datastore_id
-  node_name    = var.node_name
-
-  source_raw {
-    data = templatefile(
-      "${path.module}/templates/vm-apt-cache.tftpl",
-      {
-        ssh_public_key = trimspace(file("${var.ssh_public_key}")),
-        hostname       = "apt-cache"
-      }
-    )
-    file_name = "vm-apt-cache.yml"
-  }
-}
-
-resource "proxmox_virtual_environment_file" "devpi_vm_static" {
-  content_type = "snippets"
-  datastore_id = var.datastore_id
-  node_name    = var.node_name
-
-  source_raw {
-    data = templatefile(
-      "${path.module}/templates/vm-devpi.tftpl",
-      {
-        ssh_public_key = trimspace(file("${var.ssh_public_key}")),
-        hostname       = "devpi"
-      }
-    )
-    file_name = "vm-devpi.yml"
-  }
-}
-
-resource "proxmox_virtual_environment_file" "docker_registry_vm_static" {
-  content_type = "snippets"
-  datastore_id = var.datastore_id
-  node_name    = var.node_name
-
-  source_raw {
-    data = templatefile(
-      "${path.module}/templates/vm-docker-registry.tftpl",
-      {
-        ssh_public_key = trimspace(file("${var.ssh_public_key}")),
-        hostname       = "docker-registry"
-      }
-    )
-    file_name = "vm-docker-registry.yml"
-  }
-}
-
-resource "proxmox_virtual_environment_file" "manpages_vm_static" {
-  content_type = "snippets"
-  datastore_id = var.datastore_id
-  node_name    = var.node_name
-
-  source_raw {
-    data = templatefile(
-      "${path.module}/templates/vm-manpages.tftpl",
-      {
-        ssh_public_key = trimspace(file("${var.ssh_public_key}")),
-        hostname       = "manpages"
-      }
-    )
-    file_name = "vm-manpages.yml"
-  }
-}
-
-resource "proxmox_virtual_environment_file" "ntp_vm_static" {
-  content_type = "snippets"
-  datastore_id = var.datastore_id
-  node_name    = var.node_name
-
-  source_raw {
-    data = templatefile(
-      "${path.module}/templates/vm-ntp.tftpl",
-      {
-        ssh_public_key = trimspace(file("${var.ssh_public_key}")),
-        hostname       = "ntp"
-      }
-    )
-    file_name = "vm-ntp.yml"
-  }
-}
-
-resource "proxmox_virtual_environment_file" "cve_search_vm_static" {
-  content_type = "snippets"
-  datastore_id = var.datastore_id
-  node_name    = var.node_name
-
-  source_raw {
-    data = templatefile(
-      "${path.module}/templates/vm-cve-search.tftpl",
-      {
-        ssh_public_key = trimspace(file("${var.ssh_public_key}")),
-        hostname       = "cve-search"
-      }
-    )
-    file_name = "vm-cve-search.yml"
-  }
-}
-
-resource "proxmox_virtual_environment_file" "wikipedia_vm_static" {
-  content_type = "snippets"
-  datastore_id = var.datastore_id
-  node_name    = var.node_name
-
-  source_raw {
-    data = templatefile(
-      "${path.module}/templates/vm-wikipedia.tftpl",
-      {
-        ssh_public_key = trimspace(file("${var.ssh_public_key}")),
-        hostname       = "wikipedia"
-      }
-    )
-    file_name = "vm-wikipedia.yml"
-  }
-}
-
-
-/**
- * Central log server (Wazuh)
- */
-resource "proxmox_virtual_environment_file" "wazuh_vm_static" {
-  content_type = "snippets"
-  datastore_id = var.datastore_id
-  node_name    = var.node_name
-
-  source_raw {
-    data = templatefile(
-      "${path.module}/templates/vm-wazuh.tftpl",
-      {
-        ssh_public_key = trimspace(file("${var.ssh_public_key}")),
-        hostname       = "wazuh"
-      }
-    )
-    file_name = "vm-wazuh.yml"
+    data = templatefile("${path.module}/templates/cloud-config.tftpl", {
+      hostname       = each.value.hostname
+      ssh_public_key = trimspace(file(var.ssh_public_key))
+      data_mount     = lookup(local.data_mounts, each.key, null)
+    })
+    file_name = each.value.file
   }
 }

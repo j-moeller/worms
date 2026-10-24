@@ -54,6 +54,7 @@ required_packages:
   - rsync
   - acl
   - libpq-dev
+  - fail2ban
 
 pip_packages:
   - django

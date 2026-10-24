@@ -1,4 +1,11 @@
 ---
+- name: Install nginx
+  ansible.builtin.apt:
+    name: [nginx, openssl, ca-certificates]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
 - name: Create TLS directory
   ansible.builtin.file:
     path: "{{ tls_key_path | dirname }}"

@@ -1,4 +1,13 @@
 ---
+# Runs before apt_client points this VM's own apt at the cache
+# (SetupPrivateInternet.yml).
+- name: Install apt-cacher-ng
+  ansible.builtin.apt:
+    name: [apt-cacher-ng, ca-certificates]
+    state: present
+    update_cache: "{{ internet_enabled | bool }}"
+    cache_valid_time: 3600
+
 - name: Configure apt-cacher-ng port
   ansible.builtin.lineinfile:
     path: /etc/apt-cacher-ng/acng.conf

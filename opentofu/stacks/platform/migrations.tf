@@ -102,3 +102,78 @@ removed {
     destroy = false
   }
 }
+
+# The cloud-init snippets were one resource each (<key>_vm_static); now one
+# for_each. Moving them keeps each file and its id: without the moves OpenTofu
+# would delete and upload files of the same name in no fixed order. No-ops once
+# applied; delete with the blocks above.
+
+moved {
+  from = module.cloud_init.proxmox_virtual_environment_file.blank_vm_static
+  to   = module.cloud_init.proxmox_virtual_environment_file.snippet["blank"]
+}
+
+moved {
+  from = module.cloud_init.proxmox_virtual_environment_file.postgresql_vm_static
+  to   = module.cloud_init.proxmox_virtual_environment_file.snippet["postgresql"]
+}
+
+moved {
+  from = module.cloud_init.proxmox_virtual_environment_file.django_vm_static
+  to   = module.cloud_init.proxmox_virtual_environment_file.snippet["django"]
+}
+
+moved {
+  from = module.cloud_init.proxmox_virtual_environment_file.wazuh_vm_static
+  to   = module.cloud_init.proxmox_virtual_environment_file.snippet["wazuh"]
+}
+
+moved {
+  from = module.cloud_init.proxmox_virtual_environment_file.dns_vm_static
+  to   = module.cloud_init.proxmox_virtual_environment_file.snippet["dns"]
+}
+
+moved {
+  from = module.cloud_init.proxmox_virtual_environment_file.flask_vm_static
+  to   = module.cloud_init.proxmox_virtual_environment_file.snippet["flask"]
+}
+
+moved {
+  from = module.cloud_init.proxmox_virtual_environment_file.network_monitor_vm_static
+  to   = module.cloud_init.proxmox_virtual_environment_file.snippet["network_monitor"]
+}
+
+moved {
+  from = module.cloud_init.proxmox_virtual_environment_file.apt_cache_vm_static
+  to   = module.cloud_init.proxmox_virtual_environment_file.snippet["apt_cache"]
+}
+
+moved {
+  from = module.cloud_init.proxmox_virtual_environment_file.devpi_vm_static
+  to   = module.cloud_init.proxmox_virtual_environment_file.snippet["devpi"]
+}
+
+moved {
+  from = module.cloud_init.proxmox_virtual_environment_file.docker_registry_vm_static
+  to   = module.cloud_init.proxmox_virtual_environment_file.snippet["docker_registry"]
+}
+
+moved {
+  from = module.cloud_init.proxmox_virtual_environment_file.manpages_vm_static
+  to   = module.cloud_init.proxmox_virtual_environment_file.snippet["manpages"]
+}
+
+moved {
+  from = module.cloud_init.proxmox_virtual_environment_file.ntp_vm_static
+  to   = module.cloud_init.proxmox_virtual_environment_file.snippet["ntp"]
+}
+
+moved {
+  from = module.cloud_init.proxmox_virtual_environment_file.cve_search_vm_static
+  to   = module.cloud_init.proxmox_virtual_environment_file.snippet["cve_search"]
+}
+
+moved {
+  from = module.cloud_init.proxmox_virtual_environment_file.wikipedia_vm_static
+  to   = module.cloud_init.proxmox_virtual_environment_file.snippet["wikipedia"]
+}

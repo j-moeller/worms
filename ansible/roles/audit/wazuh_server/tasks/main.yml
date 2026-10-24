@@ -1,6 +1,13 @@
 ---
 # Installs Wazuh all-in-one once (needs internet access: packages.wazuh.com).
 # The generated passwords end up in /root/wazuh-install-files.tar.
+- name: Install the installer's prerequisites
+  ansible.builtin.apt:
+    name: [curl, gnupg, ca-certificates]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
 - name: Download the Wazuh installation assistant
   ansible.builtin.get_url:
     url: "https://packages.wazuh.com/{{ wazuh_version }}/wazuh-install.sh"

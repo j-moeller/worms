@@ -1,6 +1,6 @@
 ---
 # Private-internet services. VMs are spun up by opentofu/stacks/private_internet
-# with base packages installed via cloud-init; this playbook configures them
+# (cloud-init: first boot only); this playbook installs and configures them
 # over the mgmt-exposed management network (management addresses).
 #
 # DNS is configured separately by SetupDNS.yml (setup_dns role).
@@ -8,14 +8,8 @@
 # `make` runs it while internet is allowed to populate the caches (online
 # mode), and again after denying it to switch them to offline mode.
 
-# Point every private-internet VM's apt at the apt-cacher-ng cache (path-style),
-# so package installs work both during prep and offline.
-- hosts: private_internet
-  any_errors_fatal: true
-  become: true
-  roles:
-    - apt_client
-
+# The cache first: it installs apt-cacher-ng from the Debian mirrors before
+# apt_client points its own apt (like every other service's) at itself.
 - hosts: apt_cache_hosts
   any_errors_fatal: true
   become: true
@@ -26,6 +20,14 @@
       failed_when: false
   roles:
     - apt_cache
+
+# Then point every private-internet VM's apt at the apt-cacher-ng cache (path-style),
+# so package installs work both during prep and offline.
+- hosts: private_internet
+  any_errors_fatal: true
+  become: true
+  roles:
+    - apt_client
 
 - hosts: devpi_hosts
   any_errors_fatal: true

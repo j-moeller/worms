@@ -1,4 +1,11 @@
 ---
+- name: Install chrony
+  ansible.builtin.apt:
+    name: [chrony, ca-certificates]
+    state: present
+    update_cache: "{{ internet_enabled | bool }}"
+    cache_valid_time: 3600
+
 - name: Deploy chrony config
   ansible.builtin.template:
     src: chrony.conf.j2

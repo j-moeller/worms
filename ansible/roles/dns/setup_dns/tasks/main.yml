@@ -1,4 +1,12 @@
 ---
+# Before resolv.conf points at the (not yet installed) local dnsmasq.
+- name: Install dnsmasq
+  ansible.builtin.apt:
+    name: [dnsmasq, bind9-dnsutils, ca-certificates]
+    state: present
+    update_cache: "{{ internet_enabled | bool }}"
+    cache_valid_time: 3600
+
 - name: Disable systemd-resolved
   ansible.builtin.systemd:
     name: systemd-resolved

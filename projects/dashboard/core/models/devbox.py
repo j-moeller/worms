@@ -54,6 +54,7 @@ class Devbox(models.Model):
     # and the Proxmox VMID of the per-team gateway router VM.
     ssh_gateway_host = models.TextField(blank=True, default="")
     ssh_gateway_port = models.IntegerField(default=2222)
+    ssh_gateway_user = models.TextField(default="team", db_default="team")  # the shared gateway login account
     gateway_vm_id = models.IntegerField(null=True, blank=True)
 
     created_at = models.DateTimeField(db_default=Now())
@@ -77,6 +78,9 @@ class DevboxVM(models.Model):
     vm_identifier = models.TextField()  # devbox-<team>-a / -b / -c
     role = models.TextField(default="")  # a | b | c (position in the A-B-C chain)
     vm_maintenance_ip = models.TextField(blank=True, default="")
+    # Address on the devbox SSH fabric (vmbr7) the gateway jumps to; this is
+    # what a team SSHes into (the maintenance IP is host-only).
+    ssh_fabric_ip = models.TextField(blank=True, default="", db_default="")
     proxmox_vm_id = models.IntegerField(null=True, blank=True)
     addresses = models.JSONField(default=list, blank=True)
     networks = models.JSONField(default=list, blank=True)

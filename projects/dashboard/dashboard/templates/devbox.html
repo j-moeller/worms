@@ -46,10 +46,15 @@
     {% else %}
         <!-- CONNECT -->
         <section class="panel" style="margin-top: 20px;">
-            <div class="panel-header"><div class="panel-title">// CONNECT</div></div>
+            <div class="panel-header"><div class="panel-title">// CONNECT (main VM: {{ main_vm.vm_identifier }})</div></div>
             <div class="access-viewer-wrapper">
-                <pre class="access-viewer"><code># Connect to a devbox VM through the restrictive SSH gateway
-ssh -J {{ request.user.username }}@{{ devbox.ssh_gateway_host }}:{{ devbox.ssh_gateway_port }} root@{{ vms.0.vm_maintenance_ip|default:"&lt;devbox-vm&gt;" }}</code></pre>
+                {% if ssh_command %}
+                <pre class="access-viewer"><code># SSH into your main devbox VM through the restrictive gateway, with a key you registered below
+{{ ssh_command }}</code></pre>
+                {% else %}
+                <pre class="access-viewer"><code># Not ready yet: your devbox is still being provisioned, or no SSH key is registered.
+# Register a public key below; the SSH command appears once the devbox is up.</code></pre>
+                {% endif %}
             </div>
         </section>
 

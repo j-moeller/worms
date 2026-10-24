@@ -74,6 +74,16 @@ ROUND_CONDUCTOR = {
     "capture_grace": int(env("ROUND_CAPTURE_GRACE", "120")),
 }
 
+# Devbox (docs/devbox.md): how a team reaches the shared SSH gateway. The host
+# publishes the gateway on its WAN at DEVBOX_SSH_GATEWAY_PORT (DNAT -> gateway:22);
+# set DEVBOX_SSH_GATEWAY_HOST to the address/name teams connect to. Applied to
+# the team's Devbox record when a devbox job completes (orchestrator/rounds/devbox.py).
+DEVBOX = {
+    "ssh_gateway_host": env("DEVBOX_SSH_GATEWAY_HOST", ""),
+    "ssh_gateway_port": int(env("DEVBOX_SSH_GATEWAY_PORT", "2222")),
+    "ssh_gateway_user": env("DEVBOX_SSH_GATEWAY_USER", "team"),
+}
+
 LOGGING["loggers"]["orchestrator"] = {
     "handlers": ["console"],
     "level": LOG_LEVEL,

@@ -40,6 +40,15 @@ class Command(BaseCommand):
         # Devbox attempts (always-on, source-attributed; docs/devbox.md).
         dev_flags = captures.process_devbox_flags()
         dev_logs = captures.process_devbox_logs()
+        # Reconcile devbox VM records from completed devbox host jobs, so the
+        # dashboard shows each team its VMs/SSH command and the devbox tokens
+        # are known. Idempotent; cheap.
+        try:
+            from orchestrator.rounds import devbox
+
+            devbox.apply_devbox_jobs()
+        except Exception:  # noqa: BLE001  (must not kill the loop)
+            log.exception("devbox job reconciliation failed")
         if flags or logs or dev_flags or dev_logs:
             log.info(
                 "processed %s capture(s), %s log(s); devbox %s capture(s), %s log(s)",

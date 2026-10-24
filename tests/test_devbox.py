@@ -148,6 +148,43 @@ def test_devbox_logs_tagged_with_version(database, devbox_team):
                [t["team_id"]])[0][0] == 1
 
 
+def test_apply_devbox_jobs_registers_vms(database):
+    """A completed devbox_provision host job is reconciled into devbox_vms /
+    devboxes by the orchestrator (orchestrator/rounds/devbox.py, run in the
+    process_attempts loop), including the SSH-fabric IP the dashboard shows."""
+    import json
+
+    team_uuid = str(uuid.uuid4())
+    comp = sql(database, "INSERT INTO competitions (name, created_at, is_dev_competition) "
+               "VALUES ('devbox-apply', now(), false) RETURNING id", role=MIGRATOR)[0][0]
+    team_id = sql(database, "INSERT INTO teams (uuid, name, competition_id, max_members, created_at, devbox_version) "
+                  "VALUES (%s, 'apply-team', %s, 2, now(), 1) RETURNING id", [team_uuid, comp], role=MIGRATOR)[0][0]
+    fh = hash_of("FLAG{main}")
+    result = {
+        "vms": [{
+            "team_uuid": team_uuid, "team_slug": f"t{team_id}", "name": f"devbox-t{team_id}-a",
+            "maintenance_ip": "10.6.5.11", "ssh_ip": "10.7.5.11", "vmid": 9001, "flag_hash": fh,
+        }],
+        "services_sources": {f"t{team_id}": "10.2.0.37"},
+    }
+    sql(database, "INSERT INTO host_jobs (uuid, kind, params, state, requested_at, result, error) "
+        "VALUES (gen_random_uuid(), 'devbox_provision', '{}'::jsonb, 'done', now(), %s::jsonb, '')",
+        [json.dumps(result)], role=MIGRATOR, fetch=False)
+
+    process_attempts(database)  # runs apply_devbox_jobs()
+
+    row = sql(database, "SELECT ssh_fabric_ip, ctf_flag_hash, role, vm_maintenance_ip FROM devbox_vms v "
+              "JOIN devboxes d ON d.id = v.devbox_id WHERE d.team_id = %s", [team_id])
+    assert row == [("10.7.5.11", fh, "a", "10.6.5.11")]
+    assert sql(database, "SELECT services_source_ip FROM devboxes WHERE team_id = %s", [team_id])[0][0] == "10.2.0.37"
+
+    for stmt in ["DELETE FROM devbox_vms WHERE devbox_id IN (SELECT id FROM devboxes WHERE team_id=%s)",
+                 "DELETE FROM devboxes WHERE team_id=%s", "DELETE FROM teams WHERE id=%s"]:
+        sql(database, stmt, [team_id], role=MIGRATOR, fetch=False)
+    sql(database, "DELETE FROM host_jobs WHERE kind='devbox_provision'", role=MIGRATOR, fetch=False)
+    sql(database, "DELETE FROM competitions WHERE id=%s", [comp], role=MIGRATOR, fetch=False)
+
+
 def test_orchestrator_role_may_write_devbox_tables(database, devbox_team):
     """The least-privilege orchestrator role (not the owner) must be able to
     insert devbox captures/logs and bump the version -- the processor runs as

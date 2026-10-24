@@ -47,6 +47,16 @@ def devbox_home(request: HttpRequest, team: Team):
     for vm in vms:
         vm.found = vm.id in captured_vm_ids
 
+    # The "main" devbox VM (A) is the entry point teams SSH into (through the
+    # gateway, to its SSH-fabric address). Fall back to the first VM.
+    main_vm = next((vm for vm in vms if vm.role == "a"), vms[0] if vms else None)
+    ssh_command = None
+    if devbox and main_vm and devbox.ssh_gateway_host and main_vm.ssh_fabric_ip:
+        ssh_command = (
+            f"ssh -J {devbox.ssh_gateway_user}@{devbox.ssh_gateway_host}"
+            f":{devbox.ssh_gateway_port} root@{main_vm.ssh_fabric_ip}"
+        )
+
     logs = list(
         DevboxLog.objects.filter(team=team, devbox_version=version)
         .select_related("logging_attempt")
@@ -58,6 +68,8 @@ def devbox_home(request: HttpRequest, team: Team):
         "devbox": devbox,
         "version": version,
         "vms": vms,
+        "main_vm": main_vm,
+        "ssh_command": ssh_command,
         "score": len(captured_vm_ids),
         "total_tokens": len(vms),
         "logs": logs,

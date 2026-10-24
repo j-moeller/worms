@@ -70,3 +70,46 @@ def test_existing_vault_is_completed_not_rotated(tmp_path):
     assert after["vault_orchestrator_dashboard_token"]  # a newer generated key
     proc, third = run(tmp_path, TF_VAR_proxmox_api_token="something-else")
     assert third == second and "already complete" in proc.stdout
+
+
+# --- the secrets step of the pipeline (before/after guard for refactorings) --
+
+
+EXTERNAL = {"vault_proxmox_api_token_value", "vault_proxmox_readonly_api_token_value", "vault_tofu_proxmox_api_token"}
+
+
+def test_build_secrets_provides_every_vault_variable(tmp_path):
+    """`worms build secrets` in a fresh checkout yields every vault_* variable
+    the Ansible side refers to (the Proxmox tokens are entered by the operator,
+    so they may be absent or empty), and a second run changes nothing."""
+    import re
+    import shutil
+
+    import yaml
+
+    root = tmp_path / "checkout"
+    for part in ("src", "scripts", "ansible"):
+        shutil.copytree(REPO / part, root / part, ignore=shutil.ignore_patterns(
+            "vault.yml", ".vault_pass", "inventory.generated.yml", "pki", "__pycache__", ".venv*"))  # fmt: skip
+    bin_dir = tmp_path / "bin"  # sh and python3 only: no ansible-vault, the vault stays readable
+    bin_dir.mkdir()
+    (bin_dir / "python3").symlink_to(sys.executable)
+    (bin_dir / "sh").symlink_to(shutil.which("sh"))
+    env = {"PATH": str(bin_dir), "HOME": str(tmp_path / "home"), "WORMS_REPO_ROOT": str(root), "NO_COLOR": "1"}
+
+    def build_secrets():
+        proc = subprocess.run([sys.executable, str(root / "src" / "manage.py"), "build", "secrets"], env=env,
+                              capture_output=True, text=True)  # fmt: skip
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        return (root / "ansible" / "group_vars" / "vault.yml").read_text()
+
+    first = build_secrets()
+    vault = yaml.safe_load(first)
+    referenced = set()
+    for path in (root / "ansible").rglob("*"):
+        if path.suffix in (".yml", ".j2") and path.name != "vault.yml":
+            referenced |= set(re.findall(r"\bvault_[a-z_]+", path.read_text()))
+    assert referenced, "no vault_* variable found (the scan is broken)"
+    for key in sorted(referenced - EXTERNAL):
+        assert len(str(vault.get(key) or "")) >= 16, f"{key} is not generated"
+    assert build_secrets() == first  # never rotated

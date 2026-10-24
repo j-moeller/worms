@@ -16,24 +16,10 @@ import subprocess
 import pytest
 import yaml
 
-from conftest import FIXTURES, REPO, require
+from conftest import FIXTURES, REPO
 
 OPENTOFU = REPO / "opentofu"
 STACKS = ["platform", "firewall", "infrastructure/persistent", "infrastructure/ephemeral", "private_internet", "sandbox", "devbox"]
-
-
-@pytest.fixture(scope="session")
-def tofu_copy(tmp_path_factory):
-    """The OpenTofu tree without state or .terraform (never touches yours)."""
-    require("tofu")
-    dest = tmp_path_factory.mktemp("opentofu") / "opentofu"
-    shutil.copytree(
-        OPENTOFU,
-        dest,
-        symlinks=True,  # shared-variables.tf links stay relative, inside the copy
-        ignore=shutil.ignore_patterns(".terraform*", "terraform.tfstate*", "images", "iso"),
-    )
-    return dest
 
 
 def test_fixture_matches_shared_variables(tofu_copy, tmp_path):

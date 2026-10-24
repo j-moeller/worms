@@ -217,3 +217,68 @@ def test_django_nginx_forwards_the_host_with_its_port(render):
         hosts = [line.strip() for line in conf.splitlines() if "proxy_set_header Host" in line]
         assert hosts and all(line == "proxy_set_header Host $http_host;" for line in hosts), hosts
         assert conf.count("proxy_pass ") == len(hosts)  # every location forwards it
+
+
+# --- the configure sequence (static; before/after guard for refactorings) ---
+
+# Roles every host gets from the configure sequence, and the sequence itself.
+CONFIGURE = [
+    "WaitForVMs.yml", "SetupDNS.yml", "CreateCA.yml", "DistributeCA.yml", "ConfigureNginx.yml",
+    "ConfigureNginxDjango.yml", "SetupDbAndDashboard.yml", "SetupSandboxApi.yml", "SetupNetworkMonitor.yml",
+    "SetupPrivateInternet.yml", "SetupAudit.yml", "SetupRoundAgent.yml",
+]  # fmt: skip
+TLS_WEB = ["ca_distribute", "nginx_tls"]
+ROLES = {
+    "proxmox_host": ["round_agent"],
+    "localhost": ["ca_create"],
+    "database": ["ca_distribute", "setup_db_base", "setup_db_permissions", "auditd"],
+    "dashboard": [*TLS_WEB, "nginx_tls_django", "django_app", "auditd"],
+    "orchestrator": [*TLS_WEB, "nginx_tls_django", "django_app", "auditd"],
+    "scoring": [*TLS_WEB, "sandbox_api", "auditd"],
+    "logging": [*TLS_WEB, "sandbox_api", "auditd"],
+    "monitor": ["ca_distribute", "network_monitor", "auditd"],
+    "dns": ["setup_dns", "auditd"],
+    "wazuh": ["wazuh_server"],
+    **{pi: ["apt_client", pi, "auditd"] for pi in ("apt_cache", "devpi", "docker_registry", "manpages", "ntp",
+                                                   "cve_search", "wikipedia")},
+}  # fmt: skip
+# Plays that wait for cloud-init on each of their VMs before their roles.
+CLOUD_INIT_WAITS = {
+    ("WaitForVMs.yml", "all:!proxmox_host:!sandbox:!sandbox_gw"), ("SetupDNS.yml", "dns_hosts"),
+    ("DistributeCA.yml", "tls_hosts"), ("ConfigureNginx.yml", "nginx_hosts"),
+    ("ConfigureNginxDjango.yml", "django_hosts"), ("SetupSandboxApi.yml", "sandbox_api_hosts"),
+    ("SetupNetworkMonitor.yml", "network_monitor_hosts"),
+    *{("SetupPrivateInternet.yml", f"{pi}_hosts") for pi in ("apt_cache", "devpi", "docker_registry", "manpages",
+                                                             "ntp", "cve_search", "wikipedia")},
+}  # fmt: skip
+
+
+def test_configure_sequence_is_unchanged():
+    from ansible_static import configure_playbooks
+
+    assert configure_playbooks() == CONFIGURE
+
+
+@pytest.mark.parametrize("host", sorted(ROLES))
+def test_every_host_gets_its_roles(host):
+    from ansible_static import groups_of, play_roles, plays
+
+    groups = {"localhost"} if host == "localhost" else groups_of(host)
+    roles = [role for _playbook, play in plays(groups) for role in play_roles(play)]
+    assert sorted(roles) == sorted(ROLES[host])
+
+
+def test_plays_still_wait_for_cloud_init():
+    """WaitForVMs.yml first, for every VM; the plays that wait again per VM
+    keep doing so (a VM rebuilt later, e.g. by `worms build`, may still be
+    in its first boot)."""
+    from ansible_static import configure_playbooks
+
+    waiting = set()
+    for playbook in configure_playbooks():
+        for play in yaml.safe_load((ANSIBLE / playbook).read_text()) or []:
+            tasks = (play.get("pre_tasks") or []) + (play.get("tasks") or [])
+            if any("cloud-init status --wait" in str(task) for task in tasks):
+                waiting.add((playbook, play["hosts"]))
+    assert CLOUD_INIT_WAITS <= waiting
+    assert configure_playbooks()[0] == "WaitForVMs.yml"

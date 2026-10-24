@@ -116,6 +116,20 @@ def database(render):
         cluster.stop()
 
 
+@pytest.fixture(scope="session")
+def tofu_copy(tmp_path_factory):
+    """The OpenTofu tree without state or .terraform (never touches yours)."""
+    require("tofu")
+    dest = tmp_path_factory.mktemp("opentofu") / "opentofu"
+    shutil.copytree(
+        REPO / "opentofu",
+        dest,
+        symlinks=True,  # shared-variables.tf links stay relative, inside the copy
+        ignore=shutil.ignore_patterns(".terraform*", "terraform.tfstate*", "images", "iso"),
+    )
+    return dest
+
+
 # --- in-process Django --------------------------------------------------------
 
 

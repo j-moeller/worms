@@ -19,6 +19,10 @@ class LoggingAttempt(models.Model):
     team_uuid = models.TextField(null=True, blank=True)
     log_data = models.JSONField()
 
+    # True when the log came from a team's devbox (attributed by source
+    # address), not from the running round's sandbox (docs/devbox.md).
+    devbox = models.BooleanField(default=False, db_default=False)
+
     # Database defaults as well: the sandbox API inserts only the columns
     # above (INSERT-only role), so these must be filled by PostgreSQL.
     processed = models.BooleanField(default=False, db_default=False)

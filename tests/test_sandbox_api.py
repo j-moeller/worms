@@ -34,15 +34,21 @@ def load_app(monkeypatch, tmp_path):
     instance of app.py configured through the environment like the service;
     team_uuid (when given) is written to the current-team file."""
 
-    def _load(kind, env, team_uuid=None):
+    def _load(kind, env, team_uuid=None, devbox_map=None):
         group_vars = yaml.safe_load((REPO / "ansible" / "group_vars" / f"{kind}.yml").read_text())
         team_file = tmp_path / f"current-team-{uuid.uuid4().hex}"
         team_file.write_text(team_uuid or "")
+        devbox_file = tmp_path / f"devbox-teams-{uuid.uuid4().hex}"
+        devbox_file.write_text(
+            "".join(f"{ip} {tid}\n" for ip, tid in (devbox_map or {}).items())
+        )
         settings = {
             **env, "SANDBOX_API_KIND": kind,
             "MAX_BODY_BYTES": str(group_vars["sandbox_api_max_body_bytes"]),
             "TEAM_RATE_PER_MINUTE": "60", "TEAM_BURST": "3",
             "CURRENT_TEAM_FILE": str(team_file),
+            "DEVBOX_TEAMS_FILE": str(devbox_file),
+            "CLIENT_IP_HEADER": "X-Client-IP",
         }
         for key, value in settings.items():
             monkeypatch.setenv(key, value)
@@ -101,6 +107,42 @@ def test_logging_stores_a_log(database, team, load_app):
     r = client.post("/submit", json={"log_data": {"event": "simulation", "n": 1}})
     assert r.status_code == 201, r.get_json()
     assert len(rows(database, "logging_attempts", team["uuid"])) == 1
+
+
+def test_devbox_submission_attributed_by_source(database, team, load_app):
+    # A request from a known devbox-gateway address is a devbox submission for
+    # that team, even with no active round (empty current-team file).
+    devbox_ip = "10.3.64.7"
+    client, _ = load_app(
+        "scoring", database.env("dbuser_scoring"),
+        team_uuid=None, devbox_map={devbox_ip: team["uuid"]},
+    )  # fmt: skip
+    r = client.post("/submit", json={"vm_flag": "FLAG{dev}"}, headers={"X-Client-IP": devbox_ip})
+    assert r.status_code == 201, r.get_json()
+    stored = rows(database, "flag_capture_attempts", team["uuid"])
+    assert len(stored) == 1
+    # Recorded as a devbox attempt (the `devbox` column is true).
+    conn = database.connect()
+    with conn.cursor() as cur:
+        cur.execute("SELECT devbox FROM flag_capture_attempts WHERE team_uuid = %s", [team["uuid"]])
+        assert cur.fetchone()[0] is True
+    conn.close()
+
+
+def test_unknown_source_falls_back_to_round(database, team, load_app):
+    # An address not in the devbox map is treated as round (sandbox) traffic:
+    # it needs the current-team file.
+    client, _ = load_app(
+        "scoring", database.env("dbuser_scoring"),
+        team_uuid=team["uuid"], devbox_map={"10.3.64.7": str(uuid.uuid4())},
+    )  # fmt: skip
+    r = client.post("/submit", json={"vm_flag": "FLAG{round}"}, headers={"X-Client-IP": "10.9.9.9"})
+    assert r.status_code == 201, r.get_json()
+    conn = database.connect()
+    with conn.cursor() as cur:
+        cur.execute("SELECT devbox FROM flag_capture_attempts WHERE team_uuid = %s", [team["uuid"]])
+        assert cur.fetchone()[0] is False  # attributed to the round, not devbox
+    conn.close()
 
 
 def test_no_active_round_is_refused(database, team, load_app):

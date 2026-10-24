@@ -26,6 +26,12 @@ class Team(models.Model):
     max_members = models.PositiveIntegerField(default=2)
     created_at = models.DateTimeField(default=clock.now)
 
+    # Devbox (docs/devbox.md): incremented when the team resets its devbox
+    # environment. Devbox scores and logs are tagged with the version in force,
+    # and only the current version is shown, so a reset "clears the score"
+    # without deleting any records.
+    devbox_version = models.PositiveIntegerField(default=1, db_default=1)
+
     users = models.ManyToManyField(
         User,
         through="TeamMembership",

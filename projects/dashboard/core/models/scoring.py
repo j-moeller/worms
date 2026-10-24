@@ -16,6 +16,11 @@ class FlagCaptureAttempt(models.Model):
     team_uuid = models.TextField(null=True, blank=True)
     vm_flag_hash = models.TextField()
 
+    # True when the submission came from a team's devbox (attributed by source
+    # address), not from the running round's sandbox. Devbox attempts are
+    # scored against the team's DevboxVMs, never the round (docs/devbox.md).
+    devbox = models.BooleanField(default=False, db_default=False)
+
     # Database defaults as well: the sandbox API inserts only the columns
     # above (INSERT-only role), so these must be filled by PostgreSQL.
     processed = models.BooleanField(default=False, db_default=False)

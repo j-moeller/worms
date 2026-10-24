@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+
+{% block header %}
+<title>WORMS//DEV — Devbox</title>
+{% endblock %}
+
+
+{% block content %}
+
+<div class="leaderboard-page">
+
+    <!-- SCORE + RESET -->
+    <section class="panel">
+        <div class="panel-header">
+            <div class="panel-title">// DEVBOX &mdash; DEVELOPMENT ENVIRONMENT</div>
+            <div class="panel-title">v{{ version }}</div>
+        </div>
+
+        <div style="padding: 25px; display: flex; gap: 40px; flex-wrap: wrap; align-items: center;">
+            <div>
+                <div style="font-size: 2.4rem; color: var(--green); font-family: 'Share Tech Mono', monospace;">
+                    {{ score }} / {{ total_tokens }}
+                </div>
+                <div style="color: var(--muted); font-size: 0.72rem; letter-spacing: 1px; text-transform: uppercase;">
+                    tokens found (current version)
+                </div>
+            </div>
+
+            <form method="post" action="{% url 'devbox_reset' %}"
+                  onsubmit="return confirm('Reset your devbox? This rebuilds the three VMs and clears the current score (records are kept).');">
+                {% csrf_token %}
+                <button type="submit" style="padding: 12px 18px; border: 1px solid var(--red); background: transparent; color: var(--red); cursor: pointer; font-family: 'Share Tech Mono', monospace; font-size: 0.7rem; letter-spacing: 1px; text-transform: uppercase;">
+                    Reset devbox →
+                </button>
+            </form>
+        </div>
+    </section>
+
+    {% if not devbox %}
+        <section class="panel" style="margin-top: 20px;">
+            <div style="padding: 25px; color: var(--muted); font-family: 'Share Tech Mono', monospace; font-size: 0.75rem;">
+                Your devbox has not been provisioned yet. It is created with your
+                team; add an SSH key below so you can connect once it is ready.
+            </div>
+        </section>
+    {% else %}
+        <!-- CONNECT -->
+        <section class="panel" style="margin-top: 20px;">
+            <div class="panel-header"><div class="panel-title">// CONNECT</div></div>
+            <div class="access-viewer-wrapper">
+                <pre class="access-viewer"><code># Connect to a devbox VM through the restrictive SSH gateway
+ssh -J {{ request.user.username }}@{{ devbox.ssh_gateway_host }}:{{ devbox.ssh_gateway_port }} root@{{ vms.0.vm_maintenance_ip|default:"&lt;devbox-vm&gt;" }}</code></pre>
+            </div>
+        </section>
+
+        <!-- VMs -->
+        <section class="panel" style="margin-top: 20px;">
+            <div class="panel-header"><div class="panel-title">// VMS (A &mdash; B &mdash; C)</div></div>
+            <div class="table-wrapper">
+                <table>
+                    <thead><tr><th>VM</th><th>Address</th><th>Token</th></tr></thead>
+                    <tbody>
+                        {% for vm in vms %}
+                            <tr>
+                                <td>{{ vm.vm_identifier }}</td>
+                                <td>{% for a in vm.addresses %}{{ a }} {% endfor %}</td>
+                                <td>
+                                    {% if vm.found %}
+                                        <span style="color: var(--green);">[OK] found</span>
+                                    {% else %}
+                                        <span style="color: var(--muted);">[ ] not found</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    {% endif %}
+
+    <!-- SSH KEYS -->
+    <section class="panel" style="margin-top: 20px;">
+        <div class="panel-header"><div class="panel-title">// SSH KEYS</div></div>
+        <div class="table-wrapper">
+            <table>
+                <thead><tr><th>Name</th><th>Key</th><th></th></tr></thead>
+                <tbody>
+                    {% for key in ssh_keys %}
+                        <tr>
+                            <td>{{ key.name|default:"(unnamed)" }}</td>
+                            <td style="max-width: 420px; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 0.68rem;">{{ key.public_key }}</td>
+                            <td>
+                                <form method="post" action="{% url 'devbox_delete_ssh_key' key.id %}">
+                                    {% csrf_token %}
+                                    <button type="submit" style="border: 1px solid var(--red); background: transparent; color: var(--red); cursor: pointer; padding: 6px 10px; font-size: 0.62rem;">Remove</button>
+                                </form>
+                            </td>
+                        </tr>
+                    {% empty %}
+                        <tr><td colspan="3" style="color: var(--muted);">No SSH keys yet. Add one to connect.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <form method="post" action="{% url 'devbox_add_ssh_key' %}" style="padding: 20px; display: flex; gap: 10px; flex-wrap: wrap;">
+            {% csrf_token %}
+            <input type="text" name="name" placeholder="label (optional)" style="padding: 10px; background: rgba(0,0,0,0.25); border: 1px solid var(--border); color: var(--text);">
+            <input type="text" name="public_key" placeholder="ssh-ed25519 AAAA..." required style="flex: 1; min-width: 300px; padding: 10px; background: rgba(0,0,0,0.25); border: 1px solid var(--border); color: var(--text); font-family: 'Share Tech Mono', monospace;">
+            <button type="submit" style="padding: 10px 16px; border: 1px solid var(--cyan); background: transparent; color: var(--cyan); cursor: pointer; text-transform: uppercase; font-size: 0.7rem;">Add key →</button>
+        </form>
+    </section>
+
+    <!-- LOGS -->
+    <section class="panel" style="margin-top: 20px;">
+        <div class="panel-header"><div class="panel-title">// DEVBOX LOGS (current version)</div></div>
+        <div class="logging-table-wrapper">
+            <table class="logging-table">
+                <thead><tr><th>Timestamp</th></tr></thead>
+                <tbody>
+                    {% for logrow in logs %}
+                        <tr><td class="logging-timestamp"><span class="event-marker">[LOG]</span> {{ logrow.created_at }}</td></tr>
+                    {% empty %}
+                        <tr><td class="logging-empty">NO DEVBOX LOGS AT THIS VERSION</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+</div>
+
+{% endblock %}

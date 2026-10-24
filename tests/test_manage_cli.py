@@ -128,13 +128,15 @@ def test_delete_team_keeps_users(initialised):
 
 def test_status_and_leaderboard_with_db(initialised):
     cluster = initialised
+    # (The DB is a shared session fixture, so the current competition name may
+    # have been set by another test; assert structure, not a specific name.)
     worms(cluster, "teams", "create", "Solo")
     status = worms(cluster, "status")
-    assert "WORMS CLI" in status.stdout
+    assert "competition" in status.stdout
     assert "teams" in status.stdout
 
     board = worms(cluster, "leaderboard")
-    assert "WORMS CLI" in board.stdout
+    assert "leaderboard" in board.stdout
     assert "Solo" in board.stdout
 
 

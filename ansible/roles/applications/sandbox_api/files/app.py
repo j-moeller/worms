@@ -59,13 +59,24 @@ TEAM_BAN_SECONDS = env_int("TEAM_BAN_SECONDS", 300)
 # The round agent writes the running team's uuid here at deploy; read per
 # request (cached by mtime). No file / empty => no active round.
 CURRENT_TEAM_FILE = os.environ.get("CURRENT_TEAM_FILE", "/etc/sandbox-api/current-team")
+# Devbox attribution (docs/devbox.md): `<source-ip> <team-uuid>` per line,
+# written when devboxes are provisioned. A request whose source address (the
+# team's ipfilter-pinned devbox gateway) is listed is a DEVBOX submission for
+# that team -- attributed by address, concurrent with and independent of the
+# single running round (which uses CURRENT_TEAM_FILE). This is what keeps a
+# team's devbox from interfering with the round, and one team from submitting
+# as another.
+DEVBOX_TEAMS_FILE = os.environ.get("DEVBOX_TEAMS_FILE", "/etc/sandbox-api/devbox-teams")
+# nginx passes the real client (gateway) address in this header; only nginx can
+# reach the app socket, so it is trusted.
+CLIENT_IP_HEADER = os.environ.get("CLIENT_IP_HEADER", "X-Client-IP")
 UUID_RE = re.compile(r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
 
 # Every other column has a database default (processed, created_at); the
 # logging attempt's uuid is generated here (no database default on SQLite).
 INSERT = {
-    "scoring": "INSERT INTO flag_capture_attempts (team_uuid, vm_flag_hash) VALUES (%s, %s)",
-    "logging": "INSERT INTO logging_attempts (uuid, team_uuid, log_data) VALUES (%s, %s, %s)",
+    "scoring": "INSERT INTO flag_capture_attempts (team_uuid, vm_flag_hash, devbox) VALUES (%s, %s, %s)",
+    "logging": "INSERT INTO logging_attempts (uuid, team_uuid, log_data, devbox) VALUES (%s, %s, %s, %s)",
 }[KIND]
 
 app = Flask(__name__)
@@ -151,6 +162,39 @@ class CurrentTeam:
         return self._value
 
 
+class DevboxTeams:
+    """Map of devbox gateway source address -> team uuid, from
+    DEVBOX_TEAMS_FILE (`<ip> <uuid>` per line). Cached by mtime; returns None
+    for an address that is not a known devbox gateway."""
+
+    def __init__(self, path):
+        self._path = path
+        self._lock = threading.Lock()
+        self._map = {}
+        self._mtime = None
+
+    def team_for(self, source_ip):
+        if not source_ip:
+            return None
+        try:
+            mtime = os.stat(self._path).st_mtime
+        except OSError:
+            return None
+        if mtime != self._mtime:
+            with self._lock:
+                mapping = {}
+                try:
+                    for line in open(self._path):
+                        parts = line.split()
+                        if len(parts) == 2 and UUID_RE.match(parts[1]):
+                            mapping[parts[0]] = parts[1]
+                except OSError:
+                    return self._map.get(source_ip)
+                self._map = mapping
+                self._mtime = mtime
+        return self._map.get(source_ip)
+
+
 class TeamLimiter:
     """Token bucket per team, plus a temporary ban for teams that keep pushing."""
 
@@ -207,6 +251,7 @@ class LimitedLog:
 
 
 CURRENT_TEAM = CurrentTeam(CURRENT_TEAM_FILE)
+DEVBOX_TEAMS = DevboxTeams(DEVBOX_TEAMS_FILE)
 LIMITER = TeamLimiter()
 REJECTS = LimitedLog()
 
@@ -272,14 +317,24 @@ def submit():
     if not isinstance(data, dict):
         return error(400, "Body must be a JSON object.")
 
-    team = CURRENT_TEAM.get()
+    # A request from a known devbox gateway address is a devbox submission for
+    # that team (concurrent, source-attributed); otherwise it belongs to the
+    # single running round (current-team file). The two never mix.
+    source_ip = request.headers.get(CLIENT_IP_HEADER, "").strip()
+    team = DEVBOX_TEAMS.team_for(source_ip)
+    is_devbox = team is not None
     if team is None:
-        REJECTS.warning("rejected: no active round")
+        team = CURRENT_TEAM.get()
+    if team is None:
+        REJECTS.warning("rejected: no active round and not a devbox source")
         return error(409, "No active round.")
 
-    allowed, retry_after = LIMITER.allow(team)
+    # Rate-limit bucket keyed per team; devbox and round buckets are distinct
+    # so one cannot exhaust the other.
+    bucket = f"devbox:{team}" if is_devbox else team
+    allowed, retry_after = LIMITER.allow(bucket)
     if not allowed:
-        REJECTS.warning("rejected: team %s rate limited", team)
+        REJECTS.warning("rejected: %s rate limited", bucket)
         return error(429, "Rate limit exceeded.", Retry_After=retry_after)
 
     value, problem = validate_payload(data)
@@ -287,7 +342,10 @@ def submit():
         return error(400, problem)
 
     try:
-        params = (team, value) if KIND == "scoring" else (str(uuid.uuid4()), team, value)
+        if KIND == "scoring":
+            params = (team, value, is_devbox)
+        else:
+            params = (str(uuid.uuid4()), team, value, is_devbox)
         execute(INSERT, params)
     except Exception:
         log.exception("insert failed")

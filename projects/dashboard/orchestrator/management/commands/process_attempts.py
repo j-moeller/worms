@@ -37,10 +37,16 @@ class Command(BaseCommand):
     def pass_once(self, grace):
         flags = captures.process_flags(grace_seconds=grace)
         logs = captures.process_logs(grace_seconds=grace)
-        if flags or logs:
-            log.info("processed %s capture(s), %s log(s)", flags, logs)
+        # Devbox attempts (always-on, source-attributed; docs/devbox.md).
+        dev_flags = captures.process_devbox_flags()
+        dev_logs = captures.process_devbox_logs()
+        if flags or logs or dev_flags or dev_logs:
+            log.info(
+                "processed %s capture(s), %s log(s); devbox %s capture(s), %s log(s)",
+                flags, logs, dev_flags, dev_logs,
+            )
         # Something was processed -> maybe more is waiting; loop without sleeping.
-        return bool(flags or logs)
+        return bool(flags or logs or dev_flags or dev_logs)
 
     def handle(self, once, interval, grace, **options):
         if grace is None:

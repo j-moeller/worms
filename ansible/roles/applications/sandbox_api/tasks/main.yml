@@ -88,6 +88,17 @@
     mode: "0640"
     force: false
 
+# Devbox source -> team map (docs/devbox.md). Created empty; the host writes it
+# when devboxes are provisioned. force:false so re-provisioning never clobbers it.
+- name: Create the devbox-teams file
+  ansible.builtin.copy:
+    dest: "{{ sandbox_api_devbox_teams_file }}"
+    content: ""
+    owner: root
+    group: "{{ sandbox_api_group }}"
+    mode: "0640"
+    force: false
+
 - name: Install systemd unit
   ansible.builtin.template:
     src: sandbox-api.service.j2

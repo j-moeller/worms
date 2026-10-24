@@ -30,6 +30,9 @@ postgresql_table_privileges:
       tables: [users]
     - privs: INSERT, UPDATE, DELETE
       tables: [django_session]
+    # Devbox: teams add/remove their own SSH keys (docs/devbox.md).
+    - privs: INSERT, DELETE
+      tables: [devbox_ssh_keys]
 
   # Reads competition/round/team/upload/VM state; writes only its own results.
   django_orchestrator:
@@ -49,6 +52,14 @@ postgresql_table_privileges:
       tables: [flag_capture_attempts, logging_attempts]
     - privs: INSERT
       tables: [flag_captures, logging]
+    # Devbox (docs/devbox.md): register each team's devbox and its VMs, bump
+    # the version on reset, and record devbox captures / logs.
+    - privs: INSERT, UPDATE
+      tables: [devboxes, devbox_vms]
+    - privs: UPDATE (devbox_version)
+      tables: [teams]
+    - privs: INSERT
+      tables: [devbox_captures, devbox_logs]
 
   # Sandbox-facing APIs (roles/applications/sandbox_api): append one attempt,
   # recording the running team's uuid (the round agent tells them which team
@@ -56,11 +67,11 @@ postgresql_table_privileges:
   # attempts they wrote, and no access_tokens at all. Only the columns
   # sandbox_api/files/app.py inserts (INSERT constant).
   dbuser_scoring:
-    - privs: INSERT (team_uuid, vm_flag_hash)
+    - privs: INSERT (team_uuid, vm_flag_hash, devbox)
       tables: [flag_capture_attempts]
 
   dbuser_logging:
-    - privs: INSERT (uuid, team_uuid, log_data)
+    - privs: INSERT (uuid, team_uuid, log_data, devbox)
       tables: [logging_attempts]
 
   # Network monitor (roles/applications/network_monitor, zeek_shipper.py):

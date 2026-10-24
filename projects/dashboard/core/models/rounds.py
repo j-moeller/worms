@@ -128,6 +128,11 @@ class HostJob(models.Model):
         DEPLOY = "deploy"  # worm artifact to the start VM + start timer
         RELEASE_SECRETS = "release_secrets"  # new secrets into VMs, hashes back
         TEARDOWN = "teardown"  # destroy the sandbox
+        # Devbox (docs/devbox.md): provision/rebuild a team's devbox VMs and
+        # (re)write their tokens; run is null (a devbox job is team-scoped,
+        # not round-scoped). The team uuid and version are in params.
+        DEVBOX_PROVISION = "devbox_provision"
+        DEVBOX_REBUILD = "devbox_rebuild"
 
     class State(models.TextChoices):
         QUEUED = "queued"

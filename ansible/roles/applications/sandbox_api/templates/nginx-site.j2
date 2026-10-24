@@ -47,6 +47,9 @@ server {
         proxy_pass http://unix:/run/sandbox-api/sandbox-api.sock;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto https;
+        # The real client (the sandbox-gw / per-team devbox-gw SNAT source).
+        # The app maps a known devbox-gw address to its team (docs/devbox.md).
+        proxy_set_header X-Client-IP $remote_addr;
         proxy_connect_timeout 2s;
         proxy_send_timeout 10s;
         proxy_read_timeout 10s;

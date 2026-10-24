@@ -13,7 +13,9 @@ class User(AbstractUser):
     # (core/management/commands/create_users.py). On first login the dashboard
     # forces them to set their own password (dashboard.middleware,
     # dashboard/views/password.py) and clears this flag.
-    must_change_password = models.BooleanField(default=False)
+    # db_default too: the simulation inserts users with raw SQL (no Django
+    # default applied), and the column must not be NOT NULL without a default.
+    must_change_password = models.BooleanField(default=False, db_default=False)
 
     def __str__(self):
         if self.is_superuser:

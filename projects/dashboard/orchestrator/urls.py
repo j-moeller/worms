@@ -11,4 +11,6 @@ urlpatterns = [
     path("vms/<uuid:vm_uuid>/stop/", api.stop, name="stop"),
     path("vms/<uuid:vm_uuid>/status/", api.status, name="status"),
     path("vms/<uuid:vm_uuid>/reset/", api.reset, name="reset"),
+    # Dashboard: reset a team's devbox (bump version + enqueue rebuild).
+    path("devbox/<uuid:team_uuid>/reset/", api.devbox_reset, name="devbox_reset"),
 ]

@@ -3,6 +3,12 @@ from dashboard.views.auth import login_view, logout_view
 from dashboard.views.password import change_password
 from dashboard.views.debug import debug_login_as
 from dashboard.views.leaderboard import leaderboard
+from dashboard.views.devbox import (
+    home,
+    devbox_add_ssh_key,
+    devbox_delete_ssh_key,
+    devbox_reset,
+)
 from dashboard.views.logging import logging_event_data, logs
 from dashboard.views.profile import profile
 from dashboard.views.scoring import flag_capture_attempts
@@ -16,7 +22,12 @@ from django.contrib import admin
 from django.urls import path
 
 urlpatterns = [
-    path("", leaderboard, name="index"),
+    # Dispatches to the leaderboard (production) or the devbox (development).
+    path("", home, name="index"),
+    #
+    path("devbox/reset/", devbox_reset, name="devbox_reset"),
+    path("devbox/ssh-keys/add/", devbox_add_ssh_key, name="devbox_add_ssh_key"),
+    path("devbox/ssh-keys/<int:key_id>/delete/", devbox_delete_ssh_key, name="devbox_delete_ssh_key"),
     #
     path("admin/", admin.site.urls),
     #

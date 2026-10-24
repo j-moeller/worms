@@ -3,7 +3,8 @@
 This maps the platform's requirements to where they are implemented and how
 they are verified, with residual gaps called out. It is the index to the
 detailed docs: `rounds.md`, `devbox.md`, `monitoring.md`, `accounts.md`,
-`management.md`, `testing.md`, `findings.md`.
+`management.md`, `testing.md`, `findings.md`; proposed simplifications:
+`simplification-plan.md`.
 
 Legend: ✅ implemented & covered offline · ⚠️ implemented, not yet exercised on
 a live Proxmox host (the standing caveat — no node is available here).

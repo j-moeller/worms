@@ -43,7 +43,7 @@ def page_html() -> str:
     # endpoints pointing at the fixtures.
     return (
         "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'><title>topology</title></head><body>"
-        "<div class='topo' id='topo' data-model='/model' data-runs='/runs' "
+        "<div class='topo' id='topo' data-model='/model' data-runs='/runs' data-refresh-ms='700' "
         "data-timeline='/rounds/00000000-0000-0000-0000-000000000000/timeline/'>"
         f"{player}</div><script>{app}</script></body></html>"
     )
@@ -165,6 +165,13 @@ def test_next_event_and_shareable_hash(observed):
     checks = observed["checks"]
     assert checks["afterNext"]["selected"] == "event"
     assert checks["hash"].startswith(f"#run={topology_fixtures.RUN_UUID}&t=")
+
+
+def test_live_refresh_keeps_speed_and_zoom(observed):
+    refresh = observed["checks"]["refresh"]
+    assert refresh["modelFetches"] > refresh["fetchesBefore"]  # it did refresh
+    assert refresh["speed"] == 60
+    assert abs(refresh["k"] - refresh["k0"]) < 1e-9
 
 
 def test_failed_run_and_back_to_live(observed):

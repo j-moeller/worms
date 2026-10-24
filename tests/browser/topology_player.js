@@ -13,6 +13,7 @@ const ORIGIN = "http://worms.test";
 
 const errors = [];
 const out = { errors, checks: {} };
+let modelFetches = 0;
 
 (async () => {
     const browser = await chromium.launch();
@@ -26,7 +27,7 @@ const out = { errors, checks: {} };
         const url = new URL(route.request().url());
         const json = (body, status = 200) => route.fulfill({ status, contentType: "application/json", body });
         if (url.pathname === "/page") return route.fulfill({ status: 200, contentType: "text/html", body: fs.readFileSync(pagePath, "utf8") });
-        if (url.pathname === "/model") return json(read("model.json"));
+        if (url.pathname === "/model") { modelFetches++; return json(read("model.json")); }
         if (url.pathname === "/runs") return json(read("runs.json"));
         if (url.pathname === `/rounds/${JSON.parse(read("runs.json")).rounds[0].runs[0].uuid}/timeline/`) return json(read("timeline.json"));
         if (url.pathname.startsWith("/rounds/")) return json(JSON.stringify({ error: "Not found" }), 404);
@@ -128,8 +129,19 @@ const out = { errors, checks: {} };
     out.checks.afterDot = await S();
     out.checks.dotSide = await page.locator("#topo-side").innerText();
 
-    // Next-event key and the URL hash.
+    // The live snapshot refreshes (every 700 ms here): the chosen speed and
+    // the user's zoom survive it.
     await page.locator("#topo-side button", { hasText: "Back" }).click();
+    await page.locator("#topo-speed").selectOption("60");
+    await page.locator("#topo-zoom-in").click();
+    const k0 = await page.evaluate(() => document.getElementById("topo").topoState.view.k);
+    const fetchesBefore = modelFetches;
+    await page.waitForTimeout(1800);
+    out.checks.refresh = await page.evaluate(() => { const s = document.getElementById("topo").topoState; return { speed: s.speed, k: s.view.k }; });
+    Object.assign(out.checks.refresh, { k0, fetchesBefore, modelFetches });
+    await page.locator("#topo-fit").click();
+
+    // Next-event key and the URL hash.
     await page.keyboard.press(".");
     out.checks.afterNext = await S();
     out.checks.hash = await page.evaluate(() => location.hash);

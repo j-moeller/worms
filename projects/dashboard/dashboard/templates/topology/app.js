@@ -235,7 +235,10 @@
         loading: false,
         scene: null,
         showAux: false,
-        view: { k: 1, x: 0, y: 0, fitted: false },
+        view: { k: 1, x: 0, y: 0, user: false },
+        needsFit: true,
+        playerFor: null, // the run the player controls were set up for
+        teamName: null, // kept when switching rounds
         t: 0,
         playing: false,
         speed: 10,
@@ -853,7 +856,8 @@
         const h = b.y1 - b.y0;
         if (!rect.width || !rect.height || !w || !h) return;
         const k = Math.min(rect.width / w, rect.height / h, 1.4);
-        S.view = { k, x: (rect.width - w * k) / 2 - b.x0 * k, y: (rect.height - h * k) / 2 - b.y0 * k, fitted: true };
+        S.view = { k, x: (rect.width - w * k) / 2 - b.x0 * k, y: (rect.height - h * k) / 2 - b.y0 * k, user: false };
+        S.needsFit = false;
         applyView();
     }
 
@@ -863,6 +867,7 @@
         S.view.x = cx - (cx - S.view.x) * f;
         S.view.y = cy - (cy - S.view.y) * f;
         S.view.k = k;
+        S.view.user = true;
         applyView();
     }
 
@@ -886,6 +891,7 @@
             svg.classList.add("panning");
             S.view.x = drag.vx + dx;
             S.view.y = drag.vy + dy;
+            S.view.user = true;
             applyView();
         });
         window.addEventListener("pointerup", () => {
@@ -904,7 +910,7 @@
         $("topo-fit").addEventListener("click", fit);
         window.addEventListener("resize", () => {
             resizeCanvas();
-            if (S.view.fitted) fit();
+            if (!S.view.user) fit();
             else drawFrame();
             drawDensity();
         });
@@ -1615,7 +1621,10 @@
         const [lo, hi] = range();
         track.setAttribute("aria-valuemin", lo.toFixed(1));
         track.setAttribute("aria-valuemax", hi.toFixed(1));
-        S.speed = defaultSpeed(tl.run.duration);
+        if (S.playerFor !== tl.run.uuid) {
+            S.playerFor = tl.run.uuid;
+            S.speed = defaultSpeed(tl.run.duration);
+        }
         S.stateEvents = tl.events.filter((e) => e.kind === "state");
         $("topo-speed").value = String(S.speed);
 
@@ -1720,7 +1729,9 @@
         document.addEventListener("keydown", (ev) => {
             if (S.mode !== "round" || !S.timeline) return;
             const tag = (ev.target && ev.target.tagName) || "";
-            if (["INPUT", "SELECT", "TEXTAREA", "BUTTON"].includes(tag)) return;
+            if (["INPUT", "SELECT", "TEXTAREA"].includes(tag)) return;
+            // A focused button handles space/enter itself; the other keys still work.
+            if (tag === "BUTTON" && (ev.key === " " || ev.key === "Enter")) return;
             if (ev.key === " ") {
                 ev.preventDefault();
                 S.playing ? pause() : play();
@@ -1806,7 +1817,7 @@
 
     function selectLive() {
         pause();
-        S.view.fitted = false;
+        S.needsFit = true;
         S.mode = "live";
         S.roundId = null;
         S.runUuid = null;
@@ -1824,7 +1835,7 @@
         S.mode = "round";
         S.roundId = roundId;
         renderTabs();
-        const run = round.runs.find((x) => x.uuid === S.runUuid) || round.runs[0];
+        const run = round.runs.find((x) => x.team === S.teamName) || round.runs[0];
         if (run) selectRun(run.uuid);
         else {
             S.timeline = null;
@@ -1834,7 +1845,7 @@
 
     async function selectRun(uuid, t) {
         pause();
-        S.view.fitted = false;
+        S.needsFit = true;
         S.mode = "round";
         S.runUuid = uuid;
         S.timeline = null;
@@ -1848,7 +1859,8 @@
             tl.events.sort((a, b) => a.t - b.t);
             tl.flows.sort((a, b) => a.t - b.t);
             S.timeline = tl;
-            S.view.fitted = false;
+            S.teamName = tl.run.team;
+            S.needsFit = true;
             S.t = t !== undefined && !Number.isNaN(t) ? t : Math.min(0, tl.run.t_min);
         } catch (error) {
             S.timelineError = error;
@@ -1867,7 +1879,8 @@
             mode: S.mode, showAux: S.showAux, teamSlug: tl ? tl.run.team_slug : null,
         });
         drawScene();
-        if (!S.view.fitted) fit();
+        if (S.needsFit) fit();
+        else applyView();
         setupPlayer();
         renderSide();
         renderMeta();
@@ -1963,7 +1976,7 @@
         wireStage();
         $("topo-aux").addEventListener("change", (ev) => {
             S.showAux = ev.target.checked;
-            S.view.fitted = false;
+            S.needsFit = !S.view.user;
             rebuild();
         });
         $("topo-reload").addEventListener("click", reload);
@@ -1989,10 +2002,7 @@
         setInterval(async () => {
             if (document.hidden) return;
             await loadModel();
-            const view = Object.assign({}, S.view);
-            rebuild();
-            S.view = view;
-            applyView();
+            rebuild(); // keeps the view: needsFit is only set when the picture changes
         }, cfg.refreshMs);
     }
 

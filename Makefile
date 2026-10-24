@@ -61,6 +61,7 @@ endef
         inventory show-config \
         provision configure offline internet-allow internet-deny ping debug \
         test test-deps simulate round-reset-services round-reset-apply round-configure-sandbox \
+        devbox-apply devbox-configure devbox-destroy \
         destroy destroy_all terminate
 
 all: init secrets platform firewall host-network
@@ -78,6 +79,7 @@ init:
 	cd opentofu/stacks/infrastructure/persistent && tofu init -input=false
 	cd opentofu/stacks/infrastructure/ephemeral && tofu init -input=false
 	cd opentofu/stacks/sandbox && tofu init -input=false
+	cd opentofu/stacks/devbox && tofu init -input=false
 	cd opentofu/stacks/private_internet && tofu init -input=false
 
 # Generate management secrets into the encrypted vault (adds only missing keys).
@@ -222,6 +224,26 @@ round-configure-sandbox:
 	$(MAKE) --no-print-directory inventory
 	cd ansible && $(ANSIBLE) SetupSandbox.yml
 
+# ---- Devbox (docs/devbox.md) -------------------------------------------------
+# The devbox stack holds every team's always-on devbox plus the trusted SSH
+# gateway. generated_devboxes.tf is written by scripts/generate_devbox.py (the
+# round agent does this on devbox_provision/devbox_rebuild). No internet window:
+# the devbox VMs are untrusted and get the internal private internet only.
+devbox-apply:
+	cd opentofu/stacks/devbox && $(MAKE) apply
+	$(MAKE) --no-print-directory inventory
+
+# Configure the devbox VMs (CA + team keys) and the SSH gateway (confined
+# authorized_keys). Keys/targets come from the inventory + extra vars the agent
+# passes; see roles devbox / ssh_gateway.
+devbox-configure:
+	$(MAKE) --no-print-directory inventory
+	cd ansible && $(ANSIBLE) SetupSSHGateway.yml
+	cd ansible && $(ANSIBLE) SetupDevbox.yml
+
+devbox-destroy:
+	cd opentofu/stacks/devbox && $(MAKE) destroy
+
 # ---- Teardown ---------------------------------------------------------------
 # VM stacks first (they reference the security groups, pools and images),
 # then the firewall, then the platform.
@@ -232,6 +254,7 @@ destroy_all: destroy
 # The VM stacks read the firewall outputs even when destroying.
 destroy: firewall-migrate
 	cd opentofu/stacks/sandbox && $(MAKE) destroy
+	cd opentofu/stacks/devbox && $(MAKE) destroy
 	cd opentofu/stacks/infrastructure/ephemeral && $(MAKE) destroy
 	cd opentofu/stacks/infrastructure/persistent && $(MAKE) destroy
 	cd opentofu/stacks/private_internet && $(MAKE) destroy

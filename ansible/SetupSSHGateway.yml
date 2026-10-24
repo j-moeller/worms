@@ -1,0 +1,21 @@
+---
+# Configure the trusted devbox SSH gateway: write the per-team confined
+# authorized_keys (restrict + port-forwarding + permitopen to each team's own
+# devbox VMs). The hardened sshd itself is set by cloud-init. See docs/devbox.md.
+
+- name: Configure the devbox SSH gateway
+  hosts: ssh_gateway
+  any_errors_fatal: true
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Wait for cloud-init completion
+      ansible.builtin.command:
+        cmd: cloud-init status --wait
+      register: cloud_init_status
+      changed_when: false
+      failed_when: cloud_init_status.rc not in [0, 2]
+
+  roles:
+    - role: ssh_gateway

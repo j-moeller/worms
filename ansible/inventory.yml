@@ -41,6 +41,11 @@ all:
     monitor:
     sandbox_gw:
     sandbox:
+    # Devbox (docs/devbox.md): the untrusted per-team VMs, their per-team
+    # gateways, and the trusted shared SSH gateway.
+    devbox:
+    devbox_gw:
+    ssh_gateway:
 
     # ---- Role groups --------------------------------------------------------
     database_hosts:
@@ -72,6 +77,16 @@ all:
       children:
         scoring:
         logging:
+
+    # Devbox VM configuration (role devbox: CA trust + team keys).
+    devbox_hosts:
+      children:
+        devbox:
+
+    # Trusted devbox SSH gateway (role ssh_gateway: confined authorized_keys).
+    ssh_gateway_hosts:
+      children:
+        ssh_gateway:
 
     # Network monitor: Zeek on the mirror bridge, flow records -> database
     # (role network_monitor).

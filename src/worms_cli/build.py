@@ -28,6 +28,7 @@ COMPONENTS: dict[str, tuple[list[str], str]] = {
     "inventory": (["inventory"], "regenerate the Ansible inventory from OpenTofu"),
     "provision": (["provision"], "Ansible configuration of all VMs"),
     "private-internet": (["internet-deny", "inventory"], "note: use provision to (re)configure PI"),
+    "devbox": (["devbox-apply", "devbox-configure"], "build + configure the team devboxes and SSH gateway"),
 }
 
 # Destructive make targets, reached through dedicated subcommands.

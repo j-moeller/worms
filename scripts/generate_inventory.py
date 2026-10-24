@@ -82,12 +82,25 @@ def load_outputs(
 
 # VM stacks whose `ansible_hosts` output becomes inventory hosts, with the
 # group each VM key lands in (default: the key itself).
+def _devbox_group(key):
+    if key == "ssh_gateway":
+        return "ssh_gateway"
+    if key.endswith("-gw"):
+        return "devbox_gw"
+    return "devbox"
+
+
 VM_STACKS = [
     ("infrastructure/persistent", None),
     ("infrastructure/ephemeral", None),
     ("private_internet", None),
     ("sandbox", lambda key: key if key == "sandbox_gw" else "sandbox"),
+    ("devbox", _devbox_group),
 ]
+
+# Groups whose hosts are addressed by bare name (untrusted; no DNS name), like
+# the sandbox. Everything else gets the <name>.worms.internal form.
+_BARE_NAME_GROUPS = {"sandbox", "devbox", "devbox_gw"}
 
 DOMAIN = "worms.internal"
 ANSIBLE_USER = "debian"
@@ -130,7 +143,7 @@ def build_inventory(infrastructure: dict, stacks: dict, sandbox: dict) -> dict:
     for stack, group_of in VM_STACKS:
         for key, vm in sorted(stacks.get(stack, {}).items()):
             group = group_of(key) if group_of else key
-            hostname = vm["name"] if group == "sandbox" else f"{vm['name']}.{DOMAIN}"
+            hostname = vm["name"] if group in _BARE_NAME_GROUPS else f"{vm['name']}.{DOMAIN}"
             host = {
                 "ansible_host": vm["management_ip"],
                 "ansible_user": ANSIBLE_USER,

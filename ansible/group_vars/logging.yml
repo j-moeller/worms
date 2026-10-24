@@ -1,6 +1,10 @@
 ---
 # Logging VM (OpenTofu: infrastructure/ephemeral, key logging).
 tls_dns_name: logging.worms.internal
+# Wildcard so a devbox can reach <team>.logging.worms.internal over verified
+# HTTPS (docs/devbox.md); attribution is still by source address.
+tls_extra_sans:
+  - "DNS:*.logging.worms.internal"
 
 # Sandbox-facing REST API: INSERT-only database role (+ SELECT on the access
 # token hashes for validation).

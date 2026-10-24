@@ -1,0 +1,27 @@
+---
+# Configure the devbox VMs after they are built (round agent,
+# devbox_provision / devbox_rebuild). Installs the internal CA (so a worm can
+# reach scoring/logging over verified HTTPS) and the team's registered SSH
+# keys. Tokens are written by the agent, not here. See docs/devbox.md.
+#
+# The devbox VMs are untrusted/assumed rooted; trusting the internal CA only
+# lets them verify the services, and the keys only let their own team in
+# (through the gateway). Neither grants access the firewall does not allow.
+
+- name: Configure the devbox VMs
+  hosts: devbox
+  any_errors_fatal: false # one team's devbox must not block another's
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Wait for cloud-init completion
+      ansible.builtin.command:
+        cmd: cloud-init status --wait
+      register: cloud_init_status
+      changed_when: false
+      failed_when: cloud_init_status.rc not in [0, 2]
+
+  roles:
+    - role: ca_distribute
+    - role: devbox

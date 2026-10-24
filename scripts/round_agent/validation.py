@@ -109,6 +109,69 @@ def release_secrets(params):
     return {"vms": vm_names(params.get("vms", []))}
 
 
+# --- devbox (docs/devbox.md) --------------------------------------------------
+
+# A team slug as scripts/generate_devbox.py accepts it.
+TEAM_SLUG = re.compile(r"^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$")
+# One OpenSSH public key line (type + base64 blob + optional comment).
+SSH_KEY = re.compile(r"^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp(256|384|521)|sk-[a-z0-9@.-]+) [A-Za-z0-9+/=]{20,} ?.{0,200}$")
+
+
+def team_slug(value):
+    if not isinstance(value, str) or not TEAM_SLUG.match(value):
+        raise Invalid(f"invalid team slug: {value!r}")
+    return value
+
+
+def ssh_keys(value):
+    if not isinstance(value, list):
+        raise Invalid("authorized_keys must be a list")
+    if len(value) > 64:
+        raise Invalid("too many authorized_keys")
+    out = []
+    for key in value:
+        if not isinstance(key, str) or "\n" in key or len(key) > 8192 or not SSH_KEY.match(key.strip()):
+            raise Invalid(f"invalid SSH public key: {key!r:.60}")
+        out.append(key.strip())
+    return out
+
+
+def devbox_team(value):
+    if not isinstance(value, dict):
+        raise Invalid("team must be an object")
+    return {
+        "slug": team_slug(value.get("slug")),
+        "index": integer(value.get("index", 0), "index", 0, 31),
+        "team_uuid": team_uuid(value.get("team_uuid")),
+        "authorized_keys": ssh_keys(value.get("authorized_keys", [])),
+    }
+
+
+def devbox_teams(value):
+    if not isinstance(value, list) or not value:
+        raise Invalid("teams must be a non-empty list")
+    if len(value) > 32:
+        raise Invalid("too many devbox teams (max 32)")
+    teams = [devbox_team(t) for t in value]
+    if len({t["slug"] for t in teams}) != len(teams):
+        raise Invalid("duplicate team slug")
+    if len({t["index"] for t in teams}) != len(teams):
+        raise Invalid("duplicate team index")
+    return teams
+
+
+def devbox_provision(params):
+    return {"teams": devbox_teams(params.get("teams"))}
+
+
+def devbox_rebuild(params):
+    return {
+        "team_uuid": team_uuid(params.get("team_uuid")),
+        "devbox_version": integer(params.get("devbox_version", 1), "devbox_version", 1, 2**31 - 1),
+        "teams": devbox_teams(params.get("teams")),
+    }
+
+
 # Job kind -> validator. CHECK and TEARDOWN take no parameters.
 VALIDATORS = {
     "prepare": prepare,
@@ -116,6 +179,8 @@ VALIDATORS = {
     "deploy": deploy,
     "release_secrets": release_secrets,
     "teardown": lambda params: {},
+    "devbox_provision": devbox_provision,
+    "devbox_rebuild": devbox_rebuild,
 }
 
 

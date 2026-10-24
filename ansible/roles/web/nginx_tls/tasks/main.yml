@@ -20,7 +20,7 @@
   community.crypto.openssl_csr_pipe:
     privatekey_path: "{{ tls_key_path }}"
     common_name: "{{ tls_dns_name }}"
-    subject_alt_name: "DNS:{{ tls_dns_name }}"
+    subject_alt_name: "{{ (['DNS:' + tls_dns_name] + tls_extra_sans) | unique }}"
     key_usage:
       - digitalSignature
       - keyEncipherment

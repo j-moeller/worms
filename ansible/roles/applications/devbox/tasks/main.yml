@@ -1,0 +1,41 @@
+---
+# Configure one devbox VM. The internal CA is installed separately
+# (ca_distribute, SetupDevbox.yml). Idempotent and safe to re-run on a rebuild.
+
+- name: Install expected packages
+  ansible.builtin.apt:
+    name: "{{ devbox_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  failed_when: false # best-effort: the VM may be offline internet-wise
+
+- name: Ensure the login user's .ssh directory
+  ansible.builtin.file:
+    path: "~{{ devbox_login_user }}/.ssh"
+    state: directory
+    owner: "{{ devbox_login_user }}"
+    mode: "0700"
+
+# The team's registered keys. Managed (exclusive) so removing a key in the
+# dashboard removes access on the next provision/rebuild. The operator key
+# (cloud-init) lives in a separate authorized_keys handled by cloud-init, not
+# clobbered here (we write ~/.ssh/authorized_keys which cloud-init also wrote;
+# so we APPEND team keys via a dedicated file included by sshd).
+- name: Install the team's authorized keys (devbox access via the gateway)
+  ansible.builtin.copy:
+    dest: "~{{ devbox_login_user }}/.ssh/authorized_keys_worms_team"
+    content: "{{ devbox_authorized_keys | join('\n') + ('\n' if devbox_authorized_keys else '') }}"
+    owner: "{{ devbox_login_user }}"
+    mode: "0600"
+
+- name: Have sshd also read the team key file
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/20-worms-devbox.conf
+    content: |
+      # Managed by Ansible (role devbox). Team keys (from the dashboard) in a
+      # separate file so the operator (cloud-init) key is never disturbed.
+      AuthorizedKeysFile .ssh/authorized_keys .ssh/authorized_keys_worms_team
+    owner: root
+    mode: "0644"
+  notify: Restart devbox sshd

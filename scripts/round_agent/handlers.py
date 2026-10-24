@@ -23,6 +23,8 @@ WORM_DIR = "/home/debian"
 WORM_ZIP = "user-worm.zip"
 WORM_UNIT = "worms-start"
 CURRENT_TEAM_FILE = "/etc/sandbox-api/current-team"
+DEVBOX_TEAMS_FILE = "/etc/sandbox-api/devbox-teams"
+DEVBOX_GENERATED = "opentofu/stacks/devbox/generated_devboxes.tf"
 
 
 def _sandbox_vms(ex):
@@ -231,10 +233,147 @@ def _fetch_artifact(ex, cfg, artifact):
     return raw
 
 
+# ---------------------------------------------------------------------------
+# Devbox (docs/devbox.md)
+# ---------------------------------------------------------------------------
+
+
+def _devbox_vms(ex):
+    """{name: {maintenance_ip, vmid, team, ssh_ip}} from the devbox stack state."""
+    hosts = ex.tofu_output("devbox").get("ansible_hosts", {}) or {}
+    vms = {}
+    for key, host in hosts.items():
+        if key == "ssh_gateway" or key.endswith("-gw"):
+            continue
+        hv = host.get("host_vars", {}) or {}
+        vms[host["name"]] = {
+            "maintenance_ip": host["management_ip"],
+            "vmid": int(host["vm_id"]),
+            "team": hv.get("devbox_team"),
+            "ssh_ip": hv.get("devbox_ssh_ip"),
+        }
+    return vms
+
+
+def _write_devbox_token(ex, maintenance_ip):
+    """Generate a token, write it into a devbox VM, return its SHA-256."""
+    secret = f"FLAG{{{secrets.token_hex(16)}}}"
+    ex.ssh(maintenance_ip, ["sudo", "install", "-m", "0444", "/dev/stdin", FLAG_PATH], input=secret)
+    return hashlib.sha256(secret.encode()).hexdigest()
+
+
+def _write_devbox_map(ex, cfg, teams):
+    """Write the source-address -> team-uuid map onto scoring and logging, so a
+    devbox submission is attributed to its team (docs/devbox.md). The services
+    source of a team is its devbox-gw address from the stack output."""
+    devbox = ex.tofu_output("devbox").get("devbox", {}) or {}
+    lines = []
+    for team in teams:
+        info = devbox.get(team["slug"])
+        if info and info.get("services_source_ip"):
+            lines.append(f"{info['services_source_ip']} {team['team_uuid']}")
+    body = "".join(f"{line}\n" for line in lines)
+    for host in (cfg.get("scoring_host"), cfg.get("logging_host")):
+        if not host:
+            raise validation.Invalid("scoring_host/logging_host not configured for the round agent")
+        ex.ssh(host, ["sudo", "install", "-m", "0640", "-o", "root", "-g", "www-data", "/dev/stdin", DEVBOX_TEAMS_FILE], input=body)
+
+
+def _devbox_report(ex, teams):
+    """Per-team devbox info (VMs + tokens + source ip) for the orchestrator to
+    store in the database (devboxes, devbox_vms)."""
+    vms = _devbox_vms(ex)
+    devbox = ex.tofu_output("devbox").get("devbox", {}) or {}
+    report = []
+    by_team = {t["slug"]: t for t in teams}
+    for name, info in sorted(vms.items()):
+        if info["team"] not in by_team:
+            continue
+        report.append(
+            {
+                "team_uuid": by_team[info["team"]]["team_uuid"],
+                "team_slug": info["team"],
+                "name": name,
+                "maintenance_ip": info["maintenance_ip"],
+                "vmid": info["vmid"],
+                "ssh_ip": info["ssh_ip"],
+                "flag_hash": _write_devbox_token(ex, info["maintenance_ip"]),
+            }
+        )
+    sources = {slug: d.get("services_source_ip") for slug, d in devbox.items()}
+    return report, sources
+
+
+def devbox_provision(ex, cfg, params):
+    """Build (or update) every team's devbox and the SSH gateway: generate the
+    stack definition for all teams, apply it, configure the VMs and the gateway
+    (CA, team keys), write fresh tokens, and publish the source->team map.
+    Returns the devbox records for the orchestrator to register."""
+    teams = params["teams"]
+    ex.generate_devbox(teams, ex.repo_root / DEVBOX_GENERATED)
+    ex.make("devbox-apply", timeout=cfg.get("apply_timeout", 5400))
+    _configure_devbox(ex, teams)
+    report, sources = _devbox_report(ex, teams)
+    _write_devbox_map(ex, cfg, teams)
+    return {"vms": report, "services_sources": sources}
+
+
+def devbox_rebuild(ex, cfg, params):
+    """Rebuild one team's devbox VMs (fresh disks) and rewrite their tokens,
+    without touching other teams. The team's version has already been bumped by
+    the orchestrator (which clears the dashboard score); here the VMs are
+    replaced so the environment is truly fresh."""
+    teams = params["teams"]
+    slug = next((t["slug"] for t in teams if t["team_uuid"] == params["team_uuid"]), None)
+    if slug is None:
+        raise validation.Invalid("team_uuid is not in the teams list")
+
+    ex.generate_devbox(teams, ex.repo_root / DEVBOX_GENERATED)
+    # Replace just this team's three VMs (fresh disks); the rest is a no-op.
+    replaces = " ".join(
+        f'-replace=module.devbox_vm[\\"devbox-{slug}-{role}\\"].proxmox_virtual_environment_vm.vm'
+        for role in ("a", "b", "c")
+    )
+    ex.tofu("devbox", "apply", "-auto-approve", "-input=false", "-parallelism=1", *replaces.split(), timeout=cfg.get("apply_timeout", 5400))
+    ex.make("inventory", timeout=300)
+    _configure_devbox(ex, teams)
+
+    # Rewrite this team's tokens only.
+    vms = _devbox_vms(ex)
+    rebuilt = []
+    for name, info in sorted(vms.items()):
+        if info["team"] == slug:
+            rebuilt.append({"name": name, "flag_hash": _write_devbox_token(ex, info["maintenance_ip"])})
+    _write_devbox_map(ex, cfg, teams)
+    return {"team_uuid": params["team_uuid"], "devbox_version": params["devbox_version"], "vms": rebuilt}
+
+
+def _configure_devbox(ex, teams):
+    """Run the devbox + SSH-gateway Ansible with the teams' keys and VM targets
+    as extra vars (CA trust, team authorized_keys, confined gateway keys)."""
+    import json
+    import tempfile
+
+    devbox = ex.tofu_output("devbox").get("devbox", {}) or {}
+    team_keys = {t["slug"]: t["authorized_keys"] for t in teams}
+    gateway_keys = []
+    for t in teams:
+        targets = [f"{vm['ssh_fabric_ip']}:22" for vm in (devbox.get(t["slug"], {}) or {}).get("vms", [])]
+        for key in t["authorized_keys"]:
+            gateway_keys.append({"public_key": key, "comment": f"team={t['slug']}", "permitopen": targets})
+    extra = {"devbox_team_keys": team_keys, "ssh_gateway_authorized_keys": gateway_keys}
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+        json.dump(extra, fh)
+        varfile = fh.name
+    ex.make("devbox-configure", timeout=1800, args=f"-e @{varfile}")
+
+
 HANDLERS = {
     "prepare": prepare,
     "check": check,
     "deploy": deploy,
     "release_secrets": release_secrets,
     "teardown": teardown,
+    "devbox_provision": devbox_provision,
+    "devbox_rebuild": devbox_rebuild,
 }

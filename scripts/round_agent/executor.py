@@ -52,8 +52,23 @@ class Executor:
             raise CommandError(argv, proc.returncode, proc.stderr)
         return proc.stdout
 
-    def make(self, target, timeout=3600):
-        return self.run(["make", target], timeout=timeout)
+    def make(self, target, timeout=3600, args=None):
+        argv = ["make", target]
+        if args:
+            argv.append(f"ARGS={args}")
+        return self.run(argv, timeout=timeout)
+
+    def generate_devbox(self, teams, output_file):
+        """Write the devbox OpenTofu definition for `teams` (a list of
+        {slug, index, ...}) to output_file (generated_devboxes.tf)."""
+        script = self.repo_root / "scripts" / "generate_devbox.py"
+        import json as _json
+
+        return self.run(
+            ["python3", script, "--output", str(output_file)],
+            input=_json.dumps([{"slug": t["slug"], "index": t["index"]} for t in teams]),
+            timeout=120,
+        )
 
     def tofu(self, stack, *args, timeout=3600):
         path = self.repo_root / "opentofu" / "stacks" / stack

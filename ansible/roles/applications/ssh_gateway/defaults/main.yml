@@ -1,0 +1,19 @@
+---
+# The trusted devbox SSH gateway (docs/devbox.md). Teams SSH in and ProxyJump
+# to their OWN devbox VMs; the gateway forwards only the SSH tty. The hardened
+# sshd is set by cloud-init (ssh-gateway.tftpl); this role manages the per-key
+# authorization, which is what actually confines each team.
+
+# The login account teams use (matches the OpenTofu var gateway_user).
+ssh_gateway_user: team
+
+# One entry per registered team key. Each becomes a line in the team user's
+# authorized_keys with `restrict,port-forwarding,permitopen=...` so the key may
+# ONLY open a forwarded connection to that team's own devbox VMs (on the
+# devbox SSH fabric), and nothing else -- no agent/X11/tty/stream forwarding,
+# no shell beyond the jump. Provided by the round agent from the database.
+#
+#   - public_key: "ssh-ed25519 AAAA... alice@team"
+#     comment: "team=t1 alice"
+#     permitopen: ["10.7.0.11:22", "10.7.0.12:22", "10.7.0.13:22"]
+ssh_gateway_authorized_keys: []

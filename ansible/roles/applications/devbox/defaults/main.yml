@@ -1,0 +1,24 @@
+---
+# Devbox VM configuration (docs/devbox.md). The VMs are untrusted; this role
+# only sets what the team needs: the team's own SSH keys (so they can log in
+# through the gateway) and the usual tools. The internal CA is installed by
+# ca_distribute (SetupDevbox.yml) so a worm can reach scoring/logging over
+# verified HTTPS. Tokens are written by the round agent, not here.
+
+# Per-team key map, passed by the round agent (-e): {team_slug: [keys]}.
+devbox_team_keys: {}
+
+# The keys for THIS VM's team. The inventory sets the host var `devbox_team`
+# (from the devbox stack output); we pick that team's keys from the map above.
+# Overridable directly via -e devbox_authorized_keys=[...].
+devbox_authorized_keys: "{{ devbox_team_keys[devbox_team] | default([]) if (devbox_team is defined) else [] }}"
+
+# The account teams log in as on the devbox VMs (root: the VMs are rooted by
+# design, so this is not a privilege boundary).
+devbox_login_user: root
+
+# Packages a devbox is expected to have (the worm start assumes python3/unzip,
+# like the sandbox image).
+devbox_packages:
+  - python3
+  - unzip

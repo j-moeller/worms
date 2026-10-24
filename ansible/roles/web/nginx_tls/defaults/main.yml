@@ -4,3 +4,9 @@ tls_ca_path: /etc/nginx/tls/ca.crt
 
 tls_key_size: 3072
 tls_validity: "+825d"
+
+# Extra Subject Alternative Names beyond tls_dns_name, e.g. a wildcard so the
+# devbox can reach <team>.scoring.worms.internal with normal certificate
+# verification (docs/devbox.md). Each entry is a full SAN, e.g.
+# "DNS:*.scoring.worms.internal".
+tls_extra_sans: []

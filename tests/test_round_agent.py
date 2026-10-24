@@ -71,6 +71,49 @@ def test_validate_deploy_rejects_bad_team_uuid():
         )
 
 
+# --- devbox (docs/devbox.md) --------------------------------------------------
+
+GOOD_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabcdefghijklmnopqrstuvwxyz0123456789AB alice@team"
+
+
+def test_validate_devbox_provision_accepts_good_input():
+    clean = validation.validate(
+        "devbox_provision",
+        {"teams": [
+            {"slug": "t1", "index": 0, "team_uuid": "11111111-2222-3333-4444-555555555555", "authorized_keys": [GOOD_KEY]},
+            {"slug": "t2", "index": 1, "team_uuid": "22222222-2222-3333-4444-555555555555", "authorized_keys": []},
+        ]},
+    )
+    assert [t["slug"] for t in clean["teams"]] == ["t1", "t2"]
+    assert clean["teams"][0]["authorized_keys"] == [GOOD_KEY]
+
+
+@pytest.mark.parametrize("params", [
+    {"teams": []},                                                                   # empty
+    {"teams": [{"slug": "BAD", "index": 0, "team_uuid": "1" * 8 + "-2222-3333-4444-555555555555"}]},  # bad slug
+    {"teams": [{"slug": "t1", "index": 99, "team_uuid": "11111111-2222-3333-4444-555555555555"}]},     # index range
+    {"teams": [{"slug": "t1", "index": 0, "team_uuid": "nope"}]},                     # bad uuid
+    {"teams": [                                                                       # duplicate index
+        {"slug": "t1", "index": 0, "team_uuid": "11111111-2222-3333-4444-555555555555"},
+        {"slug": "t2", "index": 0, "team_uuid": "22222222-2222-3333-4444-555555555555"},
+    ]},
+    {"teams": [{"slug": "t1", "index": 0, "team_uuid": "11111111-2222-3333-4444-555555555555",
+                "authorized_keys": ["not a key"]}]},                                  # bad ssh key
+])  # fmt: skip
+def test_validate_devbox_provision_rejects_bad_input(params):
+    with pytest.raises(validation.Invalid):
+        validation.validate("devbox_provision", params)
+
+
+def test_validate_devbox_rebuild():
+    clean = validation.validate(
+        "devbox_rebuild",
+        {"team_uuid": "11111111-2222-3333-4444-555555555555", "devbox_version": 3,
+         "teams": [{"slug": "t1", "index": 0, "team_uuid": "11111111-2222-3333-4444-555555555555", "authorized_keys": []}]},
+    )
+    assert clean["devbox_version"] == 3
+
+
 def test_validate_prepare_bounds():
     with pytest.raises(validation.Invalid):
         validation.validate("prepare", {"seed": 1, "sandbox_params": {"vms": 10_000}})

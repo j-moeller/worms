@@ -17,9 +17,7 @@ def env(name, default=None, *, required=False):
     """
     value = os.environ.get(name, default)
     if required and (value is None or value == ""):
-        raise ImproperlyConfigured(
-            f"Missing required environment variable: {name}"
-        )
+        raise ImproperlyConfigured(f"Missing required environment variable: {name}")
     return value
 
 
@@ -39,6 +37,7 @@ def postgres_database(user, password):
         "PORT": env("DB_PORT", "5432"),
         "OPTIONS": options,
     }
+
 
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 MiB
 CHUNK_SIZE = 1024 * 1024  # 1 MiB
@@ -122,7 +121,6 @@ TEMPLATES = [
 # Database
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
-# TODO # PASSWORD
 if DEBUG:
     assert socket.gethostname() == "worms-pve"
     DATABASES = {

@@ -15,3 +15,7 @@ django_extra_env:
   ORCHESTRATOR_URL: "https://{{ infrastructure_ips.orchestrator }}"
   ORCHESTRATOR_TLS_NAME: orchestrator.worms.internal
   ORCHESTRATOR_API_TOKEN: "{{ vault_orchestrator_dashboard_token }}"
+
+django_superuser_username: admin
+django_superuser_email: admin@worms.internal
+django_superuser_password: "{{ vault_django_superuser_password }}"

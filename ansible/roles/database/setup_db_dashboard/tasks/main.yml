@@ -95,6 +95,41 @@
   environment:
     PRODUCTION: "1"
 
+
+- name: Check whether initial Django superuser exists
+  ansible.builtin.command:
+    cmd: >-
+      {{ django_venv_dir }}/bin/python manage.py shell -c
+      "from django.contrib.auth import get_user_model;
+      import sys;
+      sys.exit(0 if get_user_model().objects.filter(username='{{ django_superuser_username }}', is_superuser=True).exists() else 1)"
+    chdir: "{{ django_source_dir }}"
+  become: true
+  become_user: "{{ django_app_user }}"
+  environment:
+    PRODUCTION: "1"
+  register: django_superuser_check
+  changed_when: false
+  failed_when: django_superuser_check.rc not in [0, 1]
+
+
+- name: Create initial Django superuser
+  ansible.builtin.command:
+    cmd: >-
+      {{ django_venv_dir }}/bin/python manage.py createsuperuser
+      --noinput
+      --username={{ django_superuser_username }}
+      --email={{ django_superuser_email }}
+    chdir: "{{ django_source_dir }}"
+  become: true
+  become_user: "{{ django_app_user }}"
+  environment:
+    PRODUCTION: "1"
+    DJANGO_SUPERUSER_PASSWORD: "{{ django_superuser_password }}"
+  when: django_superuser_check.rc == 1
+  no_log: true
+
+
 #- name: Collect Django static files
 #  ansible.builtin.command:
 #    cmd: "{{ django_venv_dir }}/bin/python manage.py collectstatic --noinput"

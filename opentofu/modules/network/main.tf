@@ -46,6 +46,20 @@ locals {
       address = "${var.host_ips.mgmt_sandbox}/${split("/", var.networks.mgmt_sandbox)[1]}"
       comment = "Management (SSH host -> VM) for sandbox VMs and sandbox-gw. Ports isolated."
     }
+    # Devbox (docs/devbox.md). The untrusted devbox VMs and their gateways get
+    # their own maintenance bridge, never shared with the infrastructure's.
+    mgmt_devbox = {
+      address = "${var.host_ips.mgmt_devbox}/${split("/", var.networks.mgmt_devbox)[1]}"
+      comment = "Management (SSH host -> VM) for devbox VMs and devbox gateways. Ports isolated."
+    }
+    # The SSH fabric between the trusted SSH gateway and every devbox VM. Ports
+    # MUST be isolated (hookscript), so devbox VMs of different teams can reach
+    # the gateway but never each other here. The host address publishes the
+    # gateway (DNAT); the host does not route this bridge otherwise.
+    devbox_ssh = {
+      address = "${var.host_ips.devbox_ssh}/${split("/", var.networks.devbox_ssh)[1]}"
+      comment = "Management: devbox SSH fabric (SSH gateway <-> devbox VMs). Ports isolated."
+    }
   }
 }
 

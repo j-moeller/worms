@@ -55,7 +55,12 @@ resource "proxmox_virtual_environment_file" "hookscript" {
 
   source_raw {
     data = templatefile("${path.module}/templates/worms-hook.sh.tftpl", {
-      mgmt_bridges = join(" ", [local.bridges.mgmt_trusted, local.bridges.mgmt_exposed, local.bridges.mgmt_sandbox])
+      # Every management bridge plus the devbox SSH fabric (vmbr7), whose
+      # port isolation keeps different teams' devbox VMs apart.
+      mgmt_bridges = join(" ", [
+        local.bridges.mgmt_trusted, local.bridges.mgmt_exposed, local.bridges.mgmt_sandbox,
+        local.bridges.mgmt_devbox, local.bridges.devbox_ssh,
+      ])
     })
     file_name = "worms-hook.sh"
   }

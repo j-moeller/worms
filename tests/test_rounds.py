@@ -532,6 +532,21 @@ def test_timeline_maps_flows_and_derives_submissions(one_run):
     bare = {f["uid"]: f for f in timeline.build(run)["flows"]}
     assert bare["C2"]["dst"] == "ip:10.2.0.14" and bare["C2"]["kind"] == "other"
 
+    # The browser test's synthetic timeline (tests/topology_fixtures.py) has
+    # exactly this schema, so the page is tested against what is served.
+    import topology_fixtures
+
+    fx = topology_fixtures.timeline()
+    assert set(data) == set(fx)
+    assert set(data["run"]) == set(fx["run"])
+    assert set(data["nodes"][0]) == set(fx["nodes"][0])
+    assert set(data["flows"][0]) == set(fx["flows"][0])
+    assert set(data["events"][0]) == set(fx["events"][0])
+    for kind in ("flag_submitted", "log_received"):
+        real = next(e for e in data["events"] if e["kind"] == kind)
+        synthetic = next(e for e in fx["events"] if e["kind"] == kind)
+        assert set(real["data"]) == set(synthetic["data"]), kind
+
 
 def test_topology_endpoints_are_staff_only_and_serve_the_player(one_run):
     """/topology/data/, /topology/runs/ and the run timeline: staff only; the
@@ -584,6 +599,9 @@ def test_topology_endpoints_are_staff_only_and_serve_the_player(one_run):
     data = _json.loads(call(topology_views.topology_data, staff).content)
     assert {"nodes", "edges", "groups", "networks", "collected_at", "stale"} <= set(data)
     assert data["stale"] is False
+    # Devbox groups carry their team's name (VM names only have t<team id>).
+    t1 = next(g for g in data["groups"] if g.get("team") == f"t{one_run['team'].id}")
+    assert t1["team_name"] == "team-a" and t1["label"] == "Devbox team-a"
 
     runs = _json.loads(call(topology_views.topology_runs, staff).content)
     assert runs["rounds"][0]["name"] == "R1"

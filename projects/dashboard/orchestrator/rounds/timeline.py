@@ -319,6 +319,9 @@ def build(run: RoundRun, flow_limit=20000, infra: dict | None = None) -> dict:
             "uuid": str(run.uuid),
             "team": run.team.name,
             "team_uuid": team_uuid,
+            # The team's devbox VMs are named devbox-<slug>-a/b/c
+            # (orchestrator provision_devboxes.team_slug).
+            "team_slug": f"t{run.team_id}",
             "round": run.round.name,
             "state": run.state,
             "position": run.position,

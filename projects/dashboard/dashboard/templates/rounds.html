@@ -8,9 +8,10 @@
 <div style="max-width: 980px; margin: 0 auto; padding: 24px; font-family: system-ui, sans-serif;">
   <h1>Round runs</h1>
   <p style="color:#5f6b7a;">
-    One run per team and round. The animated timeline is served as JSON at
-    <code>/rounds/&lt;uuid&gt;/timeline/</code> (the player is a later task; see
-    <code>docs/rounds.md</code>).
+    One run per team and round. Replay a run in the
+    <a href="{% url 'topology' %}">TOPOLOGY</a> view (pick the round, then the
+    team); its raw timeline is served as JSON at
+    <code>/rounds/&lt;uuid&gt;/timeline/</code>.
   </p>
   <table style="width:100%; border-collapse: collapse;">
     <thead>
@@ -19,7 +20,7 @@
         <th style="padding:6px;">#</th>
         <th style="padding:6px;">Team</th>
         <th style="padding:6px;">State</th>
-        <th style="padding:6px;">Timeline</th>
+        <th style="padding:6px;">Replay</th>
       </tr>
     </thead>
     <tbody>
@@ -29,7 +30,7 @@
         <td style="padding:6px;">{{ run.position }}</td>
         <td style="padding:6px;">{{ run.team }}</td>
         <td style="padding:6px;">{{ run.state }}</td>
-        <td style="padding:6px;"><a href="/rounds/{{ run.uuid }}/timeline/">JSON</a></td>
+        <td style="padding:6px;"><a href="{% url 'topology' %}#run={{ run.uuid }}">play</a> · <a href="{% url 'round_timeline_data' run.uuid %}">JSON</a></td>
       </tr>
       {% empty %}
       <tr><td colspan="5" style="padding:12px; color:#5f6b7a;">No runs yet.</td></tr>

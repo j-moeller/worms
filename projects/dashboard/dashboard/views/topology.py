@@ -12,10 +12,12 @@ snapshot (`manage.py collect_topology`) and this reads it from the database.
 Addresses and firewall rules are sensitive, hence staff only.
 """
 
+import re
 from datetime import timedelta
 
 from core.models.competition import ApplicationSetting
 from core.models.rounds import RoundRun
+from core.models.team import Team
 from core.models.topology import TopologySnapshot
 from dashboard.infra_view import address_index, analyze
 from dashboard.views.util import render_with_base_info
@@ -42,6 +44,25 @@ def latest_snapshot():
         _cache.clear()
         _cache[key] = analyze(snapshot.data)
     return snapshot, _cache[key]
+
+
+TEAM_SLUG = re.compile(r"^t(\d+)$")  # orchestrator provision_devboxes.team_slug
+
+
+def with_team_names(model: dict) -> dict:
+    """The devbox groups labelled with their team's name (VM names carry only
+    the slug `t<team id>`). Returns a copy; the cached model is shared."""
+    ids = {}
+    for group in model["groups"]:
+        match = TEAM_SLUG.match(group.get("team") or "")
+        if match:
+            ids[group["team"]] = int(match.group(1))
+    names = dict(Team.objects.filter(id__in=ids.values()).values_list("id", "name")) if ids else {}
+    groups = []
+    for group in model["groups"]:
+        name = names.get(ids.get(group.get("team")))
+        groups.append({**group, "team_name": name, "label": f"Devbox {name}" if name else group["label"]})
+    return {**model, "groups": groups}
 
 
 def live_address_index() -> dict:
@@ -78,7 +99,7 @@ def topology_data(request: HttpRequest):
 
     return JsonResponse(
         {
-            **model,
+            **with_team_names(model),
             "collected_at": snapshot.collected_at.isoformat(),
             "attempted_at": snapshot.attempted_at.isoformat() if snapshot.attempted_at else None,
             "collection_error": snapshot.error,

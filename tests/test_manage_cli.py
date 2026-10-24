@@ -109,6 +109,16 @@ def test_teams_crud_and_listing(initialised):
     assert sql(cluster, "SELECT count(*) FROM teams WHERE name = 'Beta'")[0][0] == 0
 
 
+def test_create_team_enqueues_devbox_provision(initialised):
+    cluster = initialised
+    worms(cluster, "teams", "create", "DevTeam")
+    # A Devbox row with a stable index + source address, and a provision job.
+    row = sql(cluster, "SELECT index, services_source_ip FROM devboxes d "
+              "JOIN teams t ON t.id = d.team_id WHERE t.name = 'DevTeam'")
+    assert row and row[0][0] is not None and row[0][1].startswith("10.2.0.")
+    assert sql(cluster, "SELECT count(*) FROM host_jobs WHERE kind = 'devbox_provision'")[0][0] >= 1
+
+
 def test_delete_team_keeps_users(initialised):
     cluster = initialised
     worms(cluster, "teams", "create", "WithMembers")

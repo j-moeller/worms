@@ -181,6 +181,14 @@ def cmd_teams(config, args) -> int:
     action = args.team_action
     if action == "create":
         print(queries.create_team(args.name))
+        # Provisioning the devboxes happens when teams are created
+        # (docs/devbox.md): ensure a devbox + enqueue a provision host job.
+        try:
+            from django.core.management import call_command
+
+            call_command("provision_devboxes")
+        except Exception as exc:  # noqa: BLE001
+            output.warn(f"team created, but devbox provisioning was not enqueued: {exc}")
         return 0
     if action == "rename":
         print(queries.rename_team(args.old, args.new))

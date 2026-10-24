@@ -40,6 +40,11 @@ class Devbox(models.Model):
     team = models.OneToOneField(Team, on_delete=models.CASCADE, related_name="devbox")
     uuid = models.UUIDField(default=uuid.uuid4, unique=True)
 
+    # Stable index (0..31) that fixes this team's devbox addressing
+    # (scripts/generate_devbox.py). Assigned once at provision time and kept, so
+    # adding or removing another team never re-addresses this one.
+    index = models.PositiveIntegerField(null=True, blank=True, unique=True)
+
     # The SNAT source address of this team's devbox gateway on the services
     # bridge. The scoring/logging servers map it to the team (source-address
     # attribution; ipfilter-pinned, so it cannot be forged).

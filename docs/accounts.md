@@ -1,180 +1,180 @@
-# Accounts: admin, competition and student logins
+# Accounts and privileges
 
-How the dashboard is initialised with an administrator and a default
-competition, and how student accounts are created and first sign in.
+Two things, kept separate:
 
-## The admin account and the default competition (`manage.py init`)
+1. **[Required accounts](#1-required-accounts)** — every account you must have
+   for the platform to run (Proxmox, PostgreSQL, the dashboard/Django accounts,
+   and the credential stores), each with its minimum privilege.
+2. **[Per-VM privilege map](#2-per-vm-privilege-map)** — every VM and the
+   privilege level each piece of functionality runs at, with anything that is
+   **not** least-privilege flagged.
 
-`core/management/commands/init.py` creates, **idempotently**:
+The operational how-to for the dashboard accounts (create the admin, import
+students) is at the end: [Managing dashboard accounts](#3-managing-dashboard-accounts).
 
-- the **admin account**: username `admin`, `is_staff=True` and `is_superuser=True`
-  (so it can use the Django admin at `/admin/` and the staff-only dashboard
-  pages). Its password comes from the environment, never from code;
-- the **default competition** `WORMS <current year>` (e.g. `WORMS 2026`), and
-  the `application_setting` row `current` pointing at it, unless a current
-  competition is already set.
+Nothing is hardcoded: internal secrets are generated into the encrypted Ansible
+vault (`scripts/generate_secrets.py`); the Proxmox tokens are the external
+secrets you supply.
 
-It is safe to run repeatedly: existing objects are left as they are (an
-existing admin password is never reset; an existing current competition is not
-changed). Re-run it after setting the password in the vault, or to create a new
-year's competition (`--competition "WORMS 2027"`).
+---
 
-Writes go through the **migrator** database connection when it is configured
-(the orchestrator has it; the public dashboard role cannot create users or
-competitions), otherwise through the default connection (local DEBUG/sqlite).
+## 1. Required accounts
 
-### Where the admin password lives — the vault key
+### 1.1 Proxmox
 
-Like every other internal secret, the admin password is **generated once** by
-`scripts/generate_secrets.py` into the encrypted Ansible vault
-(`ansible/group_vars/vault.yml`) under the key:
-
-```
-vault_django_admin_password
-```
-
-You never type or see it. To read or change it:
-
-```
-cd ansible
-ansible-vault view --vault-password-file .vault_pass group_vars/vault.yml   # read
-ansible-vault edit --vault-password-file .vault_pass group_vars/vault.yml   # change
-```
-
-The orchestrator receives it as `DJANGO_ADMIN_PASSWORD` in its root-owned
-`0600` env file (`group_vars/orchestrator.yml` → `django_extra_env`), and runs
-`manage.py init` once per `worms build provision` (the `django_post_migrate_commands`
-hook of the `django_app` role, right after the migrations). If the password is
-not set yet, the admin is created with login **disabled**; set the key and
-re-provision to enable it.
-
-Override the username/email with `DJANGO_ADMIN_USERNAME` / `DJANGO_ADMIN_EMAIL`
-or the `--admin-username` / `--admin-email` flags.
-
-## Student accounts from a CSV (`manage.py create_users`)
-
-`core/management/commands/create_users.py` turns a CSV of students into login
-accounts, each with a **one-time random password**.
-
-```
-manage.py create_users students.csv                 # prints email,password CSV to stdout
-manage.py create_users students.csv --output creds.csv
-manage.py create_users students.csv --password-length 16
-manage.py create_users tutors.csv --staff           # is_staff accounts
-```
-
-**Input** (header row required; columns matched case-insensitively, English and
-the German export headers both accepted):
-
-| first name | surname | email |
-|---|---|---|
-| `first name` / `firstname` / `vorname` | `surname` / `last name` / `name` / `nachname` | `email` / `e-mail` / `e-mail-adresse` |
-
-Only `email` is mandatory. For each email **not already present** a user is
-created with:
-
-- `username = email`, `is_active = True`, `is_staff = False` (unless `--staff`);
-- a freshly generated password (unambiguous alphabet, no `O/0/l/1/I`);
-- `must_change_password = True`.
-
-Existing emails are skipped (no new password), so you can append rows to the
-CSV and re-run.
-
-**Output**: an `email,password` CSV on **stdout** (and, with `--output`, to a
-file) — the only time the password is shown. A short summary (counts, skipped
-emails) goes to stderr, so `create_users students.csv > creds.csv` yields a
-clean CSV. Hand each student their line over a secure channel and delete the
-file afterwards.
-
-## First login forces a password change
-
-An account created by `create_users` carries `must_change_password = True`
-(the `must_change_password` column on `users`, migration `0008`). On login the
-dashboard's `ForcePasswordChangeMiddleware` redirects the user to
-`/change-password/` for every page until they set their own password; the view
-(`dashboard/views/password.py`, Django's `SetPasswordForm`) saves the new
-password, keeps the session alive (`update_session_auth_hash`) and clears the
-flag.
-
-The public dashboard database role (`django_dashboard`) is granted exactly
-`UPDATE (password, must_change_password)` on `users` for this — it still cannot
-grant itself staff or touch any other column (checked in
-`tests/test_accounts.py`).
-
-## Tests
-
-`tests/test_accounts.py` (offline, part of `worms test`) runs both commands
-against a throwaway PostgreSQL with the real migrations and least-privilege
-grants: `init` creates the admin and competition and is idempotent;
-`create_users` creates one account per row with a one-time password and
-`must_change_password`, skips existing emails, and reads the German headers;
-the dashboard role can set a password and clear the flag but nothing else.
-
-# Infrastructure accounts and privileges
-
-Every account needed to run the platform, with the **minimum** privilege it
-needs and where it is configured. Nothing here is hardcoded: internal secrets
-are generated into the Ansible vault (`scripts/generate_secrets.py`), the
-Proxmox tokens are the external secrets you supply.
-
-## Proxmox API identities
-
-| Identity | Privilege | Scope | Used by | Where |
-|---|---|---|---|---|
-| **provisioning token** (`PROXMOX_API_TOKEN`, vault `vault_proxmox_api_token_value`) | administrative — create/configure VMs, bridges, datastores, pools, firewall, upload snippets/hookscript. Needs `VM.Allocate`, `VM.Config.*`, `VM.PowerMgmt`, `VM.Audit`, `Datastore.Allocate`+`Datastore.AllocateSpace`, `Sys.Modify` (bridges/SDN), `Pool.Allocate`, `SDN.*` and the firewall rights; in practice a token of **`root@pam`** (the hookscript/snippet `file_mode` needs `root@pam`) plus a **root SSH key on the node** (the OpenTofu provider's `ssh { username = root }`). | `/` (whole node) | OpenTofu (every stack's provider) | `opentofu/stacks/*/main.tf`; you set `TF_VAR_proxmox_api_url` / `TF_VAR_proxmox_api_token` on the node |
-| **orchestrator power token** `orchestrator@pam!orchestrator-prov` | role `WormsSandboxPower` = **`VM.PowerMgmt` + `VM.Audit`** only | `/pool/sandbox` | orchestrator (conductor game plan) and dashboard→orchestrator sandbox power | `group_vars/all.yml` (`proxmox_api_*`); ACL created by `roles/host/round_agent` |
-| **read-only topology token** `topology@pve!readonly` | **`PVEAuditor`** (read-only), on the user AND the token (privilege separation) | `/` | `manage.py collect_topology` (the admin topology view) | `group_vars/all.yml` (`proxmox_readonly_api_*`), secret `vault_proxmox_readonly_api_token_value` |
-
-The provisioning token is root-equivalent by necessity (it builds the whole
-platform); keep it off any VM. The orchestrator (a VM) only ever holds the
-power token (pool-scoped), so "orchestrator compromised" is not "node
-compromised" (see `docs/rounds.md`). The round agent on the node needs no
-Proxmox token — it is already root there.
-
-## PostgreSQL roles
-
-TLS-only (`hostssl`, `scram-sha-256`); every role may connect **only from its
-own VM's `/32`** (`pg_hba`, `roles/database/setup_db_base`). Table/column grants
-are in `roles/database/setup_db_permissions` (least privilege; verified by
-`tests/test_database.py`). The database is a dead end: only these roles reach
-it, and the malicious VMs never can.
-
-| Role | Privilege | Connects from | Notes |
+| Account | Minimum privilege | Scope | Used by |
 |---|---|---|---|
-| `admin` | **SUPERUSER** | Proxmox host `/32` only | manual administration / the `worms` CLI; never used by a service |
-| `django_migrator` | owns every table (DDL) | orchestrator `/32` | runs the migrations; the dashboard never holds it |
-| `django_dashboard` | SELECT all; INSERT `uploads`/`malware_artifacts`/`access_tokens`; UPDATE `access_tokens`(revoked), `users`(last_login, password, must_change_password); INSERT/UPDATE/DELETE `django_session`; INSERT/DELETE `devbox_ssh_keys` | dashboard `/32` | public-facing, so read-mostly |
-| `django_orchestrator` | SELECT all; INSERT/UPDATE `round_runs`/`game_plan_steps`/`virtual_machines`/`topology_snapshots`/`devboxes`/`devbox_vms`; INSERT `host_jobs`/`run_events`/`flag_captures`/`logging`/`devbox_captures`/`devbox_logs`; UPDATE `teams`(devbox_version), attempts(processed); | orchestrator `/32` | writes only its own results |
-| `dbuser_scoring` | INSERT `(team_uuid, vm_flag_hash, devbox)` on `flag_capture_attempts` **only** | scoring `/32`, conn-limit 8 | sandbox-facing, hostile input |
-| `dbuser_logging` | INSERT `(uuid, team_uuid, log_data, devbox)` on `logging_attempts` **only** | logging `/32`, conn-limit 8 | sandbox-facing, hostile input |
-| `dbuser_network_monitor` | INSERT on `network_flows`/`network_events` **only** (cannot read) | monitor `/32`, conn-limit 4 | parses attacker traffic |
-| `round_agent` | SELECT `host_jobs`; UPDATE `host_jobs`(state, timestamps, result, error) | Proxmox host `/32`, conn-limit 4 | job queue only |
+| **provisioning token** (`vault_proxmox_api_token_value`, supplied as `PROXMOX_API_TOKEN`) | root-equivalent: `VM.Allocate`, `VM.Config.*`, `VM.PowerMgmt`, `VM.Audit`, `Datastore.Allocate`+`AllocateSpace`, `Sys.Modify` (bridges/SDN), `Pool.Allocate`, `SDN.*`, firewall rights — in practice a **`root@pam`** token, plus a **root SSH key on the node** (the OpenTofu provider uploads snippets/the hookscript, whose `file_mode` requires `root@pam`). | `/` (whole node) | OpenTofu, on the node only |
+| **orchestrator power token** `orchestrator@pam!orchestrator-prov` | `VM.PowerMgmt` + `VM.Audit` (role `WormsSandboxPower`) — nothing else | `/pool/sandbox` | orchestrator (game plan) + dashboard→orchestrator VM power |
+| **read-only topology token** `topology@pve!readonly` | `PVEAuditor` (read-only; on the user *and* the token, privilege-separated) | `/` | `collect_topology` (admin topology view) |
 
-## Dashboard application accounts
+The provisioning token is root-equivalent **by necessity** (it builds the whole
+platform) — keep it on the node, never on a VM. The orchestrator VM only ever
+holds the pool-scoped power token, so "orchestrator compromised" ≠ "node
+compromised". The round agent on the node needs no token (it is already root
+there). Identities are in `ansible/group_vars/all.yml`; the sandbox-pool ACL is
+created by `roles/host/round_agent`.
 
-- **admin** — Django superuser, `is_staff=True`; password from the vault
-  (`vault_django_admin_password`); created by `manage.py init`.
-- **students** — created from a CSV with one-time passwords, `is_staff=False`,
-  `must_change_password=True` (`manage.py create_users`).
+### 1.2 Database (PostgreSQL)
 
-## VM OS / service accounts (least privilege)
+TLS-only (`hostssl`, `scram-sha-256`); each role may connect **only from its own
+VM's `/32`** (`pg_hba`, `roles/database/setup_db_base`). Grants in
+`roles/database/setup_db_permissions`, verified by `tests/test_database.py`.
 
-Every VM boots from cloud-init with SSH **key only**: the Proxmox host key is
-authorised for the `debian` login user (Ansible/the agent connect as `debian`
-and use `sudo`); `PermitRootLogin prohibit-password`, `PasswordAuthentication
-no`, `KbdInteractive/ChallengeResponse no` (the `10-worms-hardening.conf`
-drop-in in every template). No other login method works. Services run as
-dedicated non-root users wherever possible:
-
-| VM(s) | Service | Runs as |
+| Role | Minimum privilege | Connects from |
 |---|---|---|
-| dashboard, orchestrator | gunicorn (Django) + management timers/daemons | `django` (group `www-data`) |
-| scoring, logging | the sandbox API (Flask) | `sandbox-api` (group `www-data`) |
-| monitor | Zeek / the flow shipper | `zeek` / `zeek-shipper` |
-| database | PostgreSQL | `postgres` |
-| dns | dnsmasq | `dnsmasq` |
-| all nginx hosts | nginx | `www-data` |
-| wazuh | Wazuh manager/indexer/dashboard | `wazuh` (installer-managed) |
-| private internet | devpi / cve-search / kiwix / apt-cacher-ng / registry | `devpi` / `cve-search` / `kiwix` / package defaults |
-| Proxmox node | the round agent | **root** (it drives tofu/ansible/qm/ssh; cannot be unprivileged) |
-| sandbox / devbox VMs | — | rooted/untrusted by design; isolation is the network + firewall, not in-guest privilege |
+| `admin` | `SUPERUSER` — manual administration / the `worms` CLI; no service uses it | Proxmox host `/32` |
+| `django_migrator` | owns the tables (DDL); runs migrations | orchestrator `/32` |
+| `django_orchestrator` | `SELECT` all; `INSERT`/`UPDATE` only its own result tables (`round_runs`, `game_plan_steps`, `virtual_machines`, `topology_snapshots`, `devboxes`, `devbox_vms`), `INSERT` `host_jobs`/`run_events`/`flag_captures`/`logging`/`devbox_captures`/`devbox_logs`, `UPDATE teams(devbox_version)` and attempts(`processed`) | orchestrator `/32` |
+| `django_dashboard` | `SELECT` all; `INSERT` `uploads`/`malware_artifacts`/`access_tokens`; `UPDATE access_tokens(revoked)`, `users(last_login, password, must_change_password)`; sessions; `INSERT`/`DELETE devbox_ssh_keys` | dashboard `/32` |
+| `dbuser_scoring` | `INSERT (team_uuid, vm_flag_hash, devbox)` on `flag_capture_attempts` — only | scoring `/32` (conn-limit 8) |
+| `dbuser_logging` | `INSERT (uuid, team_uuid, log_data, devbox)` on `logging_attempts` — only | logging `/32` (conn-limit 8) |
+| `dbuser_network_monitor` | `INSERT` on `network_flows`/`network_events` — only (cannot read) | monitor `/32` (conn-limit 4) |
+| `round_agent` | `SELECT` `host_jobs`; `UPDATE host_jobs(state, timestamps, result, error)` | Proxmox host `/32` (conn-limit 4) |
+
+### 1.3 Dashboard / Django
+
+| Account | Privilege | Source |
+|---|---|---|
+| **admin** | Django superuser, `is_staff=True` (Django admin + staff-only pages) | `manage.py init`; password from `vault_django_admin_password` |
+| **students** | plain users, `is_staff=False`, `must_change_password=True` | `manage.py create_users` (CSV → one-time passwords) |
+| **tutors/staff** (optional) | `is_staff=True` | `manage.py create_users --staff` |
+
+### 1.4 Other credentials (the stores)
+
+| Credential | Privilege / purpose | Where |
+|---|---|---|
+| **Ansible vault** (`ansible/.vault_pass` + `group_vars/vault.yml`) | decrypts every internal secret (DB passwords, Django `SECRET_KEY`s, admin password, CA passphrase, API tokens) | generated by `scripts/generate_secrets.py`; git-ignored |
+| **Proxmox host SSH key** (root) | the one key authorised on every VM; Ansible/the round agent connect with it | provided on init (`ssh_public_key`); distributed via cloud-init |
+| **internal CA** (`pki_ca_*`, passphrase `vault_pki_ca_passphrase`) | signs the TLS certs the VMs trust; the private key stays on the controller | `roles/pki/ca_create` |
+| **orchestrator API token** (`vault_orchestrator_dashboard_token`) | bearer token for dashboard→orchestrator (sandbox power, devbox reset) | vault; delivered to both VMs' `0600` env files |
+
+---
+
+## 2. Per-VM privilege map
+
+What runs where, and at which privilege. SSH into every VM is **key-only** (the
+Proxmox host key; `PermitRootLogin prohibit-password`, `PasswordAuthentication
+no`), from the node on the management network only. The login user is `debian`
+(+ `sudo`); services run as dedicated users with `NoNewPrivileges` wherever
+possible.
+
+Legend: ✅ least-privilege · ⚠️ runs as root/elevated — reason given ·
+◎ untrusted by design (the privilege level is irrelevant — the VM *is* the threat
+and is contained by the network/firewall, not by in-guest privilege).
+
+### Infrastructure VMs
+
+| VM | Functionality | Runs as | |
+|---|---|---|---|
+| **database** | PostgreSQL | `postgres` | ✅ |
+| | auditd / rsyslog (ship to wazuh) | root | ⚠️ system logging daemons (expected) |
+| **dashboard** | gunicorn (Django app) | `django` (grp `www-data`) | ✅ `NoNewPrivileges` |
+| | nginx (TLS front end) | root master → `www-data` workers | ✅ standard privileged-port bind |
+| | fail2ban | root | ⚠️ must edit the firewall (system service) |
+| **orchestrator** | gunicorn + `conduct_rounds`, `process_attempts`, `collect_topology` | `django` | ✅ `NoNewPrivileges` |
+| | nginx | root → `www-data` | ✅ |
+| **scoring** | sandbox API (Flask/gunicorn) | `sandbox-api` | ✅ `NoNewPrivileges`, empty `CapabilityBoundingSet` |
+| | nginx | root → `www-data` | ✅ |
+| **logging** | sandbox API | `sandbox-api` | ✅ as scoring |
+| | nginx | root → `www-data` | ✅ |
+| **monitor** | Zeek (capture) | `zeek` | ✅ only `CAP_NET_RAW`+`CAP_NET_ADMIN` (ambient), no IP networking |
+| | flow shipper → DB | `zeek-shipper` | ✅ `NoNewPrivileges`, no capabilities |
+| | set capture NIC promiscuous (one-shot) | root | ⚠️ minimal boot one-shot (needs `CAP_NET_ADMIN`) |
+| **dns** | dnsmasq | root → `dnsmasq` | ✅ standard (binds :53, drops) |
+| **wazuh** | Wazuh manager / indexer / dashboard | `wazuh` / `wazuh-indexer` | ⚠️ vendor installer-managed (not hardened by us) |
+
+### Private-internet VMs (caches; a dead end — ingress only)
+
+| VM | Functionality | Runs as | |
+|---|---|---|---|
+| **apt_cache** | apt-cacher-ng | `apt-cacher-ng` | ✅ |
+| **devpi** | devpi (PyPI mirror) | `devpi` | ✅ |
+| **docker_registry** | registry | `docker-registry` | ✅ |
+| **manpages** | apache2 (+ mandoc CGI) | root → `www-data` | ✅ standard |
+| **ntp** | chrony | root → `_chrony` | ✅ standard (binds :123, drops) |
+| **cve_search** | cve-search + MongoDB | `cve-search` / `mongodb` | ✅ |
+| **wikipedia** | kiwix-serve | `kiwix` | ✅ |
+
+### The Proxmox node itself
+
+| Functionality | Runs as | |
+|---|---|---|
+| round agent (pulls host jobs; drives tofu/ansible/qm/ssh) | root | ⚠️ root **by necessity** — it performs the privileged host build; bounded by its job-queue-only DB role and a fixed job menu (`docs/rounds.md`) |
+| `worms-mirror`, host firewall + watchdog (one-shots/timers) | root | ⚠️ host-level networking (necessary) |
+
+### Untrusted VMs (assumed rooted / malicious)
+
+| VM | Functionality | Runs as | |
+|---|---|---|---|
+| **sandbox VMs** | the submitted worm | `debian` (started via `systemd-run --uid`) | ◎ unprivileged start, but the VM is assumed rootable; contained by the network/firewall |
+| **devbox VMs (A/B/C)** | the team probing their environment | teams log in as **root** (their own playground) | ◎ untrusted by design |
+| **sandbox-gw / devbox-gw** | nftables router (SNAT) | root (boot config via cloud-init) | ◎ untrusted router; bounded by the host-side Proxmox firewall on its NICs |
+| **devbox SSH gateway** (trusted) | sshd jump host | root master; teams log in as the shared `team` user | ✅ team logins confined per-key (`restrict,port-forwarding,permitopen=…`) |
+
+**Not least-privilege, summarised:** the round agent and the host one-shots run
+as root (unavoidable — they *are* the host tooling); `fail2ban` and the
+auditd/rsyslog daemons are root system services; Wazuh is vendor-managed. The
+untrusted sandbox/devbox VMs and their gateways are root/untrusted by design —
+their containment is the network and firewall, not in-guest privilege. Every
+application service we control (Django, the sandbox APIs, Zeek, the caches) runs
+as a dedicated non-root user with `NoNewPrivileges`.
+
+---
+
+## 3. Managing dashboard accounts
+
+Operational how-to for the accounts in [§1.3](#13-dashboard--django). (Network
+and infrastructure accounts are not managed here — see §1.1/§1.2.)
+
+### Admin + default competition — `manage.py init` (idempotent)
+
+Creates the `admin` account (`is_staff` + superuser) and the default competition
+`WORMS <year>` with its `current` setting. Safe to re-run (never resets an
+existing password or current competition). The password comes from the vault key
+`vault_django_admin_password`, delivered to the orchestrator as
+`DJANGO_ADMIN_PASSWORD` and applied after the migrations (`django_app` role's
+`django_post_migrate_commands`); if unset, the admin is created with login
+disabled. Read/change it with:
+
+```
+cd ansible && ansible-vault edit --vault-password-file .vault_pass group_vars/vault.yml
+```
+
+### Students — `manage.py create_users <csv>`
+
+CSV with first name / surname / email (English or German headers). Each new
+email becomes a user with a one-time random password and `must_change_password`;
+existing emails are skipped. Prints an `email,password` CSV to stdout (the only
+time the password is shown; `--output creds.csv` to a file). `--staff` for
+tutors.
+
+### First login forces a password change
+
+An account with `must_change_password` is held on `/change-password/` by
+`ForcePasswordChangeMiddleware` until it sets its own password
+(`dashboard/views/password.py`). The public `django_dashboard` DB role is granted
+exactly `UPDATE(password, must_change_password)` on `users` for this and nothing
+more.
+
+Covered offline by `tests/test_accounts.py` (`worms test`).

@@ -46,7 +46,7 @@ postgresql_table_privileges:
     - privs: INSERT, UPDATE
       tables: [round_runs, game_plan_steps, virtual_machines]
     - privs: INSERT
-      tables: [worm_deployment_plans, worm_deployments, host_jobs, run_events]
+      tables: [host_jobs, run_events]
     # Processing of the sandbox APIs' attempts into captures / logs.
     - privs: UPDATE (processed, processed_at)
       tables: [flag_capture_attempts, logging_attempts]

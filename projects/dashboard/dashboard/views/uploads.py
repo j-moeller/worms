@@ -24,7 +24,7 @@ def upload_get_method(request: HttpRequest, team: Team):
         )
         .select_related("user", "artifact")
         .prefetch_related(
-            "worm_deployment_plans__round",
+            "runs__round",
         )
         .order_by("-created_at")
     )
@@ -32,12 +32,10 @@ def upload_get_method(request: HttpRequest, team: Team):
     rows = []
 
     for upload in uploads:
-        deployments = sorted(
-            upload.worm_deployment_plans.all(),
-            key=lambda deployment: (
-                deployment.round.round_start,
-                deployment.round.pk,
-            ),
+        # The rounds this upload was run in (newest first).
+        rounds = sorted(
+            {run.round for run in upload.runs.all()},
+            key=lambda round: (round.round_start is not None, round.round_start, round.pk),
             reverse=True,
         )
 
@@ -46,8 +44,8 @@ def upload_get_method(request: HttpRequest, team: Team):
                 "content_hash": upload.artifact.content_hash,
                 "time_date": upload.created_at,
                 "username": upload.user.username,
-                "rounds": [deployment.round.name for deployment in deployments],
-                "referenced": bool(deployments),
+                "rounds": [round.name for round in rounds],
+                "referenced": bool(rounds),
             }
         )
 

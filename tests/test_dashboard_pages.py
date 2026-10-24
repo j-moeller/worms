@@ -87,3 +87,39 @@ def test_init_keeps_an_existing_password(db_clean):
     admin.save()
     call_command("init", stdout=open("/dev/null", "w"))
     assert User.objects.get(username="admin").check_password("chosen-by-the-admin")
+
+
+def run_with(team, upload, name, start):
+    from datetime import timedelta
+
+    from core.models.competition import Round
+    from core.models.rounds import RoundRun
+
+    round = Round.objects.create(competition=team.competition, name=name, seed=1, round_start=start,
+                                 round_end=start + timedelta(hours=1))  # fmt: skip
+    return RoundRun.objects.create(round=round, team=team, upload=upload, position=0, seed=1)
+
+
+def test_uploads_page_shows_the_rounds_an_upload_ran_in(site, team_upload):  # noqa: F811
+    from datetime import timedelta
+
+    from core import clock
+
+    team, upload = team_upload
+    now = clock.now()
+    run_with(team, upload, "Round 1", now - timedelta(days=2))
+    run_with(team, upload, "Round 2", now - timedelta(days=1))
+    page = site.get("/upload/", **proxied(HOST)).content.decode()
+    assert 'class="referenced"' in page
+    assert re.findall(r'class="upload-round">\s*(.*?)\s*<', page) == ["Round 2", "Round 1"]
+
+
+def test_todos_counts_the_runs_that_deploy_an_upload(site, team_upload):  # noqa: F811
+    from datetime import timedelta
+
+    from core import clock
+
+    team, upload = team_upload
+    run_with(team, upload, "Round 1", clock.now() + timedelta(days=1))
+    counts = re.findall(r"<span >(\d+)</span>", site.get("/todos/", **proxied(HOST)).content.decode())
+    assert counts == ["0", "1"], counts

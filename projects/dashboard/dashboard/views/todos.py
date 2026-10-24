@@ -3,7 +3,7 @@ from core.models.competition import Competition, Round
 from dashboard.views.decorators import require_competition
 from dashboard.views.util import get_current_round, get_rounds, render_with_base_info
 from django.contrib.auth.decorators import login_required
-from django.db.models.aggregates import Count
+from django.db.models import Count, Q
 from django.http import HttpRequest
 from django.shortcuts import redirect
 
@@ -25,8 +25,10 @@ def todos(request: HttpRequest, competition: Competition):
                 "virtual_machines",
                 distinct=True,
             ),
+            # Runs of this round that deploy a team's upload (RoundRun.upload).
             worm_deployment_count=Count(
-                "worm_deployment_plans__worm_deployments",
+                "runs",
+                filter=Q(runs__upload__isnull=False),
                 distinct=True,
             ),
         )

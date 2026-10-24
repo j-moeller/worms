@@ -1,14 +1,9 @@
 """Orchestrator REST API.
 
-Callers (each with its own bearer token, settings.ORCHESTRATOR_TOKENS):
-
-- dashboard: power control of *sandbox* VMs (VMs registered in the
-  virtual_machines table for a round). Nothing else on Proxmox can be touched.
-
-All endpoints are token-authenticated (no session, hence CSRF-exempt) and
-return JSON. VMs are identified by their uuid only; database ids and Proxmox
-VMIDs never cross this API (the orchestrator maps a VM uuid to its Proxmox VMID
-itself).
+One caller, the dashboard (its own bearer token, settings.ORCHESTRATOR_TOKENS
+"dashboard"): it pushes a team's devbox reset. Token-authenticated (no
+session, hence CSRF-exempt), JSON responses. Nothing here touches Proxmox;
+the round agent rebuilds the devbox from the host job.
 """
 
 import hmac
@@ -17,14 +12,12 @@ from functools import wraps
 from core.models.devbox import Devbox
 from core.models.rounds import HostJob
 from core.models.team import Team
-from core.models.vm import VirtualMachine
 from django.conf import settings
 from django.db import transaction
 from django.db.models import F
 from django.http import HttpRequest, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_GET, require_POST
-from proxmoxer import ProxmoxAPI
+from django.views.decorators.http import require_POST
 
 
 def require_token(scope):
@@ -44,71 +37,6 @@ def require_token(scope):
         return wrapper
 
     return decorator
-
-
-# ---------------------------------------------------------------------------
-# Sandbox VM power control (dashboard)
-# ---------------------------------------------------------------------------
-
-
-def proxmox():
-    config = settings.PROXMOX
-    return ProxmoxAPI(
-        config["host"],
-        port=config["port"],
-        user=config["user"],
-        token_name=config["token_name"],
-        token_value=config["token_value"],
-        verify_ssl=config["verify_ssl"],
-    )
-
-
-def sandbox_vm(view):
-    """Resolve a VM uuid to a registered sandbox VM; nothing else can be controlled."""
-
-    @wraps(view)
-    def wrapper(request: HttpRequest, vm_uuid):
-        vm = VirtualMachine.objects.filter(uuid=vm_uuid, proxmox_vm_id__isnull=False).first()
-        if vm is None:
-            return JsonResponse({"error": "not a sandbox VM"}, status=404)
-        try:
-            return view(request, vm)
-        except Exception as e:
-            return JsonResponse({"error": str(e)}, status=502)
-
-    return wrapper
-
-
-def qemu(vm: VirtualMachine):
-    return proxmox().nodes(settings.PROXMOX["node"]).qemu(vm.proxmox_vm_id)
-
-
-@require_token("dashboard")
-@require_POST
-@sandbox_vm
-def start(request: HttpRequest, vm: VirtualMachine):
-    return JsonResponse({"vm": str(vm.uuid), "status": "starting", "task": qemu(vm).status.start.post()})
-
-
-@require_token("dashboard")
-@require_POST
-@sandbox_vm
-def stop(request: HttpRequest, vm: VirtualMachine):
-    return JsonResponse({"vm": str(vm.uuid), "status": "stopping", "task": qemu(vm).status.stop.post()})
-
-
-@require_token("dashboard")
-@require_POST
-@sandbox_vm
-def reset(request: HttpRequest, vm: VirtualMachine):
-    return JsonResponse({"vm": str(vm.uuid), "status": "resetting", "task": qemu(vm).status.reset.post()})
-
-
-@require_token("dashboard")
-@require_GET
-@sandbox_vm
-def status(request: HttpRequest, vm: VirtualMachine):
-    return JsonResponse({"vm": str(vm.uuid), "status": qemu(vm).status.current.get()["status"]})
 
 
 # ---------------------------------------------------------------------------

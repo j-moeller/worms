@@ -53,7 +53,7 @@ GENERATED_SECRET_KEYS = {
 }
 # Bearer tokens for the orchestrator REST API (orchestrator/api.py), one per caller.
 GENERATED_TOKENS = {
-    "vault_orchestrator_dashboard_token": 32,  # dashboard -> sandbox VM power control
+    "vault_orchestrator_dashboard_token": 32,  # dashboard -> devbox reset
 }
 # External secret we cannot invent (must match what Proxmox issued).
 PROXMOX_TOKEN_KEY = "vault_proxmox_api_token_value"

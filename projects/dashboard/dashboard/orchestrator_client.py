@@ -1,7 +1,7 @@
 """Minimal client for the orchestrator REST API (dashboard -> orchestrator).
 
-The dashboard never talks to Proxmox; privileged actions (sandbox VM power,
-devbox reset) go through the orchestrator, authenticated with the per-caller
+The dashboard never talks to Proxmox; its one privileged action (the devbox
+reset) goes through the orchestrator, authenticated with the per-caller
 bearer token in settings.ORCHESTRATOR_API. The connection is TLS-verified
 against the internal CA; set ORCHESTRATOR_URL to a name the certificate covers
 (orchestrator.worms.internal) so verification succeeds.

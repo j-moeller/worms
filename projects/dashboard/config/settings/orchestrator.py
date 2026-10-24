@@ -60,7 +60,7 @@ PROXMOX_READONLY = {
 # Bearer tokens for the orchestrator REST API, one per caller (scope). Empty =
 # that caller is disabled. See orchestrator/api.py.
 ORCHESTRATOR_TOKENS = {
-    # Dashboard: VM power control for sandbox VMs.
+    # Dashboard: devbox reset (orchestrator/api.py).
     "dashboard": env("ORCHESTRATOR_DASHBOARD_TOKEN", ""),
 }
 

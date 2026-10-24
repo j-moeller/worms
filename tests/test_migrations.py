@@ -208,3 +208,17 @@ def test_baseline_schema_is_kept(cluster, baseline_migrations):
     assert set(current) == set(baseline)
     for table in sorted(baseline):
         assert current[table] == baseline[table], table
+
+
+def test_removed_tables_are_gone(cluster, baseline_migrations):
+    """Fresh installs never create the removed tables; an upgrade drops them."""
+    create_database(cluster, "gone_fresh")
+    assert django(cluster, "gone_fresh", "migrate", "--no-input", "--database=migrator").returncode == 0
+    create_database(cluster, "gone_upgraded")
+    proc = django(cluster, "gone_upgraded", "migrate", "--no-input", "--database=migrator",
+                  extra_path=baseline_migrations, settings="baseline_settings")  # fmt: skip
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert REMOVED <= set(schema(cluster, "gone_upgraded"))
+    assert django(cluster, "gone_upgraded", "migrate", "--no-input", "--database=migrator").returncode == 0
+    for db in ("gone_fresh", "gone_upgraded"):
+        assert not REMOVED & set(schema(cluster, db)), db

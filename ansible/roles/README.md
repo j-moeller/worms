@@ -15,8 +15,5 @@ stay unique across folders.
 | `audit/`            | `wazuh_server` (Wazuh all-in-one), `auditd` (auditd + rsyslog forwarding to Wazuh) | SetupAudit.yml | `wazuh_hosts`, `audit_hosts` |
 | `private_internet/` | `apt_client`, `apt_cache`, `cve_search`, `devpi`, `docker_registry`, `manpages`, `ntp`, `wikipedia` | SetupPrivateInternet.yml | `private_internet` |
 
-`database/setup_db_dashboard` is not used by any playbook (superseded by
-`applications/django_app`).
-
 A new role goes into the folder of its component; a new folder must also be
 added to `roles_path` in `ansible.cfg`.

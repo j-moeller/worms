@@ -8,7 +8,7 @@ from .team import AccessTokens, Team, TeamMembership
 from .vm import VirtualMachine
 from .scoring import FlagCapture, FlagCaptureAttempt
 from .logging import Logging, LoggingAttempt
-from .worms import MalwareArtifact, Upload, WormDeployment, WormDeploymentPlan
+from .worms import MalwareArtifact, Upload
 from .topology import TopologySnapshot
 from .monitoring import NetworkEvent, NetworkFlow
 from .rounds import GamePlanStep, HostJob, RoundRun, RunEvent

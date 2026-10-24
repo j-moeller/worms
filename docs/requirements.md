@@ -1,0 +1,106 @@
+# Requirements → implementation map
+
+This maps the platform's requirements to where they are implemented and how
+they are verified, with residual gaps called out. It is the index to the
+detailed docs: `rounds.md`, `devbox.md`, `monitoring.md`, `accounts.md`,
+`management.md`, `testing.md`, `findings.md`.
+
+Legend: ✅ implemented & covered offline · ⚠️ implemented, not yet exercised on
+a live Proxmox host (the standing caveat — no node is available here).
+
+## Database as the central dead end
+
+- ✅ Ingress on 5432 only from the Proxmox host (RW), orchestrator, dashboard,
+  scoring, logging, monitor — Proxmox security group `database`
+  (`opentofu/stacks/firewall`), host nftables (`ingest → database` only), and
+  `pg_hba` per-`/32` (`roles/database/setup_db_base`).
+- ✅ Per-role least privilege (orchestrator read-mostly, dashboard read + its
+  user writes, scoring/logging insert-only, monitor insert-only) —
+  `roles/database/setup_db_permissions`, verified by `tests/test_database.py`.
+  Full table in `accounts.md`.
+- ✅ Dead end between the malicious VMs and the rest: sandbox/devbox reach only
+  scoring/logging (which hold insert-only roles); nothing routes them to the
+  database. The monitor and scoring/logging are the only bridge, and they can
+  only INSERT.
+
+## Dashboard
+
+- ✅ Login; forced password change on first login — `dashboard/views/password.py`,
+  `ForcePasswordChangeMiddleware` (`accounts.md`).
+- ✅ Team registration window — `dashboard/views/teams.py`, the registration
+  state in `dashboard/middleware.py`.
+- ✅ Dev/prod toggle — `EnvironmentTransitionMiddleware`; the home view
+  dispatches (`dashboard/views/devbox.py`).
+- **Dev view**: ✅ devbox score (tokens found at the current version), devbox
+  logs, SSH-key management, reset (version bump + rebuild job), and the SSH
+  command to the main VM through the gateway (`devbox.md`).
+- **Prod view**: ✅ leaderboard, round scoring/logging, zip upload, round
+  countdown/status (`dashboard/views/leaderboard.py`, `scoring.py`, `logging.py`,
+  `uploads.py`, the status presentation in `views/util.py`).
+- **Admin**: ✅ leaderboard + infrastructure/sandbox topology (VMs as nodes,
+  their firewall rules, status, connections) — the TOPOLOGY view, staff-only
+  (`dashboard/views/topology.py`, `dashboard/topology.py`, `docs/visualization.md`),
+  fed by `manage.py collect_topology` (read-only Proxmox token).
+
+## Sandbox and devbox (malicious, isolated, hardened)
+
+- ✅ Assumed rooted; isolated at the network layer and resource-limited —
+  per-VM Proxmox firewall (input/output DROP + ipfilter), host nftables, own
+  storage and CPU/NIC/disk caps (`docs/rounds.md` "Containment", `docs/devbox.md`).
+- ✅ Sandbox VMs reach only: each other (generated networks), scoring, logging,
+  private internet — groups `sandbox`/`sandbox_gw`, `sandbox_api`.
+- ✅ Devbox: three VMs A–B, B–C per team; reach scoring/logging/private
+  internet; never other teams' devboxes or the sandbox — `docs/devbox.md`
+  (disjoint networks, default-drop host routing, gateway↔gateway drop on the
+  shared services bridge). ⚠️ not run on a live node.
+- ✅ Private internet is a dead end: serves sandbox/devbox, **no egress** except
+  each PI VM's own package installs through the apt-cache (narrow
+  `pi_apt_client`; the previously over-broad `services_client` was removed from
+  the PI VMs — see below and `findings.md`).
+
+### The `services_client` question
+
+`services_client` granted egress to the **whole** services subnet on every
+service port. That was two things at once: the sandbox/devbox **gateways**
+legitimately need egress to the services, but the **private-internet VMs** had
+it too, contradicting "PI is a dead end". Fixed: the gateways keep a
+`services_client` scoped to the **actual service hosts** (not the whole /24,
+and gateway↔gateway is dropped at the host anyway); the PI VMs get a narrow
+`pi_apt_client` (apt-cache:3142 only). PI is now a true dead end.
+
+## Management networks
+
+- ✅ Separated: sandbox on `vmbr4`, devbox on `vmbr6` — **not** shared with the
+  critical infrastructure (database/orchestrator on `vmbr2`; dashboard/scoring/
+  logging/… on `vmbr5`). Addressing in `opentofu/shared/shared-variables.tf`.
+- ✅ Ingress only SSH from the Proxmox host (`ssh` security group, source = the
+  host's address on that bridge); egress forbidden (every VM's output policy is
+  DROP and the management NIC carries no outbound rule). Management bridges are
+  also port-isolated (hookscript) so VMs there cannot reach each other.
+
+## Minimal privilege, SSH key-only
+
+- ✅ cloud-init: root login via the Proxmox host key only, no passwords, no
+  other method — `10-worms-hardening.conf` + `ssh_pwauth: false` in every VM
+  template (`opentofu/modules/cloud_init/templates/*`, the sandbox/devbox
+  templates). The login user is `debian` (key) + `sudo`.
+- ✅ Services run as dedicated non-root users wherever possible (`accounts.md`).
+
+## Monitor
+
+- ✅ One monitor VM records all sandbox/devbox traffic to the database via a
+  host-side mirror (`worms-mirror`) into a receive-only capture NIC in
+  promiscuous mode; Zeek + the shipper write `network_flows`/`network_events`
+  (`docs/monitoring.md`).
+
+## Residual gaps / to verify on a live host
+
+- ⚠️ Nothing has run on a real Proxmox node (no node here): VM/bridge creation,
+  the devbox `-replace` rebuild, the devbox host-job → DB reconciliation, the
+  SSH gateway's `permitopen` confinement in practice, and `worms simulate`.
+- The port-isolation **hookscript is defined but not attached** to the VMs
+  (`hook_script_file_id` is commented out in the VM modules — `findings.md`);
+  until it is wired, management-bridge isolation rests on the Proxmox firewall
+  alone. This predates this work and is the highest-value remaining hardening.
+- A full live round and a full devbox lifecycle are covered only offline
+  (fakes + a real PostgreSQL); see `testing.md`.

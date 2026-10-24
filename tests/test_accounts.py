@@ -26,7 +26,7 @@ from pg import DB_NAME, MIGRATOR, PASSWORD, REPO  # noqa: E402
 DASHBOARD = REPO / "projects" / "dashboard"
 
 
-def manage(cluster, *args, extra_env=None):
+def manage(cluster, *args):
     """Run manage.py with the orchestrator settings against the cluster (the
     migrator credentials are present, as on the real orchestrator)."""
     import os
@@ -41,7 +41,6 @@ def manage(cluster, *args, extra_env=None):
         DB_MIGRATOR_PASSWORD=PASSWORD,
         PROXMOX_HOST="x", PROXMOX_USER="x", PROXMOX_TOKEN_NAME="x", PROXMOX_TOKEN_VALUE="x",
         **cluster.env("django_orchestrator"),
-        **(extra_env or {}),
     )  # fmt: skip
     proc = subprocess.run(
         [sys.executable, "manage.py", *args, "--skip-checks"],
@@ -68,7 +67,7 @@ def run(cluster, role, sql, params=None):
 
 
 def test_init_creates_admin_and_competition(database):
-    manage(database, "init", "--competition", "WORMS TEST", extra_env={"DJANGO_ADMIN_PASSWORD": "s3cret-admin-pw"})
+    manage(database, "init", "--competition", "WORMS TEST")
 
     admin = run(
         database, "postgres",
@@ -87,8 +86,8 @@ def test_init_creates_admin_and_competition(database):
 
 
 def test_init_is_idempotent(database):
-    manage(database, "init", "--competition", "WORMS TEST", extra_env={"DJANGO_ADMIN_PASSWORD": "s3cret-admin-pw"})
-    manage(database, "init", "--competition", "WORMS TEST", extra_env={"DJANGO_ADMIN_PASSWORD": "different"})
+    manage(database, "init", "--competition", "WORMS TEST")
+    manage(database, "init", "--competition", "WORMS TEST")
 
     assert run(database, "postgres", "SELECT count(*) FROM users WHERE username = 'admin'")[0][0] == 1
     assert run(database, "postgres", "SELECT count(*) FROM competitions WHERE name = 'WORMS TEST'")[0][0] == 1

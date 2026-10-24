@@ -30,9 +30,7 @@ reprints the configuration at any time.
 # Secrets (you don't manage these)
 
 All internal management credentials — every PostgreSQL role password, the
-Django `SECRET_KEY`s, the dashboard **admin** password
-(`vault_django_admin_password`, used by `manage.py init`; see
-`docs/accounts.md`) and the internal CA passphrase — are generated **once** by
+Django `SECRET_KEY`s and the internal CA passphrase — are generated **once** by
 `scripts/generate_secrets.py` (run via `worms build secrets`) into
 `ansible/group_vars/vault.yml`, encrypted with ansible-vault using an
 auto-generated `ansible/.vault_pass`. The CA private key
@@ -340,8 +338,8 @@ ssh -J team@<proxmox-wan>:2222 root@<devbox VM>
 # Accounts and the management CLI
 
 - **Admin + competition**: `manage.py init` (idempotent) creates the `admin`
-  account (password from the vault key `vault_django_admin_password`) and the
-  default competition `WORMS <year>`. Student accounts come from a CSV with
+  account (login disabled) and the default competition `WORMS <year>`;
+  `worms admin reset-password` prints a one-time password for it, once. Student accounts come from a CSV with
   one-time passwords (`manage.py create_users`), and the dashboard forces a
   password change on first login. See **`docs/accounts.md`**.
 - **`worms` CLI** (`src/manage.py`): one tool for status, teams, users,

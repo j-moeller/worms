@@ -63,7 +63,6 @@ def initialised(database):
         DJANGO_SECRET_KEY="t", DJANGO_ALLOWED_HOSTS="localhost",
         DB_MIGRATOR_USER=MIGRATOR, DB_MIGRATOR_PASSWORD=PASSWORD,
         PROXMOX_HOST="x", PROXMOX_USER="x", PROXMOX_TOKEN_NAME="x", PROXMOX_TOKEN_VALUE="x",
-        DJANGO_ADMIN_PASSWORD="pw",
         **database.env("django_orchestrator"),
     )  # fmt: skip
     subprocess.run(
@@ -252,3 +251,61 @@ def test_worms_db_settings_win_over_a_service_env(initialised):
             else:
                 _os.environ[k] = v
 
+
+
+# --- admin one-time password ---------------------------------------------------
+
+
+def admin_row(cluster):
+    return sql(cluster, "SELECT password, must_change_password, is_superuser, is_staff FROM users "
+               "WHERE username = 'admin'")  # fmt: skip
+
+
+def check_password(password, encoded):
+    """Django's default PBKDF2 hash, checked without configuring Django here."""
+    import base64
+    import hashlib
+    import hmac
+
+    algorithm, iterations, salt, digest = encoded.split("$")
+    assert algorithm == "pbkdf2_sha256"
+    computed = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), int(iterations))
+    return hmac.compare_digest(base64.b64encode(computed).decode(), digest)
+
+
+def test_init_leaves_the_admin_without_a_password(initialised):
+    encoded, must_change, *_ = admin_row(initialised)[0]
+    assert encoded.startswith("!")  # Django's unusable password: login disabled
+
+
+def test_admin_reset_password_prints_a_one_time_password_once(initialised):
+    proc = worms(initialised, "admin", "reset-password")
+    password = proc.stdout.strip()
+    assert len(password) == 20 and "\n" not in password
+    assert "shown once" in proc.stderr and password not in proc.stderr
+    encoded, must_change, is_superuser, is_staff = admin_row(initialised)[0]
+    assert check_password(password, encoded) and password not in encoded
+    assert must_change and is_superuser and is_staff
+
+    # A changed (real) password is only replaced after confirmation.
+    sql(initialised, "UPDATE users SET must_change_password = false WHERE username = 'admin'", role=MIGRATOR)
+    refused = worms(initialised, "admin", "reset-password", check=False)
+    assert refused.returncode != 0 and admin_row(initialised)[0][0] == encoded
+    again = worms(initialised, "admin", "reset-password", "--yes").stdout.strip()
+    assert again != password and check_password(again, admin_row(initialised)[0][0])
+
+
+def test_admin_reset_password_creates_a_missing_admin(initialised):
+    sql(initialised, "DELETE FROM users WHERE username = 'admin'", role=MIGRATOR)
+    assert worms(initialised, "admin", "reset-password").stdout.strip()
+    assert admin_row(initialised)[0][1:] == (True, True, True)
+
+
+def test_admin_reset_password_never_promotes_a_student(initialised):
+    sql(initialised, "INSERT INTO users (uuid, password, is_superuser, username, is_staff, is_active, "
+        "date_joined, first_name, last_name, email, must_change_password, created_at) VALUES "
+        "(gen_random_uuid(), 'x', false, 'stud@x', false, true, now(), '', '', 'stud@x', false, now())",
+        role=MIGRATOR)  # fmt: skip
+    proc = worms(initialised, "admin", "reset-password", "--username", "stud@x", "--yes", check=False)
+    assert proc.returncode != 0 and "not an admin account" in proc.stderr
+    assert sql(initialised, "SELECT is_superuser, password FROM users WHERE username = 'stud@x'") == [(False, "x")]

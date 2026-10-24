@@ -12,6 +12,7 @@ set (it then runs the build steps over SSH).
     worms status                      # components, internet, competition, rounds
     worms teams [create|rename|delete]
     worms users / worms leaderboard
+    worms admin reset-password        # one-time password for the dashboard admin
     worms simulate                    # end-to-end simulation (was make simulate)
     worms test                        # the offline test suite (was make test)
     worms debug <host>                # Ansible connection diagnostics
@@ -259,6 +260,30 @@ def cmd_users(config, args) -> int:
     return 0
 
 
+def cmd_admin(config, args) -> int:
+    """`worms admin reset-password`: a new one-time password for the dashboard
+    admin, printed once here (stdout), never stored (manage.py
+    reset_admin_password)."""
+    _with_db(config)
+    from core.models.user import User
+    from django.core.management import call_command
+    from django.core.management.base import CommandError
+
+    admin = User.objects.filter(username=args.username).first()
+    if admin is not None and admin.has_usable_password() and not admin.must_change_password:
+        if not build.confirm(f"Replace {args.username!r}'s password and end its sessions?", args.yes):
+            return 1
+    if args.dry_run:
+        print(output.color(f"(dry run) would set a one-time password for {args.username!r}", "yellow"))
+        return 0
+    try:
+        call_command("reset_admin_password", username=args.username)
+    except CommandError as exc:
+        output.error(str(exc))
+        return 1
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # leaderboard
 # ---------------------------------------------------------------------------
@@ -392,6 +417,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("users", help="all users: team, login status, one-time password")
     sub.add_parser("leaderboard", help="the production leaderboard, in the console")
 
+    p_admin = sub.add_parser("admin", help="the dashboard admin account")
+    admin_sub = p_admin.add_subparsers(dest="admin_action", required=True)
+    p_reset_pw = admin_sub.add_parser("reset-password", help="new one-time password, printed once (created if missing)")
+    p_reset_pw.add_argument("--username", default="admin")
+    p_reset_pw.add_argument("--yes", action="store_true", help="skip confirmation")
+
     p_build = sub.add_parser("build", help="full pipeline, or one component (--list)")
     p_build.add_argument("component", nargs="?", help="component to build (default: all)")
     p_build.add_argument("--list", action="store_true", help="list components and exit")
@@ -428,6 +459,8 @@ def main(argv=None) -> int:
         return cmd_users(config, args)
     if args.command == "leaderboard":
         return cmd_leaderboard(config, args)
+    if args.command == "admin":
+        return cmd_admin(config, args)
     if args.command == "build":
         return cmd_build(config, args)
     if args.command == "simulate":

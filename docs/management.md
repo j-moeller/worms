@@ -18,6 +18,7 @@ worms teams create "Neural Net"
 worms teams rename "Old" "New"
 worms teams delete "Neural Net"   # users are NOT affected
 worms users                       # all users: team, login, one-time password
+worms admin reset-password        # one-time password for the dashboard admin (printed once)
 worms leaderboard                 # the production leaderboard, in the console
 worms build                       # full idempotent end-to-end setup (= make)
 worms build firewall              # one component; `worms build --list`

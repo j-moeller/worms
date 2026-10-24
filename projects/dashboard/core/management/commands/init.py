@@ -1,24 +1,23 @@
 """Idempotent database initialisation: the admin account and the default
 competition.
 
-Run once as part of provisioning (the orchestrator, after the migrations) and
-safe to re-run: it creates what is missing and changes nothing that is already
-there. It never prints or hardcodes the admin password -- that comes from the
-environment (the Ansible vault delivers it, like every other secret).
+Run as part of provisioning (the orchestrator, after the migrations) and safe
+to re-run: it creates what is missing and changes nothing that is already
+there.
 
     manage.py init                       # admin + default "WORMS <year>"
     manage.py init --competition "WORMS 2026"
     manage.py init --admin-username admin
 
+The admin account is created with login disabled (no password). Give it a
+one-time password with `worms admin reset-password` (manage.py
+reset_admin_password): printed once on that terminal, changed at the first
+login.
+
 Writes (users, competitions, application_setting) go through the `migrator`
 database connection when it is configured (the orchestrator has it; the
 least-privilege application role cannot create these rows), otherwise through
 the default connection (DEBUG / sqlite).
-
-The admin password is read from DJANGO_ADMIN_PASSWORD (preferred) or
-DJANGO_SUPERUSER_PASSWORD. With neither set the admin user is still created
-with an unusable password (login disabled) so the step stays idempotent; set
-the password in the vault and re-run to enable it.
 """
 
 import os
@@ -92,9 +91,6 @@ class Command(BaseCommand):
                 self.stdout.write(f"admin: {username} already present")
             return
 
-        password = os.environ.get("DJANGO_ADMIN_PASSWORD") or os.environ.get(
-            "DJANGO_SUPERUSER_PASSWORD"
-        )
         admin = User(
             username=username,
             email=email,
@@ -102,16 +98,12 @@ class Command(BaseCommand):
             is_superuser=True,
             is_active=True,
         )
-        if password:
-            admin.set_password(password)
-        else:
-            admin.set_unusable_password()
-            self.stderr.write(
-                "admin: no DJANGO_ADMIN_PASSWORD set; created with login "
-                "disabled. Set the password in the vault and re-run."
-            )
+        admin.set_unusable_password()
         admin.save(using=using)
-        self.stdout.write(f"admin: created {username} (is_staff=True, is_superuser=True)")
+        self.stdout.write(
+            f"admin: created {username} (is_staff=True, is_superuser=True), login disabled "
+            "until `worms admin reset-password`"
+        )
 
     # -- competition ---------------------------------------------------------
 

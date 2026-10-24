@@ -173,9 +173,8 @@ Three features added on top of the above; full design in `docs/accounts.md`,
 `docs/management.md` and `docs/devbox.md`.
 
 - **Accounts.** `manage.py init` (idempotent) creates the `admin` account
-  (is_staff + superuser; password from the vault key
-  `vault_django_admin_password`, delivered to the orchestrator and applied
-  after the migrations) and the default competition `WORMS <year>`.
+  (is_staff + superuser, login disabled; `worms admin reset-password` prints
+  a one-time password once) and the default competition `WORMS <year>`.
   `manage.py create_users` imports students from a CSV with one-time passwords;
   `must_change_password` (migration 0008/0010) + `ForcePasswordChangeMiddleware`
   force a change on first login. The public dashboard role is granted only

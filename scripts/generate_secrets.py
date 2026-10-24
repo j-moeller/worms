@@ -43,9 +43,6 @@ GENERATED_PASSWORDS = {
     "vault_dbuser_scoring_password": 24,
     "vault_round_agent_db_password": 24,
     "vault_pki_ca_passphrase": 24,
-    # Dashboard admin account (manage.py init); is_staff + superuser. Delivered
-    # to the orchestrator, which creates the account after the migrations.
-    "vault_django_admin_password": 24,
 }
 GENERATED_SECRET_KEYS = {
     "vault_dashboard_secret_key": 64,  # Django SECRET_KEY

@@ -1,4 +1,5 @@
 #cloud-config
+ssh_pwauth: false
 
 hostname: ${hostname}
 
@@ -30,4 +31,7 @@ packages:
 
 runcmd:
   - systemctl enable fail2ban
+  # SSH hardening (worms): key-only, no passwords, root only via the provisioned key.
+  - printf 'PermitRootLogin prohibit-password\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nChallengeResponseAuthentication no\nPubkeyAuthentication yes\nPermitEmptyPasswords no\n' > /etc/ssh/sshd_config.d/10-worms-hardening.conf
+  - systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
   - echo "done" > /tmp/cloud-config.done

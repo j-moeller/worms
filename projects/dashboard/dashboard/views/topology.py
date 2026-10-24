@@ -25,27 +25,20 @@ def analyzed(snapshot: TopologySnapshot) -> dict:
     return _cache[key]
 
 
-# TODO
-# PASSWORD
-# @login_required
+@login_required
 def topology(request: HttpRequest):
     # Firewall rules and addressing are sensitive: staff only.
-
-    # TODO:
-    # IMPORTANT:
-    # if not request.user.is_staff:
-    #     return redirect("index")
+    if not request.user.is_staff:
+        return redirect("index")
 
     return render_with_base_info(request, "topology.html")
 
 
-# TODO
-# PASSWORD
-# @login_required
 @never_cache
+@login_required
 def topology_data(request: HttpRequest):
-    # if not request.user.is_staff:
-    #     return JsonResponse({"error": "Forbidden"}, status=403)
+    if not request.user.is_staff:
+        return JsonResponse({"error": "Forbidden"}, status=403)
 
     snapshot = TopologySnapshot.objects.filter(source="proxmox").first()
     if snapshot is None or snapshot.collected_at is None:

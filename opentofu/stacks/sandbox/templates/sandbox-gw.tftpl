@@ -11,7 +11,20 @@ ssh_authorized_keys:
   - ${key}
 %{ endfor ~}
 
+ssh_pwauth: false
+
 write_files:
+  # SSH hardening (worms): key-only, no passwords, root only via the key.
+  - path: /etc/ssh/sshd_config.d/10-worms-hardening.conf
+    permissions: "0644"
+    content: |
+      PermitRootLogin prohibit-password
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      ChallengeResponseAuthentication no
+      PubkeyAuthentication yes
+      PermitEmptyPasswords no
+
   - path: /etc/sysctl.d/90-sandbox-gw.conf
     content: |
       net.ipv4.ip_forward = 1
@@ -63,6 +76,7 @@ write_files:
       }
 
 runcmd:
+  - systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
   - sysctl --system
   - systemctl enable --now nftables
   - nft -f /etc/nftables.conf

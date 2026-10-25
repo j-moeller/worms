@@ -146,9 +146,9 @@ html[data-env="dev"] {
 
 /* Two lines — label on top, countdown below — so the badge stays narrow. */
 .site-status { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 12px; border: var(--border-w) solid var(--border); border-radius: var(--radius); background: var(--surface); font-size: .72rem; line-height: 1.3; }
-.site-status__line { display: inline-flex; align-items: center; gap: 7px; }
-.site-status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
-.site-status.is-warning .dot { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 25%, transparent); }
+.site-status__line { display: inline-flex; align-items: center; gap: 6px; line-height: 1; }
+.site-status .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok) 22%, transparent); position: relative; top: -0.5px; }
+.site-status.is-warning .dot { background: var(--warn); box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 22%, transparent); }
 .site-status.is-finished .dot { background: var(--faint); box-shadow: none; }
 .site-status__label { font-weight: 600; letter-spacing: .03em; }
 .site-status__time { color: var(--muted); padding-left: 15px; }  /* aligned under the label, clear of the dot */

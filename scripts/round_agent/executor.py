@@ -13,6 +13,7 @@ OpenTofu stacks and scripts are in the tree.
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -118,12 +119,21 @@ class Executor:
     def read_json(self, path):
         return json.loads(Path(path).read_text() or "{}")
 
+    @staticmethod
+    def remote_command(argv) -> str:
+        """The command line ssh sends for `argv`. ssh does not pass an
+        argument list: it joins its arguments with spaces and the VM's login
+        shell parses the result again. Quoting every argument makes that shell
+        rebuild exactly `argv` (shlex.split(remote_command(argv)) == argv);
+        unquoted, `sh -c "base64 -d > f"` would arrive as `sh -c base64 -d > f`."""
+        return shlex.join(str(a) for a in argv)
+
     def ssh(self, host, argv, input=None, timeout=120):
-        """Run a command on a VM. `argv` is a list; it is passed as separate
-        arguments to ssh (no local shell), so values in it are not reparsed by
-        a shell on this side. Secrets go through `input` (stdin), never argv."""
+        """Run `argv` on a VM, exactly as given (remote_command quotes it for
+        the VM's shell; no local shell is involved either). Secrets go
+        through `input` (stdin), never argv."""
         return self.run(
-            ["ssh", *SSH_OPTS, f"{self.ssh_user}@{host}", "--", *argv],
+            ["ssh", *SSH_OPTS, f"{self.ssh_user}@{host}", "--", self.remote_command(argv)],
             input=input,
             timeout=timeout,
         )

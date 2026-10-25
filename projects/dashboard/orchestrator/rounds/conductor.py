@@ -72,12 +72,23 @@ class Conductor:
     def fail(self, run, message):
         log.warning("run %s failed: %s", run.uuid, message)
         RunEvent.objects.create(run=run, kind=RunEvent.Kind.ERROR, data={"message": message[:500]})
+        now = self.now()
+        fields = {"error": message[:2000], "finished_at": now}
         # Tear the sandbox down unless prepare never built one.
-        if run.state in (RoundRun.State.PENDING, RoundRun.State.PREPARING):
-            self.set_state(run, RoundRun.State.FAILED, error=message[:2000], finished_at=self.now())
-        else:
+        if run.state not in (RoundRun.State.PENDING, RoundRun.State.PREPARING):
+            # Nothing may score after the failure: stop the VMs (best effort;
+            # the failure may be power control itself) and close the run's
+            # capture window now rather than at its planned end.
+            for vm in run.virtual_machines.all():
+                try:
+                    self.power.stop(vm)
+                except Exception:  # noqa: BLE001  (best effort; teardown follows)
+                    log.warning("run %s: could not stop %s", run.uuid, vm.vm_identifier)
+            if run.ends_at is not None and run.ends_at > now:
+                fields["ends_at"] = now
             self.request_job(run, HostJob.Kind.TEARDOWN)
-            self.set_state(run, RoundRun.State.FAILED, error=message[:2000])
+        # The next run waits for that teardown (_teardown_pending).
+        self.set_state(run, RoundRun.State.FAILED, **fields)
 
     def request_job(self, run, kind, **params):
         job = HostJob.objects.create(run=run, kind=kind, params=params)
@@ -222,7 +233,10 @@ class Conductor:
             return run.state == RoundRun.State.FAILED
         self._apply_released(run, result.get("released", []))
         timing = self.timing(run)
-        start = self.now() + timedelta(seconds=timing["worm_start_delay"])
+        # The fuse was lit when the agent armed it (its clock), not when this
+        # loop noticed the job was done.
+        start = self._armed_at(result) or self.now()
+        start += timedelta(seconds=timing["worm_start_delay"])
         RunEvent.objects.create(run=run, kind=RunEvent.Kind.WORM_DEPLOYED, data={"worm_start_at": start.isoformat()})
         for step in self._initial_secret_steps(run):
             step.state = GamePlanStep.State.DONE
@@ -271,19 +285,21 @@ class Conductor:
         self.set_state(run, RoundRun.State.FINISHED, finished_at=self.now())
         return True
 
-    # FAILED still has to finish its teardown job before the next run starts.
-    def _in_failed(self, run):
-        job = self.active_job(run, HostJob.Kind.TEARDOWN)
-        if job is None:
-            run.finished_at = run.finished_at or self.now()
-            run.save(update_fields=["finished_at"])
-            return False
-        if job.state in (HostJob.State.DONE, HostJob.State.FAILED):
-            if not run.finished_at:
-                run.finished_at = self.now()
-                run.save(update_fields=["finished_at"])
-            return False
-        return False
+    def _armed_at(self, result):
+        """The deploy job's `armed_at` if it is a sane timestamp (it comes
+        from the host: not in the future, at most a job timeout old)."""
+        from django.utils.dateparse import parse_datetime
+
+        try:
+            armed = parse_datetime(str(result.get("armed_at") or ""))
+        except ValueError:
+            return None
+        if armed is None or timezone.is_naive(armed):
+            return None
+        now = self.now()
+        if armed > now + timedelta(seconds=5) or now - armed > timedelta(seconds=self.cfg["job_timeout"]):
+            return None
+        return armed
 
     # -- game plan ------------------------------------------------------------
 

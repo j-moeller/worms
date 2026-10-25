@@ -636,3 +636,162 @@ def test_attempt_processing_commands(one_run, command):
         args.append("--once")
     call_command(command, *args)
     assert FlagCapture.objects.filter(team=one_run["team"], vm=vm).count() == 1
+
+
+# --- deploy timing, failure, late releases (docs/rounds.md) ------------------------
+
+
+def _to_deploying(conductor, run):
+    from core.models.rounds import RoundRun
+
+    for _ in range(6):
+        conductor.tick()
+        run.refresh_from_db()
+        if run.state == RoundRun.State.DEPLOYING:
+            return
+        fake_agent(run, sha)
+    raise AssertionError(run.state)
+
+
+def _running(one_run):
+    from core.models.rounds import RoundRun
+
+    run = one_run["run"]
+    power, clock = FakePower(), Clock()
+    conductor = make_conductor(power, clock)
+    for _ in range(6):
+        conductor.tick()
+        fake_agent(run, sha)
+        run.refresh_from_db()
+        if run.state == RoundRun.State.ARMED:
+            break
+    clock.advance(11)
+    conductor.tick()
+    run.refresh_from_db()
+    assert run.state == RoundRun.State.RUNNING
+    return run, power, clock, conductor
+
+
+def test_the_worm_start_is_dated_from_when_the_agent_armed_it(one_run):
+    """The fuse starts on the VM when the agent arms it, not when the conductor
+    notices the deploy job is done (that lag cost early captures)."""
+    from core.models.rounds import HostJob, RoundRun
+    from django.utils import timezone
+
+    run = one_run["run"]
+    power, clock = FakePower(), Clock()
+    conductor = make_conductor(power, clock)
+    _to_deploying(conductor, run)
+    armed = clock.now() - timezone.timedelta(seconds=4)
+    job = run.jobs.get(kind=HostJob.Kind.DEPLOY)
+    job.state, job.result = HostJob.State.DONE, {"released": [], "armed_at": armed.isoformat()}
+    job.save()
+    conductor.tick()
+    run.refresh_from_db()
+    assert run.state == RoundRun.State.ARMED
+    assert run.worm_start_at == armed + timezone.timedelta(seconds=10)  # worm_start_delay in make_conductor
+    assert run.ends_at == run.worm_start_at + timezone.timedelta(seconds=600)
+
+
+@pytest.mark.parametrize("armed_at", ["", "yesterday", "2000-01-01T00:00:00+00:00", "2999-01-01T00:00:00+00:00",
+                                      "2026-01-01T00:00:00"])  # fmt: skip
+def test_an_implausible_armed_at_is_ignored(one_run, armed_at):
+    from core.models.rounds import HostJob
+    from django.utils import timezone
+
+    run = one_run["run"]
+    power, clock = FakePower(), Clock()
+    conductor = make_conductor(power, clock)
+    _to_deploying(conductor, run)
+    job = run.jobs.get(kind=HostJob.Kind.DEPLOY)
+    job.state, job.result = HostJob.State.DONE, {"released": [], "armed_at": armed_at}
+    job.save()
+    conductor.tick()
+    run.refresh_from_db()
+    assert run.worm_start_at == clock.now() + timezone.timedelta(seconds=10)
+
+
+def test_a_failed_run_stops_its_vms_and_scores_no_more(one_run):
+    from core.models.rounds import HostJob, RoundRun
+    from core.models.scoring import FlagCapture, FlagCaptureAttempt
+    from orchestrator.rounds import captures
+
+    run, power, clock, conductor = _running(one_run)
+    clock.advance(30)
+    conductor.fail(run, "power control: boom")
+    run.refresh_from_db()
+    assert run.state == RoundRun.State.FAILED and run.finished_at == clock.now()
+    assert run.ends_at == clock.now()
+    assert set(power.stopped) == set(run.virtual_machines.values_list("vm_identifier", flat=True))
+    assert run.jobs.filter(kind=HostJob.Kind.TEARDOWN, state=HostJob.State.QUEUED).exists()
+    # A flag submitted after the failure (and its grace) does not count.
+    vm = run.virtual_machines.get(vm_identifier=run.sandbox_params["start_vm"])
+    FlagCaptureAttempt.objects.create(team_uuid=str(one_run["team"].uuid), vm_flag_hash=vm.ctf_flag_hash,
+                                      created_at=clock.now() + clock_delta(conductor.cfg["capture_grace"] + 1))  # fmt: skip
+    captures.process_flags(conductor.cfg["capture_grace"])
+    assert not FlagCapture.objects.filter(vm=vm).exists()
+
+
+def clock_delta(seconds):
+    from django.utils import timezone
+
+    return timezone.timedelta(seconds=seconds)
+
+
+def test_a_flag_submitted_before_its_hash_was_stored_still_counts(one_run):
+    """The agent writes a secret into the VM before the conductor stores its
+    hash; a worm quick enough to submit in between is credited afterwards."""
+    from core.models.rounds import RunEvent
+    from core.models.scoring import FlagCapture, FlagCaptureAttempt
+    from django.utils import timezone
+    from orchestrator.rounds import captures
+
+    run, power, clock, conductor = _running(one_run)
+    vm = run.virtual_machines.filter(ctf_flag_hash__isnull=True).first()
+    secret_hash = sha("delayed-" + vm.vm_identifier)
+    submitted = FlagCaptureAttempt.objects.create(
+        team_uuid=str(one_run["team"].uuid), vm_flag_hash=secret_hash, created_at=clock.now()
+    )
+    captures.process_flags(conductor.cfg["capture_grace"])  # no VM has this hash yet
+    submitted.refresh_from_db()
+    assert submitted.processed and not FlagCapture.objects.filter(vm=vm).exists()
+
+    vm.ctf_flag_hash, vm.secret_released_at = secret_hash, timezone.now()  # the release job's result arrives
+    vm.save()
+    assert captures.process_late_releases(conductor.cfg["capture_grace"]) == 1
+    capture = FlagCapture.objects.get(vm=vm)
+    assert capture.flag_capture_attempt_id == submitted.id and capture.team == one_run["team"]
+    assert run.events.filter(kind=RunEvent.Kind.CAPTURED, vm=vm).exists()
+    assert captures.process_late_releases(conductor.cfg["capture_grace"]) == 0  # once
+
+
+def test_late_releases_never_credit_another_team(one_run):
+    import uuid as uuidlib
+
+    from core.models.scoring import FlagCapture, FlagCaptureAttempt
+    from django.utils import timezone
+    from orchestrator.rounds import captures
+
+    run, power, clock, conductor = _running(one_run)
+    vm = run.virtual_machines.filter(ctf_flag_hash__isnull=True).first()
+    secret_hash = sha("other-" + vm.vm_identifier)
+    FlagCaptureAttempt.objects.create(team_uuid=str(uuidlib.uuid4()), vm_flag_hash=secret_hash,
+                                      created_at=clock.now(), processed=True)  # fmt: skip
+    vm.ctf_flag_hash, vm.secret_released_at = secret_hash, timezone.now()
+    vm.save()
+    assert captures.process_late_releases(conductor.cfg["capture_grace"]) == 0
+    assert not FlagCapture.objects.filter(vm=vm).exists()
+
+
+def test_a_submission_just_before_the_dated_start_counts(one_run):
+    """The start is dated by the host's clock, submissions by the database's:
+    the grace applies at the start as at the end."""
+    from core.models.scoring import FlagCapture, FlagCaptureAttempt
+    from orchestrator.rounds import captures
+
+    run, power, clock, conductor = _running(one_run)
+    vm = run.virtual_machines.get(vm_identifier=run.sandbox_params["start_vm"])
+    FlagCaptureAttempt.objects.create(team_uuid=str(one_run["team"].uuid), vm_flag_hash=vm.ctf_flag_hash,
+                                      created_at=run.worm_start_at - clock_delta(20))  # fmt: skip
+    captures.process_flags(conductor.cfg["capture_grace"])
+    assert FlagCapture.objects.filter(vm=vm).count() == 1

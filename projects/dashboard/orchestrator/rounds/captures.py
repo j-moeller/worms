@@ -62,9 +62,13 @@ def _team_objects_by_uuid(uuids):
 
 
 def _live(run, ts, grace):
+    """Whether `ts` (the database's clock) falls in the run's window. The grace
+    applies at both ends: the worm's start is dated by the Proxmox host's clock
+    (the deploy job), and before it starts nothing of the team runs in the
+    sandbox, so an early margin credits nothing it should not."""
     if run is None or run.worm_start_at is None or run.ends_at is None:
         return False
-    return run.worm_start_at <= ts <= run.ends_at + grace
+    return run.worm_start_at - grace <= ts <= run.ends_at + grace
 
 
 def process_flags(grace_seconds=120, batch=500):
@@ -102,6 +106,50 @@ def process_flags(grace_seconds=120, batch=500):
                 captured += 1
             attempt.processed, attempt.processed_at = True, now
             attempt.save(update_fields=["processed", "processed_at"])
+    return captured
+
+
+def process_late_releases(grace_seconds=120, recent_seconds=900):
+    """Credit submissions that came in before their flag's hash was known.
+
+    A secret is written into its VM by the round agent, and its hash reaches
+    the VM row only when the conductor reads the job's result -- seconds
+    later. A worm that submits the fresh flag in between is processed against
+    no VM and marked processed. So for every VM whose secret was released
+    recently, look for that team's processed, uncredited submissions of
+    exactly this hash within the run's window and credit the earliest. Run by
+    the same single writer as process_flags (manage.py process_attempts)."""
+    grace = timedelta(seconds=grace_seconds)
+    since = timezone.now() - timedelta(seconds=recent_seconds)
+    vms = VirtualMachine.objects.filter(
+        secret_released_at__gte=since, ctf_flag_hash__isnull=False, run__isnull=False
+    ).select_related("run", "run__team")
+    captured = 0
+    for vm in vms:
+        run = vm.run
+        team_id = run.team_id
+        if run.worm_start_at is None or run.ends_at is None:
+            continue
+        if FlagCapture.objects.filter(team_id=team_id, vm=vm).exists():
+            continue
+        attempt = (
+            FlagCaptureAttempt.objects.filter(
+                team_uuid=str(run.team.uuid), vm_flag_hash=vm.ctf_flag_hash, devbox=False, processed=True,
+                created_at__gte=run.worm_start_at - grace, created_at__lte=run.ends_at + grace,
+                flag_captures__isnull=True,
+            )
+            .order_by("created_at", "id")
+            .first()
+        )  # fmt: skip
+        if attempt is None:
+            continue
+        with transaction.atomic():
+            FlagCapture.objects.create(team_id=team_id, round=vm.round, vm=vm, flag_capture_attempt=attempt)
+            RunEvent.objects.create(
+                run=run, ts=attempt.created_at, kind=RunEvent.Kind.CAPTURED, vm=vm,
+                data={"team": team_id, "attempt": attempt.id},
+            )  # fmt: skip
+        captured += 1
     return captured
 
 

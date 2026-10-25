@@ -14,6 +14,7 @@ import base64
 import hashlib
 import secrets
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 from round_agent import validation
@@ -21,7 +22,20 @@ from round_agent import validation
 FLAG_PATH = "/etc/worms/flag"
 WORM_DIR = "/home/debian"
 WORM_ZIP = "user-worm.zip"
+# The zip is unpacked here; the worm is `python3 main.py` run in this
+# directory (docs/worm-contract.md).
+WORM_CODE = "worm"
+WORM_ENTRY = "main.py"
 WORM_UNIT = "worms-start"
+# Unpack with Python's zipfile (python3 is in every Debian cloud image -- cloud-
+# init and Ansible need it; unzip is not installed). It keeps every entry
+# inside the target directory (absolute paths and `..` are stripped) and
+# writes symlinks as plain files.
+UNPACK = (
+    "set -e; cd {dir}; rm -rf {code}; mkdir {code}; "
+    "python3 -m zipfile -e {zip} {code}; "
+    "test -f {code}/{entry} || {{ echo 'the upload has no {entry} at its top level' >&2; exit 3; }}"
+)
 CURRENT_TEAM_FILE = "/etc/sandbox-api/current-team"
 DEVBOX_TEAMS_FILE = "/etc/sandbox-api/devbox-teams"
 DEVBOX_GENERATED = "opentofu/stacks/devbox/generated_devboxes.tf"
@@ -75,7 +89,8 @@ def _release(ex, cfg, vm_names):
         secret = f"FLAG{{{secrets.token_hex(16)}}}"
         ex.ssh(
             info["maintenance_ip"],
-            ["sudo", "install", "-m", "0444", "/dev/stdin", FLAG_PATH],
+            # -D: /etc/worms does not exist in a fresh VM.
+            ["sudo", "install", "-D", "-m", "0444", "/dev/stdin", FLAG_PATH],
             input=secret,
         )
         released.append({"vm": name, "flag_hash": hashlib.sha256(secret.encode()).hexdigest()})
@@ -165,24 +180,36 @@ def deploy(ex, cfg, params):
     # survives the text channel and never appears on a command line.
     ex.ssh(
         start_ip,
-        ["/bin/sh", "-c", f'base64 -d > {WORM_DIR}/{WORM_ZIP}'],
+        ["/bin/sh", "-c", f"base64 -d > {WORM_DIR}/{WORM_ZIP}"],
         input=base64.b64encode(artifact).decode("ascii"),
+    )
+    # Unpack it now, so a broken upload fails the deploy with a reason
+    # instead of a worm that never starts.
+    ex.ssh(
+        start_ip,
+        ["/bin/sh", "-c", UNPACK.format(dir=WORM_DIR, code=WORM_CODE, zip=WORM_ZIP, entry=WORM_ENTRY)],
     )
 
     released = _release(ex, cfg, params["initial_secrets"])
 
-    # Arm a one-shot systemd timer on the VM: after worm_delay it unzips and
-    # runs the worm as the sandbox user. The command is a fixed literal.
+    # Arm a one-shot systemd timer on the VM: after worm_delay it runs the
+    # worm as the sandbox user, in its directory. No shell: fixed literals.
     delay = params["worm_delay"]
     ex.ssh(
         start_ip,
         [
             "sudo", "systemd-run", f"--on-active={delay}", f"--unit={WORM_UNIT}",
-            "--working-directory", WORM_DIR, "--uid", ex.ssh_user,
-            "/bin/sh", "-lc", f"unzip -o {WORM_ZIP} && python3 main.py",
+            "--working-directory", f"{WORM_DIR}/{WORM_CODE}", "--uid", ex.ssh_user,
+            "/usr/bin/python3", WORM_ENTRY,
         ],
     )
-    return {"released": released, "start_vm": start, "worm_delay": delay, "team_uuid": params["team_uuid"]}
+    # When the fuse was lit (the host's clock): the conductor dates the worm's
+    # start from this, not from when it noticed the job was done.
+    armed_at = datetime.now(timezone.utc).isoformat()
+    return {
+        "released": released, "start_vm": start, "worm_delay": delay,
+        "team_uuid": params["team_uuid"], "armed_at": armed_at,
+    }  # fmt: skip
 
 
 def _set_current_team(ex, cfg, uuid):
@@ -198,11 +225,20 @@ def _set_current_team(ex, cfg, uuid):
         )
 
 
+def _clear_current_team(ex, cfg):
+    """No run is active: scoring and logging refuse round submissions again
+    (no file = no active round) instead of recording the last team's uuid."""
+    for host in (cfg.get("scoring_host"), cfg.get("logging_host")):
+        if host:
+            ex.ssh(host, ["sudo", "rm", "-f", CURRENT_TEAM_FILE])
+
+
 def release_secrets(ex, cfg, params):
     return {"released": _release(ex, cfg, params["vms"])}
 
 
 def teardown(ex, cfg, params):
+    _clear_current_team(ex, cfg)
     ex.tofu("sandbox", "destroy", "-auto-approve", "-input=false", timeout=cfg.get("apply_timeout", 5400))
     ex.worms("inventory", timeout=300)
     return {"destroyed": True}
@@ -251,7 +287,7 @@ def _devbox_vms(ex):
 def _write_devbox_token(ex, maintenance_ip):
     """Generate a token, write it into a devbox VM, return its SHA-256."""
     secret = f"FLAG{{{secrets.token_hex(16)}}}"
-    ex.ssh(maintenance_ip, ["sudo", "install", "-m", "0444", "/dev/stdin", FLAG_PATH], input=secret)
+    ex.ssh(maintenance_ip, ["sudo", "install", "-D", "-m", "0444", "/dev/stdin", FLAG_PATH], input=secret)
     return hashlib.sha256(secret.encode()).hexdigest()
 
 

@@ -1,10 +1,11 @@
 """Turn the sandbox APIs' pending attempts into captures and logs, once.
 
-This is the same pass the conductor runs on every tick
-(orchestrator/rounds/captures.py); the command exists so it can be triggered
-on demand -- by the simulation (ansible/Simulate.yml), or by an operator --
-without waiting for the conductor's loop. Safe to run any time: it only
-processes attempts not yet processed, and a VM counts once per team.
+This is the same pass the attempt processor daemon runs continuously
+(`manage.py process_attempts`, orchestrator/rounds/captures.py); the command
+exists so it can be triggered on demand -- by the simulation
+(ansible/Simulate.yml), or by an operator -- without waiting for that loop.
+Safe to run any time: it only processes attempts not yet processed, and a VM
+counts once per team.
 
     manage.py process_captures
 """
@@ -22,5 +23,6 @@ class Command(BaseCommand):
 
     def handle(self, grace, **options):
         flags = captures.process_flags(grace_seconds=grace)
+        flags += captures.process_late_releases(grace_seconds=grace)
         logs = captures.process_logs(grace_seconds=grace)
         self.stdout.write(f"captures: {flags}, logs: {logs}")

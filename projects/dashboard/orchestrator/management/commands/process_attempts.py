@@ -36,6 +36,8 @@ class Command(BaseCommand):
 
     def pass_once(self, grace):
         flags = captures.process_flags(grace_seconds=grace)
+        # Submissions that arrived before their flag's hash was stored.
+        flags += captures.process_late_releases(grace_seconds=grace)
         logs = captures.process_logs(grace_seconds=grace)
         # Devbox attempts (always-on, source-attributed; docs/devbox.md).
         dev_flags = captures.process_devbox_flags()

@@ -537,3 +537,155 @@ def test_round_agent_unit_wraps_an_ssh_agent(render, tmp_path):
     if shutil.which("systemd-analyze"):
         proc = subprocess.run(["systemd-analyze", "verify", "--man=no", str(path)], capture_output=True, text=True)
         assert "ExecStart" not in proc.stderr, proc.stderr
+
+
+# --- the remote side: what ssh really runs on a VM ---------------------------------
+#
+# ssh does not pass an argument list: it joins its arguments into one command
+# line and the VM's login shell parses it again (`sh -c "<line>"`). The fake
+# executor above records argv lists and so hid that the deploy's copy and fuse
+# commands were re-split on the VM. These tests run the very line ssh would
+# send through a real shell.
+
+
+def _remote_shell(line, input=None, cwd=None):
+    """What sshd does with the command line it receives."""
+    import subprocess
+
+    return subprocess.run(["/bin/sh", "-c", line], input=input, cwd=cwd, capture_output=True, text=True)
+
+
+def _zip(entries):
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, data in entries.items():
+            archive.writestr(name, data)
+    return buffer.getvalue()
+
+
+def test_ssh_sends_one_line_the_remote_shell_splits_back_into_argv(monkeypatch):
+    import shlex
+
+    from round_agent.executor import SSH_OPTS, Executor
+
+    ex = Executor("/nonexistent")
+    sent = {}
+    monkeypatch.setattr(ex, "run", lambda argv, input=None, timeout=None: sent.setdefault("argv", argv))
+    argv = ["/bin/sh", "-c", "base64 -d > /home/debian/user-worm.zip"]
+    ex.ssh("10.4.0.10", argv)
+    assert sent["argv"][: len(SSH_OPTS) + 1] == ["ssh", *SSH_OPTS]
+    assert sent["argv"][-2:] == ["--", "/bin/sh -c 'base64 -d > /home/debian/user-worm.zip'"]
+    assert shlex.split(sent["argv"][-1]) == argv
+
+
+def test_every_deploy_command_reaches_the_vm_unchanged():
+    import shlex
+
+    from round_agent.executor import Executor
+
+    ex = FakeExecutor()
+    ex.artifact_bytes = _zip({"main.py": "print('hi')\n"})
+    handlers.deploy(ex, CFG, _deploy_params(ex))
+    for call in ex.ssh_calls:
+        assert shlex.split(Executor.remote_command(call["argv"])) == [str(a) for a in call["argv"]]
+
+
+def _deploy_params(ex, delay=120):
+    return validation.validate("deploy", {
+        "start_vm": "sandbox-a", "team_uuid": "11111111-2222-3333-4444-555555555555",
+        "artifact": {"storage_key": "malware-artifacts/aa/bb/" + "c" * 64 + ".zip",
+                     "content_hash": hashlib.sha256(ex.artifact_bytes).hexdigest()},
+        "initial_secrets": ["sandbox-a"], "worm_delay": delay,
+    })  # fmt: skip
+
+
+def _replay_on_the_vm(ex, home, start_ip="10.4.0.10"):
+    """Run the deploy's copy and unpack commands as the start VM would, with
+    the VM's home directory at `home`. Returns the unpack result."""
+    from round_agent.executor import Executor
+
+    calls = [c for c in ex.ssh_calls if c["host"] == start_ip and c["argv"][0] == "/bin/sh"]
+    copy, unpack = calls
+    result = _remote_shell(Executor.remote_command(copy["argv"]), input=copy["input"])
+    assert result.returncode == 0, result.stderr
+    return _remote_shell(Executor.remote_command(unpack["argv"]))
+
+
+def test_the_zip_arrives_intact_and_is_unpacked(tmp_path, monkeypatch):
+    monkeypatch.setattr(handlers, "WORM_DIR", str(tmp_path))
+    ex = FakeExecutor()
+    ex.artifact_bytes = _zip({"main.py": "print('hi')\n", "lib/util.py": "x = 1\n", "../../escape": "no"})
+    result = handlers.deploy(ex, CFG, _deploy_params(ex))
+    unpack = _replay_on_the_vm(ex, tmp_path)
+    assert unpack.returncode == 0, unpack.stderr
+    assert (tmp_path / handlers.WORM_ZIP).read_bytes() == ex.artifact_bytes  # not base64 text
+    assert (tmp_path / "worm" / "main.py").read_text() == "print('hi')\n"
+    assert (tmp_path / "worm" / "lib" / "util.py").exists()
+    # Nothing outside the worm's directory.
+    assert not (tmp_path.parent / "escape").exists() and not (tmp_path / "escape").exists()
+    # The fuse runs `python3 main.py` in that directory as the sandbox user,
+    # after the delay -- no shell, nothing run at deploy time.
+    arm = next(c for c in ex.ssh_calls if "systemd-run" in c["argv"])
+    assert arm["argv"][:2] == ["sudo", "systemd-run"] and "--on-active=120" in arm["argv"]
+    assert arm["argv"][arm["argv"].index("--working-directory") + 1] == f"{tmp_path}/worm"
+    assert arm["argv"][arm["argv"].index("--uid") + 1] == "debian"
+    assert arm["argv"][-2:] == ["/usr/bin/python3", "main.py"]
+    # The conductor dates the worm's start from when the fuse was lit.
+    from datetime import datetime, timezone
+
+    armed = datetime.fromisoformat(result["armed_at"])
+    assert armed.tzinfo is not None and abs((datetime.now(timezone.utc) - armed).total_seconds()) < 60
+
+
+@pytest.mark.parametrize("entries, message", [
+    ({"worm/main.py": "x"}, "no main.py at its top level"),
+    ({"README": "x"}, "no main.py at its top level"),
+])  # fmt: skip
+def test_an_upload_without_main_py_fails_the_deploy_with_a_reason(tmp_path, monkeypatch, entries, message):
+    monkeypatch.setattr(handlers, "WORM_DIR", str(tmp_path))
+    ex = FakeExecutor()
+    ex.artifact_bytes = _zip(entries)
+    handlers.deploy(ex, CFG, _deploy_params(ex))
+    unpack = _replay_on_the_vm(ex, tmp_path)
+    assert unpack.returncode == 3 and message in unpack.stderr
+
+
+def test_a_file_that_is_not_a_zip_fails_the_unpack(tmp_path, monkeypatch):
+    monkeypatch.setattr(handlers, "WORM_DIR", str(tmp_path))
+    ex = FakeExecutor()
+    ex.artifact_bytes = b"not a zip"
+    handlers.deploy(ex, CFG, _deploy_params(ex))
+    assert _replay_on_the_vm(ex, tmp_path).returncode != 0
+
+
+def test_flags_are_written_where_no_directory_exists_yet():
+    """A fresh VM has no /etc/worms: install -D creates it (sandbox and devbox)."""
+    ex = FakeExecutor()
+    handlers.release_secrets(ex, CFG, validation.validate("release_secrets", {"vms": ["sandbox-a"]}))
+    write = next(c for c in ex.ssh_calls if "install" in c["argv"])
+    assert write["argv"][:4] == ["sudo", "install", "-D", "-m"]
+    ex = FakeExecutor()
+    handlers._write_devbox_token(ex, "10.6.0.10")
+    assert ex.ssh_calls[0]["argv"][:3] == ["sudo", "install", "-D"]
+
+
+def test_install_d_creates_the_flag_directory(tmp_path):
+    """The flag write itself, through a shell, into a path whose directory is missing."""
+    from round_agent.executor import Executor
+
+    target = tmp_path / "etc" / "worms" / "flag"
+    argv = ["install", "-D", "-m", "0444", "/dev/stdin", str(target)]
+    result = _remote_shell(Executor.remote_command(argv), input="FLAG{x}")
+    assert result.returncode == 0, result.stderr
+    assert target.read_text() == "FLAG{x}" and oct(target.stat().st_mode & 0o777) == "0o444"
+
+
+def test_teardown_clears_the_running_team():
+    """After a run, scoring and logging refuse round submissions (no current team)."""
+    ex = FakeExecutor()
+    handlers.teardown(ex, CFG, {})
+    cleared = [c for c in ex.ssh_calls if c["argv"] == ["sudo", "rm", "-f", "/etc/sandbox-api/current-team"]]
+    assert {c["host"] for c in cleared} == {"10.5.0.14", "10.5.0.15"}

@@ -29,18 +29,21 @@
       ansible.builtin.command: nft list set inet worms internet_wan
       changed_when: false
 
-    - name: List sandbox VMs
+    - name: List untrusted VMs (sandbox and devbox)
       ansible.builtin.command: pvesh get /cluster/resources --type vm --output-format json
       register: internet_vms
       changed_when: false
 
-    - name: Refuse while sandbox VMs exist
+    # Opening the internet gives every untrusted VM an indirect path out (DNS
+    # forwarding, the caches). Devbox VMs are always-on, so this also stops the
+    # window while any devbox exists, not only during a round.
+    - name: Refuse while any untrusted (sandbox or devbox) VM exists
       ansible.builtin.assert:
-        that: sandbox_vms | length == 0
-        fail_msg: "Refusing: VM(s) {{ sandbox_vms | join(', ') }} in the sandbox pool"
+        that: untrusted_vms | length == 0
+        fail_msg: "Refusing: untrusted VM(s) {{ untrusted_vms | join(', ') }} in the sandbox/devbox pool"
         quiet: true
       vars:
-        sandbox_vms: "{{ internet_vms.stdout | from_json | selectattr('pool', 'defined') | selectattr('pool', 'eq', 'sandbox') | map(attribute='vmid') | list }}"
+        untrusted_vms: "{{ internet_vms.stdout | from_json | selectattr('pool', 'defined') | selectattr('pool', 'in', ['sandbox', 'devbox']) | map(attribute='vmid') | list }}"
 
     # Flag first: from now on no sandbox can be deployed.
     - name: Create the flag directory

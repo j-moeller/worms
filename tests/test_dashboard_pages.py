@@ -123,3 +123,18 @@ def test_todos_counts_the_runs_that_deploy_an_upload(site, team_upload):  # noqa
     run_with(team, upload, "Round 1", clock.now() + timedelta(days=1))
     counts = re.findall(r"<span >(\d+)</span>", site.get("/todos/", **proxied(HOST)).content.decode())
     assert counts == ["0", "1"], counts
+
+
+def test_anonymous_requests_create_no_session(site):  # noqa: F811
+    """An anonymous, cookie-less request must not write a django_session row:
+    the dev/prod toggle is only for logged-in users, and creating a session per
+    request would fill the shared database disk (docs/security-assessment.md, D1).
+    """
+    from django.contrib.sessions.models import Session
+
+    assert Session.objects.count() == 0
+    assert site.get("/login/", **proxied(HOST)).status_code == 200
+    assert Session.objects.count() == 0
+    # A real login still gets a session (and the dev/prod flag).
+    assert login(site, HOST, f"https://{HOST}").status_code == 302
+    assert Session.objects.count() == 1

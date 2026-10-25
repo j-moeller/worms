@@ -300,8 +300,10 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "pi_apt_c
 }
 
 # Sandbox VMs (assumed root-compromised). Free traffic among the generated
-# networks (that is the experiment), plus the services bridge on the allowed
-# ports. Nothing else exists from their point of view.
+# networks (that is the experiment), plus the service hosts only (scoring,
+# logging, DNS, private internet) on the allowed ports -- never another gateway
+# or an empty address on the services bridge. Nothing else exists from their
+# point of view.
 resource "proxmox_virtual_environment_cluster_firewall_security_group" "sandbox" {
   name = "sandbox"
 
@@ -326,7 +328,7 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "sandbox"
     action  = "ACCEPT"
     proto   = "tcp"
     dport   = local.private_internet_ports.tcp
-    dest    = local.networks.services
+    dest    = join(",", local.services_hosts)
     comment = "-> services bridge (TCP, via sandbox-gw)"
   }
 
@@ -335,7 +337,7 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "sandbox"
     action  = "ACCEPT"
     proto   = "udp"
     dport   = local.private_internet_ports.udp
-    dest    = local.networks.services
+    dest    = join(",", local.services_hosts)
     comment = "-> services bridge (UDP, via sandbox-gw)"
   }
 }
@@ -368,7 +370,7 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "sandbox_
     proto   = "tcp"
     dport   = local.private_internet_ports.tcp
     source  = local.networks.sandbox_vms
-    dest    = local.networks.services
+    dest    = join(",", local.services_hosts)
     comment = "Sandbox -> services bridge (TCP)"
   }
 
@@ -378,7 +380,7 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "sandbox_
     proto   = "udp"
     dport   = local.private_internet_ports.udp
     source  = local.networks.sandbox_vms
-    dest    = local.networks.services
+    dest    = join(",", local.services_hosts)
     comment = "Sandbox -> services bridge (UDP)"
   }
 }
@@ -391,8 +393,10 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "sandbox_
 # =============================================================================
 
 # Devbox VMs (assumed root-compromised). Free traffic among a team's own devbox
-# networks, plus the services bridge on the allowed ports (via the team's
-# devbox-gw). Scoped to the devbox network, so never the sandbox network.
+# networks, plus the service hosts only (scoring, logging, DNS, private internet)
+# on the allowed ports, via the team's devbox-gw -- never another gateway or an
+# empty services address. Scoped to the devbox network, so never the sandbox
+# network.
 resource "proxmox_virtual_environment_cluster_firewall_security_group" "devbox" {
   name    = "devbox"
   comment = "Devbox VMs: own networks + services (docs/devbox.md)"
@@ -416,7 +420,7 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "devbox" 
     action  = "ACCEPT"
     proto   = "tcp"
     dport   = local.private_internet_ports.tcp
-    dest    = local.networks.services
+    dest    = join(",", local.services_hosts)
     comment = "-> services bridge (TCP, via devbox-gw)"
   }
   rule {
@@ -424,7 +428,7 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "devbox" 
     action  = "ACCEPT"
     proto   = "udp"
     dport   = local.private_internet_ports.udp
-    dest    = local.networks.services
+    dest    = join(",", local.services_hosts)
     comment = "-> services bridge (UDP, via devbox-gw)"
   }
 }
@@ -457,7 +461,7 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "devbox_g
     proto   = "tcp"
     dport   = local.private_internet_ports.tcp
     source  = local.networks.devbox_vms
-    dest    = local.networks.services
+    dest    = join(",", local.services_hosts)
     comment = "Devbox -> services bridge (TCP)"
   }
   rule {
@@ -466,7 +470,7 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "devbox_g
     proto   = "udp"
     dport   = local.private_internet_ports.udp
     source  = local.networks.devbox_vms
-    dest    = local.networks.services
+    dest    = join(",", local.services_hosts)
     comment = "Devbox -> services bridge (UDP)"
   }
 }
@@ -510,12 +514,19 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "devbox_s
   name    = "devbox_ssh_gateway"
   comment = "Devbox SSH gateway (teams -> gateway -> devbox VMs)"
 
+  # Teams reach the gateway only through the host DNAT, which the host SNATs to
+  # its own devbox-SSH-fabric address (host_network: worms.nft.j2). Accepting 22
+  # from that address alone means a devbox VM -- which shares vmbr7 with the
+  # gateway -- cannot open an SSH connection to the gateway, even if its own
+  # firewall (output DROP) were somehow bypassed. The gateway is NOT reachable
+  # from the sandbox at all (disjoint bridges, no host route).
   rule {
     type    = "in"
     action  = "ACCEPT"
     proto   = "tcp"
     dport   = "22"
-    comment = "Teams -> gateway:22 (public, via host DNAT)"
+    source  = local.host_ips.devbox_ssh
+    comment = "Teams -> gateway:22 (public, via host DNAT, SNATed to the host)"
   }
   rule {
     type    = "out"

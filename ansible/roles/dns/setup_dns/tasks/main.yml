@@ -44,6 +44,28 @@
     mode: '0644'
   notify: Restart dnsmasq
 
+- name: Bound the dnsmasq query log so a query flood cannot fill the disk
+  ansible.builtin.copy:
+    dest: /etc/logrotate.d/dnsmasq-worms
+    content: |
+      # Managed by Ansible (role setup_dns). DO NOT EDIT.
+      # dnsmasq logs every query (log-queries); the DNS VM is shared by every
+      # sandbox and devbox, so a query flood would otherwise fill its disk and
+      # take DNS down for all of them (docs/security-assessment.md, S8).
+      /var/log/dnsmasq.log {
+          daily
+          rotate 3
+          maxsize 20M
+          missingok
+          notifempty
+          compress
+          delaycompress
+          copytruncate
+      }
+    owner: root
+    group: root
+    mode: "0644"
+
 - name: Enable and start dnsmasq
   ansible.builtin.systemd:
     name: dnsmasq

@@ -169,8 +169,11 @@ resource "proxmox_virtual_environment_vm" "gw" {
 
   tags = ["untrusted", "sandbox-gw"]
 
-  # TODO:
-  # HOOK:
+  # Port isolation on the management bridge: isolate this VM's ports so VMs on a
+  # management bridge cannot reach each other at layer 2 (defense in depth behind
+  # the per-VM firewall). Left commented because attaching a hookscript needs the
+  # provider to act as root@pam; the provisioning API token cannot. Enable when
+  # applying with root@pam credentials (docs/security-assessment.md, S4).
   # hook_script_file_id = local.platform.hookscript_file_id
 
   initialization {
@@ -400,8 +403,12 @@ resource "proxmox_virtual_environment_vm" "vm" {
     "untrusted"
   ]
 
-  # TODO:
-  # HOOK:
+  # Port isolation on the management bridge: isolate this VM's ports so sandbox
+  # VMs cannot reach each other on the management bridge at layer 2 (defense in
+  # depth behind the per-VM firewall). Left commented because attaching a
+  # hookscript needs the provider to act as root@pam; the provisioning API token
+  # cannot. Enable when applying with root@pam credentials
+  # (docs/security-assessment.md, S4).
   # hook_script_file_id = local.platform.hookscript_file_id
 
   initialization {

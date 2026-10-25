@@ -46,6 +46,10 @@ locals {
   persistent = {
     database = {
       user_data_file_id = local.platform.cloud_init.postgresql.file_id
+      # The whole platform shares this one database. Sized for the monitor's
+      # network_flows/network_events and the always-on devbox logs, which grow
+      # for the length of the competition (docs/security-assessment.md, S1/D1).
+      disk_size = 100
       nics = [
         { bridge = local.nw.core.name, cidr = "${local.infrastructure_ips.database}/24", gateway = local.host_ips.core },
         { bridge = local.nw.mgmt_trusted.name, cidr = "${local.management_ips.database}/24" },

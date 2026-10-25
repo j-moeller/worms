@@ -112,6 +112,27 @@ def test_host_firewall_ruleset(render, tmp_path):
     assert 'meta ibrname "vmbr3" counter drop' in text
 
 
+def test_host_firewall_publishes_the_devbox_ssh_gateway(render, tmp_path):
+    """With the devbox SSH gateway published, the host DNATs teams to it and
+    SNATs that same connection to its own fabric address, so the gateway sees
+    only the host as the SSH source -- a devbox VM on vmbr7 cannot pose as a
+    team to it (docs/security-assessment.md, devbox isolation)."""
+    require("nft")
+    path = tmp_path / "worms.nft"
+    text = render("ansible/roles/host/host_network", "worms.nft.j2", host_publish_ssh_gateway=True)
+    path.write_text(text)
+    # Assert the rendered rules first (runs on every kernel): teams are DNATed
+    # in, then that same connection is SNATed (masqueraded) to the host.
+    assert "dnat ip to 10.7.0.2:22" in text
+    assert 'oifname "vmbr7" ip daddr 10.7.0.2 tcp dport 22 ct status dnat masquerade' in text
+    proc = subprocess.run(["nft", "-c", "-f", str(path)], capture_output=True, text=True)
+    if proc.returncode != 0:
+        errors = [line for line in proc.stderr.splitlines() if "Error:" in line]
+        if errors and all("Operation not supported" in e or "Permission denied" in e for e in errors):
+            pytest.skip("this kernel cannot check the bridge family (nft -c): " + errors[0])
+    assert proc.returncode == 0, proc.stderr
+
+
 @pytest.mark.parametrize(
     "role, template, extra",
     [
@@ -196,6 +217,16 @@ def test_dashboard_nginx_rate_limits_the_team_api(render):
 
     off = render(NGINX_DJANGO, "worms-tls.conf.j2", tls_dns_name="orchestrator.worms.internal")
     assert "limit_req" not in off and "location /api/" not in off and "location / {" in off
+
+
+def test_sandbox_api_nginx_limits_are_per_source(render):
+    """The sandbox API's nginx limits are keyed on the source address (the SNAT
+    gateway), so one team's devbox-gw cannot spend the round's (sandbox-gw's) or
+    another team's budget (docs/security-assessment.md, S5)."""
+    conf = render("ansible/roles/applications/sandbox_api", "nginx-site.j2", tls_dns_name="scoring.worms.internal")
+    assert "limit_req_zone $binary_remote_addr zone=sandbox_api_req" in conf
+    assert "limit_conn_zone $binary_remote_addr zone=sandbox_api_conn" in conf
+    assert "$server_name zone=sandbox_api" not in conf  # not a single global budget
 
 
 def test_orchestrator_power_acl_covers_user_and_token():

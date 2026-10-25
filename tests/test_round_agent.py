@@ -306,6 +306,46 @@ def test_teardown():
     assert any(c[:2] == ("tofu", "sandbox") and "destroy" in c for c in ex.calls)
 
 
+def test_devbox_gateway_permitopen_is_only_the_entry_vm():
+    """The SSH gateway forwards each team to its entry VM (A) only; B/C are
+    reached by pivoting inside the devbox network (docs/security-assessment.md).
+    Every registered key is still installed on the VMs themselves (team_keys)."""
+
+    class Ex:
+        def __init__(self):
+            self.args = None
+
+        def tofu_output(self, stack):
+            return {
+                "devbox": {
+                    "t1": {
+                        "services_source_ip": "10.2.0.33",
+                        "vms": [
+                            {"name": "devbox-t1-a", "ssh_fabric_ip": "10.7.0.10"},
+                            {"name": "devbox-t1-b", "ssh_fabric_ip": "10.7.0.11"},
+                            {"name": "devbox-t1-c", "ssh_fabric_ip": "10.7.0.12"},
+                        ],
+                    }
+                }
+            }
+
+        def worms(self, component, timeout=3600, args=None):
+            self.args = args
+
+    ex = Ex()
+    teams = [{"slug": "t1", "authorized_keys": ["ssh-ed25519 AAAA key-one", "ssh-ed25519 BBBB key-two"]}]
+    handlers._configure_devbox(ex, teams)
+
+    extra = json.load(open(ex.args.split("@", 1)[1]))
+    gateway_keys = extra["ssh_gateway_authorized_keys"]
+    assert len(gateway_keys) == 2  # one confined line per registered key
+    for entry in gateway_keys:
+        assert entry["permitopen"] == ["10.7.0.10:22"]  # only VM A, never B/C
+        assert entry["comment"] == "team=t1"
+    # The VMs themselves still authorize every registered key.
+    assert extra["devbox_team_keys"]["t1"] == teams[0]["authorized_keys"]
+
+
 # --- the database loop --------------------------------------------------------
 
 

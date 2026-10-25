@@ -37,14 +37,15 @@ Details: [monitoring.md](monitoring.md), [testing.md](testing.md).
 
 ## Open issues (not changed: outside this task)
 
-- **The port-isolation hookscript is not attached to any VM.**
-  `hook_script_file_id` is commented out ("TODO: HOOK") in
-  `infrastructure_vm`, `private_internet_vm`, the sandbox VMs and sandbox-gw,
-  so the README's "management bridges are port-isolated" does not hold. The
-  isolation on the management bridges currently rests on the Proxmox firewall
-  alone (output policy DROP, `ssh` group inbound only), and
-  `worms simulate` checks that from a sandbox VM. Possibly because Proxmox lets only
-  `root@pam` set hookscripts, not API tokens.
+- **The port-isolation hookscript is wired everywhere but left commented.**
+  `hook_script_file_id` is now present (commented) on every VM module and stack
+  — `infrastructure_vm`, `private_internet_vm`, `devbox_vm`, the sandbox VMs and
+  sandbox-gw — so turning it on is a one-line change. It stays commented because
+  Proxmox lets only `root@pam` set hookscripts, not the provisioning API token;
+  enable it when applying with `root@pam`. Until then the isolation rests on the
+  per-VM Proxmox firewall (output policy DROP, `ssh`/segment groups), and the
+  host firewall watchdog now hard-stops an uncontained **sandbox or devbox** VM.
+  See docs/security-assessment.md (S4) and the devbox-isolation fixes there.
 - The sandbox VMs do not trust the internal CA (README "Round start":
   "distribute the self-signed CA" is not implemented for the sandbox group).
   (Resolved: the sandbox guests now trust the internal CA; SetupSandbox.yml,
@@ -63,7 +64,9 @@ Details: [monitoring.md](monitoring.md), [testing.md](testing.md).
 - Infrastructure VMs have no time synchronisation configured. Flow
   timestamps come from the monitor's clock, submission timestamps from the
   database's.
-- Retention of `network_flows` (see monitoring.md, Limitations).
+- Retention of `network_flows` (see monitoring.md, Limitations). The shared
+  database disk is now 100 GB (docs/security-assessment.md, S1), which buys
+  headroom; a retention/partition policy is still advisable.
 
 ## Changes (by commit)
 

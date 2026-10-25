@@ -90,3 +90,26 @@
     regexp: '(archives:\s*\n\s*enabled:\s*)false'
     replace: '\1true'
   notify: Restart filebeat
+
+# The installer leaves every generated credential in /root/wazuh-install-files.tar.
+# Keep a copy with the other secrets on the controller, then shred it from the
+# log-parsing VM (docs/security-assessment.md, S14).
+- name: Secure the Wazuh install bundle (holds every generated password)
+  when: wazuh_remove_install_bundle | bool
+  block:
+    - name: Check whether the install bundle is still on the VM
+      ansible.builtin.stat:
+        path: /root/wazuh-install-files.tar
+      register: wazuh_bundle
+
+    - name: Fetch the install bundle to the controller (kept with the other secrets)
+      ansible.builtin.fetch:
+        src: /root/wazuh-install-files.tar
+        dest: "{{ wazuh_install_bundle_fetch_dir }}/{{ inventory_hostname }}-wazuh-install-files.tar"
+        flat: true
+      when: wazuh_bundle.stat.exists
+
+    - name: Shred the install bundle on the VM
+      ansible.builtin.command: shred -u /root/wazuh-install-files.tar
+      when: wazuh_bundle.stat.exists
+      changed_when: true

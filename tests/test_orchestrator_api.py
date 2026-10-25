@@ -47,6 +47,28 @@ def test_devbox_reset_bumps_the_version_and_enqueues_a_rebuild(api, team):
     assert job.params == {"team_uuid": str(team.uuid), "devbox_version": 2}
 
 
+def test_devbox_reset_does_not_pile_up_rebuilds(api, team):
+    """A second reset while a rebuild is still queued neither enqueues another
+    job nor bumps the version again (docs/security-assessment.md, D2)."""
+    from core.models.rounds import HostJob
+
+    assert reset(api, team).json()["rebuild_enqueued"] is True
+    team.refresh_from_db()
+    version = team.devbox_version
+
+    again = reset(api, team).json()
+    assert again["rebuild_enqueued"] is False
+    assert again["devbox_version"] == version  # not bumped again
+    assert HostJob.objects.filter(kind=HostJob.Kind.DEVBOX_REBUILD).count() == 1
+
+    # Once the rebuild has finished, a reset enqueues a fresh one.
+    job = HostJob.objects.get(kind=HostJob.Kind.DEVBOX_REBUILD)
+    job.state = HostJob.State.DONE
+    job.save(update_fields=["state"])
+    assert reset(api, team).json()["rebuild_enqueued"] is True
+    assert HostJob.objects.filter(kind=HostJob.Kind.DEVBOX_REBUILD).count() == 2
+
+
 @pytest.mark.parametrize("token", [None, "wrong", ""])
 def test_devbox_reset_needs_the_token(api, team, token):
     from core.models.rounds import HostJob

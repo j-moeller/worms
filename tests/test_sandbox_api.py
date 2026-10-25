@@ -27,6 +27,27 @@ from conftest import REPO  # noqa: E402
 APP = REPO / "ansible" / "roles" / "applications" / "sandbox_api" / "files" / "app.py"
 SQL = REPO / "ansible" / "files" / "simulation"
 
+# The sandbox round's SNAT source (sandbox-gw). nginx always sets X-Client-IP;
+# round traffic arrives from this address, devbox traffic from a devbox-gw.
+SANDBOX_GW = "10.2.0.2"
+
+
+class _Client:
+    """Wraps Flask's test client so a POST defaults to the sandbox-gw source,
+    as nginx would set it for round traffic; tests override X-Client-IP to
+    simulate a devbox gateway or an unexpected source."""
+
+    def __init__(self, client):
+        self._client = client
+
+    def post(self, *args, **kwargs):
+        headers = dict(kwargs.pop("headers", None) or {})
+        headers.setdefault("X-Client-IP", SANDBOX_GW)
+        return self._client.post(*args, headers=headers, **kwargs)
+
+    def get(self, *args, **kwargs):
+        return self._client.get(*args, **kwargs)
+
 
 @pytest.fixture
 def load_app(monkeypatch, tmp_path):
@@ -49,13 +70,14 @@ def load_app(monkeypatch, tmp_path):
             "CURRENT_TEAM_FILE": str(team_file),
             "DEVBOX_TEAMS_FILE": str(devbox_file),
             "CLIENT_IP_HEADER": "X-Client-IP",
+            "SANDBOX_GW_IP": SANDBOX_GW,
         }
         for key, value in settings.items():
             monkeypatch.setenv(key, value)
         spec = importlib.util.spec_from_file_location(f"sandbox_api_{kind}_{uuid.uuid4().hex}", APP)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        return module.app.test_client(), team_file
+        return _Client(module.app.test_client()), team_file
 
     return _load
 
@@ -129,20 +151,17 @@ def test_devbox_submission_attributed_by_source(database, team, load_app):
     conn.close()
 
 
-def test_unknown_source_falls_back_to_round(database, team, load_app):
-    # An address not in the devbox map is treated as round (sandbox) traffic:
-    # it needs the current-team file.
+def test_unknown_source_is_refused(database, team, load_app):
+    # Fail closed: a source that is neither a known devbox gateway nor the
+    # sandbox gateway is refused, never silently attributed to the running
+    # round (docs/security-assessment.md, S5).
     client, _ = load_app(
         "scoring", database.env("dbuser_scoring"),
         team_uuid=team["uuid"], devbox_map={"10.3.64.7": str(uuid.uuid4())},
     )  # fmt: skip
     r = client.post("/submit", json={"vm_flag": "FLAG{round}"}, headers={"X-Client-IP": "10.9.9.9"})
-    assert r.status_code == 201, r.get_json()
-    conn = database.connect()
-    with conn.cursor() as cur:
-        cur.execute("SELECT devbox FROM flag_capture_attempts WHERE team_uuid = %s", [team["uuid"]])
-        assert cur.fetchone()[0] is False  # attributed to the round, not devbox
-    conn.close()
+    assert r.status_code == 403, r.get_json()
+    assert rows(database, "flag_capture_attempts", team["uuid"]) == []
 
 
 def test_no_active_round_is_refused(database, team, load_app):

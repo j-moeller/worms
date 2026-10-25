@@ -52,3 +52,10 @@ variable "security_groups" {
   description = "Security-group names to apply (keys: devbox|devbox_gw, devbox_ssh_target, services_client, ssh)."
   type        = map(string)
 }
+
+# Proxmox hookscript (port isolation on the management bridges and vmbr7).
+# Available but attached only when applying with root@pam (see main.tf).
+variable "hookscript_file_id" {
+  description = "Proxmox hookscript (port isolation on management bridges / vmbr7)."
+  default     = null
+}

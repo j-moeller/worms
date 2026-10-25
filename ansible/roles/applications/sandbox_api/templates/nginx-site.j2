@@ -6,8 +6,13 @@
 # whole; per-VM limits are enforced on the Proxmox host, per-team limits in the
 # application.
 
-limit_req_zone $server_name zone=sandbox_api_req:1m rate={{ sandbox_api_nginx_rate_per_second }}r/s;
-limit_conn_zone $server_name zone=sandbox_api_conn:1m;
+# Keyed on the source address (the SNAT gateway): sandbox-gw for the round, a
+# distinct per-team address for each devbox-gw. So one team's devbox cannot
+# spend the round's (or another team's) request/connection budget here; the
+# per-team application buckets and the per-VM host limits sit behind this
+# (docs/security-assessment.md, S5).
+limit_req_zone $binary_remote_addr zone=sandbox_api_req:1m rate={{ sandbox_api_nginx_rate_per_second }}r/s;
+limit_conn_zone $binary_remote_addr zone=sandbox_api_conn:1m;
 
 server {
     listen 443 ssl;

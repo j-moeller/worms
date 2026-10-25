@@ -51,6 +51,14 @@ resource "proxmox_virtual_environment_vm" "vm" {
 
   tags = ["untrusted", var.is_gateway ? "devbox-gw" : "devbox"]
 
+  # Port isolation: isolate this VM's ports on the management bridge (vmbr6) and,
+  # for a plain devbox VM, on the devbox SSH fabric (vmbr7), so teams' devbox VMs
+  # cannot reach each other at layer 2 -- only the gateway and the host. Left
+  # commented because attaching a hookscript needs the provider to act as
+  # root@pam; the provisioning API token cannot. Enable when applying with
+  # root@pam credentials (docs/security-assessment.md, S4; docs/devbox.md).
+  # hook_script_file_id = var.hookscript_file_id
+
   initialization {
     datastore_id = var.datastore
 

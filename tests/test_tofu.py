@@ -57,6 +57,36 @@ def test_validate(tofu_copy, stack):
 # --- consistency across layers (no tofu needed) ------------------------------
 
 
+def _security_group(firewall: str, name: str) -> str:
+    pattern = rf'security_group" "{name}" \{{.*?\n\}}'
+    return re.search(pattern, firewall, re.S).group(0)
+
+
+def test_devbox_ssh_gateway_accepts_ssh_only_from_the_host():
+    """The shared SSH gateway shares vmbr7 with every team's devbox VMs. Its
+    inbound SSH is pinned to the host's fabric address (teams arrive SNATed to
+    it), so a devbox VM cannot open a connection to the gateway even if its own
+    output policy were bypassed (docs/security-assessment.md, devbox isolation).
+    """
+    firewall = (OPENTOFU / "stacks" / "firewall" / "main.tf").read_text()
+    group = _security_group(firewall, "devbox_ssh_gateway")
+    in_rule = re.search(r'type    = "in".*?\n  \}', group, re.S).group(0)
+    assert "source  = local.host_ips.devbox_ssh" in in_rule
+    nft = (OPENTOFU.parent / "ansible" / "roles" / "host" / "host_network" / "templates" / "worms.nft.j2").read_text()
+    assert "ct status dnat masquerade" in nft  # the host SNATs team ingress to itself
+
+
+def test_untrusted_egress_is_scoped_to_the_service_hosts():
+    """Sandbox and devbox VMs and their gateways may reach only the service
+    hosts on the services bridge (scoring, logging, DNS, private internet),
+    never another gateway's SNAT address or an unused services address."""
+    firewall = (OPENTOFU / "stacks" / "firewall" / "main.tf").read_text()
+    for name in ("sandbox", "sandbox_gw", "devbox", "devbox_gw"):
+        group = _security_group(firewall, name)
+        assert 'join(",", local.services_hosts)' in group, f"{name}: services egress not scoped to the hosts"
+        assert "dest    = local.networks.services" not in group, f"{name}: still targets the whole services subnet"
+
+
 def test_database_clients_are_allowed_everywhere(infrastructure):
     """A VM with a database role must be allowed by the Proxmox `database`
     security group, by pg_hba (its /32) and, if routed, by the host."""

@@ -93,6 +93,23 @@ class Conductor:
     def active_job(self, run, kind):
         return run.jobs.filter(kind=kind).order_by("-id").first()
 
+    def _teardown_pending(self) -> bool:
+        """True while a sandbox teardown has not completed, so the host may
+        still hold a sandbox and the next run must not build over it. A teardown
+        that is queued/running means wait; a FAILED run whose teardown itself
+        failed means the host is dirty and the queue holds until an operator
+        clears it, rather than applying a fresh sandbox over the leftovers
+        (docs/security-assessment.md, S7)."""
+        if HostJob.objects.filter(
+            kind=HostJob.Kind.TEARDOWN, state__in=[HostJob.State.QUEUED, HostJob.State.RUNNING]
+        ).exists():
+            return True
+        for run in RoundRun.objects.filter(state=RoundRun.State.FAILED):
+            teardown = self.active_job(run, HostJob.Kind.TEARDOWN)
+            if teardown is not None and teardown.state == HostJob.State.FAILED:
+                return True
+        return False
+
     # -- the tick -------------------------------------------------------------
 
     def tick(self):
@@ -107,6 +124,11 @@ class Conductor:
         ).order_by("round_id", "position").first()
         if active is not None:
             return self.advance(active)
+
+        # A failed run tears its sandbox down asynchronously; don't build the
+        # next run's sandbox until that teardown has finished (S7).
+        if self._teardown_pending():
+            return False
 
         nxt = RoundRun.objects.filter(state=RoundRun.State.PENDING).order_by("round_id", "position").first()
         if nxt is not None:

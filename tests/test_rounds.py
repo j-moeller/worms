@@ -333,6 +333,45 @@ def test_failed_prepare_job_fails_the_run_without_teardown(one_run):
     assert not run.jobs.filter(kind=HostJob.Kind.TEARDOWN).exists()
 
 
+def test_next_run_waits_for_the_previous_teardown(one_run):
+    """A failed run tears its sandbox down asynchronously; the next run must not
+    build over it until that teardown has completed (docs/security-assessment.md,
+    S7)."""
+    from core.models.competition import Round
+    from core.models.rounds import HostJob, RoundRun
+    from django.utils import timezone
+    from orchestrator.rounds.planner import plan_round
+
+    run1 = one_run["run"]
+    past = timezone.now() - timezone.timedelta(minutes=1)
+    round2 = Round.objects.create(
+        seed=6, name="R2", competition=one_run["round"].competition,
+        round_start=past, round_end=past + timezone.timedelta(days=1),
+    )  # fmt: skip
+    run2 = plan_round(round2)[0]
+
+    power, clock = FakePower(), Clock()
+    conductor = make_conductor(power, clock)
+
+    conductor.tick()  # run1 -> PREPARING
+    fake_agent(run1, sha)  # prepare done
+    conductor.tick()  # run1 -> CHECKING
+    run1.refresh_from_db()
+    conductor.fail(run1, "boom")  # FAILED + teardown queued
+    assert run1.jobs.filter(kind=HostJob.Kind.TEARDOWN, state=HostJob.State.QUEUED).exists()
+
+    # The teardown is still pending: run2 must stay PENDING.
+    conductor.tick()
+    run2.refresh_from_db()
+    assert run2.state == RoundRun.State.PENDING
+
+    # Teardown completes -> run2 may start.
+    fake_agent(run1, sha)
+    conductor.tick()
+    run2.refresh_from_db()
+    assert run2.state == RoundRun.State.PREPARING
+
+
 def test_run_without_upload_is_skipped(db_clean):
     from core.models.competition import ApplicationSetting, Competition, Round
     from core.models.rounds import RoundRun

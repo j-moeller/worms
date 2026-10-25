@@ -6,11 +6,13 @@ and strict:
 
 - POST /submit only (nginx rejects everything else), JSON object only, size
   capped by nginx and by Flask (MAX_BODY_BYTES).
-- No access token. Only one team runs at a time, so the round agent writes the
-  running team's uuid into CURRENT_TEAM_FILE at deploy; the API records that
-  uuid on every submission. A submission while no round is active (no team
-  file) is refused (409). (Access tokens still exist for teams in general;
-  they are just not used by the scoring/logging servers anymore.)
+- No access token. Attribution is by source address (nginx passes it as
+  X-Client-IP): a known devbox gateway is that team's devbox submission; the
+  sandbox round's SNAT source (SANDBOX_GW_IP) is the single running round,
+  recorded from CURRENT_TEAM_FILE (the round agent writes it at deploy). This
+  is fail closed: any other source is refused (403), and the round source with
+  no active round is refused (409). (Access tokens still exist for teams in
+  general; they are just not used by the scoring/logging servers anymore.)
 - A token-bucket rate limit keyed by the current team; past the limit a short
   ban (429). IP-based blocking is pointless here: sandbox-gw SNATs all sandbox
   traffic, so per-VM limits are enforced on the Proxmox host instead.
@@ -70,6 +72,12 @@ DEVBOX_TEAMS_FILE = os.environ.get("DEVBOX_TEAMS_FILE", "/etc/sandbox-api/devbox
 # nginx passes the real client (gateway) address in this header; only nginx can
 # reach the app socket, so it is trusted.
 CLIENT_IP_HEADER = os.environ.get("CLIENT_IP_HEADER", "X-Client-IP")
+# The sandbox round's SNAT source (sandbox-gw). A submission from this address,
+# and only this address, is attributed to the single running round. Any other
+# source that is not a known devbox gateway is refused (fail closed), so a
+# devbox gateway missing from the map -- or any unexpected source -- can never
+# be silently counted for the current round's team.
+SANDBOX_GW_IP = os.environ.get("SANDBOX_GW_IP", "").strip()
 UUID_RE = re.compile(r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
 
 # Every other column has a database default (processed, created_at); the
@@ -324,10 +332,16 @@ def submit():
     team = DEVBOX_TEAMS.team_for(source_ip)
     is_devbox = team is not None
     if team is None:
+        # Fail closed: only the sandbox round's own SNAT source (sandbox-gw) is
+        # attributed to the running round; any other source that is not a known
+        # devbox gateway is refused, never silently counted for the current team.
+        if not SANDBOX_GW_IP or source_ip != SANDBOX_GW_IP:
+            REJECTS.warning("rejected: unrecognised source %r", source_ip)
+            return error(403, "Unrecognised source.")
         team = CURRENT_TEAM.get()
-    if team is None:
-        REJECTS.warning("rejected: no active round and not a devbox source")
-        return error(409, "No active round.")
+        if team is None:
+            REJECTS.warning("rejected: no active round")
+            return error(409, "No active round.")
 
     # Rate-limit bucket keyed per team; devbox and round buckets are distinct
     # so one cannot exhaust the other.

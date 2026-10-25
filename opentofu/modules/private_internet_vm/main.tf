@@ -83,9 +83,11 @@ resource "proxmox_virtual_environment_vm" "service_vm" {
     "private_internet"
   ]
 
-  # Isolates the ports on management bridges (platform stack: hookscript).
-  # TODO:
-  # HOOK:
+  # Port isolation on the management bridges: isolate this VM's ports so VMs on a
+  # management bridge cannot reach each other at layer 2 (defense in depth behind
+  # the per-VM firewall). Left commented because attaching a hookscript needs the
+  # provider to act as root@pam; the provisioning API token cannot. Enable when
+  # applying with root@pam credentials (docs/security-assessment.md, S4).
   # hook_script_file_id = var.hookscript_file_id
 
   initialization {

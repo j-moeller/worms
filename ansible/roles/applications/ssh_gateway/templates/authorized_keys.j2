@@ -1,9 +1,11 @@
 {#- Managed by Ansible (role ssh_gateway). One line per team key. The options
-    confine the key to a ProxyJump into that team's own devbox VMs:
+    confine the key to a ProxyJump into that team's own ENTRY devbox VM (A):
       restrict          -> no agent/X11/tty/stream forwarding, no port forward
       port-forwarding   -> re-enable ONLY TCP forwarding, then bound by:
-      permitopen="h:p"  -> only to the listed devbox VM addresses
-    So `ssh -J <user>@gateway root@<team-vm>` works and nothing else does. -#}
+      permitopen="h:p"  -> only to that team's entry VM address (a single host)
+    So `ssh -J <user>@gateway root@<team-A>` works and nothing else does; the
+    worm reaches B/C by pivoting inside the devbox network. This file is
+    root-owned (the team cannot edit it). -#}
 # WORMS devbox SSH gateway authorized_keys (managed by Ansible). DO NOT EDIT.
 {% for entry in ssh_gateway_authorized_keys %}
 restrict,port-forwarding{% for target in entry.permitopen %},permitopen="{{ target }}"{% endfor %} {{ entry.public_key }}{% if entry.comment is defined and entry.comment %} {{ entry.comment }}{% endif %}

@@ -11,19 +11,36 @@
     create_home: true
     state: present
 
-- name: Ensure the team user's .ssh directory
+# The team account is jump-only (its per-key options are the real confinement).
+# Make its home, .ssh and authorized_keys root-owned so the team cannot rewrite
+# its own authorized_keys -- and thus its permitopen/restrict confinement -- by
+# deleting and recreating ~/.ssh (which it could do if it owned its home). sshd
+# accepts a root-owned home for a non-root user under StrictModes. The account
+# needs no writable home (no shell, no onward known_hosts). See
+# docs/security-assessment.md (S3) and docs/devbox.md.
+- name: Lock the team user's home to root (not writable by the team)
+  ansible.builtin.file:
+    path: "~{{ ssh_gateway_user }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Ensure the team user's .ssh directory (root-owned)
   ansible.builtin.file:
     path: "~{{ ssh_gateway_user }}/.ssh"
     state: directory
-    owner: "{{ ssh_gateway_user }}"
-    mode: "0700"
+    owner: root
+    group: root
+    mode: "0755"
 
-- name: Write the confined authorized_keys (one restricted line per team key)
+- name: Write the confined authorized_keys (root-owned; one restricted line per team key)
   ansible.builtin.template:
     src: authorized_keys.j2
     dest: "~{{ ssh_gateway_user }}/.ssh/authorized_keys"
-    owner: "{{ ssh_gateway_user }}"
-    mode: "0600"
+    owner: root
+    group: root
+    mode: "0644"
 
 - name: Assert the hardened sshd drop-in is present (from cloud-init)
   ansible.builtin.stat:

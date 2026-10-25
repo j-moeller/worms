@@ -188,6 +188,9 @@ module "devbox_vm" {
   ssh_fabric = { bridge = local.nw.devbox_ssh.name, cidr = each.value.ssh_fabric_cidr }
   management = { bridge = local.nw.mgmt_devbox.name, cidr = each.value.maintenance_cidr }
 
+  # Available for port isolation (attached inside the module only under root@pam).
+  hookscript_file_id = local.platform.hookscript_file_id
+
   security_groups = {
     devbox            = local.sg.devbox
     devbox_ssh_target = local.sg.devbox_ssh_target
@@ -226,6 +229,9 @@ module "devbox_gw" {
   services   = { bridge = local.nw.services.name, cidr = each.value.services_cidr }
   management = { bridge = local.nw.mgmt_devbox.name, cidr = each.value.maintenance_cidr }
 
+  # Available for port isolation (attached inside the module only under root@pam).
+  hookscript_file_id = local.platform.hookscript_file_id
+
   security_groups = {
     devbox_gw       = local.sg.devbox_gw
     services_client = local.sg.services_client
@@ -252,6 +258,14 @@ resource "proxmox_virtual_environment_vm" "ssh_gateway" {
   vga { type = "none" }
 
   tags = ["infrastructure", "devbox-ssh-gateway"]
+
+  # No port-isolation hookscript here, by design: the gateway's vmbr7 port MUST
+  # stay non-isolated so it can reach every team's devbox VM on the SSH fabric.
+  # Isolation is applied to the devbox VMs instead (module devbox_vm), so an
+  # isolated devbox VM reaches the (non-isolated) gateway and the host but never
+  # another team's VM. The gateway protects itself at the firewall layer: it
+  # accepts SSH only from the host's DNAT source (security group
+  # devbox_ssh_gateway), so a devbox VM cannot open a connection to it.
 
   initialization {
     datastore_id = "local-zfs"

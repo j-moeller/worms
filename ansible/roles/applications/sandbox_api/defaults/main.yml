@@ -15,6 +15,10 @@ sandbox_api_current_team_file: /etc/sandbox-api/current-team
 # Devbox gateway source -> team map (docs/devbox.md), written when devboxes are
 # provisioned. Same ownership as the current-team file.
 sandbox_api_devbox_teams_file: /etc/sandbox-api/devbox-teams
+# The sandbox round's SNAT source (sandbox-gw). Only this source is attributed
+# to the running round; any other non-devbox source is refused (fail closed,
+# docs/security-assessment.md, S5).
+sandbox_api_sandbox_gw_ip: "{{ services_ips.sandbox_gw }}"
 
 # Requests larger than this are rejected by nginx (413) before they reach Python.
 sandbox_api_max_body_bytes: 4096

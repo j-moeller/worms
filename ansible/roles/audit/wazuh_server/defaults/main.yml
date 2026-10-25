@@ -16,6 +16,14 @@ wazuh_install_poll_seconds: 30    # heartbeat interval while it runs
 # and dashboard together.
 wazuh_indexer_heap: 512m
 
+# After the install, every generated password (indexer admin, API, dashboard)
+# sits in cleartext in /root/wazuh-install-files.tar on the Wazuh VM -- the one
+# VM that parses logs from hosts that may be compromised. Pull that bundle back
+# to the controller (kept with the other secrets, git-ignored) and shred it on
+# the VM (docs/security-assessment.md, S14). Set false to leave it in place.
+wazuh_remove_install_bundle: true
+wazuh_install_bundle_fetch_dir: "{{ playbook_dir }}/.wazuh-secrets"
+
 # Syslog listener for the audit logs (role auditd), and who may send.
 wazuh_syslog_port: 514
 wazuh_syslog_allowed:

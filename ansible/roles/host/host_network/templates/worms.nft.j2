@@ -123,6 +123,13 @@ table inet worms {
   chain postrouting {
     type nat hook postrouting priority srcnat;
     iifname @internet_zones oifname @internet_wan masquerade comment "internet allowed"
+{% if host_publish_ssh_gateway | default(false) and ssh_gateway_ips.devbox_ssh is defined %}
+    # Teams reach the devbox SSH gateway via the host DNAT above. SNAT that
+    # connection to the host's own fabric address so the gateway sees a single
+    # trusted source (its firewall accepts 22 from the host only); a devbox VM
+    # on vmbr7 can then never masquerade as a team to the gateway.
+    oifname "{{ b.devbox_ssh }}" ip daddr {{ ssh_gateway_ips.devbox_ssh }} tcp dport 22 ct status dnat masquerade comment "devbox SSH gateway: present teams as the host"
+{% endif %}
   }
 }
 

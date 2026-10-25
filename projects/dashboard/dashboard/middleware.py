@@ -86,7 +86,10 @@ class UserMetadataMiddleware:
         if request.path.startswith(API_PREFIX):
             return self.get_response(request)
         request.time_now = clock.now()
-        request.is_dev_environment = request.session["is_dev_environment"]
+        # Default rather than require the key: EnvironmentTransitionMiddleware
+        # only sets it for authenticated users, so reading it must not assume it
+        # exists and must not itself create a session (docs/security-assessment.md, D1).
+        request.is_dev_environment = request.session.get("is_dev_environment", False)
 
         request.competition = ApplicationSetting.get_current_competition()
         request.team = TeamMembership.get_users_team(request.user, request.competition)
@@ -123,7 +126,11 @@ class EnvironmentTransitionMiddleware:
         self.get_response = get_response
 
     def __call__(self, request: HttpRequest):
-        if request.path.startswith(API_PREFIX):
+        # Only authenticated users have a dev/prod view to toggle. Touching the
+        # session for anonymous requests would write a django_session row for
+        # every cookie-less request (e.g. a crawler or a flood), filling the
+        # shared database disk for no reason (docs/security-assessment.md, D1).
+        if request.path.startswith(API_PREFIX) or not request.user.is_authenticated:
             return self.get_response(request)
         request.session.setdefault("is_dev_environment", False)
 

@@ -351,7 +351,13 @@ def _configure_devbox(ex, teams):
     team_keys = {t["slug"]: t["authorized_keys"] for t in teams}
     gateway_keys = []
     for t in teams:
-        targets = [f"{vm['ssh_fabric_ip']}:22" for vm in (devbox.get(t["slug"], {}) or {}).get("vms", [])]
+        vms = (devbox.get(t["slug"], {}) or {}).get("vms", [])
+        # The gateway forwards each team to its ENTRY VM (A) only; the worm
+        # pivots A->B->C inside the team's own devbox network, as in the sandbox.
+        # permitopen is thus a single host, so a team key cannot open a forward
+        # to B/C directly (docs/devbox.md; docs/security-assessment.md).
+        entry = f"devbox-{t['slug']}-a"
+        targets = [f"{vm['ssh_fabric_ip']}:22" for vm in vms if vm["name"] == entry]
         for key in t["authorized_keys"]:
             gateway_keys.append({"public_key": key, "comment": f"team={t['slug']}", "permitopen": targets})
     extra = {"devbox_team_keys": team_keys, "ssh_gateway_authorized_keys": gateway_keys}

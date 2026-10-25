@@ -21,7 +21,7 @@ tokens its worm has submitted to scoring at the current devbox version.
 
 ```
             team's laptop
-                 │  ssh -J team@<gateway> root@<devbox VM>
+                 │  ssh -J team@<gateway> root@<team's A>
                  ▼
         devbox SSH gateway (trusted, hardened)      vmbr7 (devbox SSH fabric, port-isolated)
                  │  jump, SSH tty only                         │
@@ -113,7 +113,7 @@ Teams never reach a devbox VM directly. A single **trusted, hardened** SSH
 gateway (OpenTofu, published by host DNAT on port `2222`) is the only way in:
 
 ```
-ssh -J team@<proxmox-wan>:2222 root@<devbox VM>
+ssh -J team@<proxmox-wan>:2222 root@<team's A VM>
 ```
 
 The gateway is deliberately minimal (`ssh-gateway.tftpl`): agent, X11, stream
@@ -122,15 +122,29 @@ real confinement is **per key**: the `ssh_gateway` Ansible role writes the
 team account's `authorized_keys` with, for every registered key,
 
 ```
-restrict,port-forwarding,permitopen="<the team's own devbox VMs>:22" <key>
+restrict,port-forwarding,permitopen="<the team's ENTRY VM (A)>:22" <key>
 ```
 
 `restrict` disables every feature; `port-forwarding` re-enables only TCP
-forwarding, and `permitopen` limits it to **that team's** VM addresses on the
-devbox SSH fabric. So a key can only `ProxyJump` into its own team's devbox and
-forward nothing else — the SSH tty is the only thing that flows. The gateway
-reaches the VMs over **vmbr7**, which is **port-isolated** (hookscript), so the
-VMs can reach the gateway and the host but never each other across teams.
+forwarding, and `permitopen` limits it to **that team's entry VM (A)** on the
+devbox SSH fabric — a single host. So a key can `ProxyJump` into its own team's
+**A** and nothing else; the worm reaches **B** and **C** by pivoting inside the
+devbox network, exactly as it would in the sandbox. The SSH tty is the only
+thing that flows.
+
+The gateway protects itself in depth (docs/security-assessment.md):
+
+- the team account's home, `.ssh` and `authorized_keys` are **root-owned**, so a
+  team cannot rewrite its own `permitopen`/`restrict` line;
+- the gateway reaches the VMs over **vmbr7**, which is **port-isolated**
+  (hookscript — available but `root@pam`-gated), so devbox VMs reach the gateway
+  and the host but never each other across teams. The gateway's own port stays
+  non-isolated (it must reach every team's A);
+- teams arrive through the host DNAT, which SNATs them to the host's fabric
+  address; the gateway's firewall accepts SSH **only from that address**, so a
+  devbox VM sharing vmbr7 cannot open a connection to the gateway (its own
+  output-DROP policy already forbids it — this is the second layer). The gateway
+  is not on any bridge a sandbox VM can reach.
 
 Teams manage their keys on the dashboard dev view (`DevboxSSHKey`); the keys are
 installed both on the gateway (for the jump) and on the devbox VMs (for the
@@ -203,7 +217,7 @@ worms teams create "Neural Net"    # also enqueues devbox provisioning
 #   POST https://orchestrator/devbox/<team-uuid>/reset/   (dashboard token)
 ```
 
-A team connects with `ssh -J team@<gateway>:2222 root@<their devbox VM>` using a
+A team connects with `ssh -J team@<gateway>:2222 root@<their A VM>` using a
 key they registered on the dashboard.
 
 ## Status / not done here

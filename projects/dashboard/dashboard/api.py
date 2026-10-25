@@ -270,7 +270,8 @@ def rounds(request, team):
 def round_scoring(request, team, round_id):
     """Every flag the team's sandbox submitted during its run in the round,
     oldest first, with the result: captured (scored), duplicate (that VM was
-    already captured), not_counted, invalid, pending (not processed yet)."""
+    already captured), not_counted, invalid, pending (not processed yet), and
+    the VM -- if the team captured it in the round."""
     rnd = _round(team, round_id)
     limit = _limit(request, "scoring")
     cursor = _decode_cursor(request, "s", 2)
@@ -309,7 +310,9 @@ def round_scoring(request, team, round_id):
                 "submitted_at": _iso(attempt.created_at),
                 "flag_hash": attempt.vm_flag_hash,
                 "result": result,
-                "vm": vm.vm_identifier if vm is not None else None,
+                # Named only if the team captured it in this round: a team
+                # never sees a sandbox VM it did not capture (docs/progression.md).
+                "vm": vm.vm_identifier if vm is not None and str(vm.uuid) in captured_vm_ids else None,
             }
 
         items, last, more = _page(rows, limit, render)

@@ -9,15 +9,14 @@ from dashboard.views.devbox import (
     devbox_delete_ssh_key,
     devbox_reset,
 )
-from dashboard.views.logging import logging_event_data, logs
 from dashboard.views.navigation import set_environment, set_theme
 from dashboard.views.profile import profile
-from dashboard.views.scoring import flag_capture_attempts
 from dashboard.views.teams import join_team, leave_team, team_registration
 from dashboard.views.uploads import upload
 from dashboard.views.todos import todos
 from dashboard import api
-from dashboard.views.rounds import rounds, round_timeline_data
+from dashboard.views import progression
+from dashboard.views.rounds import rounds
 from dashboard.views.topology import topology, topology_data, topology_runs
 from django.conf import settings
 from django.contrib import admin
@@ -33,13 +32,13 @@ urlpatterns = [
     #
     path("admin/", admin.site.urls),
     #
-    path("captures/", flag_capture_attempts, name="captures"),
-    path("logs/", logs, name="logs"),
-    path(
-        "logging/events/<uuid:uuid>/",
-        logging_event_data,
-        name="logging_event_data",
-    ),
+    # A team's rounds, replayed (docs/progression.md).
+    path("progression/", progression.progression_page, name="progression"),
+    path("progression/rounds/", progression.team_rounds, name="progression_rounds"),
+    path("progression/rounds/<int:round_id>/", progression.team_document, name="progression_data"),
+    path("progression/rounds/<int:round_id>/flows/", progression.team_flows, name="progression_flows"),
+    path("progression/rounds/<int:round_id>/logs/<uuid:ref>/", progression.team_log, name="progression_log"),
+    path("progression/rounds/<int:round_id>/download/", progression.team_download, name="progression_download"),
     #
     path("upload/", upload, name="upload"),
     #
@@ -59,11 +58,23 @@ urlpatterns = [
     path("todos/", todos, name="todos"),
     #
     path("rounds/", rounds, name="rounds"),
-    path("rounds/<uuid:uuid>/timeline/", round_timeline_data, name="round_timeline_data"),
+    # One run's progression, for staff (the TOPOLOGY player).
+    path("rounds/<uuid:uuid>/progression/", progression.run_document, name="run_progression"),
+    path("rounds/<uuid:uuid>/progression/flows/", progression.run_flows, name="run_progression_flows"),
+    path("rounds/<uuid:uuid>/progression/logs/<uuid:ref>/", progression.run_log, name="run_progression_log"),
+    path("rounds/<uuid:uuid>/progression/download/", progression.run_download, name="run_progression_download"),
     # Team API (bearer token; docs/team_api.md).
     path("api/v1/rounds/", api.rounds, name="api_rounds"),
     path("api/v1/rounds/<int:round_id>/scoring/", api.round_scoring, name="api_round_scoring"),
     path("api/v1/rounds/<int:round_id>/logging/", api.round_logging, name="api_round_logging"),
+    path("api/v1/rounds/<int:round_id>/progression/", api.round_progression, name="api_round_progression"),
+    path("api/v1/rounds/<int:round_id>/progression/flows/", api.round_progression_flows, name="api_round_progression_flows"),
+    path(
+        "api/v1/rounds/<int:round_id>/progression/logs/<uuid:ref>/",
+        api.round_progression_log,
+        name="api_round_progression_log",
+    ),
+    path("api/v1/rounds/<int:round_id>/progression.zip", api.round_progression_zip, name="api_round_progression_zip"),
     path("topology/", topology, name="topology"),
     path("topology/data/", topology_data, name="topology_data"),
     path("topology/runs/", topology_runs, name="topology_runs"),

@@ -26,8 +26,7 @@
                 <ul>
                     {% if request.team and not request.active_competition.is_registration_period %}
                     <li><a href="{% url 'upload' %}"{% if page == 'upload' %} aria-current="page"{% endif %}>Upload</a></li>
-                    <li><a href="{% url 'captures' %}"{% if page == 'captures' %} aria-current="page"{% endif %}>Captures</a></li>
-                    <li><a href="{% url 'logs' %}"{% if page == 'logs' %} aria-current="page"{% endif %}>Logs</a></li>
+                    <li><a href="{% url 'progression' %}"{% if page == 'progression' %} aria-current="page"{% endif %}>Progression</a></li>
                     {% endif %}
                     {% if request.active_competition.is_registration_period %}
                     <li><a href="{% url 'team_registration' %}"{% if page == 'team_registration' %} aria-current="page"{% endif %}>Teams</a></li>

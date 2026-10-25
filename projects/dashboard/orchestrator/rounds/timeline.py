@@ -11,6 +11,9 @@ One run -> one JSON document:
       "edges": [{source, target, network}],               # VM <-> network
       "vm_status": {vm id: [[t, "running"|"stopped"|"destroyed"], ...]},
       "events": [{id, t, kind, node, vm, data}],          # t = seconds from worm start
+                                                          # (a log is a reference: data.log =
+                                                          #  {ref: its uuid, size}; the record
+                                                          #  itself is fetched on demand)
       "flows": [{t, d, src, dst, src_role, dst_role, dst_name, kind,
                  src_port, dst_port, transport, service, conn_state,
                  bytes, pkts, uid}],                      # connections, as dots
@@ -37,6 +40,11 @@ so the player has a single clock.
   inferred from the monitor (the latest connection from a run VM to that
   server that was open at the time) and marked `source_inferred`.
 
+Log records are not part of the timeline (a run can send thousands): each
+`log_received` event carries a reference (the attempt's uuid) and the record's
+size; orchestrator/rounds/progression.py serves the record on demand and packs
+them into the progression zip.
+
 Every value derived from the sandbox (flows, log data, submitted hashes) is
 attacker-controlled: the player renders it as text only. Pure read model: this
 does not touch Proxmox and writes nothing.
@@ -45,19 +53,18 @@ does not touch Proxmox and writes nothing.
 from __future__ import annotations
 
 import bisect
-import json
 from datetime import timedelta
 
 from core.models.logging import Logging, LoggingAttempt
 from core.models.monitoring import NetworkFlow
 from core.models.rounds import RoundRun, RunEvent
 from core.models.scoring import FlagCapture, FlagCaptureAttempt
-from django.db.models import Max, Min, Q
+from django.db.models import Max, Min, Q, TextField
+from django.db.models.functions import Cast, Length
 
 FLOW_DRAIN = timedelta(seconds=300)  # flows are written when they end
 ATTRIBUTION_SLACK = 2.0  # seconds of clock skew between the monitor and the API
 ATTRIBUTION_SCAN = 500  # connections looked back at per submission
-LOG_PREVIEW = 4000  # characters of a log record kept for the detail view
 ATTEMPT_LIMIT = 5000
 
 # Roles of the far end that name the flow's kind.
@@ -68,11 +75,14 @@ def _seconds(ts, zero):
     return round((ts - zero).total_seconds(), 2)
 
 
-def _preview(value):
-    text = json.dumps(value, ensure_ascii=False, default=str)
-    if len(text) <= LOG_PREVIEW:
-        return {"data": value, "truncated": False}
-    return {"data": text[:LOG_PREVIEW], "truncated": True, "size": len(text)}
+def log_attempts(qs):
+    """LoggingAttempts without their (attacker-sized) record, annotated with
+    its size in characters: what a `log_received` event needs."""
+    return qs.defer("log_data").annotate(log_size=Length(Cast("log_data", output_field=TextField())))
+
+
+def log_ref(attempt) -> dict:
+    return {"ref": str(attempt.uuid), "size": attempt.log_size or 0}
 
 
 def _vm_status(vms, events, t_min):
@@ -107,6 +117,53 @@ def run_window(run: RoundRun, event_times=None):
         return None, None
     end = run.ends_at or max(event_times, default=min(starts))
     return min(starts), end + FLOW_DRAIN
+
+
+def make_endpoint(by_address, labels, infra):
+    """address -> (node id, role, name) for one end of a flow: a run VM
+    (`sandbox`), an infrastructure node from the live snapshot's address index
+    (scoring, logging, DNS, a private-internet VM, ...), or `unknown`."""
+
+    def endpoint(address):
+        address = str(address)
+        if address in by_address:
+            return by_address[address], "sandbox", labels[by_address[address]]
+        hit = infra.get(address)
+        if hit:
+            return hit["node"], hit["role"], hit["name"]
+        return f"ip:{address}", "unknown", address
+
+    return endpoint
+
+
+def flow_record(flow, zero, endpoint) -> dict:
+    """One NetworkFlow as the player's connection record (t relative to zero)."""
+    src, src_role, src_name = endpoint(flow.src_ip)
+    dst, dst_role, dst_name = endpoint(flow.dst_ip)
+    if src_role == "sandbox" and dst_role == "sandbox":
+        kind = "lan"
+    else:
+        other = dst_role if src_role == "sandbox" else src_role
+        kind = other if other in SERVICE_ROLES else "other"
+    return {
+        "t": _seconds(flow.ts, zero),
+        "d": round(flow.duration or 0.0, 3),
+        "src": src,
+        "dst": dst,
+        "src_role": src_role,
+        "dst_role": dst_role,
+        "src_name": src_name,
+        "dst_name": dst_name,
+        "kind": kind,
+        "src_port": flow.src_port,
+        "dst_port": flow.dst_port,
+        "transport": flow.transport,
+        "service": flow.service or None,
+        "conn_state": flow.conn_state or None,
+        "bytes": (flow.src_ip_bytes or 0) + (flow.dst_ip_bytes or 0),
+        "pkts": (flow.src_pkts or 0) + (flow.dst_pkts or 0),
+        "uid": flow.uid,
+    }
 
 
 def classify_submission(attempt, capture, vm, captured_vm_ids):
@@ -189,14 +246,7 @@ def build(run: RoundRun, flow_limit=20000, infra: dict | None = None) -> dict:
 
     window_start, window_end = run_window(run, [e.ts for e in run_events])
 
-    def endpoint(address):
-        address = str(address)
-        if address in by_address:
-            return by_address[address], "sandbox", labels[by_address[address]]
-        hit = infra.get(address)
-        if hit:
-            return hit["node"], hit["role"], hit["name"]
-        return f"ip:{address}", "unknown", address
+    endpoint = make_endpoint(by_address, labels, infra)
 
     flows, truncated = [], {"flows": False, "flag_submissions": False, "logs": False}
     if window_start and by_address:
@@ -209,34 +259,7 @@ def build(run: RoundRun, flow_limit=20000, infra: dict | None = None) -> dict:
             if len(flows) == flow_limit:
                 truncated["flows"] = True
                 break
-            src, src_role, src_name = endpoint(flow.src_ip)
-            dst, dst_role, dst_name = endpoint(flow.dst_ip)
-            if src_role == "sandbox" and dst_role == "sandbox":
-                kind = "lan"
-            else:
-                other = dst_role if src_role == "sandbox" else src_role
-                kind = other if other in SERVICE_ROLES else "other"
-            flows.append(
-                {
-                    "t": _seconds(flow.ts, zero),
-                    "d": round(flow.duration or 0.0, 3),
-                    "src": src,
-                    "dst": dst,
-                    "src_role": src_role,
-                    "dst_role": dst_role,
-                    "src_name": src_name,
-                    "dst_name": dst_name,
-                    "kind": kind,
-                    "src_port": flow.src_port,
-                    "dst_port": flow.dst_port,
-                    "transport": flow.transport,
-                    "service": flow.service or None,
-                    "conn_state": flow.conn_state or None,
-                    "bytes": (flow.src_ip_bytes or 0) + (flow.dst_ip_bytes or 0),
-                    "pkts": (flow.src_pkts or 0) + (flow.dst_pkts or 0),
-                    "uid": flow.uid,
-                }
-            )
+            flows.append(flow_record(flow, zero, endpoint))
 
     # Scoring / logging see only the gateway's address: the submitting VM is
     # the one whose connection to that server was open at the time (the
@@ -295,8 +318,10 @@ def build(run: RoundRun, flow_limit=20000, infra: dict | None = None) -> dict:
             )
 
         logs = list(
-            LoggingAttempt.objects.filter(
-                team_uuid=team_uuid, devbox=False, created_at__gte=window_start, created_at__lte=window_end
+            log_attempts(
+                LoggingAttempt.objects.filter(
+                    team_uuid=team_uuid, devbox=False, created_at__gte=window_start, created_at__lte=window_end
+                )
             ).order_by("created_at", "id")[: ATTEMPT_LIMIT + 1]
         )
         truncated["logs"] = len(logs) > ATTEMPT_LIMIT
@@ -313,10 +338,9 @@ def build(run: RoundRun, flow_limit=20000, infra: dict | None = None) -> dict:
                     "node": "role:logging",
                     "vm": source,
                     "data": {
-                        "uuid": str(attempt.uuid),
                         "stored": attempt.id in stored,
                         "processed": attempt.processed,
-                        "log": _preview(attempt.log_data),
+                        "log": log_ref(attempt),
                         "source_vm": source,
                         "source_label": labels.get(source),
                         "source_inferred": source is not None,

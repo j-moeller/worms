@@ -6,9 +6,19 @@
         <label title="Gateways' own cards, wazuh, the devbox SSH gateway and unclassified VMs"><input type="checkbox" id="topo-aux"> auxiliary VMs</label>
         <button type="button" id="topo-fit" title="Fit the picture (F)">Fit</button>
         <button type="button" id="topo-reload" title="Reload the snapshot and the round list">Reload</button>
-        <button type="button" id="topo-download" title="Save what is shown (infrastructure + the selected run's timeline) as one JSON file">Download JSON</button>
-        <button type="button" id="topo-open" title="View a downloaded JSON file (read locally; nothing is uploaded)">Open JSON…</button>
-        <input type="file" id="topo-file" accept=".json,application/json" hidden>
+        <details class="topo-menu" id="topo-download-menu">
+            <summary title="Save the round, or what is shown">Download</summary>
+            <div class="topo-menu__panel">
+                <a id="topo-dl-zip" href="#" download hidden>Round as .zip</a>
+                <div id="topo-dl-options" hidden>
+                    <label><input type="checkbox" id="topo-dl-logs" checked> with the log records</label>
+                    <label><input type="checkbox" id="topo-dl-network" checked> with the network traffic</label>
+                </div>
+                <button type="button" id="topo-download" title="What is shown as one JSON file (log records stay references)">What is shown (.json)</button>
+            </div>
+        </details>
+        <button type="button" id="topo-open" title="View a downloaded .zip or .json file (read locally; nothing is uploaded)">Open file…</button>
+        <input type="file" id="topo-file" accept=".zip,.json,application/zip,application/json" hidden>
     </div>
 </header>
 

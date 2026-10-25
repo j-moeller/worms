@@ -108,6 +108,17 @@ def populate(request: HttpRequest):
         },
     )
 
+    # The development competition (the Dev environment), with a week-long
+    # round: what the team's devbox did in it is its Dev progression.
+    dev = Competition.objects.filter(is_dev_competition=True).first() or Competition.objects.create(
+        name=f"{competition.name} · dev", is_dev_competition=True
+    )
+    Round.objects.get_or_create(
+        competition=dev,
+        name="Dev week",
+        defaults={"seed": 2, "round_start": now - timedelta(days=1), "round_end": now + timedelta(days=6)},
+    )
+
     # Teams, each with a lead and a few members (people to switch into).
     names = ["Red Team", "Neural Net", "0xCAFE", "Null Pointer", "Segfault Collective", "rm -rf"]
     teams = []
@@ -118,9 +129,12 @@ def populate(request: HttpRequest):
             defaults={
                 "max_members": 4,
                 "devbox_version": 1,
-                "development_competition": competition,
+                "development_competition": dev,
             },
         )
+        if team.development_competition_id != dev.id:  # demo data from before the dev competition
+            team.development_competition = dev
+            team.save(update_fields=["development_competition"])
         teams.append(team)
         slug = name.split()[0].lower().lstrip("0x") or "team"
         lead, _ = User.objects.get_or_create(
@@ -139,7 +153,7 @@ def populate(request: HttpRequest):
         TeamMembership.objects.get_or_create(user=request.user, team=red)
 
     # A few sandbox VMs on the round, and flag captures so the leaderboard has
-    # ranked points and the captures page has content.
+    # ranked points and the progression page has content.
     vms = []
     for n in range(3):
         vm, _ = VirtualMachine.objects.get_or_create(
@@ -179,11 +193,11 @@ def populate(request: HttpRequest):
             "gateway_vm_id": 9003,
         },
     )
-    for role, ip, fabric, found in [
+    for hours, (role, ip, fabric, found) in zip((20, 3, 0), [
         ("a", "10.128.3.10", "10.7.3.10", True),
         ("b", "10.128.3.11", "10.7.3.11", True),
         ("c", "10.128.3.12", "10.7.3.12", False),
-    ]:
+    ]):
         devbox_vm, _ = DevboxVM.objects.get_or_create(
             devbox=devbox,
             vm_identifier=f"devbox-red-{role}",
@@ -198,9 +212,16 @@ def populate(request: HttpRequest):
             },
         )
         if found:
-            DevboxCapture.objects.get_or_create(
+            capture, _ = DevboxCapture.objects.get_or_create(
                 team=red, devbox_vm=devbox_vm, devbox_version=red.devbox_version
             )
+            # The submission that found it, during the dev round.
+            if capture.flag_capture_attempt_id is None:
+                capture.flag_capture_attempt = FlagCaptureAttempt.objects.create(
+                    team_uuid=str(red.uuid), vm_flag_hash=devbox_vm.ctf_flag_hash or "", devbox=True,
+                    processed=True, processed_at=now - timedelta(hours=hours), created_at=now - timedelta(hours=hours),
+                )  # fmt: skip
+                capture.save(update_fields=["flag_capture_attempt"])
     DevboxSSHKey.objects.get_or_create(
         team=red,
         name="mara@laptop",
@@ -215,10 +236,17 @@ def populate(request: HttpRequest):
                 team_uuid=str(red.uuid),
                 devbox=True,
                 log_data={"event": "probe", "vm": f"devbox-red-{'abc'[i]}", "open_ports": [22, 80, 8888]},
+                processed=True,
+                created_at=now - timedelta(hours=21 - 8 * i),
             )
             DevboxLog.objects.create(
                 team=red, devbox_version=red.devbox_version, logging_attempt=attempt
             )
+
+    # Red Team's run in the round and a snapshot of the infrastructure: what
+    # the PROGRESSION page and the staff TOPOLOGY player replay.
+    _demo_run(round, red, now)
+    _demo_snapshot()
 
     # Access tokens for the first team (shown on the profile).
     AccessTokens.objects.get_or_create(
@@ -248,3 +276,140 @@ def populate(request: HttpRequest):
         "Switch into a team's user below to see their views.",
     )
     return _back(request)
+
+
+def _demo_run(round, team, now):
+    """A finished run of `team` in `round`, 30 minutes ago: three sandbox VMs
+    on two networks; the worm starts on web-0, captures it and db-1, probes
+    vault-2 (never captured, so the team does not see it), submits flags and
+    sends logs; the monitor's connections in between. Idempotent."""
+    from django.db.models import Max
+
+    from core.models.logging import Logging, LoggingAttempt
+    from core.models.monitoring import NetworkFlow
+    from core.models.rounds import RoundRun, RunEvent
+    from core.models.scoring import FlagCapture, FlagCaptureAttempt
+    from core.models.vm import VirtualMachine
+
+    if RoundRun.objects.filter(round=round, team=team).exists():
+        return
+    start = now - timedelta(minutes=30)
+
+    def at(seconds):
+        return start + timedelta(seconds=seconds)
+
+    position = (RoundRun.objects.filter(round=round).aggregate(last=Max("position"))["last"] or 0) + 1
+    run = RoundRun.objects.create(
+        round=round, team=team, position=position, seed=7, state=RoundRun.State.FINISHED,
+        sandbox_params={"start_vm": "web-0"}, worm_start_at=start, ends_at=at(600), finished_at=at(660),
+    )  # fmt: skip
+    nets = {"dmz": {"name": "vmbr1000", "cidr": "10.64.0.0/24"}, "core": {"name": "vmbr1001", "cidr": "10.64.1.0/24"}}
+    vms = {}
+    for n, (name, addresses, on) in enumerate(
+        [("web-0", ["10.64.0.10"], ["dmz"]), ("db-1", ["10.64.0.11", "10.64.1.11"], ["dmz", "core"]), ("vault-2", ["10.64.1.12"], ["core"])]
+    ):
+        vms[name] = VirtualMachine.objects.create(
+            round=round, run=run, vm_identifier=name, vm_maintenance_ip=f"10.4.0.{30 + n}", proxmox_vm_id=7100 + n,
+            addresses=addresses, networks=[nets[k] for k in on], secret_released_at=at(5),
+            ctf_flag_hash=hashlib.sha256(f"demo-run-{run.uuid}-{name}".encode()).hexdigest(),
+        )  # fmt: skip
+
+    def event(seconds, kind, vm=None, **data):
+        RunEvent.objects.create(run=run, ts=at(seconds), kind=kind, vm=vm, data=data)
+
+    for seconds, state in [(-150, "preparing"), (-100, "checking"), (-60, "deploying"), (-20, "armed"), (0, "running"),
+                           (600, "ending"), (630, "tearing_down"), (660, "finished")]:  # fmt: skip
+        event(seconds, "state", state=state)
+    event(-30, "worm_deployed", worm_start_at=start.isoformat())
+    event(0, "worm_started")
+    for vm in vms.values():
+        event(5, "secret_released", vm)
+    event(300, "vm_stopped", vms["vault-2"])
+    event(360, "vm_started", vms["vault-2"])
+
+    def submit(seconds, flag_hash, captured=None):
+        attempt = FlagCaptureAttempt.objects.create(
+            team_uuid=str(team.uuid), vm_flag_hash=flag_hash, processed=True, processed_at=at(seconds + 1), created_at=at(seconds)
+        )
+        if captured is not None:
+            FlagCapture.objects.create(team=team, round=round, vm=captured, flag_capture_attempt=attempt)
+            event(seconds, "captured", captured, team=team.id, attempt=attempt.id)
+
+    submit(42, vms["web-0"].ctf_flag_hash, vms["web-0"])
+    submit(185, vms["db-1"].ctf_flag_hash, vms["db-1"])
+    submit(240, vms["web-0"].ctf_flag_hash)  # already captured
+    submit(410, "0" * 64)  # not a flag
+
+    for seconds, data in [
+        (60, {"event": "infected", "host": "web-0"}),
+        (190, {"event": "infected", "host": "db-1", "via": "ssh"}),
+        (420, {"event": "scan", "from": "db-1", "targets": ["10.64.1.12"], "open": [22]}),
+    ]:
+        attempt = LoggingAttempt.objects.create(
+            team_uuid=str(team.uuid), log_data=data, processed=True, processed_at=at(seconds + 1), created_at=at(seconds)
+        )
+        Logging.objects.create(team=team, round=round, logging_attempt=attempt)
+
+    web, db, db_core, vault = "10.64.0.10", "10.64.0.11", "10.64.1.11", "10.64.1.12"
+    scoring, logging, dns, apt = "10.2.0.14", "10.2.0.15", "10.2.0.11", "10.2.0.20"
+    flows = [
+        (3, 1.2, web, apt, 80, "tcp", "http", "SF"),
+        (40, 0.3, web, scoring, 443, "tcp", "ssl", "SF"),
+        (58, 0.3, web, logging, 443, "tcp", "ssl", "SF"),
+        (90, 2.5, web, db, 22, "tcp", "ssh", "SF"),
+        (120, 0.1, web, db, 3306, "tcp", None, "REJ"),
+        (150, 6.0, web, db, 22, "tcp", "ssh", "SF"),
+        (183, 0.3, db, scoring, 443, "tcp", "ssl", "SF"),
+        (188, 0.3, db, logging, 443, "tcp", "ssl", "SF"),
+        (238, 0.3, web, scoring, 443, "tcp", "ssl", "SF"),
+        (260, 1.0, db_core, vault, 22, "tcp", "ssh", "SF"),
+        (330, 0.1, db_core, vault, 445, "tcp", None, "S0"),
+        (408, 0.3, db, scoring, 443, "tcp", "ssl", "SF"),
+        (418, 0.3, db, logging, 443, "tcp", "ssl", "SF"),
+    ] + [(seconds, 0.05, web if seconds % 2 else db, dns, 53, "udp", "dns", "SF") for seconds in range(10, 600, 25)]
+    for i, (seconds, duration, src, dst, port, transport, service, state) in enumerate(flows):
+        NetworkFlow.objects.create(
+            uid=f"Cdemo{run.id}n{i}", ts=at(seconds), duration=duration, src_ip=src, src_port=40000 + i, dst_ip=dst,
+            dst_port=port, transport=transport, service=service, conn_state=state, src_ip_bytes=300 + 40 * i,
+            dst_ip_bytes=1200 + 90 * i, src_pkts=4 + i % 5, dst_pkts=3 + i % 4,
+        )  # fmt: skip
+
+
+def _demo_snapshot():
+    """A Proxmox snapshot with the infrastructure and the private internet
+    (no sandbox: no run is in progress), unless one was collected."""
+    from core.models.topology import TopologySnapshot
+    from django.utils import timezone
+
+    if TopologySnapshot.objects.filter(source="proxmox").exists():
+        return
+
+    def guest(vmid, name, nics, pool="persistent", tags=""):
+        config = {"name": name}
+        for i, (bridge, cidr) in enumerate(nics):
+            config[f"net{i}"] = f"virtio=BC:24:11:00:{vmid % 256:02X}:{i:02X},bridge={bridge},firewall=1"
+            config[f"ipconfig{i}"] = f"ip={cidr}"
+        return {
+            "vmid": vmid, "type": "qemu", "name": name, "status": "running", "pool": pool, "tags": tags, "config": config,
+            "firewall": {"options": {"enable": 1, "policy_in": "DROP", "policy_out": "DROP"}, "rules": [], "aliases": {}, "ipsets": {}},
+        }  # fmt: skip
+
+    guests = [
+        guest(101, "database", [("vmbr21", "10.11.0.16/24")]),
+        guest(102, "orchestrator", [("vmbr21", "10.11.0.19/24")]),
+        guest(103, "dashboard", [("vmbr20", "10.10.0.18/24")]),
+        guest(104, "scoring", [("vmbr23", "10.2.0.14/24"), ("vmbr22", "10.12.0.14/24")], pool="ephemeral"),
+        guest(105, "logging", [("vmbr23", "10.2.0.15/24"), ("vmbr22", "10.12.0.15/24")], pool="ephemeral"),
+        guest(106, "monitor", [("vmbr22", "10.12.0.100/24")], pool="ephemeral"),
+        guest(110, "dns", [("vmbr23", "10.2.0.11/24")], pool="private_internet", tags="private_internet"),
+        guest(120, "apt-cache", [("vmbr23", "10.2.0.20/24")], pool="private_internet", tags="private_internet"),
+    ]
+    bridges = [("vmbr20", "10.10.0.1/24"), ("vmbr21", "10.11.0.1/24"), ("vmbr22", "10.12.0.1/24"), ("vmbr23", None)]
+    data = {
+        "schema": 1, "node": "worms-pve", "version": "8.4.1", "services": [{"name": "pve-firewall", "state": "running"}],
+        "networks": [{"iface": name, "type": "bridge", "cidr": cidr, "active": 1} for name, cidr in bridges],
+        "guests": guests,
+        "cluster_firewall": {"options": {"enable": 1, "policy_in": "DROP"}, "rules": [], "groups": [], "aliases": {}, "ipsets": {}},
+        "node_firewall": {"options": {"enable": 1}, "rules": []}, "host": {"api_port": 8006}, "errors": [],
+    }  # fmt: skip
+    TopologySnapshot.objects.create(source="proxmox", data=data, collected_at=timezone.now(), attempted_at=timezone.now())

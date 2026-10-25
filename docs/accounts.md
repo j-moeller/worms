@@ -84,7 +84,7 @@ VM's `/32`** (`pg_hba`, `roles/database/setup_db_base`). Grants in
 | **admin** | Django superuser, `is_staff=True` (Django admin + staff-only pages) | `manage.py init` (login disabled); one-time password from `worms admin reset-password` |
 | **students** | plain users, `is_staff=False`, `must_change_password=True` | `manage.py create_users` (CSV → one-time passwords) |
 | **tutors/staff** (optional) | `is_staff=True` | `manage.py create_users --staff` |
-| **team access tokens** | read-only: the team's own round scoring and logs through the team API (`docs/team_api.md`) — nothing of other teams, nothing writable | created/revoked by team members on the ACCESS page; stored as SHA-256 only |
+| **team access tokens** | read-only: the team's own round scoring, logs and progression through the team API (`docs/team_api.md`) — nothing of other teams, nothing writable | created/revoked by team members on their profile; stored as SHA-256 only |
 
 ### 1.4 Other credentials (the stores)
 

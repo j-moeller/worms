@@ -151,17 +151,20 @@ submission.
 
 ## Timeline (the round player's data)
 
-`GET /rounds/<uuid>/timeline/` (staff) returns, from
-`orchestrator/rounds/timeline.py`, everything the TOPOLOGY view's round player
-replays on a single clock (seconds from the worm's start):
+`orchestrator/rounds/timeline.py` assembles everything the round player
+replays on a single clock (seconds from the worm's start); it is served as
+part of the run's progression (`docs/progression.md`: staff at
+`/rounds/<uuid>/progression/`, the team — only what it captured — on the
+PROGRESSION page and through the team API):
 
 - `nodes` (sandbox VMs, which is the start VM, when each was captured),
   `networks`, `edges` — the sandbox to draw; `vm_status` — each VM's power
   state over time;
 - `events` — state changes, VMs stopped/started, secrets released, worm
   deployed/started, captures, plus the team's flag submissions (on scoring)
-  and logs (on logging), each attributed to the VM whose connection to that
-  server was open at the time (inferred: the servers only see the gateway);
+  and logs (on logging, as references to their records), each attributed to
+  the VM whose connection to that server was open at the time (inferred: the
+  servers only see the gateway);
 - `flows` — every connection from the monitor (`network_flows`) with an end
   in the run, the far end mapped to scoring / logging / DNS / a private
   internet VM through the live Proxmox snapshot: the dots;

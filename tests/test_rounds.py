@@ -10,6 +10,7 @@ the game plan timing, secret release and capture processing.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sys
 
@@ -473,7 +474,7 @@ def test_timeline_maps_flows_and_derives_submissions(one_run):
     FlagCaptureAttempt.objects.create(team_uuid=str(one_run["team"].uuid), vm_flag_hash=vm0.ctf_flag_hash or sha("sandbox-vm0"), created_at=at(7.5))
     FlagCaptureAttempt.objects.create(team_uuid=str(one_run["team"].uuid), vm_flag_hash="0" * 64, created_at=at(20))
     FlagCaptureAttempt.objects.create(team_uuid="someone-else", vm_flag_hash="1" * 64, created_at=at(21))
-    LoggingAttempt.objects.create(team_uuid=str(one_run["team"].uuid), log_data={"msg": "<img src=x onerror=alert(1)>"}, created_at=at(9.2))
+    log = LoggingAttempt.objects.create(team_uuid=str(one_run["team"].uuid), log_data={"msg": "<img src=x onerror=alert(1)>"}, created_at=at(9.2))
     call_command("process_attempts", "--once", "--grace", "120")
 
     infra = address_index(analyze(infra_fixture.snapshot()))
@@ -500,9 +501,10 @@ def test_timeline_maps_flows_and_derives_submissions(one_run):
     logs = [e for e in data["events"] if e["kind"] == "log_received"]
     assert len(logs) == 1 and logs[0]["node"] == "role:logging"
     assert logs[0]["data"]["source_vm"] == str(vm0.uuid) and logs[0]["data"]["stored"]
-    # Attacker-controlled content is passed through as data (the player
-    # renders it as text), never interpreted here.
-    assert logs[0]["data"]["log"]["data"] == {"msg": "<img src=x onerror=alert(1)>"}
+    # A log is a reference to its record (fetched on demand), with its size:
+    # the record itself is not in the timeline.
+    assert logs[0]["data"]["log"]["ref"] == str(log.uuid) and logs[0]["data"]["log"]["size"] > 20
+    assert "onerror" not in json.dumps(data)
 
     # Without the live index the far end is still reported, by address.
     bare = {f["uid"]: f for f in timeline.build(run)["flows"]}
@@ -524,18 +526,25 @@ def test_timeline_maps_flows_and_derives_submissions(one_run):
         assert set(real["data"]) == set(synthetic["data"]), kind
 
 
-def test_topology_endpoints_are_staff_only_and_serve_the_player(one_run):
-    """/topology/data/, /topology/runs/ and the run timeline: staff only; the
-    model comes from the stored snapshot; the runs feed the round/team tabs;
-    the timeline resolves service addresses through the live snapshot."""
+def test_topology_endpoints_are_staff_only_and_serve_the_player(one_run, request):
+    """/topology/data/, /topology/runs/ and the run's progression: staff only;
+    the model comes from the stored snapshot; the runs feed the round/team
+    tabs; the progression resolves service addresses through the live
+    snapshot."""
     import json as _json
+
+    from django.test import override_settings
+
+    urls = override_settings(ROOT_URLCONF="dashboard.urls")  # the progression links to its flows / logs
+    urls.enable()
+    request.addfinalizer(urls.disable)
 
     import infra_fixture
     from core.models.monitoring import NetworkFlow
     from core.models.rounds import RoundRun
     from core.models.topology import TopologySnapshot
     from core.models.user import User
-    from dashboard.views import rounds as rounds_views
+    from dashboard.views import progression as progression_views
     from dashboard.views import topology as topology_views
     from django.contrib.auth.models import AnonymousUser
     from django.test import RequestFactory
@@ -567,7 +576,7 @@ def test_topology_endpoints_are_staff_only_and_serve_the_player(one_run):
     topology_views._cache.clear()
 
     for view, args in [(topology_views.topology_data, ()), (topology_views.topology_runs, ()),
-                       (rounds_views.round_timeline_data, (run.uuid,))]:
+                       (progression_views.run_document, (run.uuid,)), (progression_views.run_flows, (run.uuid,))]:
         assert call(view, student, *args).status_code == 403
         assert call(view, AnonymousUser(), *args).status_code == 302  # to the login
         assert call(view, staff, *args).status_code == 200
@@ -588,17 +597,11 @@ def test_topology_endpoints_are_staff_only_and_serve_the_player(one_run):
 
     NetworkFlow.objects.create(uid="V1", ts=run.worm_start_at + timezone.timedelta(seconds=3), src_ip="10.64.0.10",
                                dst_ip="10.2.0.14", dst_port=443, transport="tcp")
-    timeline = _json.loads(call(rounds_views.round_timeline_data, staff, run.uuid).content)
-    assert timeline["flows"][0]["dst"] == "vm:104" and timeline["flows"][0]["kind"] == "scoring"
-
-
-def test_timeline_truncates_large_logs(one_run):
-    from orchestrator.rounds import timeline
-
-    small = timeline._preview({"a": 1})
-    assert small == {"data": {"a": 1}, "truncated": False}
-    big = timeline._preview({"a": "x" * 10000})
-    assert big["truncated"] and len(big["data"]) == timeline.LOG_PREVIEW and big["size"] > 10000
+    doc = _json.loads(call(progression_views.run_document, staff, run.uuid).content)
+    assert doc["format"] == "worms-progression" and doc["audience"] == "staff" and "flows" not in doc["timeline"]
+    assert doc["network"]["count"] == 1 and doc["network"]["url"].endswith(f"/rounds/{run.uuid}/progression/flows/")
+    flows = _json.loads(call(progression_views.run_flows, staff, run.uuid).content)["flows"]
+    assert flows[0]["dst"] == "vm:104" and flows[0]["kind"] == "scoring"
 
 
 @pytest.mark.parametrize("command", ["process_captures", "process_attempts"])

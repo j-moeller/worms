@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Progression{% endblock %}
+{% block head %}<link rel="stylesheet" href="{% static 'dashboard/css/topology.css' %}">{% endblock %}
+{% block content %}
+<header class="page-head">
+    <p class="page-head__kicker">{% if environment == "dev" %}Dev · your devbox{% else %}Live · your runs{% endif %}</p>
+    <h1 class="page-head__title">Round progression</h1>
+    <p class="page-head__lead">{% if environment == "dev" %}Replay what your worm did on your devbox during a round: the tokens it submitted, the logs it sent.{% else %}Replay your run in a round like a video: the VMs your worm captured, the flags it submitted, the logs it sent and its traffic.{% endif %} Only the VMs you captured in the round are shown.</p>
+</header>
+
+{% if not rounds %}
+<section class="panel"><div class="panel__body"><p class="empty">No rounds yet.</p></div></section>
+{% else %}
+{% comment %}Without JavaScript: the round links, a summary and the downloads.
+topology.js replaces the summary with the player (the same downloads are in
+its bar).{% endcomment %}
+<nav class="round-tabs" aria-label="Rounds" data-progression-tabs>
+    {% for item in rounds %}
+    <a class="round-tabs__tab" href="?round={{ item.round.id }}"{% if item.round.id == selected.id %} aria-current="page"{% endif %}>{{ item.round.name }} <span class="badge{% if item.state == 'active' %} badge--accent{% endif %}">{{ item.state }}</span></a>
+    {% endfor %}
+</nav>
+
+{% if selected %}
+<section class="panel" aria-labelledby="summary-title" data-progression-summary>
+    <header class="panel__head">
+        <h2 class="panel__title" id="summary-title">{{ selected.name }}</h2>
+        <p class="panel__meta">{% if selected.round_start %}<time datetime="{{ selected.round_start|date:'c' }}" data-localtime>{{ selected.round_start }}</time>{% endif %}{% if selected.round_end %} – <time datetime="{{ selected.round_end|date:'c' }}" data-localtime>{{ selected.round_end }}</time>{% endif %}</p>
+    </header>
+    <div class="panel__body">
+        <dl class="kv">
+            <dt>Round</dt><dd>{{ selected_state }}</dd>
+            {% if environment == "live" %}<dt>Your run</dt><dd>{% if summary.run %}{{ summary.run.state }}{% else %}not planned{% endif %}</dd>{% endif %}
+            <dt>Flags submitted</dt><dd>{{ summary.submissions }}</dd>
+            <dt>Logs sent</dt><dd>{{ summary.logs }}</dd>
+        </dl>
+        <h3>Captured VMs ({{ summary.captures|length }})</h3>
+        {% if summary.captures %}
+        <div class="table-wrap">
+            <table class="table">
+                <thead><tr><th scope="col">VM</th><th scope="col">Captured at</th></tr></thead>
+                <tbody>
+                    {% for capture in summary.captures %}
+                    <tr><th scope="row" class="mono">{{ capture.vm }}</th><td><time datetime="{{ capture.at|date:'c' }}" data-localtime>{{ capture.at }}</time></td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="empty">Nothing captured in this round{% if selected_state != "finished" %} yet{% endif %}.</p>
+        {% endif %}
+        <p class="panel__actions">
+            <a class="btn btn--primary" href="{% url 'progression_download' selected.id %}" download>Download .zip</a>
+            <a class="btn btn--ghost" href="{% url 'progression_download' selected.id %}?logs=0&amp;network=0" download>Events only</a>
+            <a class="btn btn--ghost" href="{% url 'progression_data' selected.id %}">JSON</a>
+        </p>
+        <p class="muted">The replay needs JavaScript. The zip holds the round's progression (progression.json), every log record (logs/) and the network traffic (network/); “Events only” leaves both out. The same data is in the team API (see your profile).</p>
+    </div>
+</section>
+{% endif %}
+
+{% comment %}The player markup is template-free (topology/player.html) so the
+browser test can load it with fixture data; the endpoints come from here.{% endcomment %}
+<div class="topo" id="topo" hidden
+     data-audience="team"
+     data-environment="{{ environment }}"
+     data-round="{{ selected.id|default:'' }}"
+     data-rounds="{% url 'progression_rounds' %}"
+     data-progression="{% url 'progression_data' 0 %}"
+     data-download="{% url 'progression_download' 0 %}">
+{% include "topology/player.html" %}
+</div>
+<script src="{% static 'dashboard/js/topology.js' %}" defer></script>
+{% endif %}
+{% endblock %}

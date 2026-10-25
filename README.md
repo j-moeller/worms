@@ -369,14 +369,18 @@ Mirroring of the sandbox bridges to the monitor is automatic (`worms-mirror`
 on the host picks up every new sandbox NIC), so the monitor records the
 round's traffic without any per-round step.
 
-# Team API (scoring and logs as JSON)
+# Team API (scoring, logs and round progression)
 
 Teams download their own scoring (every flag their worm submitted in a round,
-with the result) and logs of a round as JSON with an access token from the
-ACCESS page: `GET /api/v1/rounds/`, `/api/v1/rounds/<id>/scoring/`,
+with the result) and logs of a round as JSON with an access token from their
+profile: `GET /api/v1/rounds/`, `/api/v1/rounds/<id>/scoring/`,
 `/api/v1/rounds/<id>/logging/` with `Authorization: Bearer <token>`. Paged
 with an opaque cursor; page sizes, bytes per page, query time and request
-rates are capped (nginx + the app). Details: `docs/team_api.md`.
+rates are capped (nginx + the app). A round's whole **progression** — its
+clock, every event, log records and traffic — is at
+`/api/v1/rounds/<id>/progression/` (JSON, records and traffic fetched
+separately) and `/api/v1/rounds/<id>/progression.zip` (all in one; also for
+unfinished rounds). Details: `docs/team_api.md`, `docs/progression.md`.
 
 # Topology view (dashboard → TOPOLOGY, staff only)
 
@@ -391,17 +395,23 @@ A–B/B–C links. Hovering a VM shows its bridges, security groups and rules.
 Tabs select a round and then a team to **replay that run** like a video:
 connections as dots along the edges, events (worm start, secrets, VMs stopped,
 captures, flag submissions, logs) as icons on the VMs — click one to pause and
-see the details — and a seekable timeline. **Download JSON** saves the
-infrastructure and the selected run as one file; **Open JSON…** views such a
-file again, offline (read locally, validated, never uploaded). Details:
-`docs/visualization.md`.
+see the details — and a seekable timeline. **Download** saves the run as a
+zip (its progression, log records and traffic) or what is shown as one JSON
+file; **Open file…** views either again, offline (read locally, validated,
+never uploaded). Details: `docs/visualization.md`.
+
+Teams get the same player on their **PROGRESSION** page: their own rounds,
+with only the VMs they captured, scoring, logging and the private internet —
+no infrastructure, no firewall — and the round's start, end and now. They can
+download a round as a zip there or through the team API. Format and rules:
+`docs/progression.md`.
 
 Data flow: `orchestrator` runs `manage.py collect_topology` every 2 minutes
 (systemd timer `orchestrator-collect-topology.timer`), reads Proxmox with a
 read-only token (GET only, config fields whitelisted, no cloud-init secrets),
 and upserts one row in `topology_snapshots`. The dashboard analyses that row
 (`dashboard/infra_view.py`) and serves it at `/topology/data/`; a run's replay
-comes from `/rounds/<uuid>/timeline/` (`orchestrator/rounds/timeline.py`).
+comes from `/rounds/<uuid>/progression/` (`orchestrator/rounds/progression.py`).
 
 Credentials (the user/token are assumed to exist, role `PVEAuditor` on `/`
 for the user and, with privilege separation, for the token):

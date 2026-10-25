@@ -12,6 +12,8 @@ only runs when request.is_dev_environment is set.
 
 from __future__ import annotations
 
+import json
+
 from core.models.devbox import Devbox, DevboxCapture, DevboxLog, DevboxSSHKey, DevboxVM
 from core.models.team import Team
 from dashboard.views.decorators import user_in_team_required
@@ -25,6 +27,12 @@ from django.db.models import F
 from django.http import HttpRequest
 from django.shortcuts import redirect
 from django.views.decorators.http import require_POST
+
+
+def pretty(log_data) -> str:
+    """The worm's log entry as indented JSON text. The template escapes it:
+    it is attacker-controlled (written by the worm via the logging API)."""
+    return json.dumps(log_data, indent=2, ensure_ascii=False)
 
 
 def home(request: HttpRequest):
@@ -57,8 +65,6 @@ def devbox_home(request: HttpRequest, team: Team):
             f"ssh -J {devbox.ssh_gateway_user}@{devbox.ssh_gateway_host}"
             f":{devbox.ssh_gateway_port} root@{main_vm.ssh_fabric_ip}"
         )
-
-    from dashboard.views.logging import pretty
 
     logs = [
         {"entry": entry, "data": pretty(entry.logging_attempt.log_data)}

@@ -1,7 +1,8 @@
-// The TOPOLOGY page's replay bundle: download what is shown, then open the
-// file in a page whose server endpoints all fail (an offline viewer), and
-// feed it broken and hostile files. Prints observations as JSON; the
-// assertions are in tests/test_topology_page.py.
+// The round player's files: download what is shown (a progression JSON), then
+// open files in a page whose server endpoints all fail (an offline viewer):
+// that JSON, the server's zip (log records read from it), a file of the
+// earlier format, broken, crafted and hostile files. Prints observations as
+// JSON; the assertions are in tests/test_topology_page.py.
 //
 //   node topology_replay.js <page.html> <fixtures dir> <work dir>
 const fs = require("fs");
@@ -27,9 +28,13 @@ async function openPage(browser, offline, counters) {
         if (offline) return json(JSON.stringify({ error: "server unavailable" }), 503);
         if (url.pathname === "/model") return json(read("model.json"));
         if (url.pathname === "/runs") return json(read("runs.json"));
-        if (url.pathname.startsWith("/rounds/") && url.pathname.includes(JSON.parse(read("runs.json")).rounds[0].runs[0].uuid)) return json(read("timeline.json"));
+        const run = `/rounds/${JSON.parse(read("runs.json")).rounds[0].runs[0].uuid}/progression/`;
+        if (url.pathname === run) return json(read("progression.json"));
+        if (url.pathname === `${run}flows/`) return json(read("flows.json"));
+        if (url.pathname.startsWith(`${run}logs/`)) return json(read("log.json"));
         return json(JSON.stringify({ error: "Not found" }), 404);
     });
+    page.on("request", (request) => { if (!request.url().startsWith(ORIGIN)) counters.foreign.push(request.url()); });
     await page.route(/^https?:\/\/(?!worms\.test)/, (route) => route.abort());
     await page.goto(`${ORIGIN}/page`);
     return page;
@@ -45,6 +50,7 @@ const state = (page) => page.evaluate(() => {
 });
 
 async function download(page, file) {
+    await page.evaluate(() => { document.getElementById("topo-download-menu").open = true; });
     const [dl] = await Promise.all([page.waitForEvent("download"), page.locator("#topo-download").click()]);
     const target = path.join(work, file);
     await dl.saveAs(target);
@@ -53,6 +59,19 @@ async function download(page, file) {
 
 async function openFile(page, file) {
     await page.locator("#topo-file").setInputFiles(file);
+}
+
+// Open the first log event of what is shown; its record as the side panel shows it.
+async function openLog(page) {
+    await page.evaluate(() => {
+        const s = document.getElementById("topo").topoState;
+        const e = s.timeline.events.find((x) => x.kind === "log_received");
+        s.selected = null;
+        document.querySelectorAll("#topo-side button").forEach((b) => { if (b.textContent.includes("Back")) b.click(); });
+        [...document.querySelectorAll("#topo-feed li")].find((li) => Number(li.dataset.t) === e.t).click();
+    });
+    await page.waitForFunction(() => { const pre = document.querySelector("#topo-side pre.log-record"); return pre && !pre.textContent.startsWith("Loading"); });
+    return page.locator("#topo-side pre.log-record").innerText();
 }
 
 async function seekUI(page, t) {
@@ -65,24 +84,25 @@ async function seekUI(page, t) {
     const browser = await chromium.launch();
 
     // --- download from the live page -------------------------------------
-    const online = { requests: [] };
+    const online = { requests: [], foreign: [] };
     const page = await openPage(browser, false, online);
     await page.waitForSelector("[data-node]");
     const infra = await download(page, "infrastructure.json");
     await page.locator("#topo-rounds .topo-tab", { hasText: "R1" }).click();
-    await page.waitForFunction(() => document.getElementById("topo").topoState.timeline);
+    await page.waitForFunction(() => { const s = document.getElementById("topo").topoState; return s.timeline && s.timeline.flowsLoaded; });
     const replay = await download(page, "replay.json");
     out.checks.download = {
         infraName: infra.suggested, replayName: replay.suggested,
-        format: replay.json.format, version: replay.json.version, source: replay.json.source,
-        modelNodes: replay.json.model.nodes.length, flows: replay.json.timeline.flows.length,
+        format: replay.json.format, version: replay.json.version, audience: replay.json.audience,
+        sceneNodes: replay.json.scene.nodes.length, flows: replay.json.timeline.flows.length,
         events: replay.json.timeline.events.length, sandboxVMs: replay.json.timeline.nodes.length,
-        infraTimeline: infra.json.timeline, infraNodes: infra.json.model.nodes.length,
-        keys: Object.keys(replay.json).sort(), modelKeys: Object.keys(replay.json.model).sort(),
+        infraTimeline: infra.json.timeline, infraNodes: infra.json.scene.nodes.length,
+        keys: Object.keys(replay.json).sort(), sceneKeys: Object.keys(replay.json.scene).sort(),
+        logs: replay.json.logs, network: replay.json.network,
     };
 
     // --- an offline viewer: every endpoint fails ------------------------------
-    const offline = { requests: [] };
+    const offline = { requests: [], foreign: [] };
     const viewer = await openPage(browser, true, offline);
     await viewer.waitForFunction(() => document.getElementById("topo").topoState.modelError);
     out.checks.offlineBefore = await state(viewer);
@@ -107,11 +127,39 @@ async function seekUI(page, t) {
 
     // Round trip: downloading the opened file gives the same data back.
     const again = await download(viewer, "again.json");
-    out.checks.roundTrip = {
-        model: JSON.stringify(again.json.model) === JSON.stringify(replay.json.model),
-        timeline: JSON.stringify(again.json.timeline) === JSON.stringify(replay.json.timeline),
-        source: again.json.source,
+    const same = (key) => JSON.stringify(again.json[key]) === JSON.stringify(replay.json[key]);
+    out.checks.roundTrip = { scene: same("scene"), timeline: same("timeline"), clock: same("clock"), round: same("round"), team: same("team") };
+
+    // The server's zip: flows from network/flows.jsonl, log records from logs/.
+    const beforeZip = offline.requests.length;
+    await openFile(viewer, path.join(fixtures, "round.zip"));
+    await viewer.waitForFunction(() => { const s = document.getElementById("topo").topoState; return s.mode === "file" && s.file && s.file.name === "round.zip"; });
+    out.checks.zip = {
+        state: await state(viewer),
+        flows: await viewer.evaluate(() => document.getElementById("topo").topoState.timeline.flows.length),
+        log: await openLog(viewer),
+        xss: await viewer.evaluate(() => window.__xss === 1),
+        imgs: await viewer.locator("img").count(),
     };
+    out.checks.zip.requests = offline.requests.slice(beforeZip).filter((p) => p !== "/model");
+    await viewer.screenshot({ path: path.join(work, "topology-zip.png") });
+
+    // A file of the earlier format: model + timeline, inline logs.
+    await openFile(viewer, path.join(fixtures, "legacy.json"));
+    await viewer.waitForFunction(() => { const s = document.getElementById("topo").topoState; return s.mode === "file" && s.file && s.file.name === "legacy.json"; });
+    out.checks.legacy = {
+        state: await state(viewer),
+        flows: await viewer.evaluate(() => document.getElementById("topo").topoState.timeline.flows.length),
+        log: await openLog(viewer),
+    };
+
+    // A progression pointing at other servers: nothing is fetched from there.
+    await openFile(viewer, path.join(fixtures, "elsewhere.json"));
+    await viewer.waitForFunction(() => { const s = document.getElementById("topo").topoState; return s.mode === "file" && s.file && s.file.name === "elsewhere.json"; });
+    out.checks.elsewhere = { state: await state(viewer), log: await openLog(viewer) };
+    await viewer.waitForTimeout(300);
+    out.checks.elsewhere.evilRequests = offline.foreign.filter((u) => u.includes("evil"));
+    out.checks.elsewhere.xss = await viewer.evaluate(() => window.__xss === 1);
 
     // The infrastructure-only file: a static picture, no player.
     await openFile(viewer, infra.path);
@@ -121,7 +169,8 @@ async function seekUI(page, t) {
 
     // Broken files: an error, and the view stays as it was.
     out.checks.broken = {};
-    for (const name of ["notjson.json", "wrongformat.json", "version99.json", "nodesnotlist.json", "big.json"]) {
+    for (const name of ["notjson.json", "wrongformat.json", "version99.json", "nodesnotlist.json", "big.json", "nodoc.zip", "liar.zip", "huge.zip"]) {
+        await viewer.evaluate(() => { document.getElementById("topo-banner").hidden = true; });
         await openFile(viewer, path.join(fixtures, name));
         await viewer.waitForSelector("#topo-banner.error:not([hidden])");
         out.checks.broken[name] = { banner: await viewer.locator("#topo-banner").innerText(), state: await state(viewer) };

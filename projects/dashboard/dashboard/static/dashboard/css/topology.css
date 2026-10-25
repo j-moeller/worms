@@ -62,6 +62,9 @@
             --shadow: 0 8px 24px rgba(0, 0, 0, .45);
         }
     }
+    .topo[hidden] { display: none; }
+    /* The Dev environment's accent (the themes pin the player's palette). */
+    html[data-env="dev"] .topo { --accent: var(--accent-dev, #15803d); }
     .topo * { box-sizing: border-box; }
     .topo button, .topo select {
         font: inherit; font-size: 13px; color: var(--ink); background: var(--panel);
@@ -77,6 +80,22 @@
     .topo-meta .stale, .topo-meta .err { color: var(--warn); font-weight: 600; }
     .topo-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
     .topo-actions label { font-size: 13px; color: var(--muted); display: inline-flex; gap: 5px; align-items: center; cursor: pointer; }
+    .topo-actions label[hidden] { display: none; }
+    /* The Download menu (a <details>: works as a menu without more script). */
+    .topo-menu { position: relative; }
+    .topo-menu > summary {
+        list-style: none; cursor: pointer; font-size: 13px; color: var(--ink); background: var(--panel);
+        border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px;
+    }
+    .topo-menu > summary::-webkit-details-marker { display: none; }
+    .topo-menu > summary:hover, .topo-menu[open] > summary { border-color: var(--accent); }
+    .topo-menu__panel {
+        position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; min-width: 240px; display: grid; gap: 8px;
+        padding: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow);
+    }
+    .topo-menu__panel a { color: var(--accent); font-weight: 600; font-size: 13px; }
+    .topo-menu__panel a[hidden], .topo-menu__panel [hidden] { display: none; }
+    .topo-menu__panel div { display: grid; gap: 4px; }
 
     .topo-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 0; }
     .topo-tabs.sub { border-bottom: none; padding: 6px 0 2px; gap: 6px; }
@@ -171,6 +190,9 @@
     }
     .topo-track .mark { position: absolute; top: 17px; width: 2px; height: 11px; margin-left: -1px; border-radius: 1px; }
     .topo-track .mark.big { top: 13px; height: 19px; width: 3px; margin-left: -1.5px; }
+    /* The round's start / end, and now (a running round). */
+    .topo-track .mark.edge { top: 11px; height: 23px; background: var(--muted); opacity: .75; }
+    .topo-track .mark.now { top: 9px; height: 27px; width: 3px; margin-left: -1.5px; background: var(--accent); }
     .topo-track .hover {
         position: absolute; top: -20px; transform: translateX(-50%); font-size: 11px; font-family: "Share Tech Mono", monospace;
         background: var(--ink); color: var(--panel); padding: 1px 5px; border-radius: 3px; pointer-events: none; white-space: nowrap;
@@ -201,6 +223,9 @@
     .topo svg .vm.host.inactive text, .topo svg .vm.host.inactive text.muted { fill: var(--ink); }
     .topo svg .vm.inactive text { opacity: .55; }
     .topo svg .vm.absent { opacity: .45; }
+    /* A team's VM before its capture: a faint card (still opaque, so no line shows through). */
+    .topo svg .vm.uncaptured rect.card { stroke-dasharray: 3 3; }
+    .topo svg .vm.uncaptured text, .topo svg .vm.uncaptured .status { opacity: .4; }
     .topo svg .vm.captured rect.card { stroke: var(--c-flag); stroke-width: 2.4; }
     .topo svg .vm.start rect.card { stroke: var(--c-lan); stroke-width: 2.2; }
     .topo svg .vm.selected rect.card { stroke: var(--accent); stroke-width: 3; }

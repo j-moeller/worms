@@ -35,11 +35,19 @@ a live Proxmox host (the standing caveat — no node is available here).
 - **Dev view**: ✅ devbox score (tokens found at the current version), devbox
   logs, SSH-key management, reset (version bump + rebuild job), and the SSH
   command to the main VM through the gateway (`devbox.md`).
-- **Prod view**: ✅ leaderboard, round scoring/logging, zip upload, round
-  countdown/status (`dashboard/views/leaderboard.py`, `scoring.py`, `logging.py`,
-  `uploads.py`, the status presentation in `views/util.py`).
-- **Team API**: ✅ teams download their round scoring and logs as JSON with
-  an access token (bearer), paged, with item/byte/time/rate limits
+- **Prod view**: ✅ leaderboard, zip upload, round countdown/status
+  (`dashboard/views/leaderboard.py`, `uploads.py`, the status presentation in
+  `views/util.py`).
+- **Round progression**: ✅ a team replays its rounds (Live: its run; Dev: its
+  devbox) on the PROGRESSION page — only the VMs it captured, scoring,
+  logging and the private internet; never another team's devbox, other
+  sandbox VMs, infrastructure, firewall internals or secrets — and downloads
+  them (one format: JSON, or a zip with optional log records and traffic;
+  unfinished rounds included). The same format feeds the staff replay
+  (`orchestrator/rounds/progression.py`, `dashboard/views/progression.py`,
+  `docs/progression.md`, `tests/test_progression.py`).
+- **Team API**: ✅ teams download their round scoring, logs and progression
+  (JSON, zip) with an access token (bearer), with item/byte/time/rate limits
   (`dashboard/api.py`, `docs/team_api.md`, `tests/test_team_api.py`).
 - **Admin**: ✅ leaderboard + infrastructure/sandbox topology (VMs as nodes
   with their status, firewall groups/rules/bridges on hover, the operational
@@ -95,10 +103,12 @@ and gateway↔gateway is dropped at the host anyway); the PI VMs get a narrow
 
 ## Monitor
 
-- ✅ One monitor VM records all sandbox/devbox traffic to the database via a
+- ✅ One monitor VM records all sandbox traffic to the database via a
   host-side mirror (`worms-mirror`) into a receive-only capture NIC in
   promiscuous mode; Zeek + the shipper write `network_flows`/`network_events`
-  (`docs/monitoring.md`).
+  (`docs/monitoring.md`). Devbox bridges are not mirrored (unless added to
+  `host_mirror_extra_bridges`), so a Dev round's progression has no traffic
+  (`docs/progression.md`).
 
 ## Residual gaps / to verify on a live host
 

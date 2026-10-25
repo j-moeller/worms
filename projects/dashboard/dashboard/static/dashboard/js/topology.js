@@ -1,31 +1,43 @@
-/* The TOPOLOGY view: the infrastructure (live) and the round player.
+/* The round player: the TOPOLOGY view (staff) and the PROGRESSION page
+ * (a team), one script for both. It replays a round progression
+ * (orchestrator/rounds/progression.py, docs/progression.md) like a video.
  *
- * Data (JSON, staff only; docs/visualization.md):
- *   data-model     the live infrastructure model (dashboard/infra_view.py)
- *   data-runs      rounds of the current competition and their runs (the tabs)
- *   data-timeline  one run's timeline (orchestrator/rounds/timeline.py); the
- *                  all-zero uuid in the URL is replaced by the run's
+ * Staff (data-audience="staff"; docs/visualization.md):
+ *   data-model        the live infrastructure model (dashboard/infra_view.py)
+ *   data-runs         rounds of the current competition and their runs (the tabs)
+ *   data-progression  one run's progression; the all-zero uuid in the URL is
+ *                     replaced by the run's (data-download: its zip)
+ * Team (data-audience="team"):
+ *   data-rounds       the rounds of the active environment (the tabs)
+ *   data-progression  one round's progression; the round id 0 in the URL is
+ *                     replaced by the round's (data-download: its zip)
  *
- * The picture has a fixed layout: the Proxmox host, the orchestrator and the
- * dashboard on top, the database in the middle, scoring and logging below it,
- * then the devboxes, the sandbox and (to the right) the private internet. Only
- * operational connections are drawn, never a management network.
+ * A progression names where the rest is: its connections (network.url, or
+ * inline, or in the zip) and each log record (logs.url with {ref}, or in the
+ * zip) -- fetched when needed, so the picture is up at once.
  *
- * Selecting a round and a team replays that run: connections as dots along
- * the edges, events as icons on the VMs (click: pause + details), VM power
- * state and captures as they happen, with a seekable timeline.
+ * Staff see the fixed layout of the whole infrastructure: the Proxmox host,
+ * the orchestrator and the dashboard on top, the database in the middle,
+ * scoring and logging below it, then the devboxes, the sandbox and (to the
+ * right) the private internet. A team sees the scene its progression brings:
+ * scoring, logging, the private internet and the VMs it captured (the server
+ * decides what is in it; this script only draws it). Only operational
+ * connections are drawn, never a management network.
  *
- * Everything the view shows can be saved as one JSON file ("Download JSON":
- * the infrastructure model + the selected run's timeline) and viewed again
- * later ("Open JSON…", read locally, nothing is uploaded): the replay bundle,
- * docs/visualization.md.
+ * Replaying: connections as dots along the edges, events as icons on the VMs
+ * (click: pause + details), VM power state and captures as they happen, the
+ * round's start / end / now on a seekable timeline.
+ *
+ * What is shown can be saved ("Download": the round as a zip from the server,
+ * or what is shown as one JSON file) and viewed again later ("Open file…": a
+ * .zip or .json, read locally, nothing is uploaded).
  *
  * SECURITY: flows, logs and submitted flags come from the (malicious)
  * sandbox, and an opened file can come from anywhere. Every string is
  * rendered with textContent / text nodes; nothing from the data is ever
  * parsed as HTML. Server responses and files alike pass through the same
- * sanitizer (cleanModel / cleanTimeline): known fields only, coerced types,
- * capped sizes.
+ * sanitizer (cleanProgression / cleanModel / cleanTimeline): known fields
+ * only, coerced types, capped sizes; a file's URLs are never fetched.
  */
 (function () {
     "use strict";
@@ -36,11 +48,20 @@
     const SVG_NS = "http://www.w3.org/2000/svg";
     const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
     const cfg = {
+        audience: root.dataset.audience === "team" ? "team" : "staff",
+        environment: root.dataset.environment === "dev" ? "dev" : "live",
         model: root.dataset.model,
         runs: root.dataset.runs,
-        timeline: root.dataset.timeline,
+        rounds: root.dataset.rounds,
+        round: Number(root.dataset.round) || null,
+        progression: root.dataset.progression,
+        download: root.dataset.download,
         refreshMs: Number(root.dataset.refreshMs || 60000),
     };
+    // The team's page: its rounds, its scene; no infrastructure, no firewall.
+    const TEAM = cfg.audience === "team";
+    // A round's URL from the page's template (round id 0 / the all-zero run uuid).
+    const roundUrl = (template, id) => (TEAM ? template.replace(/\/rounds\/0\//, `/rounds/${encodeURIComponent(id)}/`) : template.replace(ZERO_UUID, id));
 
     // ------------------------------------------------------------------
     // DOM helpers (text only -- see SECURITY above)
@@ -155,12 +176,15 @@
     }
 
     // ------------------------------------------------------------------
-    // The replay bundle: sanitizer, export, import
+    // Progressions: sanitizer, files (.json, .zip), export
     // ------------------------------------------------------------------
 
-    const BUNDLE_FORMAT = "worms-topology-replay";
-    const BUNDLE_VERSION = 1;
+    const FORMAT = "worms-progression";
+    const VERSION = 1;
+    const LEGACY_FORMAT = "worms-topology-replay"; // files saved by the earlier TOPOLOGY view
+    const ZIP_DOCUMENT = "progression.json";
     const MAX_FILE_BYTES = Number(root.dataset.maxFileBytes) || 64 * 1024 * 1024;
+    const ZIP_MAX = { entries: 20000, json: 128 * 1024 * 1024, log: 1024 * 1024 };
     const CAP = { nodes: 10000, list: 100000, events: 200000, flows: 500000, rules: 4000, small: 512, status: 10000 };
     const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
     const KNOWN_ROLES = new Set(["proxmox", "orchestrator", "dashboard", "database", "scoring", "logging", "monitor", "wazuh",
@@ -275,38 +299,62 @@
         };
     }
 
-    // One run's timeline (orchestrator/rounds/timeline.py), sorted, with
-    // event ids and the time range recomputed.
-    function cleanTimeline(tl) {
+    // One round's timeline (orchestrator/rounds/timeline.py's shape, as a
+    // progression carries it), sorted, with event ids and the time range
+    // recomputed. `doc` (the progression around it) gives the clock and the
+    // labels when there is no run (a dev round, a run not planned yet).
+    function cleanFlow(f) {
+        const t = isObj(f) ? time(f.t) : null;
+        return t === null ? null : {
+            t, d: clamp(num(f.d, 0), 0, T_LIMIT), src: txt(f.src, 256), dst: txt(f.dst, 256), src_role: txt(f.src_role, 64),
+            dst_role: txt(f.dst_role, 64), src_name: txt(f.src_name, 256), dst_name: txt(f.dst_name, 256), kind: txt(f.kind, 32) || "other",
+            src_port: num(f.src_port), dst_port: num(f.dst_port), transport: txt(f.transport, 32), service: optTxt(f.service, 128),
+            conn_state: optTxt(f.conn_state, 16), bytes: num(f.bytes, 0), pkts: num(f.pkts, 0), uid: txt(f.uid, 128),
+        };
+    }
+
+    const cleanFlows = (v) => list(v, "flows", CAP.flows, cleanFlow).sort((a, b) => a.t - b.t);
+
+    // The span to play: the clock's, widened to whatever the data holds.
+    function widen(tl) {
+        let lo = tl.run.t_min;
+        let hi = tl.run.t_max;
+        for (const e of tl.events) { lo = Math.min(lo, e.t); hi = Math.max(hi, e.t); }
+        for (const f of tl.flows) { lo = Math.min(lo, f.t); hi = Math.max(hi, f.t + f.d); }
+        tl.run.t_min = lo;
+        tl.run.t_max = hi;
+        return tl;
+    }
+
+    function cleanTimeline(tl, doc) {
         if (!isObj(tl)) throw new Error("timeline must be an object");
-        const r = isObj(tl.run) ? tl.run : {};
+        const r = isObj(tl.run) ? tl.run : null;
+        const g = r || {};
+        const clock = (doc && doc.clock) || {};
         const events = list(tl.events, "timeline.events", CAP.events, (e) => {
             const t = isObj(e) ? time(e.t) : null;
             return t === null ? null : { t, kind: txt(e.kind, 64), node: optTxt(e.node, 256), vm: optTxt(e.vm, 256), data: isObj(e.data) ? e.data : {} };
         }).sort((a, b) => a.t - b.t);
         events.forEach((e, i) => { e.id = i; });
-        const flows = list(tl.flows, "timeline.flows", CAP.flows, (f) => {
-            const t = isObj(f) ? time(f.t) : null;
-            return t === null ? null : {
-                t, d: clamp(num(f.d, 0), 0, T_LIMIT), src: txt(f.src, 256), dst: txt(f.dst, 256), src_role: txt(f.src_role, 64),
-                dst_role: txt(f.dst_role, 64), src_name: txt(f.src_name, 256), dst_name: txt(f.dst_name, 256), kind: txt(f.kind, 32) || "other",
-                src_port: num(f.src_port), dst_port: num(f.dst_port), transport: txt(f.transport, 32), service: optTxt(f.service, 128),
-                conn_state: optTxt(f.conn_state, 16), bytes: num(f.bytes, 0), pkts: num(f.pkts, 0), uid: txt(f.uid, 128),
-            };
-        }).sort((a, b) => a.t - b.t);
-        let lo = Math.min(0, time(r.t_min) ?? 0);
-        let hi = Math.max(time(r.duration) ?? 0, time(r.t_max) ?? 0);
-        for (const e of events) { lo = Math.min(lo, e.t); hi = Math.max(hi, e.t); }
-        for (const f of flows) { lo = Math.min(lo, f.t); hi = Math.max(hi, f.t + f.d); }
-        return {
+        const inline = Array.isArray(tl.flows);
+        const uuid = txt(g.uuid, 64);
+        const round = doc && doc.round;
+        const team = doc && doc.team;
+        return widen({
             run: {
-                uuid: txt(r.uuid, 64), team: txt(r.team, 256), team_uuid: txt(r.team_uuid, 64), team_slug: optTxt(r.team_slug, 128),
-                round: txt(r.round, 256), state: txt(r.state, 32), position: num(r.position, 0),
-                worm_start_at: optTxt(r.worm_start_at, 64), ends_at: optTxt(r.ends_at, 64), start_vm: optTxt(r.start_vm, 256),
-                duration: time(r.duration), t_min: lo, t_max: hi,
+                present: !!r,
+                // Identifies what is played (the player keeps its speed per run).
+                key: uuid || `${doc ? doc.environment : ""}:${round ? round.id : ""}:${team ? team.uuid : ""}`,
+                uuid, team: txt(g.team, 256) || (team ? team.name : ""), team_uuid: txt(g.team_uuid, 64), team_slug: optTxt(g.team_slug, 128),
+                round: txt(g.round, 256) || (round ? round.name : ""), state: txt(g.state, 32), position: num(g.position),
+                worm_start_at: optTxt(g.worm_start_at, 64), ends_at: optTxt(g.ends_at, 64), start_vm: optTxt(g.start_vm, 256),
+                duration: time(g.duration) ?? clock.round_end ?? null,
+                t_min: Math.min(0, clock.t_min ?? 0, time(g.t_min) ?? 0),
+                t_max: Math.max(clock.t_max ?? 0, time(g.duration) ?? 0, time(g.t_max) ?? 0),
             },
             nodes: list(tl.nodes, "timeline.nodes", CAP.nodes, (n) => (isObj(n) && n.id !== undefined && n.id !== null ? {
                 id: txt(n.id, 256), label: txt(n.label, 256) || txt(n.id, 256), vmid: num(n.vmid), addresses: strings(n.addresses, "addresses"),
+                group: n.group === "devbox" ? "devbox" : "sandbox", devbox_role: ["a", "b", "c"].includes(n.devbox_role) ? n.devbox_role : null,
                 networks: list(n.networks, "networks", CAP.small, (x) => (isObj(x) ? { name: txt(x.name, 64), cidr: optTxt(x.cidr, 64) } : null)),
                 start_vm: bool(n.start_vm), captured: bool(n.captured), captured_at: time(n.captured_at),
             } : null)),
@@ -316,46 +364,193 @@
                 .map((x) => (Array.isArray(x) && time(x[0]) !== null ? [time(x[0]), txt(x[1], 32)] : null))
                 .filter(Boolean).sort((a, b) => a[0] - b[0]) : null)),
             events,
-            flows,
-            captures: list(tl.captures, "timeline.captures", CAP.list, (c) => (isObj(c) && time(c.t) !== null ? { t: time(c.t), vm: optTxt(c.vm, 256), team: num(c.team) } : null)),
+            flows: inline ? cleanFlows(tl.flows) : [],
+            flowsLoaded: inline,
+            captures: list(tl.captures, "timeline.captures", CAP.list, (c) => (isObj(c) && time(c.t) !== null ? { t: time(c.t), vm: optTxt(c.vm, 256) } : null)),
             truncated: isObj(tl.truncated) ? { flows: bool(tl.truncated.flows), flag_submissions: bool(tl.truncated.flag_submissions), logs: bool(tl.truncated.logs) } : {},
-        };
+        });
     }
 
-    // A replay bundle, as written by makeBundle (any source: validate it).
-    function readBundle(raw) {
-        if (!isObj(raw)) throw new Error("not a JSON object");
-        if (raw.format !== BUNDLE_FORMAT) throw new Error(`not a WORMS topology file (format must be "${BUNDLE_FORMAT}")`);
-        if (!Number.isInteger(raw.version) || raw.version < 1 || raw.version > BUNDLE_VERSION) {
-            throw new Error(`unsupported version ${txt(raw.version, 16) || "?"} (this page reads version ${BUNDLE_VERSION})`);
-        }
-        const source = isObj(raw.source) ? raw.source : {};
-        return {
-            model: cleanModel(raw.model),
-            timeline: raw.timeline === null || raw.timeline === undefined ? null : cleanTimeline(raw.timeline),
-            exported_at: optTxt(raw.exported_at, 64),
-            source: { mode: optTxt(source.mode, 16), run: optTxt(source.run, 64), from_file: optTxt(source.from_file, 256) },
-        };
+    // A URL in a document: a path on this site, and only in the server's
+    // own documents (an opened file is never a reason to fetch anything).
+    function sitePath(v, fromServer) {
+        const s = fromServer ? optTxt(v, 1024) : null;
+        return s && s.startsWith("/") && !s.startsWith("//") && !s.includes("\\") ? s : null;
     }
 
-    function makeBundle() {
-        return {
-            format: BUNDLE_FORMAT,
-            version: BUNDLE_VERSION,
-            exported_at: new Date().toISOString(),
-            source: {
-                mode: S.mode,
-                run: S.mode === "round" ? S.runUuid : S.mode === "file" && S.file ? S.file.source.run : null,
-                from_file: S.mode === "file" && S.file ? S.file.name : null,
+    // A progression (orchestrator/rounds/progression.py), from the server or a file.
+    function cleanProgression(p, fromServer) {
+        if (!isObj(p)) throw new Error("not a JSON object");
+        const c = isObj(p.clock) ? p.clock : {};
+        const rd = isObj(p.round) ? p.round : null;
+        const tm = isObj(p.team) ? p.team : null;
+        const lg = isObj(p.logs) ? p.logs : {};
+        const nw = isObj(p.network) ? p.network : {};
+        const doc = {
+            audience: p.audience === "team" ? "team" : "staff",
+            environment: p.environment === "dev" ? "dev" : "live",
+            generated_at: optTxt(p.generated_at, 64),
+            round: rd ? { id: num(rd.id), name: txt(rd.name, 256), competition: txt(rd.competition, 32), start: optTxt(rd.start, 64), end: optTxt(rd.end, 64) } : null,
+            team: tm ? { uuid: txt(tm.uuid, 64), name: txt(tm.name, 256) } : null,
+            clock: {
+                t0: optTxt(c.t0, 64), round_start: time(c.round_start), round_end: time(c.round_end), now: time(c.now),
+                finished: bool(c.finished), t_min: time(c.t_min), t_max: time(c.t_max),
             },
-            model: S.model || cleanModel({ nodes: [] }),
-            timeline: S.mode === "live" ? null : S.timeline,
+            scene: p.scene === null || p.scene === undefined ? null : cleanModel(p.scene),
+            logs: {
+                count: num(lg.count, 0), truncated: bool(lg.truncated), included: bool(lg.included),
+                path: optTxt(lg.path, 256), url: sitePath(lg.url, fromServer),
+            },
+            network: {
+                available: nw.available !== false, reason: optTxt(nw.reason, 512), count: num(nw.count, 0), truncated: bool(nw.truncated),
+                included: bool(nw.included), path: optTxt(nw.path, 256), url: sitePath(nw.url, fromServer),
+            },
+        };
+        doc.timeline = p.timeline === null || p.timeline === undefined ? null : cleanTimeline(p.timeline, doc);
+        return doc;
+    }
+
+    // A file of the earlier format (the TOPOLOGY view's "replay bundle": the
+    // infrastructure model and one run's timeline, logs and flows inline).
+    function fromLegacy(raw) {
+        const tl = isObj(raw.timeline) ? raw.timeline : null;
+        const r = tl && isObj(tl.run) ? tl.run : {};
+        return cleanProgression({
+            audience: "staff", environment: "live", generated_at: raw.exported_at,
+            round: tl ? { name: r.round } : null, team: tl ? { name: r.team, uuid: r.team_uuid } : null,
+            clock: tl ? { t_min: r.t_min, t_max: r.t_max } : {}, scene: raw.model, timeline: tl,
+            logs: { included: !!tl }, network: { available: true, included: !!tl },
+        }, false);
+    }
+
+    // A document from a file (any source: validate it).
+    function readDocument(raw) {
+        if (!isObj(raw)) throw new Error("not a JSON object");
+        const version = (max) => {
+            if (!Number.isInteger(raw.version) || raw.version < 1 || raw.version > max) {
+                throw new Error(`unsupported version ${txt(raw.version, 16) || "?"} (this page reads version ${max})`);
+            }
+        };
+        if (raw.format === LEGACY_FORMAT) {
+            version(1);
+            if (!isObj(raw.model)) throw new Error("model must be an object");
+            return fromLegacy(raw);
+        }
+        if (raw.format !== FORMAT) throw new Error(`not a WORMS progression (format must be "${FORMAT}")`);
+        version(VERSION);
+        return cleanProgression(raw, false);
+    }
+
+    // --- zip files (the server's download), read in the browser ---------
+
+    const u16 = (b, i) => b[i] | (b[i + 1] << 8);
+    const u32 = (b, i) => (b[i] | (b[i + 1] << 8) | (b[i + 2] << 16) | (b[i + 3] << 24)) >>> 0;
+    const ZIP_LOCAL = 0x04034b50;
+
+    // The members of a zip: name -> {method, csize, usize, local}, from its
+    // central directory.
+    function zipIndex(bytes) {
+        let eocd = -1;
+        for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 22 - 65535); i--) {
+            if (u32(bytes, i) === 0x06054b50) {
+                eocd = i;
+                break;
+            }
+        }
+        if (eocd < 0) throw new Error("not a zip file");
+        const count = u16(bytes, eocd + 10);
+        if (count > ZIP_MAX.entries) throw new Error(`more than ${ZIP_MAX.entries} files in the zip`);
+        const members = new Map();
+        const decoder = new TextDecoder();
+        let p = u32(bytes, eocd + 16);
+        for (let n = 0; n < count; n++) {
+            if (p + 46 > bytes.length || u32(bytes, p) !== 0x02014b50) throw new Error("damaged zip (central directory)");
+            const nameLength = u16(bytes, p + 28);
+            const entry = { flags: u16(bytes, p + 8), method: u16(bytes, p + 10), csize: u32(bytes, p + 20), usize: u32(bytes, p + 24), local: u32(bytes, p + 42) };
+            members.set(decoder.decode(bytes.subarray(p + 46, p + 46 + nameLength)), entry);
+            p += 46 + nameLength + u16(bytes, p + 30) + u16(bytes, p + 32);
+        }
+        return members;
+    }
+
+    // One member's bytes, inflated (at most `max` of them: a zip states its
+    // sizes, but a crafted one may lie about them).
+    async function zipRead(zip, name, max) {
+        const entry = zip.members.get(name);
+        if (!entry) return null;
+        if (entry.flags & 1) throw new Error("encrypted zips are not supported");
+        if (entry.usize > max) throw new Error(`${shorten(name, 80)} is too large (${fmtBytes(entry.usize)})`);
+        const bytes = zip.bytes;
+        const lo = entry.local;
+        if (lo + 30 > bytes.length || u32(bytes, lo) !== ZIP_LOCAL) throw new Error("damaged zip (local header)");
+        const start = lo + 30 + u16(bytes, lo + 26) + u16(bytes, lo + 28);
+        const data = bytes.subarray(start, start + entry.csize);
+        if (data.length !== entry.csize) throw new Error("damaged zip (truncated)");
+        if (entry.method === 0) return data;
+        if (entry.method !== 8) throw new Error("unsupported zip compression");
+        if (typeof DecompressionStream === "undefined") throw new Error("this browser cannot unpack zip files (open progression.json instead)");
+        const reader = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw")).getReader();
+        const chunks = [];
+        let size = 0;
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            size += value.length;
+            if (size > max || size > entry.usize) {
+                reader.cancel();
+                throw new Error(`${shorten(name, 80)} is larger than the zip says`);
+            }
+            chunks.push(value);
+        }
+        const out = new Uint8Array(size);
+        let at = 0;
+        for (const chunk of chunks) {
+            out.set(chunk, at);
+            at += chunk.length;
+        }
+        return out;
+    }
+
+    async function zipText(zip, name, max) {
+        const bytes = await zipRead(zip, name, max);
+        return bytes === null ? null : new TextDecoder().decode(bytes);
+    }
+
+    // --- export, import -------------------------------------------------
+
+    // What is shown, as one progression document (flows inline when they
+    // are loaded; log records stay references).
+    function makeBundle() {
+        const d = S.mode === "live" ? null : S.doc;
+        const tl = S.mode === "live" ? null : S.timeline;
+        let run = null;
+        if (tl && tl.run.present) {
+            run = Object.assign({}, tl.run);
+            delete run.present;
+            delete run.key;
+        }
+        return {
+            format: FORMAT,
+            version: VERSION,
+            generated_at: new Date().toISOString(),
+            audience: d ? d.audience : cfg.audience,
+            environment: d ? d.environment : cfg.environment,
+            round: d ? d.round : null,
+            team: d ? d.team : null,
+            clock: d ? d.clock : null,
+            scene: S.model || null,
+            timeline: tl ? Object.assign({
+                run, nodes: tl.nodes, networks: tl.networks, edges: tl.edges, vm_status: tl.vm_status, events: tl.events,
+                captures: tl.captures, truncated: tl.truncated,
+            }, tl.flowsLoaded ? { flows: tl.flows } : {}) : null,
+            logs: d ? Object.assign({}, d.logs, { included: false, path: null, url: null }) : null,
+            network: d ? Object.assign({}, d.network, { included: !!(tl && tl.flowsLoaded), count: tl ? tl.flows.length : 0, path: null, url: null }) : null,
         };
     }
 
     function bundleName() {
-        const tl = S.mode === "live" ? null : S.timeline;
-        const parts = tl ? ["worms", tl.run.round, tl.run.team] : ["worms", "infrastructure"];
+        const d = S.mode === "live" ? null : S.doc;
+        const parts = d && S.timeline ? ["worms", d.round ? d.round.name : "round", d.team ? d.team.name : "team", d.environment] : ["worms", "infrastructure"];
         parts.push(new Date().toISOString().slice(0, 19));
         return `${parts.join("-").replace(/[^A-Za-z0-9._-]+/g, "_")}.json`;
     }
@@ -364,29 +559,113 @@
         if (!S.model && !S.timeline) return notice("Nothing to download yet.", true);
         const blob = new Blob([JSON.stringify(makeBundle())], { type: "application/json" });
         const url = URL.createObjectURL(blob);
-        const link = el("a", { href: url, download: bundleName(), style: "display: none" });
+        const link = el("a", { href: url, download: bundleName(), hidden: true });
         document.body.appendChild(link);
         link.click();
         link.remove();
         setTimeout(() => URL.revokeObjectURL(url), 30000);
     }
 
+    // The server's zip of the round shown, with the parts asked for.
+    function zipUrl() {
+        const id = TEAM ? S.roundId : S.runUuid;
+        if (S.mode !== "round" || !cfg.download || id === null || id === undefined) return null;
+        const logs = $("topo-dl-logs").checked ? 1 : 0;
+        const network = $("topo-dl-network").checked && !(S.doc && !S.doc.network.available) ? 1 : 0;
+        return `${roundUrl(cfg.download, id)}?logs=${logs}&network=${network}`;
+    }
+
+    function updateDownload() {
+        const url = zipUrl();
+        const link = $("topo-dl-zip");
+        link.hidden = !url;
+        $("topo-dl-options").hidden = !url;
+        if (url) link.setAttribute("href", url);
+        const network = $("topo-dl-network");
+        network.disabled = !!(S.doc && !S.doc.network.available);
+        network.parentElement.title = network.disabled ? S.doc.network.reason || "No network data for this round." : "";
+    }
+
     async function openFile(file) {
         if (!file) return;
         try {
             if (file.size > MAX_FILE_BYTES) throw new Error(`too large (${fmtBytes(file.size)}; at most ${fmtBytes(MAX_FILE_BYTES)})`);
-            let raw;
-            try {
-                raw = JSON.parse(await file.text());
-            } catch (e) {
-                throw new Error("not valid JSON");
+            const bytes = new Uint8Array(await file.arrayBuffer());
+            let doc;
+            let zip = null;
+            if (bytes.length >= 4 && u32(bytes, 0) === ZIP_LOCAL) {
+                zip = { bytes, members: zipIndex(bytes) };
+                const text = await zipText(zip, ZIP_DOCUMENT, ZIP_MAX.json);
+                if (text === null) throw new Error(`no ${ZIP_DOCUMENT} in the zip`);
+                let raw;
+                try {
+                    raw = JSON.parse(text);
+                } catch (e) {
+                    throw new Error(`${ZIP_DOCUMENT} is not valid JSON`);
+                }
+                doc = readDocument(raw);
+                if (doc.timeline && doc.network.included && doc.network.path) {
+                    const lines = ((await zipText(zip, doc.network.path, ZIP_MAX.json)) || "").split("\n").filter((line) => line.trim());
+                    if (lines.length > CAP.flows) throw new Error(`more than ${CAP.flows} connections`);
+                    doc.timeline.flows = cleanFlows(lines.map((line) => {
+                        try {
+                            return JSON.parse(line);
+                        } catch (e) {
+                            return null;
+                        }
+                    }));
+                    doc.timeline.flowsLoaded = true;
+                    widen(doc.timeline);
+                }
+            } else {
+                let raw;
+                try {
+                    raw = JSON.parse(new TextDecoder().decode(bytes));
+                } catch (e) {
+                    throw new Error("neither a zip nor valid JSON");
+                }
+                doc = readDocument(raw);
             }
-            S.file = Object.assign({ name: txt(file.name, 200) || "replay.json" }, readBundle(raw));
+            S.file = { name: txt(file.name, 200) || "progression", doc, zip: doc.logs.included && doc.logs.path ? zip : null };
             notice(null);
             selectFile();
         } catch (error) {
             notice(`Could not open ${txt(file.name, 200)}: ${error.message}`, true);
         }
+    }
+
+    // --- log records: fetched (or read from the zip) when one is opened --
+
+    const REF = /^[0-9A-Za-z-]{1,64}$/;
+    const logCache = new Map();
+
+    // One record (a promise, kept: the same record is never fetched twice).
+    function loadLog(ref) {
+        if (!REF.test(ref)) return Promise.reject(new Error("not a log reference"));
+        const key = `${S.mode}:${S.mode === "file" ? S.file && S.file.name : S.doc && S.doc.logs.url}:${ref}`;
+        if (!logCache.has(key)) {
+            if (logCache.size > 200) logCache.clear();
+            logCache.set(key, fetchLog(ref).catch((error) => {
+                logCache.delete(key);
+                throw error;
+            }));
+        }
+        return logCache.get(key);
+    }
+
+    async function fetchLog(ref) {
+        let raw;
+        if (S.mode === "file") {
+            const f = S.file;
+            if (!f || !f.zip) throw new Error("This file has no log records (download the zip with log records to keep them).");
+            const text = await zipText(f.zip, f.doc.logs.path.replace("{ref}", ref), ZIP_MAX.log);
+            if (text === null) throw new Error("This log record is not in the zip.");
+            raw = JSON.parse(text);
+        } else {
+            if (!S.doc || !S.doc.logs.url) throw new Error("Log records are not available here.");
+            raw = await getJSON(S.doc.logs.url.replace("{ref}", encodeURIComponent(ref)));
+        }
+        return isObj(raw) && "data" in raw ? { received_at: optTxt(raw.received_at, 64), data: raw.data } : { received_at: null, data: raw };
     }
 
     function notice(text, isError) {
@@ -484,16 +763,20 @@
     // ------------------------------------------------------------------
 
     const S = {
-        model: null, // the model shown (live, or from the opened file)
-        liveModel: null, // the latest snapshot from the server
+        model: null, // the scene shown: the live model (staff), the progression's (team, a file)
+        liveModel: null, // the latest snapshot from the server (staff)
         modelError: null,
-        file: null, // an opened replay bundle {name, model, timeline, exported_at, source}
-        runs: null,
+        file: null, // an opened file {name, doc, zip}
+        runs: null, // staff: rounds and their runs (the tabs)
         runsError: null,
-        mode: "live", // "live" | "round" | "file"
+        rounds: null, // team: its rounds (the tabs)
+        roundsError: null,
+        mode: TEAM ? "round" : "live", // "live" | "round" | "file"
         roundId: null,
         runUuid: null,
-        timeline: null,
+        doc: null, // the progression played (from the server or the file)
+        timeline: null, // its timeline (doc.timeline)
+        flowsError: null,
         timelineError: null,
         loading: false,
         scene: null,
@@ -576,15 +859,21 @@
         const GROUPS_TOP = 500;
         const LEFT = 40;
 
+        // A team's scene: no infrastructure rows, one untrusted group (its
+        // sandbox, or its devbox in Dev), the VMs it captured.
+        const team = opts.audience === "team";
+        const runNodes = new Map(((tl && tl.nodes) || []).map((n) => [n.id, n]));
+
         // Devboxes (left column): one box per team, A - B - C.
         const devGroups = ((model && model.groups) || []).filter((g) => g.kind === "devbox")
-            .filter((g) => opts.mode !== "round" || g.team === opts.teamSlug);
+            .filter((g) => team || opts.mode !== "round" || g.team === opts.teamSlug);
         const DEV_W = 500;
         let devY = GROUPS_TOP;
         const devboxBoxes = [];
         for (const g of devGroups) {
             const box = { id: g.id, kind: "devbox", x: LEFT, y: devY, w: DEV_W, h: 132, label: g.label, info: g };
-            const members = g.members.map((id) => mnodes.find((n) => n.id === id)).filter(Boolean);
+            const members = g.members.map((id) => mnodes.find((n) => n.id === id)).filter(Boolean)
+                .map((m) => (runNodes.has(m.id) ? Object.assign({}, m, { run: runNodes.get(m.id) }) : m));
             const gap = (DEV_W - members.length * VM_CARD.w) / (members.length + 1);
             members.forEach((m, i) => {
                 const cx = LEFT + gap * (i + 1) + VM_CARD.w * i + VM_CARD.w / 2;
@@ -597,14 +886,20 @@
         const devBottom = devboxBoxes.length ? devY - 26 : GROUPS_TOP;
 
         // Sandbox (centre): from the timeline in round mode, else the live VMs.
+        // A team's Dev scene has none.
+        const withSandbox = !(team && opts.environment === "dev");
         const SB_X = LEFT + (devboxBoxes.length ? DEV_W + 50 : 0);
         let sbVMs;
         let sbNets;
         let sbMembership; // vm id -> [net id]
-        if (opts.mode === "round" && tl) {
-            sbVMs = tl.nodes.map((n) => ({
+        if (!withSandbox) {
+            sbVMs = [];
+            sbNets = [];
+            sbMembership = {};
+        } else if (opts.mode === "round" && tl) {
+            sbVMs = tl.nodes.filter((n) => n.group !== "devbox").map((n) => ({
                 id: n.id, name: n.label, role: "sandbox", vmid: n.vmid, run: n, status: "running", active: true,
-                addresses: n.addresses || [], networks: n.networks || [], tags: [], pool: "sandbox",
+                addresses: n.addresses || [], networks: n.networks || [], tags: [], pool: team ? "" : "sandbox",
             }));
             sbNets = (tl.networks || []).map((n) => ({ id: `net:${n.id}`, bridge: n.label || n.id, cidr: n.cidr, kind: "sandbox" }));
             sbMembership = {};
@@ -620,12 +915,12 @@
         const rowsEach = Math.max(1, Math.ceil(sbVMs.length / 2 / perRow));
         const SB_H = Math.max(240, 100 + (2 * rowsEach) * (VM_CARD.h + 30) + 40);
         const sbBox = {
-            id: "group:sandbox", kind: "sandbox", x: SB_X, y: GROUPS_TOP, w: SB_W, h: SB_H,
+            id: "group:sandbox", kind: "sandbox", x: SB_X, y: GROUPS_TOP, w: withSandbox ? SB_W : 0, h: withSandbox ? SB_H : 0,
             label: opts.mode === "round" && tl ? `SANDBOX · ${tl.run.team} · ${tl.run.round}` : "SANDBOX",
             info: ((model && model.groups) || []).find((g) => g.id === "group:sandbox") || { id: "group:sandbox", kind: "sandbox", members: [] },
             empty: sbVMs.length === 0,
         };
-        scene.groups.push(sbBox);
+        if (withSandbox) scene.groups.push(sbBox);
         // Network hubs on the box's middle line, VMs above and below, each
         // placed near the barycentre of its networks.
         const hubY = sbBox.y + sbBox.h / 2 + 8;
@@ -659,7 +954,7 @@
 
         // Private internet (right): DNS first, then the caches.
         const piNodes = [...(byRole.dns || []), ...(byRole.private_internet || [])];
-        const PI_X = sbBox.x + sbBox.w + 50;
+        const PI_X = withSandbox ? sbBox.x + sbBox.w + 50 : LEFT + DEV_W + 50;
         const PI_W = PI_CARD.w + 50;
         const piBox = {
             id: "group:pi", kind: "pi", x: PI_X, y: GROUPS_TOP, w: PI_W, h: Math.max(160, 60 + piNodes.length * (PI_CARD.h + 12)),
@@ -670,23 +965,27 @@
         scene.pi = { x: PI_X + PI_W / 2, y: GROUPS_TOP, box: piBox };
         scene.alias.set("pi", "group:pi");
 
-        // --- the top rows, spread over the total width.
+        // --- the top rows, spread over the total width (a team: scoring and
+        // logging only, above its group).
         const RIGHT = PI_X + PI_W;
         const mid = (LEFT + RIGHT) / 2;
-        addNode(first("proxmox"), LEFT + 120, 80, CARD, { sub: "hypervisor" });
-        addNode(first("orchestrator"), mid, 80, CARD);
-        addNode(first("dashboard"), RIGHT - 120, 80, CARD);
-        addNode(first("database"), mid, 220, CARD);
-        addNode(first("monitor"), mid - 380, 220, CARD, { sub: "traffic recorder" });
-        addNode(first("scoring"), mid - 170, 360, CARD);
-        addNode(first("logging"), mid + 170, 360, CARD);
-        if (opts.showAux) {
+        if (!team) {
+            addNode(first("proxmox"), LEFT + 120, 80, CARD, { sub: "hypervisor" });
+            addNode(first("orchestrator"), mid, 80, CARD);
+            addNode(first("dashboard"), RIGHT - 120, 80, CARD);
+            addNode(first("database"), mid, 220, CARD);
+            addNode(first("monitor"), mid - 380, 220, CARD, { sub: "traffic recorder" });
+        }
+        const serviceMid = team ? (withSandbox ? sbBox.x + sbBox.w / 2 : LEFT + DEV_W / 2) : mid;
+        addNode(first("scoring"), serviceMid - 170, 360, CARD, team ? { sub: "flag submissions" } : undefined);
+        addNode(first("logging"), serviceMid + 170, 360, CARD, team ? { sub: "your worm's logs" } : undefined);
+        if (opts.showAux && !team) {
             for (const n of byRole.wazuh || []) addNode(n, mid + 380, 220, CARD);
             for (const n of byRole.ssh_gateway || []) addNode(n, LEFT + 120, 360, CARD);
             (byRole.other || []).forEach((n, i) => addNode(n, LEFT + 80 + i * (CARD.w + 20), Math.max(devBottom, sbBox.y + sbBox.h, piBox.y + piBox.h) + 70, CARD));
         }
         // Extra VMs of a role that has a fixed slot (e.g. two scoring VMs) go next to it.
-        for (const role of ["orchestrator", "dashboard", "database", "scoring", "logging", "monitor"]) {
+        for (const role of team ? ["scoring", "logging"] : ["orchestrator", "dashboard", "database", "scoring", "logging", "monitor"]) {
             (byRole[role] || []).slice(1).forEach((n, i) => {
                 const base = scene.nodes.get(scene.byRole.get(role)[0]);
                 addNode(n, base.x, base.y + (i + 1) * (CARD.h + 12), CARD);
@@ -695,7 +994,8 @@
 
         // --- gateways: each group's anchor (a diamond on the box's top edge).
         const gateways = Object.fromEntries(mnodes.filter((n) => n.role === "sandbox_gw" || n.role === "devbox_gw").map((n) => [n.id, n]));
-        for (const box of [...devboxBoxes, sbBox]) {
+        const boxes = withSandbox ? [...devboxBoxes, sbBox] : devboxBoxes;
+        for (const box of boxes) {
             const gwId = box.info && box.info.gateway;
             const gw = gwId ? gateways[gwId] : null;
             const onRight = box.kind === "devbox";
@@ -710,6 +1010,7 @@
         // Devbox traffic leaves through the gutter between the devbox column
         // and the sandbox (one trunk for all teams), then the shared lane.
         const trunkX = LEFT + DEV_W + 25;
+        scene.team = team;
         const lead = (box) => (box.kind === "devbox"
             ? [pt(box.anchor), { x: trunkX, y: box.anchor.y }, { x: trunkX, y: scene.lane }]
             : [pt(box.anchor)]);
@@ -742,7 +1043,7 @@
         // Service edges: every group -> scoring, logging, the private internet.
         const serviceInfo = {};
         for (const e of edges) if (e.kind === "service") serviceInfo[`${e.source}>${e.target}`] = e;
-        for (const box of [...devboxBoxes, sbBox]) {
+        for (const box of boxes) {
             const a = box.anchor;
             for (const role of ["scoring", "logging"]) {
                 for (const id of scene.byRole.get(role) || []) {
@@ -957,7 +1258,7 @@
         if (g.kind === "sandbox" && g.empty) {
             node.appendChild(sv("text", {
                 class: "muted", x: g.x + g.w / 2, y: g.y + g.h / 2 + 4, "text-anchor": "middle",
-                text: replaying() ? "No VMs recorded for this run." : "No sandbox right now (no run in progress).",
+                text: S.scene.team ? "No VM captured in this round (yet)." : replaying() ? "No VMs recorded for this run." : "No sandbox right now (no run in progress).",
             }));
         }
         if (g.kind === "pi") {
@@ -1002,10 +1303,13 @@
         const a = g.anchor;
         const node = sv("g", { class: `anchor${a.gw ? "" : " missing"}`, transform: `translate(${a.x},${a.y})`, tabindex: 0 });
         node.appendChild(sv("path", { d: "M0,-9 L9,0 L0,9 L-9,0 Z" }));
-        node.appendChild(sv("text", {
-            class: "muted mono halo", x: a.labelLeft ? -13 : 13, y: a.labelLeft ? -10 : -6, "font-size": 10,
-            "text-anchor": a.labelLeft ? "end" : "start", text: fitText(a.gw ? a.gw.name : g.kind === "sandbox" ? "sandbox-gw" : "devbox-gw", 160, 10, true),
-        }));
+        // A team's scene shows where its traffic leaves the group, not the gateway VM.
+        if (!S.scene.team) {
+            node.appendChild(sv("text", {
+                class: "muted mono halo", x: a.labelLeft ? -13 : 13, y: a.labelLeft ? -10 : -6, "font-size": 10,
+                "text-anchor": a.labelLeft ? "end" : "start", text: fitText(a.gw ? a.gw.name : g.kind === "sandbox" ? "sandbox-gw" : "devbox-gw", 160, 10, true),
+            }));
+        }
         node.addEventListener("mouseenter", (ev) => showTip(ev, anchorTip(g)));
         node.addEventListener("mousemove", moveTip);
         node.addEventListener("mouseleave", hideTip);
@@ -1093,6 +1397,7 @@
             n.el.classList.toggle("inactive", !st.on);
             n.el.classList.toggle("absent", !!n.info.absent);
             n.el.classList.toggle("captured", !!captured);
+            n.el.classList.toggle("uncaptured", !!(S.scene.team && n.info.run && !captured));
             n.el.classList.toggle("start", !!(n.info.run && n.info.run.start_vm));
             n.statusEl.setAttribute("class", `status ${st.on ? "on" : "off"}`);
             if (n.info.run && n.subEl) {
@@ -1253,15 +1558,29 @@
             return el("div", null, parts);
         }
         if (info.run) {
-            parts.push(el("div", { class: "th" }, "Networks (vmbr)"));
-            for (const net of info.networks || []) parts.push(el("div", { class: "tl mono" }, `${net.name} ${net.cidr || ""}`));
-            parts.push(el("div", { class: "tl mono" }, `addresses: ${(info.addresses || []).join(", ")}`));
+            const nets = info.run.networks || info.networks || [];
+            if (nets.length) {
+                parts.push(el("div", { class: "th" }, S.scene.team ? "Networks" : "Networks (vmbr)"));
+                for (const net of nets) parts.push(el("div", { class: "tl mono" }, `${net.name} ${net.cidr || ""}`));
+            }
+            const addresses = info.run.addresses || info.addresses || [];
+            if (addresses.length) parts.push(el("div", { class: "tl mono" }, `addresses: ${addresses.join(", ")}`));
             if (info.run.start_vm) parts.push(el("div", { class: "tn" }, "Start VM: the worm is deployed here."));
             if (info.run.captured_at !== null && info.run.captured_at !== undefined) {
                 parts.push(el("div", { class: "tn" }, `Captured at ${fmtTime(info.run.captured_at)}.`));
             }
+            if (S.scene.team) {
+                parts.push(el("div", { class: "tn" }, "Click for its events."));
+                return el("div", null, parts);
+            }
             appendFirewall(parts, sandboxFirewall(), 6);
             parts.push(el("div", { class: "tn" }, "Groups as attached to every sandbox VM (opentofu/stacks/sandbox). Click for details."));
+            return el("div", null, parts);
+        }
+        if (S.scene.team) {
+            const what = { scoring: "Takes the flags your worm submits.", logging: "Takes the logs your worm sends.", dns: "Name service of the private internet.",
+                private_internet: "A mirror on the private internet (packages and the like)." };
+            if (what[n.role]) parts.push(el("div", { class: "tn" }, what[n.role]));
             return el("div", null, parts);
         }
         if (info.nics && info.nics.length) {
@@ -1295,6 +1614,10 @@
 
     function anchorTip(g) {
         const a = g.anchor;
+        if (S.scene.team) {
+            return el("div", null, el("div", { class: "tt" }, "Way out"),
+                el("div", { class: "ts" }, "Where the group's traffic leaves for scoring, logging and the private internet."));
+        }
         const parts = [el("div", { class: "tt" }, a.gw ? a.gw.name : g.kind === "sandbox" ? "sandbox-gw" : "devbox-gw")];
         parts.push(el("div", { class: "ts" }, `${ROLE_LABEL[g.kind === "sandbox" ? "sandbox_gw" : "devbox_gw"]} · routes the group's networks to the services (SNAT)`));
         if (!a.gw) {
@@ -1333,7 +1656,8 @@
         } else if (e.kind.startsWith("service")) {
             const g = sc.groups.find((x) => x.id === e.group);
             parts.push(el("div", { class: "tt" }, `${g ? g.label : "group"} → ${e.to === "group:pi" ? "private internet" : name(to)}`));
-            parts.push(el("div", { class: "ts" }, e.verified ? "allowed by the target's firewall (via the gateway)" : "by design — not verified (no live gateway / no matching rule)"));
+            if (sc.team) parts.push(el("div", { class: "ts" }, "what your worm can reach from here"));
+            else parts.push(el("div", { class: "ts" }, e.verified ? "allowed by the target's firewall (via the gateway)" : "by design — not verified (no live gateway / no matching rule)"));
             if (e.info.targets && e.info.targets.length) parts.push(el("div", { class: "tl" }, e.info.targets.join(", ")));
         } else {
             parts.push(el("div", { class: "tt" }, `${name(from)} — ${name(to, e.to)}`));
@@ -1349,10 +1673,12 @@
         }
         if (g.kind === "devbox") {
             return el("div", null, el("div", { class: "tt" }, g.label),
-                el("div", { class: "ts" }, "Three VMs, A–B and B–C; reaches scoring, logging and the private internet only (never the sandbox or another team)."));
+                el("div", { class: "ts" }, S.scene.team ? "Your devbox VMs that your worm found a token on in this round."
+                    : "Three VMs, A–B and B–C; reaches scoring, logging and the private internet only (never the sandbox or another team)."));
         }
         return el("div", null, el("div", { class: "tt" }, "Sandbox"),
-            el("div", { class: "ts" }, "The running round's VMs; reach each other, scoring, logging and the private internet only."));
+            el("div", { class: "ts" }, S.scene.team ? "The VMs your worm captured in this round (a VM shows up faint until its capture)."
+                : "The running round's VMs; reach each other, scoring, logging and the private internet only."));
     }
 
     // ------------------------------------------------------------------
@@ -1626,29 +1952,57 @@
             "Pick a round and a team above to replay a run.")]);
     }
 
+    // Where the round is: not started, running (now), finished.
+    function roundState(doc) {
+        const c = doc ? doc.clock : null;
+        if (!c || (c.now === null && !c.finished)) return null;
+        if (c.finished) return "finished";
+        return c.round_start !== null && c.now < c.round_start ? "not started" : "running";
+    }
+
+    function connectionsText(tl) {
+        const d = S.doc;
+        if (d && !d.network.available) return d.network.reason || "not recorded";
+        if (!tl.flowsLoaded) return S.flowsError ? `could not load (${S.flowsError.message})` : d && d.network.url ? `${d.network.count}, loading…` : "not included";
+        return `${tl.flows.length}${tl.truncated && tl.truncated.flows ? " (truncated)" : ""}`;
+    }
+
     function renderRunSummary() {
         const tl = S.timeline;
         if (!tl) {
-            const msg = S.timelineError ? S.timelineError.message : S.runUuid ? "Loading the run…" : "Pick a team.";
+            const msg = S.timelineError ? S.timelineError.message
+                : TEAM ? (S.roundId ? "Loading the round…" : "Pick a round.")
+                    : S.runUuid ? "Loading the run…" : "Pick a team.";
             append(side, [el("h3", null, "Round"), el("p", { class: "hint" }, msg)]);
             return;
         }
         const r = tl.run;
+        const d = S.doc;
         const kinds = {};
         for (const e of tl.events) kinds[e.kind] = (kinds[e.kind] || 0) + 1;
         const captured = tl.nodes.filter((n) => n.captured).length;
+        const env = d && d.environment === "dev" ? "Dev · devbox" : "Live";
+        const state = roundState(d);
         append(side, [
             el("h3", null, `${r.round} · ${r.team}`),
-            el("div", { class: "sub" }, `run #${r.position} · ${r.state}`),
+            el("div", { class: "sub" }, [env, r.present ? `run #${r.position} · ${r.state}` : d && d.environment === "live" ? "no run" : null, state ? `round ${state}` : null]
+                .filter(Boolean).join(" · ")),
             kvTable([
-                ["worm start", r.worm_start_at ? new Date(r.worm_start_at).toLocaleString() : "—"],
-                ["duration", r.duration !== null ? fmtTime(r.duration) : "—"],
-                ["VMs", `${tl.nodes.length} (${captured} captured)`],
-                ["connections", `${tl.flows.length}${tl.truncated && tl.truncated.flows ? " (truncated)" : ""}`],
-                ["flags submitted", String(kinds.flag_submitted || 0)],
-                ["logs sent", String(kinds.log_received || 0)],
+                d && d.round && (d.round.start || d.round.end)
+                    ? ["round", `${d.round.start ? fmtDate(d.round.start) : "—"} – ${d.round.end ? fmtDate(d.round.end) : "—"}`] : null,
+                r.present ? ["worm start", r.worm_start_at ? fmtDate(r.worm_start_at) : "—"] : null,
+                r.present ? ["duration", r.duration !== null ? fmtTime(r.duration) : "—"] : null,
+                ["VMs", d && d.audience === "team" ? `${captured} captured` : `${tl.nodes.length} (${captured} captured)`],
+                ["connections", connectionsText(tl)],
+                ["flags submitted", `${kinds.flag_submitted || 0}${tl.truncated && tl.truncated.flag_submissions ? " (truncated)" : ""}`],
+                ["logs sent", `${kinds.log_received || 0}${tl.truncated && tl.truncated.logs ? " (truncated)" : ""}`],
             ]),
         ]);
+        if (d && d.audience === "team") {
+            append(side, [el("p", { class: "hint" }, d.environment === "dev"
+                ? "Your devbox during the round: the VMs your worm found a token on, what it submitted and logged."
+                : "Your run: only the VMs your worm captured are shown (faint until their capture), with their traffic to each other, scoring, logging and the private internet.")]);
+        }
         const feed = el("ul", { class: "feed", id: "topo-feed" });
         const notable = tl.events.filter((e) => e.kind !== "flag_submitted" || e.data.result !== "invalid").slice(0, 600);
         for (const e of notable) {
@@ -1694,10 +2048,13 @@
             ]),
         ]);
         if (info.run) {
-            append(side, [el("h4", null, "Networks"), el("table", null, el("tbody", null,
-                (info.networks || []).map((net) => el("tr", null, el("td", { class: "mono" }, net.name), el("td", { class: "mono" }, net.cidr || "")))))]);
+            const nets = info.run.networks || info.networks || [];
+            if (nets.length) {
+                append(side, [el("h4", null, "Networks"), el("table", null, el("tbody", null,
+                    nets.map((net) => el("tr", null, el("td", { class: "mono" }, net.name), el("td", { class: "mono" }, net.cidr || "")))))]);
+            }
             if (info.run.captured_at !== null && info.run.captured_at !== undefined) append(side, [el("p", { class: "is-bad" }, `Captured at ${fmtTime(info.run.captured_at)}.`)]);
-            renderFirewall(sandboxFirewall());
+            if (!S.scene.team) renderFirewall(sandboxFirewall());
             const mine = S.timeline.events.filter((e) => e.vm === info.id || e.node === info.id || (e.data && e.data.source_vm === info.id));
             if (mine.length) {
                 const feed = el("ul", { class: "feed" });
@@ -1709,6 +2066,7 @@
             }
             return;
         }
+        if (S.scene.team) return;
         if (info.nics && info.nics.length) {
             append(side, [el("h4", null, "NICs"), el("table", null,
                 el("thead", null, el("tr", null, el("th", null, "nic"), el("th", null, "bridge"), el("th", null, "kind"), el("th", null, "address"))),
@@ -1755,9 +2113,11 @@
             rows.push(["sent by", d.source_label ? `${d.source_label} (inferred)` : "unknown"]);
         }
         append(side, [backButton(), el("h3", null, look.label), el("div", { class: "sub" }, `at ${fmtTime(e.t)}`), kvTable(rows)]);
-        if (e.kind === "log_received" && d.log) {
-            append(side, [el("h4", null, d.log.truncated ? `Log (first ${String(d.log.data).length} of ${d.log.size} characters)` : "Log"),
-                el("pre", null, typeof d.log.data === "string" ? d.log.data : JSON.stringify(d.log.data, null, 2))]);
+        if (e.kind === "log_received" && isObj(d.log)) {
+            const size = num(d.log.size);
+            const box = el("pre", { class: "log-record" }, "");
+            append(side, [el("h4", null, size !== null ? `Log record (${size} characters)` : "Log record"), box]);
+            showLog(e, box);
         } else {
             append(side, [el("h4", null, "Data"), el("pre", null, JSON.stringify(d, null, 2))]);
         }
@@ -1765,6 +2125,34 @@
         actions.appendChild(el("button", { type: "button", onclick: () => { select(null); play(); } }, "▶ Continue"));
         if (vm && vm.info) actions.appendChild(el("button", { type: "button", onclick: () => select({ type: "node", id: vm.id }) }, `Show ${vm.info.name}`));
         side.appendChild(actions);
+    }
+
+    // The record of a log event: inline (an older file), else fetched or read
+    // from the zip by its reference. Text only, capped.
+    async function showLog(e, box) {
+        const d = e.data || {};
+        const text = (value) => {
+            const s = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+            return s === undefined ? String(value) : s.length > 200000 ? `${s.slice(0, 200000)}\n… (cut)` : s;
+        };
+        if (d.log.data !== undefined) {
+            box.textContent = text(d.log.data);
+            return;
+        }
+        const ref = txt(d.log.ref, 64);
+        if (!ref) {
+            box.textContent = "No reference to the record.";
+            return;
+        }
+        box.textContent = "Loading…";
+        try {
+            const record = await loadLog(ref);
+            if (!(S.selected && S.selected.type === "event" && S.selected.event === e)) return; // another selection meanwhile
+            box.textContent = text(record.data);
+        } catch (error) {
+            box.textContent = error.message;
+            box.classList.add("is-warn");
+        }
     }
 
     function renderFlowDetails(f) {
@@ -1858,7 +2246,9 @@
             track.setAttribute("aria-valuetext", fmtTime(S.t));
             $("topo-time").textContent = `${fmtTime(S.t)} / ${fmtTime(S.timeline.run.duration ?? hi)}`;
             const phase = phaseAt(S.t);
-            $("topo-phase").textContent = S.t < 0 ? `before the worm's start · ${phase || "…"}` : phase ? `state: ${phase}` : "";
+            const c = S.doc ? S.doc.clock : null;
+            const now = c && c.now !== null && S.t >= c.now - 1 ? " · now" : "";
+            $("topo-phase").textContent = (S.t < 0 && S.timeline.run.present ? `before the worm's start · ${phase || "…"}` : phase ? `state: ${phase}` : "") + now;
             updateFeed(S.t);
         }
     }
@@ -1888,9 +2278,9 @@
         const [lo, hi] = range();
         track.setAttribute("aria-valuemin", lo.toFixed(1));
         track.setAttribute("aria-valuemax", hi.toFixed(1));
-        if (S.playerFor !== tl.run.uuid) {
-            S.playerFor = tl.run.uuid;
-            S.speed = defaultSpeed(tl.run.duration);
+        if (S.playerFor !== tl.run.key) {
+            S.playerFor = tl.run.key;
+            S.speed = defaultSpeed(tl.run.present && tl.run.duration ? tl.run.duration : hi - lo);
         }
         S.stateEvents = tl.events.filter((e) => e.kind === "state");
         $("topo-speed").value = String(S.speed);
@@ -1907,6 +2297,14 @@
                 class: `mark${big.has(e.kind) ? " big" : ""}`, title: `${fmtTime(e.t)} ${look.label}`,
                 style: `left: ${pct(e.t)}; background: var(${look.color})`,
             }));
+        }
+        // The round's start and end, and now while it runs.
+        const c = S.doc && S.mode !== "live" ? S.doc.clock : null;
+        if (c) {
+            for (const [t, label, cls] of [[c.round_start, "round start", "edge"], [c.round_end, "round end", "edge"], [c.now, "now", "now"]]) {
+                if (t === null || t < lo || t > hi) continue;
+                marks.appendChild(el("div", { class: `mark ${cls}`, title: `${fmtTime(t)} ${label}`, style: `left: ${pct(t)}` }));
+            }
         }
         // Axis labels.
         const axis = clear($("topo-axis"));
@@ -2067,19 +2465,28 @@
 
     function renderTabs() {
         const rounds = clear($("topo-rounds"));
-        rounds.appendChild(tabButton("Infrastructure (live)", S.mode === "live", () => selectLive()));
-        const list = (S.runs && S.runs.rounds) || [];
-        for (const r of list) rounds.appendChild(tabButton(shorten(r.name, 40), S.mode === "round" && S.roundId === r.id, () => selectRound(r.id)));
+        if (TEAM) {
+            for (const r of (S.rounds && S.rounds.rounds) || []) {
+                rounds.appendChild(tabButton(shorten(r.name, 40), S.mode === "round" && S.roundId === r.id, () => selectTeamRound(r.id),
+                    el("span", { class: "state" }, txt(r.state, 32))));
+            }
+        } else {
+            rounds.appendChild(tabButton("Infrastructure (live)", S.mode === "live", () => selectLive()));
+            for (const r of (S.runs && S.runs.rounds) || []) rounds.appendChild(tabButton(shorten(r.name, 40), S.mode === "round" && S.roundId === r.id, () => selectRound(r.id)));
+        }
         if (S.file) {
-            const what = S.file.timeline ? `${S.file.timeline.run.round} · ${S.file.timeline.run.team}` : "infrastructure";
+            const d = S.file.doc;
+            const what = d.timeline ? `${d.timeline.run.round} · ${d.timeline.run.team}` : "infrastructure";
             rounds.appendChild(tabButton(`File: ${shorten(S.file.name, 40)}`, S.mode === "file", () => selectFile(), el("span", { class: "state" }, shorten(what, 48))));
         }
-        if (S.runsError) rounds.appendChild(el("span", { class: "topo-tabs-empty is-warn" }, `rounds: ${S.runsError.message}`));
-        else if (S.runs && !list.length) rounds.appendChild(el("span", { class: "topo-tabs-empty" }, "No round has been evaluated yet."));
+        const error = TEAM ? S.roundsError : S.runsError;
+        const count = TEAM ? ((S.rounds && S.rounds.rounds) || []).length : ((S.runs && S.runs.rounds) || []).length;
+        if (error) rounds.appendChild(el("span", { class: "topo-tabs-empty is-warn" }, `rounds: ${error.message}`));
+        else if ((TEAM ? S.rounds : S.runs) && !count) rounds.appendChild(el("span", { class: "topo-tabs-empty" }, TEAM ? "No rounds yet." : "No round has been evaluated yet."));
 
         const teams = clear($("topo-teams"));
-        if (S.mode !== "round") return;
-        const round = list.find((r) => r.id === S.roundId);
+        if (TEAM || S.mode !== "round") return;
+        const round = ((S.runs && S.runs.rounds) || []).find((r) => r.id === S.roundId);
         if (!round) return;
         for (const run of round.runs) {
             teams.appendChild(tabButton(shorten(run.team, 40), S.runUuid === run.uuid, () => selectRun(run.uuid), el("span", { class: "state" }, run.state)));
@@ -2093,6 +2500,7 @@
         S.model = S.liveModel;
         S.roundId = null;
         S.runUuid = null;
+        S.doc = null;
         S.timeline = null;
         S.timelineError = null;
         S.selected = null;
@@ -2110,50 +2518,120 @@
         const run = round.runs.find((x) => x.team === S.teamName) || round.runs[0];
         if (run) selectRun(run.uuid);
         else {
+            S.doc = null;
             S.timeline = null;
             rebuild();
         }
     }
 
+    // A progression from the server: what to play, from where.
+    function showProgression(doc, t) {
+        if (!doc.timeline) throw new Error("the progression has no timeline");
+        S.doc = doc;
+        S.timeline = doc.timeline;
+        S.flowsError = null;
+        S.t = t !== undefined && t !== null && !Number.isNaN(t) ? t : doc.timeline.run.t_min;
+    }
+
+    // Staff: one run (the round's tab, then the team's).
     async function selectRun(uuid, t) {
         pause();
         S.needsFit = true;
         S.mode = "round";
         S.model = S.liveModel;
         S.runUuid = uuid;
+        S.doc = null;
         S.timeline = null;
         S.timelineError = null;
         S.selected = null;
         renderTabs();
         rebuild();
         try {
-            const tl = cleanTimeline(await getJSON(cfg.timeline.replace(ZERO_UUID, uuid)));
+            const doc = cleanProgression(await getJSON(roundUrl(cfg.progression, uuid)), true);
             if (S.runUuid !== uuid || S.mode !== "round") return; // another tab was picked meanwhile
-            S.timeline = tl;
-            S.teamName = tl.run.team;
+            showProgression(doc, t);
+            S.teamName = doc.timeline.run.team;
             S.needsFit = true;
-            S.t = t !== undefined && !Number.isNaN(t) ? t : Math.min(0, tl.run.t_min);
         } catch (error) {
             S.timelineError = error;
         }
         rebuild();
         writeHash();
+        loadFlows();
     }
 
-    // The opened file: its own infrastructure and timeline; nothing is fetched.
+    // Team: one round. `refresh` reloads the round shown (it is running),
+    // keeping the view, the selection and the time -- or following "now".
+    async function selectTeamRound(id, t, refresh) {
+        if (!refresh) {
+            pause();
+            S.needsFit = true;
+            S.selected = null;
+            S.doc = null;
+            S.timeline = null;
+        }
+        S.mode = "round";
+        S.roundId = id;
+        S.timelineError = null;
+        renderTabs();
+        if (!refresh) rebuild();
+        try {
+            const doc = cleanProgression(await getJSON(roundUrl(cfg.progression, id)), true);
+            if (S.roundId !== id || S.mode !== "round") return;
+            const following = refresh && S.timeline && S.t >= S.timeline.run.t_max - 1;
+            showProgression(doc, refresh ? (following ? doc.timeline.run.t_max : S.t) : t);
+            S.model = doc.scene;
+        } catch (error) {
+            if (refresh) return; // keep what is shown; the next refresh tries again
+            S.timelineError = error;
+        }
+        rebuild();
+        writeHash();
+        loadFlows();
+    }
+
+    // The progression's connections, fetched after the picture is up.
+    async function loadFlows() {
+        const doc = S.doc;
+        const tl = S.timeline;
+        if (S.mode !== "round" || !doc || !tl || tl.flowsLoaded || !doc.network.available || !doc.network.url) return;
+        try {
+            const body = await getJSON(doc.network.url);
+            if (S.doc !== doc) return;
+            tl.flows = cleanFlows(isObj(body) ? body.flows : null);
+            tl.flowsLoaded = true;
+            if (isObj(body) && bool(body.truncated)) tl.truncated.flows = true;
+            widen(tl);
+        } catch (error) {
+            if (S.doc !== doc) return;
+            S.flowsError = error;
+        }
+        routeCache.clear();
+        setupPlayer();
+        renderSide();
+        renderLegend();
+        render();
+    }
+
+    // The opened file: its own scene and timeline; nothing is fetched.
     function selectFile() {
         if (!S.file) return;
         pause();
+        const doc = S.file.doc;
         S.needsFit = true;
         S.mode = "file";
-        S.roundId = null;
-        S.runUuid = null;
-        S.model = S.file.model;
-        S.timeline = S.file.timeline;
+        if (!TEAM) {
+            S.roundId = null;
+            S.runUuid = null;
+        }
+        S.doc = doc;
+        S.model = doc.scene || (!TEAM && doc.audience === "staff" ? S.liveModel : null);
+        S.timeline = doc.timeline;
         S.timelineError = null;
+        S.flowsError = null;
         S.selected = null;
         S.playerFor = null;
-        if (S.timeline) S.t = Math.min(0, S.timeline.run.t_min);
+        if (S.timeline) S.t = S.timeline.run.t_min;
         renderTabs();
         rebuild();
         writeHash();
@@ -2165,8 +2643,10 @@
 
     function rebuild() {
         const tl = S.mode !== "live" ? S.timeline : null;
+        const doc = S.mode !== "live" ? S.doc : null;
         S.scene = buildScene(S.model, tl, {
             mode: tl ? "round" : "live", showAux: S.showAux, teamSlug: tl ? tl.run.team_slug : null,
+            audience: doc ? doc.audience : cfg.audience, environment: doc ? doc.environment : cfg.environment,
         });
         drawScene();
         if (S.needsFit) fit();
@@ -2175,10 +2655,11 @@
         renderSide();
         renderMeta();
         renderLegend();
+        updateDownload();
         const empty = $("topo-empty");
         if (S.mode === "round" && S.timelineError) {
             empty.hidden = false;
-            empty.textContent = `Could not load the run: ${S.timelineError.message}`;
+            empty.textContent = `Could not load the ${TEAM ? "round" : "run"}: ${S.timelineError.message}`;
         } else if (S.mode !== "file" && !S.model && S.modelError) {
             empty.hidden = false;
             empty.textContent = S.modelError.message;
@@ -2192,10 +2673,23 @@
         const meta = clear($("topo-meta"));
         const m = S.model;
         if (S.mode === "file" && S.file) {
+            const d = S.file.doc;
             meta.appendChild(document.createTextNode(`File ${shorten(S.file.name, 80)}`));
-            if (S.file.exported_at) meta.appendChild(document.createTextNode(`, exported ${shorten(fmtDate(S.file.exported_at), 40)}`));
+            if (d.generated_at) meta.appendChild(document.createTextNode(`, made ${shorten(fmtDate(d.generated_at), 40)}`));
             if (m && m.collected_at) meta.appendChild(document.createTextNode(` · snapshot of ${shorten(m.host.node || "?", 60)} from ${shorten(fmtDate(m.collected_at), 40)}`));
             meta.appendChild(document.createTextNode(" · viewed locally, nothing is fetched"));
+            return;
+        }
+        if (TEAM) {
+            const d = S.doc;
+            if (!d) {
+                meta.appendChild(document.createTextNode(S.timelineError ? "" : S.roundId ? "Loading the round…" : ""));
+                return;
+            }
+            const state = roundState(d);
+            meta.appendChild(document.createTextNode(`${d.round ? shorten(d.round.name, 60) : "Round"} · ${d.environment === "dev" ? "Dev: your devbox" : "Live: your run"}`));
+            if (d.generated_at) meta.appendChild(document.createTextNode(` · as of ${shorten(fmtDate(d.generated_at), 40)}`));
+            if (state === "running") meta.appendChild(el("span", { class: "stale" }, " · the round is running (updates every minute)"));
             return;
         }
         if (!m) {
@@ -2211,6 +2705,25 @@
     function renderLegend() {
         const legend = clear($("topo-legend"));
         const item = (cls, color, label) => el("span", { style: `color: var(${color})` }, el("i", { class: cls }), el("span", { style: "color: var(--muted)" }, label));
+        if (S.scene && S.scene.team) {
+            const dev = S.doc && S.doc.environment === "dev";
+            append(legend, [
+                item("", "--c-service", "→ scoring / logging"),
+                item("", "--c-pi", "→ private internet"),
+                dev ? item("", "--c-devbox", "devbox link") : item("", "--c-lan", "sandbox network"),
+                item("dash", "--muted", "faint VM: not captured yet"),
+            ]);
+            if (replaying() && S.timeline.flows.length) {
+                append(legend, [
+                    item("dot", "--c-lan", "VM ↔ VM"),
+                    item("dot", "--c-scoring", "→ scoring"),
+                    item("dot", "--c-logging", "→ logging"),
+                    item("dot", "--c-pi", "→ private internet / DNS"),
+                    item("dot", "--bad", "not established (ring)"),
+                ]);
+            }
+            return;
+        }
         append(legend, [
             item("", "--c-db", "database ingress (firewall)"),
             item("", "--c-service", "→ scoring / logging"),
@@ -2231,13 +2744,15 @@
     }
 
     function writeHash() {
-        const hash = S.mode === "round" && S.runUuid ? `#run=${S.runUuid}&t=${S.t.toFixed(1)}` : S.mode === "file" ? "#file" : "#live";
+        let hash = S.mode === "file" ? "#file" : "#live";
+        if (S.mode === "round" && TEAM && S.roundId) hash = `#round=${S.roundId}&t=${S.t.toFixed(1)}`;
+        else if (S.mode === "round" && S.runUuid) hash = `#run=${S.runUuid}&t=${S.t.toFixed(1)}`;
         if (location.hash !== hash) history.replaceState(null, "", hash);
     }
 
     function readHash() {
         const params = new URLSearchParams(location.hash.replace(/^#/, ""));
-        return { run: params.get("run"), t: params.has("t") ? Number(params.get("t")) : undefined };
+        return { run: params.get("run"), round: Number(params.get("round")) || null, t: params.has("t") ? Number(params.get("t")) : undefined };
     }
 
     async function loadModel() {
@@ -2259,13 +2774,41 @@
         }
     }
 
+    async function loadRounds() {
+        try {
+            S.rounds = await getJSON(cfg.rounds);
+            S.roundsError = null;
+        } catch (error) {
+            S.roundsError = error;
+        }
+    }
+
     async function reload() {
+        if (TEAM) {
+            await loadRounds();
+            renderTabs();
+            if (S.mode === "round" && S.roundId) await selectTeamRound(S.roundId, undefined, true);
+            return;
+        }
         await Promise.all([loadModel(), loadRuns()]);
         renderTabs();
         if (S.mode !== "file") rebuild();
     }
 
+    // The team's page: the player replaces the page's own round links and
+    // summary (they stay for browsers without JavaScript).
+    function teamPage() {
+        for (const node of document.querySelectorAll("[data-progression-tabs], [data-progression-summary]")) node.hidden = true;
+        root.hidden = false;
+        $("topo-aux").parentElement.hidden = true;
+        $("topo-teams").parentElement.hidden = true;
+        root.querySelector(".topo-title").textContent = "// PROGRESSION";
+        $("topo-svg").setAttribute("aria-label", "Round progression: the VMs you captured and their connections");
+        $("topo-reload").title = "Reload the rounds and the round shown";
+    }
+
     async function init() {
+        if (TEAM) teamPage();
         readColors();
         resizeCanvas();
         wirePanZoom();
@@ -2278,6 +2821,8 @@
         });
         $("topo-reload").addEventListener("click", reload);
         $("topo-download").addEventListener("click", downloadBundle);
+        $("topo-dl-logs").addEventListener("change", updateDownload);
+        $("topo-dl-network").addEventListener("change", updateDownload);
         $("topo-open").addEventListener("click", () => $("topo-file").click());
         $("topo-file").addEventListener("change", (ev) => {
             openFile(ev.target.files && ev.target.files[0]);
@@ -2304,6 +2849,21 @@
                 drawDensity();
                 drawFrame();
             });
+        }
+        if (TEAM) {
+            await loadRounds();
+            renderTabs();
+            const wanted = readHash();
+            const ids = ((S.rounds && S.rounds.rounds) || []).map((r) => r.id);
+            const id = [wanted.round, cfg.round, S.rounds && S.rounds.default].find((x) => x && ids.includes(x));
+            if (id) await selectTeamRound(id, wanted.round === id ? wanted.t : undefined);
+            else rebuild();
+            // A running round grows: reload it every minute (keeping the view).
+            setInterval(() => {
+                if (document.hidden || S.mode !== "round" || !S.doc || S.doc.clock.now === null) return;
+                selectTeamRound(S.roundId, undefined, true);
+            }, cfg.refreshMs);
+            return;
         }
         await Promise.all([loadModel(), loadRuns()]);
         renderTabs();

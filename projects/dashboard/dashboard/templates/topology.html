@@ -12,7 +12,9 @@
 <div class="topo" id="topo"
      data-model="{% url 'topology_data' %}"
      data-runs="{% url 'topology_runs' %}"
-     data-timeline="{% url 'round_timeline_data' '00000000-0000-0000-0000-000000000000' %}">
+     data-audience="staff"
+     data-progression="{% url 'run_progression' '00000000-0000-0000-0000-000000000000' %}"
+     data-download="{% url 'run_progression_download' '00000000-0000-0000-0000-000000000000' %}">
 {% include "topology/player.html" %}
 </div>
 <script src="{% static 'dashboard/js/topology.js' %}" defer></script>

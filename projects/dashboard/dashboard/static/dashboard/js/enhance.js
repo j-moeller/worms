@@ -180,6 +180,12 @@
                 location.reload();
                 return;
             }
+            // A page with a script of its own (the round player) cannot be
+            // swapped in: a parsed-in script never runs. Load it instead.
+            if (doc.querySelector("[data-env-swap] script[src]") || $("[data-env-swap] script[src]")) {
+                location.reload();
+                return;
+            }
             regions().forEach((current) => {
                 const key = current.getAttribute("data-env-swap");
                 const fresh = doc.querySelector('[data-env-swap="' + key + '"]');

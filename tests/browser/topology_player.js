@@ -1,4 +1,4 @@
-// Drives the TOPOLOGY page (templates/topology/player.html + app.js) in
+// Drives the TOPOLOGY page (templates/topology/player.html + topology.js) in
 // Chromium with fixture data and prints the observations as JSON; the
 // assertions are in tests/test_topology_page.py.
 //
@@ -14,6 +14,8 @@ const ORIGIN = "http://worms.test";
 const errors = [];
 const out = { errors, checks: {} };
 let modelFetches = 0;
+let logFetches = 0;
+const requests = [];
 
 (async () => {
     const browser = await chromium.launch();
@@ -29,7 +31,10 @@ let modelFetches = 0;
         if (url.pathname === "/page") return route.fulfill({ status: 200, contentType: "text/html", body: fs.readFileSync(pagePath, "utf8") });
         if (url.pathname === "/model") { modelFetches++; return json(read("model.json")); }
         if (url.pathname === "/runs") return json(read("runs.json"));
-        if (url.pathname === `/rounds/${JSON.parse(read("runs.json")).rounds[0].runs[0].uuid}/timeline/`) return json(read("timeline.json"));
+        const run = `/rounds/${JSON.parse(read("runs.json")).rounds[0].runs[0].uuid}/progression/`;
+        if (url.pathname === run) { requests.push("progression"); return json(read("progression.json")); }
+        if (url.pathname === `${run}flows/`) { requests.push("flows"); return json(read("flows.json")); }
+        if (url.pathname.startsWith(`${run}logs/`)) { logFetches++; return json(read("log.json")); }
         if (url.pathname.startsWith("/rounds/")) return json(JSON.stringify({ error: "Not found" }), 404);
         return route.fulfill({ status: 404, body: "" });
     });
@@ -77,7 +82,9 @@ let modelFetches = 0;
 
     // --- round -> team -> player ---------------------------------------------
     await page.locator("#topo-rounds .topo-tab", { hasText: "R1" }).click();
-    await page.waitForFunction(() => document.getElementById("topo").topoState.timeline);
+    await page.waitForFunction(() => { const s = document.getElementById("topo").topoState; return s.timeline && s.timeline.flowsLoaded; });
+    out.checks.flowsLoaded = await page.evaluate(() => document.getElementById("topo").topoState.timeline.flows.length);
+    out.checks.requests = requests.slice();
     out.checks.teamTabs = await page.locator("#topo-teams .topo-tab").allInnerTexts();
     out.checks.round = await sceneInfo();
     out.checks.playerVisible = await page.locator("#topo-player").isVisible();
@@ -107,7 +114,13 @@ let modelFetches = 0;
     await page.locator("#topo-side button", { hasText: "Back" }).click();
     await page.waitForFunction(() => [...document.querySelectorAll("#topo-feed li")].length > 0);
     await page.locator("#topo-feed li", { hasText: "log received" }).first().click();
-    out.checks.logSide = await page.locator("#topo-side pre").innerText();
+    await page.waitForFunction(() => { const pre = document.querySelector("#topo-side pre.log-record"); return pre && !pre.textContent.startsWith("Loading"); });
+    out.checks.logSide = await page.locator("#topo-side pre.log-record").innerText();
+    // Opened again: from the cache.
+    await page.locator("#topo-side button", { hasText: "Back" }).click();
+    await page.locator("#topo-feed li", { hasText: "log received" }).first().click();
+    await page.waitForFunction(() => { const pre = document.querySelector("#topo-side pre.log-record"); return pre && !pre.textContent.startsWith("Loading"); });
+    out.checks.logFetches = logFetches;
     out.checks.xssFired = await page.evaluate(() => window.__xss === 1);
     out.checks.imgInSide = await page.locator("#topo-side img").count();
 
@@ -141,6 +154,17 @@ let modelFetches = 0;
     Object.assign(out.checks.refresh, { k0, fetchesBefore, modelFetches });
     await page.locator("#topo-fit").click();
 
+    // The Download menu: the server's zip, with the parts asked for.
+    await page.locator("#topo-download-menu > summary").click();
+    const zipHref = () => page.evaluate(() => { const a = document.getElementById("topo-dl-zip"); return a.hidden ? null : a.getAttribute("href"); });
+    out.checks.zipLinks = { full: await zipHref() };
+    await page.locator("#topo-dl-logs").uncheck();
+    await page.locator("#topo-dl-network").uncheck();
+    out.checks.zipLinks.lean = await zipHref();
+    await page.locator("#topo-dl-logs").check();
+    await page.locator("#topo-dl-network").check();
+    await page.locator("#topo-download-menu > summary").click();
+
     // Next-event key and the URL hash.
     await page.keyboard.press(".");
     out.checks.afterNext = await S();
@@ -159,6 +183,7 @@ let modelFetches = 0;
     await page.locator("#topo-rounds .topo-tab", { hasText: "Infrastructure" }).click();
     out.checks.backLive = await S();
     out.checks.playerHiddenLive = !(await page.locator("#topo-player").isVisible());
+    out.checks.zipLinks.live = await zipHref();
 
     console.log(JSON.stringify(out));
     await browser.close();

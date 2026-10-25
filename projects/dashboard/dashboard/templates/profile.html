@@ -31,8 +31,7 @@
             <p class="lead">{{ request.team.name }}</p>
             <ul class="links">
                 <li><a href="{% url 'upload' %}">Upload a worm</a></li>
-                <li><a href="{% url 'captures' %}">Flag captures</a></li>
-                <li><a href="{% url 'logs' %}">Worm logs</a></li>
+                <li><a href="{% url 'progression' %}">Round progression</a> (captures, logs, traffic)</li>
             </ul>
             {% elif request.active_competition.is_registration_period %}
             <p>You are not in a team yet.</p>

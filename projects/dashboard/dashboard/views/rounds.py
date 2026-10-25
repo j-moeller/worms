@@ -1,19 +1,12 @@
-"""Round runs (staff only): the list, and one run's timeline as JSON.
-
-The timeline is assembled by orchestrator.rounds.timeline (a read-only module
-usable from either Django app) and replayed by the round player on the
-TOPOLOGY page (templates/topology.html).
+"""Round runs (staff only): the list. One run's progression (replayed by the
+TOPOLOGY player) is served by views/progression.py.
 """
 
 from core.models.rounds import RoundRun
-from dashboard.views.topology import live_address_index
 from dashboard.views.util import render_with_base_info
 from django.contrib.auth.decorators import login_required
-from django.http import HttpRequest, JsonResponse
-from django.shortcuts import get_object_or_404, redirect
-from django.views.decorators.cache import never_cache
-
-from orchestrator.rounds import timeline
+from django.http import HttpRequest
+from django.shortcuts import redirect
 
 
 @login_required
@@ -42,18 +35,3 @@ def rounds(request: HttpRequest):
         },
     )
 
-
-@never_cache
-@login_required
-def round_timeline_data(request: HttpRequest, uuid):
-    if not request.user.is_staff:
-        return JsonResponse({"error": "Forbidden"}, status=403)
-    run = get_object_or_404(
-        RoundRun.objects.select_related("round", "team").prefetch_related(
-            "virtual_machines", "events__vm"
-        ),
-        uuid=uuid,
-    )
-    # The far end of the sandbox's flows (scoring, logging, DNS, the private
-    # internet) is resolved against the latest Proxmox snapshot.
-    return JsonResponse(timeline.build(run, infra=live_address_index()))

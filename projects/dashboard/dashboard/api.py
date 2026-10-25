@@ -4,6 +4,12 @@
     GET /api/v1/rounds/<round>/scoring/?limit=&cursor=  every flag the team's sandbox submitted
                                                       during its run, with the result
     GET /api/v1/rounds/<round>/logging/?limit=&cursor=  every log attributed to the team in that round
+    GET /api/v1/rounds/<round>/progression/           the round's progression (docs/progression.md):
+                                                      clock, scene, every event; logs by reference
+    GET /api/v1/rounds/<round>/progression/flows/     its connections (network traffic)
+    GET /api/v1/rounds/<round>/progression/logs/<ref>/  one log record
+    GET /api/v1/rounds/<round>/progression.zip?logs=0|1&network=0|1
+                                                      all of it as one zip (both default to 1)
 
     Authorization: Bearer <access token>
 
@@ -16,7 +22,10 @@ Availability (docs/team_api.md) -- a client can ask for a lot of data, so:
   (flag_attempts_team_time, logging_team_round), however deep the client
   pages; the page ends with an opaque `next_cursor`;
 - a page holds at most `limit` items (scoring <= 500, logging <= 200) and at
-  most MAX_PAGE_BYTES of item data -- a response is never much above 1 MiB;
+  most MAX_PAGE_BYTES of item data -- a page is never much above 1 MiB;
+- a progression is bounded by its builder (ATTEMPT_LIMIT submissions and logs,
+  FLOW_LIMIT connections; log records only by reference) -- a few MiB at
+  most, the zip (deflated) much less;
 - every query runs under a statement timeout (STATEMENT_TIMEOUT_MS);
 - these paths write nothing: no session (the session middlewares skip /api/),
   no CSRF, GET only;
@@ -41,13 +50,17 @@ from core.models.competition import Round
 from core.models.logging import Logging
 from core.models.rounds import RoundRun
 from core.models.scoring import FlagCapture, FlagCaptureAttempt
+from core import clock
 from core.models.team import AccessTokens
+from dashboard.views import progression as progression_views
+from dashboard.views.topology import live_address_index
 from django.db import OperationalError, connection, transaction
 from django.db.models import Q
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
 
+from orchestrator.rounds import progression
 from orchestrator.rounds.timeline import classify_submission, run_window
 
 API_PREFIX = "/api/"
@@ -121,7 +134,8 @@ def api_view(handler):
                 with connection.cursor() as cur:
                     cur.execute(f"SET LOCAL statement_timeout = {int(STATEMENT_TIMEOUT_MS)}")
                 team = _authenticate(request)
-                return _json(handler(request, team, *args, **kwargs))
+                result = handler(request, team, *args, **kwargs)
+                return result if isinstance(result, HttpResponse) else _json(result)
         except ApiError as error:
             return _error(error)
         except OperationalError:
@@ -244,6 +258,8 @@ def rounds(request, team):
                 "run": _run_info(runs.get(rnd.id)),
                 "scoring": reverse("api_round_scoring", args=[rnd.id]),
                 "logging": reverse("api_round_logging", args=[rnd.id]),
+                "progression": reverse("api_round_progression", args=[rnd.id]),
+                "download": reverse("api_round_progression_zip", args=[rnd.id]),
             }
             for rnd in rounds_
         ],
@@ -342,3 +358,51 @@ def round_logging(request, team, round_id):
         "items": items,
         "page": _page_info("api_round_logging", rnd, limit, items, next_cursor),
     }
+
+
+def _progression(team, round_id, flows=False):
+    """The round's progression as the team sees it (audience "team"), its
+    flows and log records linked to the API's own endpoints."""
+    rnd = _round(team, round_id)
+    doc = progression.build(team, rnd, now=clock.now(), audience="team", infra=live_address_index(), flows=flows)
+    zero = progression_views.ZERO_UUID
+    log_url = reverse("api_round_progression_log", args=[rnd.id, zero]).replace(zero, "{ref}")
+    return rnd, progression_views.with_links(doc, reverse("api_round_progression_flows", args=[rnd.id]), log_url)
+
+
+@api_view
+def round_progression(request, team, round_id):
+    """The round's progression (docs/progression.md): the clock (round start,
+    end, now while it runs), the scene, every event; each log is a reference
+    (logs.url), the connections are at network.url."""
+    return _progression(team, round_id)[1]
+
+
+@api_view
+def round_progression_flows(request, team, round_id):
+    """The progression's connections, as the monitor recorded them (none for
+    a development round: devbox traffic is not recorded)."""
+    return progression_views.flows_payload(_progression(team, round_id, flows=True)[1])
+
+
+@api_view
+def round_progression_log(request, team, round_id, ref):
+    """One log record of the progression: {ref, received_at, data}."""
+    rnd = _round(team, round_id)
+    record = progression.log_record(team, rnd, ref, now=clock.now())
+    if record is None:
+        raise ApiError(404, "not_found", "No such log in this round.")
+    return record
+
+
+@api_view
+def round_progression_zip(request, team, round_id):
+    """Everything as one zip: progression.json, logs/<ref>.json (logs=1),
+    network/flows.jsonl (network=1)."""
+    try:
+        logs = progression_views.flag(request, "logs")
+        network = progression_views.flag(request, "network")
+    except progression_views.BadFlag as error:
+        raise ApiError(400, "bad_flag", str(error)) from None
+    _, doc = _progression(team, round_id, flows=network)
+    return progression_views.zip_response(doc, logs)

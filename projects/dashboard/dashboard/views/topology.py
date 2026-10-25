@@ -4,8 +4,8 @@
     /topology/data/             the live infrastructure model (dashboard/infra_view.py)
     /topology/runs/             rounds of the current competition and their runs
                                 (the round / team tabs)
-    /rounds/<uuid>/timeline/    one run's timeline (orchestrator/rounds/timeline.py,
-                                served by views/rounds.py)
+    /rounds/<uuid>/progression/ one run's progression (orchestrator/rounds/progression.py,
+                                served by views/progression.py; docs/progression.md)
 
 The dashboard never contacts Proxmox: the orchestrator stores a read-only
 snapshot (`manage.py collect_topology`) and this reads it from the database.

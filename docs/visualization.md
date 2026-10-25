@@ -108,50 +108,40 @@ the sender of a flag or a log is **inferred** from the monitor: the run VM
 whose connection to that server was open at the time. It is marked
 "(inferred)"; with no matching connection the sender is "unknown".
 
-### Download and open a JSON file (the replay bundle)
+### Download and open files
 
-- **Download JSON** saves what is on screen as one self-contained file: the
-  infrastructure model and — on a round/team tab — that run's timeline (on
-  the live tab, the infrastructure only). It is built in the browser from
-  the data the page shows; nothing else is needed to show it again.
-- **Open JSON…** (or drop a file onto the view) shows such a file in its own
-  tab, `File: <name>`, with the full player: the same picture, hover cards,
-  dots, icons, details and slider. The file is read locally — it is never
-  uploaded, and nothing is fetched while it is shown (the page works as a
-  viewer even when the dashboard has no snapshot or the run is gone).
-  Downloading again from a file tab gives the same data back.
+The player's data is a **round progression** (`docs/progression.md`), the same
+format the teams' PROGRESSION page and the team API use.
 
-Format (`version` 1):
+- **Download → Round as .zip** (a round/team tab) saves the run's progression
+  from the server: `progression.json` with the infrastructure model it was
+  viewed against, every log record (`logs/<ref>.json`) and the connections
+  (`network/flows.jsonl`); either can be left out.
+- **Download → What is shown (.json)** saves what is on screen as one file,
+  built in the browser: the infrastructure model and — on a round/team tab —
+  that run's timeline with its connections inline (log records stay
+  references); on the live tab, the infrastructure only.
+- **Open file…** (or drop a file onto the view) shows a `.zip` or `.json` in
+  its own tab, `File: <name>`, with the full player: the same picture, hover
+  cards, dots, icons, details and slider; a zip's log records are read from
+  the zip when opened. The file is read locally — it is never uploaded, and
+  nothing is fetched while it is shown (a file's URLs are ignored). Files of
+  the earlier `worms-topology-replay` format still open. Downloading again
+  from a file tab gives the same data back.
 
-```json
-{
-  "format": "worms-topology-replay",
-  "version": 1,
-  "exported_at": "2026-10-24T17:05:07.000Z",
-  "source": {"mode": "round", "run": "<run uuid>", "from_file": null},
-  "model":    { "host": {…}, "nodes": […], "groups": […], "networks": […],
-                "edges": […], "security_groups": {…}, "unresolved": {…},
-                "collected_at": "…", "stale": false, "collection_error": "" },
-  "timeline": { "run": {…}, "nodes": […], "networks": […], "edges": […],
-                "vm_status": {…}, "events": […], "flows": […],
-                "captures": […], "truncated": {…} }
-}
-```
-
-`model` is the infrastructure model below, `timeline` the run timeline below
-(or `null`), each restricted to the fields the view uses (the address
-index and the generator graph are not included). A file can come from
-anywhere, so the page validates it like untrusted input — and so does every
-server response, through the same code (`cleanModel` / `cleanTimeline` in
-`app.js`):
+A file can come from anywhere, so the page validates it like untrusted input
+— and so does every server response, through the same code
+(`cleanProgression` / `cleanModel` / `cleanTimeline` in `topology.js`):
 
 - the envelope must match (`format`, a `version` the page knows);
 - only known fields are kept, each coerced to its type (strings capped,
   numbers finite, times within ±10⁸ s, unknown roles → `other`), entries that
   are not objects or have no time are dropped, events and flows are sorted
   and event ids reassigned, the time range is recomputed;
-- list sizes are capped (e.g. 500 000 flows, 200 000 events, 10 000 nodes)
-  and the file is refused above 64 MiB (`data-max-file-bytes`);
+- list sizes are capped (e.g. 500 000 flows, 200 000 events, 10 000 nodes),
+  the file is refused above 64 MiB (`data-max-file-bytes`), a zip above
+  20 000 members, a member above its cap (128 MiB for the document and the
+  connections, 1 MiB per log record) or inflating beyond the size it claims;
 - `__proto__` / `constructor` / `prototype` keys are ignored;
 - everything is rendered as text, as always.
 
@@ -166,7 +156,8 @@ Proxmox (read-only PVEAuditor token, GET only)
             └ dashboard: dashboard/infra_view.py  analyze(snapshot)  → /topology/data/
 database: run_events, virtual_machines, network_flows,
           flag_capture_attempts/flag_captures, logging_attempts/logging
-            └ orchestrator/rounds/timeline.py  build(run, infra=address index) → /rounds/<uuid>/timeline/
+            └ orchestrator/rounds/timeline.py  build(run, infra=address index)
+                 └ orchestrator/rounds/progression.py  → /rounds/<uuid>/progression/ (+ flows/, logs/<ref>/, download/)
 round_runs/rounds  → /topology/runs/  (the tabs)
 page: templates/topology.html  (endpoints; links the static CSS/JS)
       templates/topology/player.html  (markup only, no template tags)
@@ -178,10 +169,14 @@ page: templates/topology.html  (endpoints; links the static CSS/JS)
 |---|---|---|
 | `/topology/data/` | `views/topology.py: topology_data` | the infrastructure model + `collected_at`, `stale` (> 15 min), `collection_error`; 503 with a hint before the first collection |
 | `/topology/runs/` | `views/topology.py: topology_runs` | rounds of the current competition (newest first) with their runs (uuid, team, state, position) |
-| `/rounds/<uuid>/timeline/` | `views/rounds.py: round_timeline_data` | the run's timeline (below) |
+| `/rounds/<uuid>/progression/` | `views/progression.py: run_document` | the run's progression (`docs/progression.md`; audience staff: the whole timeline below, log records by reference, the connections at `network.url`) |
+| `/rounds/<uuid>/progression/flows/` | `views/progression.py: run_flows` | its connections |
+| `/rounds/<uuid>/progression/logs/<ref>/` | `views/progression.py: run_log` | one log record |
+| `/rounds/<uuid>/progression/download/` | `views/progression.py: run_download` | the zip (`?logs=0|1&network=0|1`), with the infrastructure model |
 
-All three are **staff only** (anonymous → login redirect, non-staff → 403),
-`never_cache`.
+All are **staff only** (anonymous → login redirect, non-staff → 403),
+`never_cache`. Teams replay their own rounds on the PROGRESSION page, from
+documents built for them (`docs/progression.md`).
 
 ### The infrastructure model (`dashboard/infra_view.py`, pure)
 
@@ -219,8 +214,9 @@ events + derived `flag_submitted` on `role:scoring` and `log_received` on
 connection with an end in the run, the far end mapped through the address
 index: `kind` lan / scoring / logging / dns / private_internet / other,
 duration, state, bytes, packets, uid), `captures`, `architecture`,
-`truncated`. Limits: 20 000 flows, 5 000 submissions, 5 000 logs, 4 000
-characters per log record.
+`truncated`. A `log_received` event carries a reference to its record
+(`data.log = {ref, size}`), not the record. Limits: 20 000 flows, 5 000
+submissions, 5 000 logs.
 
 ## Security
 
@@ -233,7 +229,7 @@ characters per log record.
   payload in a log record to prove it (`tests/test_topology_page.py`).
 - The timeline caps what it returns (flows, submissions, logs, log size) so a
   noisy worm cannot blow up the page.
-- A downloaded bundle contains the same staff-only data as the page
+- A staff download contains the same staff-only data as the page
   (addresses, firewall rules, the run's traffic): handle it like the page.
   An opened file is untrusted input: validated, size-capped, rendered as
   text, never uploaded (above).
@@ -243,8 +239,9 @@ characters per log record.
 | File | What |
 |---|---|
 | `tests/test_infra_view.py` | The model on a realistic snapshot (`tests/infra_fixture.py`): roles and status, no management network as an edge, database ingress from its firewall (and following rule changes), unresolvable sources reported, groups and networks, devbox A–B/B–C links never crossing teams, sandbox hubs, verified / unverified service edges, hover data, the address index, firewall-spec resolution and port matching. |
-| `tests/test_rounds.py` | The timeline against PostgreSQL with the real conductor: VM status over time, flows mapped to scoring / the private internet, flag submissions (captured / invalid, the other team's not shown) and logs attributed to the VM whose connection was open, attacker text passed through as data, log truncation; the three endpoints (staff only, 503 before a snapshot, team names). It also pins the browser test's fixture to the builder's real schema. |
-| `tests/test_topology_page.py` | The page in Chromium (Node Playwright, `tests/browser/topology_player.js`) with fixture data: the layout rules above, live status, the hover card, round/team tabs, playback and dots, a badge click pauses and opens the event, a captured VM is marked, a VM stopped and restarted by the game plan, a dot click, next-event and the URL hash, the live refresh keeping the chosen speed and zoom, the XSS payload shown as text, a run that fails to load, back to live, no script errors. The replay bundle (`tests/browser/topology_replay.js`): download from a round and from the live tab, open the file in a page whose endpoints all fail (offline viewer: playback, badges, nothing fetched), a lossless round trip, an infrastructure-only file, broken files refused with the view kept (not JSON, wrong format, unknown version, bad structure, too large), and a hostile file (XSS strings, `__proto__` keys, unknown roles, junk entries, non-finite times) opened without executing anything. `WORMS_SCREENSHOTS=<dir>` keeps the screenshots. |
+| `tests/test_rounds.py` | The timeline against PostgreSQL with the real conductor: VM status over time, flows mapped to scoring / the private internet, flag submissions (captured / invalid, the other team's not shown) and logs attributed to the VM whose connection was open, a log as a reference (the record is not in the timeline); the endpoints (staff only, 503 before a snapshot, team names, the progression and its flows). It also pins the browser test's fixture to the builder's real schema. |
+| `tests/test_progression.py` | The progression (`docs/progression.md`): what a team sees and never sees, staff seeing everything, Dev windows, the clock, log-record scoping, the zip, the team API, the PROGRESSION page's endpoints and the staff ones. |
+| `tests/test_topology_page.py` | The page in Chromium (Node Playwright, `tests/browser/topology_player.js`) with fixture data: the layout rules above, live status, the hover card, round/team tabs, playback and dots, a badge click pauses and opens the event, a captured VM is marked, a VM stopped and restarted by the game plan, a dot click, next-event and the URL hash, the live refresh keeping the chosen speed and zoom, the connections fetched after the progression, the log record fetched once when opened and its XSS payload shown as text, the zip link following the options, a run that fails to load, back to live, no script errors. Files (`tests/browser/topology_replay.js`): download from a round and from the live tab, open the file in a page whose endpoints all fail (offline viewer: playback, badges, nothing fetched), a lossless round trip, the server's zip (connections and log records read from it), a file of the earlier format, a file pointing at other servers (nothing fetched), an infrastructure-only file, broken files refused with the view kept (not JSON, wrong format, unknown version, bad structure, too large, a zip without a document, a zip member inflating beyond its stated size, a member claiming to be huge), and a hostile file (XSS strings, `__proto__` keys, unknown roles, junk entries, non-finite times) opened without executing anything. The team's page (`tests/browser/progression_page.js`): no infrastructure, firewall or gateway anywhere, VMs faint until captured, lazy connections and log records, the zip link, a Dev round without traffic, a running round refreshed in place. `WORMS_SCREENSHOTS=<dir>` keeps the screenshots. |
 
 Not covered: a real Proxmox snapshot and a real round's traffic (no node
 here); the layout with very large sandboxes or many teams is only exercised

@@ -1,7 +1,7 @@
 from dashboard.views.access import create_access_token, revoke_access_token
 from dashboard.views.auth import login_view, logout_view
 from dashboard.views.password import change_password
-from dashboard.views.debug import debug_login_as
+from dashboard.views.debug import debug_login_as, populate
 from dashboard.views.leaderboard import leaderboard
 from dashboard.views.devbox import (
     home,
@@ -85,6 +85,7 @@ if settings.DEBUG:
     from core import clock
 
     urlpatterns += [
+        path("debug/populate/", populate, name="debug_populate"),
         path(
             "debug/login-as/<uuid:uuid>/",
             debug_login_as,

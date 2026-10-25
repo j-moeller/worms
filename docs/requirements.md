@@ -1,10 +1,10 @@
 # Requirements → implementation map
 
 This maps the platform's requirements to where they are implemented and how
-they are verified, with residual gaps called out. It is the index to the
-detailed docs: `rounds.md`, `devbox.md`, `monitoring.md`, `accounts.md`,
-`management.md`, `testing.md`, `findings.md`; proposed simplifications:
-`simplification-plan.md`.
+they are verified, with residual gaps called out. The detailed docs:
+`rounds.md`, `devbox.md`, `monitoring.md`, `accounts.md`, `management.md`,
+`team_api.md`, `visualization.md`, `testing.md`, and the security review in
+`security-assessment.md`.
 
 Legend: ✅ implemented & covered offline · ⚠️ implemented, not yet exercised on
 a live Proxmox host (the standing caveat — no node is available here).
@@ -63,7 +63,7 @@ a live Proxmox host (the standing caveat — no node is available here).
 - ✅ Private internet is a dead end: serves sandbox/devbox, **no egress** except
   each PI VM's own package installs through the apt-cache (narrow
   `pi_apt_client`; the previously over-broad `services_client` was removed from
-  the PI VMs — see below and `findings.md`).
+  the PI VMs — see below).
 
 ### The `services_client` question
 
@@ -105,9 +105,9 @@ and gateway↔gateway is dropped at the host anyway); the PI VMs get a narrow
 - ⚠️ Nothing has run on a real Proxmox node (no node here): VM/bridge creation,
   the devbox `-replace` rebuild, the devbox host-job → DB reconciliation, the
   SSH gateway's `permitopen` confinement in practice, and `worms simulate`.
-- The port-isolation **hookscript is defined but not attached** to the VMs
-  (`hook_script_file_id` is commented out in the VM modules — `findings.md`);
-  until it is wired, management-bridge isolation rests on the Proxmox firewall
-  alone. This predates this work and is the highest-value remaining hardening.
+- The port-isolation **hookscript is wired through every VM module but left
+  commented** (`hook_script_file_id`): attaching it needs `root@pam`, not the
+  provisioning API token, so until it is enabled management-bridge isolation
+  rests on the Proxmox firewall alone (`docs/security-assessment.md`, S4).
 - A full live round and a full devbox lifecycle are covered only offline
   (fakes + a real PostgreSQL); see `testing.md`.

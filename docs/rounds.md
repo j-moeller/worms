@@ -222,8 +222,7 @@ themselves are covered offline in `tests/test_rounds.py` and
   `python3` and `unzip` in the image) is not configured yet.
 - **The dashboard media path.** The agent reads uploads from
   `round_agent_dashboard_media_root` on the dashboard VM; the dashboard's
-  `default_storage` must write there (`MEDIA_ROOT` is not set yet — see
-  `docs/findings.md`).
+  `default_storage` must write there (`MEDIA_ROOT` is not set yet).
 - **Scoring/standing display** of captures over the round.
 - **Running it on a real Proxmox host.** Everything here was built and tested
   offline (`worms test`): the conductor and agent are exercised end to end with

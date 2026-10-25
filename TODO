@@ -1,115 +1,30 @@
-[ ] Website
- - [x] Login
- - [x] Leaderboard
- - [x] Captures
- - [x] logging prints
- - [ ] Worm uploads
- - [ ] Design
+# Remaining work
 
-[ ] Start of experiment
- - [x] Distribution of worms (round agent: deploy job)
- - [x] Activation of worms (one-shot timer on the start VM)
+Built features are documented under docs/ — see docs/requirements.md for the
+requirement -> implementation map. This file lists only what is NOT done.
 
-[ ] GPUs / Inference Engine service
- - [ ] Jailbreaking ?
+## Verify on a live Proxmox host
+Everything was built and tested offline (`worms test`); no node was available.
+The standing caveat and the first live steps are in docs/testing.md.
+- A full round and a full devbox lifecycle on a real node: VM/bridge creation,
+  the devbox `-replace` rebuild, the SSH-gateway `permitopen` confinement, and
+  `worms simulate`.
+- Attach the port-isolation hookscript (needs root@pam; it is wired through
+  every VM module but left commented — docs/security-assessment.md, S4).
+- Set `MEDIA_ROOT` so the dashboard stores uploads where the round agent reads
+  them (docs/rounds.md), so the `deploy` job's artifact fetch works.
 
-[ ] Monitoring
- - [x] Monitoring of single interface (vmbr1)
- - [x] Monitoring server (Zeek)
- - [x] Monitoring of multiple vmbr (worms-mirror: every sandbox bridge port)
- - [x] Writing to DB (network_flows, network_events)
- - [x] Display of network activity on webpage (TOPOLOGY round player)
+## Security hardening
+Tracked in docs/security-assessment.md ("not done"): login brute-force
+protection (D3), team-join consent/race (D4), current-password on a voluntary
+change (D5); Proxmox provider TLS verification (C1); and locking devpi and the
+Docker registry to read-only/authenticated before re-enabling them (S2).
 
-[ ] Heartbeat
- - [ ] Definition of "vital" services (per VM)
- - [ ] Heartbeat server
- - [ ] Writing to DB
-
-[ ] Scoring Server
- - [ ] Initialization with secrets from VMs
- - [ ] Initialization of different teams
- - [x] Connect to DB
- - [x] Writing to DB (fixed: database defaults, docs/findings.md)
- - [x] Display of team points on webpage
- - [x] Team API: round scoring as JSON with a bearer token (docs/team_api.md)
-
-[ ] Database
- - [x] Create VM
- - [x] Run database service
- - [x] Allow remote connection
- - [ ] Create schema (logging, heartbeat, monitor, scoring)
-    - [x] Logging
-    - [x] scoring
-    - [ ] heartbeat
-    - [x] monitor
-
-[ ] logging
- - [x] Create logging server (REST API)
- - [x] Connect to DB
- - [x] Writing to DB (fixed: database defaults, docs/findings.md)
- - [ ] Display in web server
- - [x] Download (team API: /api/v1/rounds/<id>/logging/, docs/team_api.md)
-
-[ ] Topology
- - [ ] Dynamic generation of complex network topology
- - [ ] Initialization of different VMs, network, layer-2/layer-3 switches
- - [ ] Initialization of vulnerabilities
-
-[ ] Private internet
- - [ ] apt cache
- - [ ] pypi mirror
- - [ ] CVEs / CWEs
- - [ ] manpages
- - [ ] wikipedia
-
-[ ] HTTPS
- - [x] Services
- - [ ] DB connection !!
-
-[ ] SSH only login
-[ ] Firewall rules
-[ ] Remove root users
-[x] Remove hardcoded passwords (admin password from the vault; students get
-    one-time passwords + forced change on first login; see docs/accounts.md)
-
-[ ] Accounts (docs/accounts.md)
- - [x] Idempotent admin + default competition (manage.py init, vault password)
- - [x] Student accounts from CSV with one-time passwords (manage.py create_users)
- - [x] Forced password change on first login
-
-[ ] Management CLI (docs/management.md)
- - [x] worms status / teams / users / leaderboard / build (src/manage.py)
- - [x] Single source of truth: the database VM + the Proxmox API
- - [ ] Run against a live deployment from a laptop (tunnel/tokens)
-
-[ ] Devbox (docs/devbox.md)
- - [x] Data model, dev dashboard view, reset via devbox version
- - [x] Source-address scoring/logging attribution (no round interference)
- - [x] Per-team SSH keys + locked-down SSH gateway; devbox<->sandbox isolation
- - [x] OpenTofu stack/module + generator (tofu validate), Ansible roles, agent jobs
- - [x] Provisioning on team creation
- - [ ] Run on a real Proxmox host (VM build, -replace rebuild, key plumbing)
-
-[x] Limit request size, limit request frequency
- - [x] sandbox APIs; team API (/api/ on the dashboard: nginx per address + token)
- - [ ] dashboard HTML pages (login etc.): no nginx rate limit yet
-
-[ ] Watch dog, failsafe, killswitch
-[ ] Testing
- - [x] Offline suite (make test)
- - [x] End-to-end simulation (make simulate)
- - [ ] Run make simulate on the real host (not done yet)
- - [ ] Port-isolation hookscript is not attached (docs/findings.md)
-
-[ ] Round orchestration (docs/rounds.md)
- - [x] Run planning (one run per team, upload before the deadline)
- - [x] Conductor state machine (prepare/check/deploy/run/end/teardown)
- - [x] Game plan (stop VMs, delayed secrets after stops) - least privilege
- - [x] Privileged host work via the round agent (pull-based, validated)
- - [x] VM power from the orchestrator (pool-scoped token)
- - [x] Secrets generated on the host; only hashes in the DB
- - [x] Capture processing (attempts -> captures, once per team+VM)
- - [x] Timeline export (JSON for the animated view)
- - [x] Animated timeline front-end (player: TOPOLOGY view, docs/visualization.md)
- - [ ] Configure sandbox guests (CA, deps); set dashboard MEDIA_ROOT
- - [ ] Run on a real Proxmox host
+## Not yet built
+- Worm uploads polish and a dashboard design pass.
+- Heartbeat: define the "vital" services per VM, a collector, and its DB schema.
+- GPU / inference-engine service (jailbreaking scenarios).
+- Richer sandbox topology generation: L2/L3 switches and seeded vulnerabilities.
+- Private-internet services exist as Ansible roles but are disabled in the
+  stack (only Wikipedia is deployed); re-enable apt-cache / devpi / registry /
+  manpages / cve-search once locked down (S2).

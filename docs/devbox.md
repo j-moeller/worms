@@ -231,7 +231,7 @@ The OpenTofu (firewall + devbox stack + module) passes `tofu validate` with
 bpg/proxmox 0.118.0.
 
 **Not yet run on a live Proxmox host** (none here) — the same caveat the
-sandbox and round orchestration carry (`docs/findings.md`): VM creation, the
+sandbox and round orchestration carry (`docs/testing.md`): VM creation, the
 `-replace` rebuild, the Ansible key plumbing end to end, and the SSH gateway's
-`permitopen` confinement in practice. See the security TODO in
-`docs/findings.md`.
+`permitopen` confinement in practice. The remaining security items are tracked
+in `docs/security-assessment.md`.

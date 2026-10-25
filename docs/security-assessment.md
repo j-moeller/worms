@@ -75,7 +75,7 @@ path was read end to end; nothing was run against a live Proxmox host.
 - **S1 (High, fixed):** the monitor shipper and the always-on devbox logs write
   to one shared database with no retention. Mitigated by the 100 GB disk; a
   retention/partition policy for `network_flows`/`network_events` remains
-  advisable (see findings.md).
+  advisable (see `docs/monitoring.md`, Limitations).
 - **S2 (High, latent):** devpi (empty root password, writable) and the Docker
   registry (no auth) would accept anonymous writes that persist across rounds —
   a poisoning and a cross-environment channel. **Not yet fixed**; these services

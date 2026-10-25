@@ -399,5 +399,6 @@ self-signed by PVE's own CA and does not name `10.11.0.1`, the address the
 orchestrator connects to. Until the node's API certificate is issued for that
 address (e.g. by the internal CA, which the VMs trust) — or
 `PROXMOX_CA_BUNDLE` / `PROXMOX_VERIFY_SSL` are set through `django_extra_env`
-— the orchestrator's Proxmox calls fail TLS verification (`docs/findings.md`).
+— the orchestrator's Proxmox calls fail TLS verification
+(`docs/security-assessment.md`, C1).
 

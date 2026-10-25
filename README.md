@@ -287,8 +287,7 @@ worms simulate    # end to end on the deployed platform: a sandbox VM submits to
                  # and containment; PASS/FAIL report
 ```
 
-Details: `docs/testing.md`. Findings and open issues of this work:
-`docs/findings.md`.
+Details: `docs/testing.md`.
 
 # Containment of rogue sandbox VMs
 

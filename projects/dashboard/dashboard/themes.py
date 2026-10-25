@@ -13,9 +13,8 @@ from __future__ import annotations
 from django.conf import settings
 
 THEMES = {
-    "underground": "Underground",
-    "lab": "Lab",
-    "tech": "Tech",
+    "lab": "Light",
+    "lab-dark": "Dark",
 }
 DEFAULT = "lab"
 COOKIE = "worms_theme"

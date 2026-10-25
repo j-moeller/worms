@@ -86,20 +86,39 @@ def devbox_home(request: HttpRequest, team: Team):
 @require_POST
 @user_in_team_required
 def devbox_reset(request: HttpRequest, team: Team):
-    """Reset the team's devbox. Goes through the orchestrator (the dashboard
-    role may not bump the version); in DEBUG (sqlite, no orchestrator) it bumps
-    locally so the flow is usable in development."""
+    """Reset the team's devbox: rebuild its VMs and clear the score by bumping
+    the team's devbox version (docs/devbox.md). The reset goes through the
+    orchestrator (the dashboard role may not bump the version); in DEBUG
+    (sqlite, no orchestrator) it bumps locally so the flow is usable. A failure
+    is reported to the user instead of being shown as success."""
     from dashboard import orchestrator_client
+
+    # You cannot reset a devbox you do not have (it is created with the team).
+    if not Devbox.objects.filter(team=team).exists():
+        messages.error(request, "You have no devbox to reset yet — it is created together with your team.")
+        return redirect("index")
 
     try:
         result = orchestrator_client.post(f"/devbox/{team.uuid}/reset/")
-    except orchestrator_client.OrchestratorError:
+    except orchestrator_client.OrchestratorError as error:
         if settings.DEBUG:
+            # Local development has no orchestrator: bump the version directly
+            # so the flow is usable, and say plainly that nothing is rebuilt.
             with transaction.atomic():
                 Team.objects.filter(pk=team.pk).update(devbox_version=F("devbox_version") + 1)
-            result = {"rebuild_enqueued": True}
-        else:
-            raise
+            messages.success(
+                request,
+                "Devbox version bumped (development mode: no orchestrator, so the "
+                "VMs are not really rebuilt). The score starts over.",
+            )
+            return redirect("index")
+        messages.error(
+            request,
+            f"Could not reset your devbox: {error}. Please try again; if it keeps "
+            "failing, contact an organiser.",
+        )
+        return redirect("index")
+
     if result.get("rebuild_enqueued", True):
         messages.success(request, "Reset requested: your devbox VMs are being rebuilt and the score starts over.")
     else:

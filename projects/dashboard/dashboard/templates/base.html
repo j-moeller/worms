@@ -4,7 +4,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{% block title %}{% endblock %} · WORMS//{% if dev %}DEV{% else %}SANDBOX{% endif %}</title>
+    <title>{% block title %}{% endblock %} · WORMS//{% if dev %}DEV{% else %}LIVE{% endif %}</title>
     <link rel="stylesheet" href="{% static 'dashboard/css/base.css' %}">
     {% block head %}{% endblock %}
     <link rel="stylesheet" href="{% static request.theme_css|default:'dashboard/css/themes/lab.css' %}" data-theme-stylesheet>
@@ -16,9 +16,9 @@
     <header class="site-header">
         <div class="site-header__inner">
             <div class="site-header__group site-header__group--start">
-            {# The brand is the home link: the leaderboard (Sandbox) or the devbox (Dev). #}
+            {# The brand is the home link: the leaderboard (Live) or the devbox (Dev). #}
             <a class="brand" href="{% url 'index' %}" data-env-swap="brand">
-                <span class="brand__name">WORMS</span><span class="brand__sep">//</span><span class="brand__env">{% if dev %}DEV{% else %}SANDBOX{% endif %}</span>
+                <span class="brand__name">WORMS</span><span class="brand__sep">//</span><span class="brand__env">{% if dev %}DEV{% else %}LIVE{% endif %}</span>
             </a>
 
             {% if request.user.is_authenticated %}
@@ -47,8 +47,8 @@
                 <button type="submit" name="environment" value="{% if dev %}sandbox{% else %}dev{% endif %}"
                         class="envtoggle" aria-pressed="{% if dev %}true{% else %}false{% endif %}"
                         aria-label="Switch environment" data-env-toggle>
-                    <span class="envtoggle__label envtoggle__label--sandbox" aria-hidden="true">Sandbox</span>
-                    <span class="envtoggle__label envtoggle__label--dev" aria-hidden="true">Devbox</span>
+                    <span class="envtoggle__label envtoggle__label--sandbox" aria-hidden="true">Live</span>
+                    <span class="envtoggle__label envtoggle__label--dev" aria-hidden="true">Dev</span>
                     <span class="envtoggle__knob" aria-hidden="true"></span>
                 </button>
             </form>
@@ -126,7 +126,7 @@
         <form method="post" action="{% url 'set_theme' %}" class="theme-picker" data-theme-picker>
             {% csrf_token %}
             <input type="hidden" name="next" value="{{ request.get_full_path }}">
-            <span class="theme-picker__label" id="theme-picker-label">Design</span>
+            <span class="theme-picker__label" id="theme-picker-label">Theme</span>
             <span class="theme-picker__options" role="group" aria-labelledby="theme-picker-label">
                 {% for key, name in request.themes %}
                 <button type="submit" name="theme" value="{{ key }}" class="theme-picker__option" aria-pressed="{% if key == request.theme %}true{% else %}false{% endif %}" data-stylesheet="{% static 'dashboard/css/themes/'|add:key|add:'.css' %}">{{ name }}</button>

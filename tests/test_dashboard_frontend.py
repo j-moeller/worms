@@ -48,7 +48,7 @@ def test_referenced_static_files_exist():
     for path in _templates():
         refs.update(STATIC_REF.findall(path.read_text()))
     # The theme stylesheets are referenced dynamically (per request.theme).
-    for key in ("underground", "lab", "tech"):
+    for key in ("lab", "lab-dark"):
         refs.add(f"dashboard/css/themes/{key}.css")
     assert "dashboard/css/base.css" in refs and "dashboard/js/enhance.js" in refs
     for ref in refs:
@@ -70,11 +70,11 @@ def test_theme_is_set_by_a_form_post_cookie(site):  # noqa: F811
     token = _csrf(site, "/login/")
     origin = {"HTTP_ORIGIN": f"https://{HOST}"}
     response = site.post(
-        "/theme/", {"csrfmiddlewaretoken": token, "theme": "tech", "next": "/login/"},
+        "/theme/", {"csrfmiddlewaretoken": token, "theme": "lab-dark", "next": "/login/"},
         **proxied(HOST), **origin,
     )  # fmt: skip
     assert response.status_code == 302
-    assert response.cookies["worms_theme"].value == "tech"
+    assert response.cookies["worms_theme"].value == "lab-dark"
     # An unknown design is ignored (no cookie set).
     bad = site.post(
         "/theme/", {"csrfmiddlewaretoken": token, "theme": "nope", "next": "/login/"},
@@ -130,10 +130,10 @@ def test_environment_toggle_reflects_and_switches_the_session(site, team_upload)
     and in-place swap are JavaScript-only; the form post is the baseline."""
     page = site.get("/", **proxied(HOST)).content.decode()
     assert "envtoggle" in page and "data-env-toggle" in page
-    assert ">Sandbox<" in page and ">Devbox<" in page  # both labels live in the track
-    # Sandbox is the default; the chrome says so, and the no-JS button submits dev.
+    assert ">Live<" in page and ">Dev<" in page  # both labels live in the track
+    # Live is the default; the chrome says so, and the no-JS button submits dev.
     assert 'data-env="sandbox"' in page
-    assert 'class="brand__env">SANDBOX<' in page
+    assert 'class="brand__env">LIVE<' in page
     assert re.search(r'class="envtoggle"[^>]*aria-pressed="false"', page)
     assert re.search(r'name="environment"\s+value="dev"', page)
 
@@ -200,3 +200,19 @@ def test_access_tokens_moved_into_the_profile(site, team_upload):  # noqa: F811
     assert "Access tokens" in page
     assert 'action="/access-tokens/create/"' in page   # the create form
     assert "/api/v1/rounds/" in page                   # the API docs moved too
+
+
+def test_devbox_reset_without_a_devbox_is_an_error(site, team_upload):  # noqa: F811
+    """Resetting a devbox you do not have reports an error instead of confirming
+    an action that did not happen (and never bumps the version)."""
+    team, _ = team_upload
+    before = team.devbox_version
+    token = _csrf(site, "/")
+    response = site.post(
+        "/devbox/reset/", {"csrfmiddlewaretoken": token},
+        HTTP_ORIGIN=f"https://{HOST}", **proxied(HOST),
+    )  # fmt: skip
+    assert response.status_code == 302
+    team.refresh_from_db()
+    assert team.devbox_version == before  # nothing was reset
+    assert "no devbox to reset" in site.get("/", **proxied(HOST)).content.decode()

@@ -13,6 +13,7 @@
         <div class="panel__body">
             <p class="stat"><span class="stat__value">{{ score }}<span class="stat__of">/{{ total_tokens }}</span></span><span class="stat__label">tokens submitted at this version</span></p>
             {% if vms %}<p class="pips" aria-hidden="true">{% for vm in vms %}<span class="pip{% if vm.found %} is-on{% endif %}"></span>{% endfor %}</p>{% endif %}
+            {% if devbox %}
             <details class="confirm">
                 <summary class="btn btn--danger">Reset devbox</summary>
                 <div class="confirm__body">
@@ -20,6 +21,9 @@
                     <form method="post" action="{% url 'devbox_reset' %}">{% csrf_token %}<button type="submit" class="btn btn--danger">Yes, rebuild my devbox</button></form>
                 </div>
             </details>
+            {% else %}
+            <p class="muted">Your devbox has not been built yet, so there is nothing to reset.</p>
+            {% endif %}
         </div>
     </section>
 

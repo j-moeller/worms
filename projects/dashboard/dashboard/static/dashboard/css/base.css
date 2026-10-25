@@ -30,9 +30,9 @@
     --faint: #67727f;
     --border: #273039;
     --border-strong: #38444f;
-    --accent: #4f8cff;
+    --accent: #dc2626;
     --accent-ink: #ffffff;
-    --accent-weak: rgba(79, 140, 255, .14);
+    --accent-weak: rgba(220, 38, 38, .12);
     --link: var(--accent);
     --ok: #35c48a;
     --warn: #e0a83a;
@@ -40,8 +40,8 @@
     --hot: #ff7a45;
     --focus: var(--accent);
     /* The Dev environment recolours the whole site to this accent (themes
-       override it). Sandbox keeps the theme's own --accent. */
-    --accent-dev: #c2410c;
+       override it). Live keeps the theme's own --accent. */
+    --accent-dev: #7c3aed;
     --accent-ink-dev: #ffffff;
 
     --page-texture: none;

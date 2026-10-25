@@ -2,7 +2,7 @@
  * Theme: Lab (light) — a sterile laboratory environment. White surfaces on a
  * faint grey wash, hairline borders, generous space, almost no shadow. Calm
  * and highly legible. The accent carries the environment: red for Live (the
- * graded competition — be careful), violet for Dev (your playground).
+ * graded competition — be careful), green for Dev (your playground).
  */
 :root {
     --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -30,8 +30,8 @@
     --hot: #d2622b;
     --focus: #dc2626;
     /* Dev = your own playground: experiment, break things, nothing counts. A
-       playful violet, clearly not the Live red. */
-    --accent-dev: #7c3aed;
+       calm, darkish green, clearly not the Live red. */
+    --accent-dev: #15803d;
     --accent-ink-dev: #ffffff;
 
     --radius: 8px;

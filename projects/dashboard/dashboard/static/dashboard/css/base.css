@@ -41,7 +41,7 @@
     --focus: var(--accent);
     /* The Dev environment recolours the whole site to this accent (themes
        override it). Live keeps the theme's own --accent. */
-    --accent-dev: #7c3aed;
+    --accent-dev: #15803d;
     --accent-ink-dev: #ffffff;
 
     --page-texture: none;

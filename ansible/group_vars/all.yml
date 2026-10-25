@@ -84,6 +84,13 @@ pki_ca_validity: "+3650d"
 pki_server_key_size: 3072
 pki_server_validity: "+825d"
 
+# --- Worm uploads -------------------------------------------------------------
+# Where the dashboard stores uploaded worms (Django MEDIA_ROOT; role django_app)
+# and where the round agent reads them over SSH (role round_agent). One value
+# for both. Outside the application's source tree, which is rsynced with
+# --delete and read-only to the service.
+dashboard_media_root: /opt/dashboard/media
+
 # --- Proxmox (consumed by the orchestrator via proxmoxer) -------------------
 # Host / port / node come from the OpenTofu ground truth as `proxmox`
 # (inventory.generated.yml). Only the identity + API token live here; the

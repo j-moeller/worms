@@ -61,7 +61,9 @@ sandbox VMs (start/stop) fits a least-privilege token (`VM.PowerMgmt` +
   and reports only its SHA-256. The scoring server compares hashes. A
   compromised orchestrator or dashboard cannot hand flags to a team.
 - **The worm artifact is verified.** The agent fetches the team's zip from the
-  dashboard VM and checks its SHA-256 against the upload record before
+  dashboard VM -- the dashboard's `MEDIA_ROOT`, `dashboard_media_root` in
+  `group_vars/all.yml` for both, read with sudo because it belongs to the
+  service user -- and checks its SHA-256 against the upload record before
   copying it to the start VM. Every command the agent runs on a VM goes over
   ssh as one command line quoted for the VM's shell (`Executor.remote_command`),
   so the VM runs exactly the argument list the agent built.
@@ -265,9 +267,6 @@ themselves are covered offline in `tests/test_rounds.py` and
 
 ## What is not done here
 
-- **The dashboard media path.** The agent reads uploads from
-  `round_agent_dashboard_media_root` on the dashboard VM; the dashboard's
-  `default_storage` must write there (`MEDIA_ROOT` is not set yet).
 - **Scoring/standing display** of captures over the round.
 - **A way from one sandbox VM to the next.** The sandbox VMs accept SSH with
   the operator's key only and run no other service, so a worm has no designed

@@ -35,9 +35,9 @@ round_agent_env_file: /etc/worms/round-agent.env
 round_agent_python: /usr/bin/python3
 
 # Where the agent reads uploaded worm artifacts (the dashboard's media dir),
-# over SSH from the host. Must match the dashboard's file storage.
+# over SSH from the host: the dashboard's MEDIA_ROOT (group_vars/all.yml).
 round_agent_dashboard_host: "{{ management_ips.dashboard }}"
-round_agent_dashboard_media_root: /opt/dashboard/media
+round_agent_dashboard_media_root: "{{ dashboard_media_root }}"
 
 # Scoring/logging management addresses: the agent writes the running team's
 # uuid to them at deploy (the scoring/logging servers no longer use tokens).

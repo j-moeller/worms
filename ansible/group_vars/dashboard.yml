@@ -18,6 +18,8 @@ nginx_team_api: true
 nginx_login_rate: 10r/m
 # MAX_UPLOAD_SIZE (100 MiB) plus the multipart envelope.
 nginx_upload_max_body_size: 101m
+# Uploaded worms (MEDIA_ROOT): the one writable path of the service.
+django_media_root: "{{ dashboard_media_root }}"
 # Public facing: no migrator credentials, migrations run on the orchestrator.
 django_run_migrations: false
 django_extra_env:

@@ -91,3 +91,4 @@ local_settings.py
 db.sqlite3
 # collectstatic output (deployments collect into STATIC_ROOT on the VM)
 /staticfiles/
+/media/

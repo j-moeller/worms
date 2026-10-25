@@ -39,6 +39,10 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 # gunicorn only needs to write its runtime dir; keep the source tree read-only.
 RuntimeDirectory=django
 RuntimeDirectoryMode=0750
+{% if django_media_root %}
+# ...and the uploads (MEDIA_ROOT), everything else stays read-only.
+ReadWritePaths={{ django_media_root }}
+{% endif %}
 
 [Install]
 WantedBy=multi-user.target

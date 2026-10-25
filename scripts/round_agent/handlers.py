@@ -249,10 +249,11 @@ def _fetch_artifact(ex, cfg, artifact):
     verify its content hash before it is used. A mismatch fails the job."""
     media_root = cfg["dashboard_media_root"].rstrip("/")
     path = f"{media_root}/{artifact['storage_key']}"
-    # The key is validated against a strict pattern (no traversal); still, pass
-    # it as a bare argument, never through a shell. base64 keeps the binary
-    # intact over the text channel.
-    encoded = ex.ssh(cfg["dashboard_host"], ["base64", path], timeout=120)
+    # The key is validated against a strict pattern (no traversal) and the
+    # remote command is quoted (Executor.remote_command). base64 keeps the
+    # binary intact over the text channel; sudo, because the media directory
+    # belongs to the dashboard's service user (0750), not the login user.
+    encoded = ex.ssh(cfg["dashboard_host"], ["sudo", "base64", "--", path], timeout=120)
     raw = base64.b64decode(encoded)
     digest = hashlib.sha256(raw).hexdigest()
     if digest != artifact["content_hash"]:

@@ -25,6 +25,9 @@ django_venv_dir: "/opt/{{ django_app_name }}/venv"
 # nginx_django_static_root -- keep the two equal).
 django_static_root: "/opt/{{ django_app_name }}/static"
 django_env_file: "/etc/{{ django_app_name }}/django.env"
+# Uploaded files (Django MEDIA_ROOT), the one directory the service may write
+# (ReadWritePaths). Empty: the app stores no files (the orchestrator).
+django_media_root: ""
 
 # The two apps live in the same Django project; the settings module selects the role.
 django_local_source: "{{ playbook_dir }}/../projects/dashboard"

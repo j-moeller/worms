@@ -253,7 +253,7 @@ class FakeExecutor:
 
     def ssh(self, host, argv, input=None, timeout=120):
         self.ssh_calls.append({"host": host, "argv": argv, "input": input})
-        if argv and argv[0] == "base64" and input is None:
+        if argv[:2] == ["sudo", "base64"] and input is None:
             return base64.b64encode(self.artifact_bytes).decode()
         return ""
 
@@ -330,7 +330,9 @@ def test_deploy_fetches_verifies_copies_and_arms():
     result = handlers.deploy(ex, CFG, params)
     assert result["released"][0]["vm"] == "sandbox-a"
     # Fetched from the dashboard.
-    assert any(c["host"] == "10.5.0.18" and c["argv"][0] == "base64" for c in ex.ssh_calls)
+    # (as root: the media directory belongs to the dashboard's service user)
+    fetch = next(c for c in ex.ssh_calls if c["host"] == "10.5.0.18")
+    assert fetch["argv"] == ["sudo", "base64", "--", f"/opt/dashboard/media/{key}"]
     # Told scoring AND logging which team is running (current-team over stdin).
     team_writes = [c for c in ex.ssh_calls if "/etc/sandbox-api/current-team" in c["argv"]]
     assert {c["host"] for c in team_writes} == {"10.5.0.14", "10.5.0.15"}
@@ -492,8 +494,10 @@ def test_round_agent_env_renders(render):
         postgres_db="mydb",
         pki_ca_cert_path="/etc/worms/ca.crt",
         vault_round_agent_db_password="secret",
+        dashboard_media_root="/opt/dashboard/media",
     )
     assert "DB_USER=round_agent" in env and "DB_SSLMODE=verify-full" in env
+    assert "DASHBOARD_MEDIA_ROOT=/opt/dashboard/media" in env
     assert "PYTHONPATH=" in env and "/scripts" in env
     assert "SCORING_HOST=10.5.0.14" in env and "LOGGING_HOST=10.5.0.15" in env
     assert "DASHBOARD_HOST=10.5.0.18" in env
@@ -512,6 +516,7 @@ def test_round_agent_env_carries_the_opentofu_inputs(render):
         infrastructure_ips={"database": "10.11.0.16"},
         management_ips={"dashboard": "10.5.0.18", "scoring": "10.5.0.14", "logging": "10.5.0.15"},
         postgres_db="mydb", pki_ca_cert_path="/etc/worms/ca.crt", vault_round_agent_db_password="secret",
+        dashboard_media_root="/opt/dashboard/media",
         vault_tofu_proxmox_api_token="root@pam!worms=0000-1111",
         proxmox={"host": "10.11.0.1", "api_port": 8006, "node": "pve-lab"},
     )

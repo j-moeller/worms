@@ -25,7 +25,7 @@ HOST = "dashboard.worms.internal"
 
 
 @pytest.fixture
-def site(db_clean, monkeypatch):
+def site(db_clean, monkeypatch, tmp_path):
     from conftest import REPO
     from core.models.competition import ApplicationSetting, Competition
     from core.models.user import User
@@ -58,6 +58,7 @@ def site(db_clean, monkeypatch):
         TEMPLATES=templates,
         ALLOWED_HOSTS=[HOST, "10.10.0.18"],
         CSRF_TRUSTED_ORIGINS=[f"https://{HOST}"],  # what base.py derives from ALLOWED_HOSTS
+        MEDIA_ROOT=str(tmp_path / "media"),  # uploads stay out of the checkout
     ):
         yield Client(enforce_csrf_checks=True)
 

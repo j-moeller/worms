@@ -49,6 +49,15 @@
     - "{{ django_source_dir }}"
     - "{{ django_static_root }}"
 
+- name: Create the upload directory (MEDIA_ROOT)
+  when: django_media_root | length > 0
+  ansible.builtin.file:
+    path: "{{ django_media_root }}"
+    state: directory
+    owner: "{{ django_app_user }}"
+    group: "{{ django_app_group }}"
+    mode: "0750"
+
 - name: Synchronize Django application
   ansible.posix.synchronize:
     src: "{{ django_local_source }}/"

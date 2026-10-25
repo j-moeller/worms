@@ -11,5 +11,5 @@ __pycache__/
 .pytest_cache/
 .venv-test/
 
-# Test/runtime upload storage (no MEDIA_ROOT in offline tests)
+# Upload storage of older test runs (before MEDIA_ROOT was set; now projects/dashboard/media/ locally)
 /malware-artifacts/

@@ -11,8 +11,6 @@ The standing caveat and the first live steps are in docs/testing.md.
   `worms simulate`.
 - Attach the port-isolation hookscript (needs root@pam; it is wired through
   every VM module but left commented — docs/security-assessment.md, S4).
-- Set `MEDIA_ROOT` so the dashboard stores uploads where the round agent reads
-  them (docs/rounds.md), so the `deploy` job's artifact fetch works.
 
 ## Security hardening
 Tracked in docs/security-assessment.md ("not done"): a per-account login

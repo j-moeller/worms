@@ -199,6 +199,12 @@ STATIC_URL = "static/"
 STATIC_ROOT = env("DJANGO_STATIC_ROOT", str(BASE_DIR / "staticfiles"))
 
 
+# Uploaded worms (dashboard/views/uploads.py). In production the dashboard's
+# DJANGO_MEDIA_ROOT (role django_app; the round agent reads the files from the
+# same directory over SSH). Locally a directory in the project.
+MEDIA_ROOT = env("DJANGO_MEDIA_ROOT", str(BASE_DIR / "media"))
+
+
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
 

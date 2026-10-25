@@ -64,6 +64,7 @@ locals {
 
     dashboard = {
       user_data_file_id = local.platform.cloud_init.django.file_id
+      ram               = 1024 # gunicorn + nginx; ballooning floor 512 (docs/resources.md)
       nics = [
         { bridge = local.nw.dmz.name, cidr = "${local.infrastructure_ips.dashboard}/24", gateway = local.host_ips.dmz },
         { bridge = local.nw.mgmt_exposed.name, cidr = "${local.management_ips.dashboard}/24" },
@@ -78,6 +79,7 @@ locals {
 
     orchestrator = {
       user_data_file_id = local.platform.cloud_init.django.file_id
+      ram               = 1024 # gunicorn + conduct/process/collect daemons; floor 512
       nics = [
         { bridge = local.nw.core.name, cidr = "${local.infrastructure_ips.orchestrator}/24", gateway = local.host_ips.core },
         { bridge = local.nw.mgmt_trusted.name, cidr = "${local.management_ips.orchestrator}/24" },
@@ -112,10 +114,17 @@ locals {
   }
 }
 
+# Build every persistent VM, minus wazuh while it is disabled (enable_wazuh).
+variable "enable_wazuh" {
+  description = "Create the Wazuh central-log VM. Off for now to save RAM (docs/resources.md)."
+  type        = bool
+  default     = false
+}
+
 module "infrastructure_vms" {
   source = "../../../modules/infrastructure_vm"
 
-  for_each = local.persistent
+  for_each = { for name, vm in local.persistent : name => vm if name != "wazuh" || var.enable_wazuh }
 
   proxmox_instance   = var.proxmox_instance
   name               = each.key

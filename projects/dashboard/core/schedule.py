@@ -32,6 +32,7 @@ SANDBOX_BOUNDS = {
     "networks": (4, 1, 30),
     "sites": (1, 1, 8),
     "max_interfaces": (3, 1, 8),
+    "vm_ram": (512, 256, 8192),  # RAM ceiling per sandbox VM (MB); the host balloons the rest back
 }
 
 # Game plan parameters (orchestrator/rounds/gameplan.py DEFAULTS): (low, high).

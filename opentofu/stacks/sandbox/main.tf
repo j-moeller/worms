@@ -156,7 +156,10 @@ resource "proxmox_virtual_environment_vm" "gw" {
     limit = 1
     units = local.limits.cpu_units
   }
-  memory { dedicated = 512 }
+  memory {
+    dedicated = 512
+    floating  = 256 # ballooning: nftables router, reclaimable (docs/resources.md)
+  }
 
   # Only SSH is used: no guest agent (the host never parses guest-controlled
   # agent replies; stop/kill works without it), no serial console, no display,
@@ -388,6 +391,9 @@ resource "proxmox_virtual_environment_vm" "vm" {
 
   memory {
     dedicated = each.value.ram
+    # Ballooning: the host reclaims a sandbox VM's unused RAM (a worm
+    # rarely needs its whole ceiling). Floor = half the ceiling (docs/resources.md).
+    floating = max(256, floor(each.value.ram / 2))
   }
 
   # Only SSH is used: no guest agent (the host never parses guest-controlled

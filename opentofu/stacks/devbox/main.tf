@@ -250,7 +250,10 @@ resource "proxmox_virtual_environment_vm" "ssh_gateway" {
   node_name = var.proxmox_instance
 
   cpu { cores = 1 }
-  memory { dedicated = 512 }
+  memory {
+    dedicated = 512
+    floating  = 256 # ballooning: sshd jump host, reclaimable (docs/resources.md)
+  }
 
   agent { enabled = false }
   tablet_device   = false

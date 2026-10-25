@@ -219,6 +219,7 @@ class ArchitectureGenerator:
         vm_count: int,
         max_interfaces: int = 4,
         sites: int = 1,
+        vm_ram: int = 512,
     ) -> None:
         self.seed = seed
         self.random = random.Random(seed)
@@ -227,6 +228,10 @@ class ArchitectureGenerator:
         self.vm_count = max(1, vm_count)
         self.max_interfaces = max(1, max_interfaces)
         self.site_count = max(1, sites)
+        # Every sandbox VM gets this ceiling (MB); the host balloons the rest
+        # back (opentofu/stacks/sandbox, docs/resources.md). Set per round on
+        # the dashboard (core/schedule.py, sandbox_params.vm_ram).
+        self.vm_ram = max(64, vm_ram)
 
         self.networks: list[NetworkBridge] = []
         self.vms: list[VM] = []
@@ -483,7 +488,7 @@ class ArchitectureGenerator:
                 key=vm_name,
                 name=vm_name,
                 cpu=self._cpu(),
-                ram=self._ram(),
+                ram=self.vm_ram,
                 maintenance_cidr=self._maintenance_cidr(vm_index),
                 bridges=bridges,
                 ip_configs=ip_configs,
@@ -581,13 +586,6 @@ class ArchitectureGenerator:
         return self.random.choices(
             population=[1],
             weights=[1],
-            k=1,
-        )[0]
-
-    def _ram(self) -> int:
-        return self.random.choices(
-            population=[1024, 2048, 4096],
-            weights=[100, 50, 1],
             k=1,
         )[0]
 
@@ -705,6 +703,13 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--vm-ram",
+        type=int,
+        default=512,
+        help="RAM ceiling per sandbox VM in MB (the host balloons the rest back).",
+    )
+
+    parser.add_argument(
         "--network-file",
         metavar="FILE",
         help=(
@@ -726,6 +731,7 @@ def main() -> None:
         vm_count=args.vms,
         max_interfaces=args.max_interfaces,
         sites=args.sites,
+        vm_ram=args.vm_ram,
     )
 
     vms = generator.generate()

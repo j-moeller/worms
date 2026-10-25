@@ -115,7 +115,7 @@ locals {
     wikipedia = {
       cpu               = 1
       cpu_type          = null
-      ram               = 2048
+      ram               = 1024 # kiwix-serve mmaps the ZIM; ballooning floor 512 (docs/resources.md)
       disk_size         = 5
       data_disk_size    = 20
       user_data_file_id = local.platform.cloud_init.wikipedia.file_id

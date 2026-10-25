@@ -52,7 +52,7 @@ module "dns" {
   proxmox_instance            = var.proxmox_instance
   name                        = "dns"
   cpu                         = 1
-  ram                         = 1024
+  ram                         = 512 # dnsmasq; ballooning floor 256 (docs/resources.md)
   network_cidr                = "${local.services_ips.dns}/24"
   maintenance_network_cidr    = "${local.management_ips.dns}/24"
   maintenance_network_gateway = local.host_ips.mgmt_exposed
@@ -77,6 +77,7 @@ module "sandbox_apis" {
   source = "../../../modules/infrastructure_vm"
 
   for_each = toset(["scoring", "logging"])
+  ram      = 512 # Flask (1 worker) + nginx; ballooning floor 256 (docs/resources.md)
 
   proxmox_instance = var.proxmox_instance
   name             = each.key

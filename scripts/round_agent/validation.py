@@ -72,6 +72,7 @@ def sandbox_params(value):
         "vms": integer(value.get("vms", 8), "vms", 1, 250),
         "sites": integer(value.get("sites", 1), "sites", 1, 8),
         "max_interfaces": integer(value.get("max_interfaces", 3), "max_interfaces", 1, 8),
+        "vm_ram": integer(value.get("vm_ram", 512), "vm_ram", 256, 8192),
     }
 
 

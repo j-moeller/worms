@@ -202,6 +202,11 @@ class RoundForm(StyledForm):
                                         min_value=schedule.SANDBOX_BOUNDS["max_interfaces"][1],
                                         max_value=schedule.SANDBOX_BOUNDS["max_interfaces"][2],
                                         initial=schedule.SANDBOX_BOUNDS["max_interfaces"][0])  # fmt: skip
+    vm_ram = forms.IntegerField(label="RAM per VM (MB)",
+                                min_value=schedule.SANDBOX_BOUNDS["vm_ram"][1],
+                                max_value=schedule.SANDBOX_BOUNDS["vm_ram"][2],
+                                initial=schedule.SANDBOX_BOUNDS["vm_ram"][0],
+                                help_text="Ceiling; the host reclaims a VM's unused RAM (ballooning).")  # fmt: skip
 
     # One run (minutes).
     worm_start_delay = _minutes("Fuse (min)", 5, 0, 1440, help_text="From deploy to the worm's start.")
@@ -218,7 +223,7 @@ class RoundForm(StyledForm):
     restart_after = _minutes("Restart a stopped VM after (min)", None, 1, 1440, required=False,
                              help_text="Empty: stopped VMs stay off.")  # fmt: skip
 
-    LIVE_ONLY = ("seed", "vms", "networks", "sites", "max_interfaces", "worm_start_delay", "run_duration",
+    LIVE_ONLY = ("seed", "vms", "networks", "sites", "max_interfaces", "vm_ram", "worm_start_delay", "run_duration",
                  "initial_fraction", "first_stop_after", "stop_interval", "min_alive", "restart_after")  # fmt: skip
 
     def __init__(self, *args, competition=None, instance=None, started=False, **kwargs):
@@ -288,6 +293,7 @@ class RoundForm(StyledForm):
             "networks": data["networks"],
             "sites": data["sites"],
             "max_interfaces": data["max_interfaces"],
+            "vm_ram": data["vm_ram"],
             "game_plan": game_plan,
             "timing": {
                 "worm_start_delay": data["worm_start_delay"] * minute,

@@ -42,7 +42,11 @@ resource "proxmox_virtual_environment_vm" "vm" {
     limit = 1
     units = var.limits.cpu_units
   }
-  memory { dedicated = 512 }
+  # Ballooning (docs/resources.md): reclaimable down to ram_min under pressure.
+  memory {
+    dedicated = var.ram
+    floating  = var.ram_min
+  }
 
   agent { enabled = false }
   tablet_device   = false

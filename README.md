@@ -226,7 +226,12 @@ stack are migrated by handled automatically by `worms build platform` / `worms b
 
 # Central logging (Wazuh + auditd)
 
-`SetupAudit.yml` (part of `worms build provision`):
+**Disabled for now to save RAM** (Wazuh's JVM indexer is the heaviest
+always-on VM): `enable_wazuh` (OpenTofu persistent stack) and `wazuh_enabled`
+(`ansible/group_vars/all.yml`) both default to off — flip both to re-enable.
+See `docs/resources.md`.
+
+`SetupAudit.yml` (part of `worms build provision`, when enabled):
 
 - **wazuh** VM (persistent stack, siem bridge, 4 vCPU / 2 GB / 50 GB; Wazuh recommends
   8 GB, so the indexer heap is capped at 512 MB): Wazuh

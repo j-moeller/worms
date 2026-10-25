@@ -331,7 +331,7 @@ def round_data(**overrides):
         "environment": "live", "name": "R1",
         "round_start": start.strftime("%Y-%m-%dT%H:%M"),
         "round_end": (start + timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M"),
-        "seed": "", "vms": 8, "networks": 4, "sites": 1, "max_interfaces": 3,
+        "seed": "", "vms": 8, "networks": 4, "sites": 1, "max_interfaces": 3, "vm_ram": 512,
         "worm_start_delay": 5, "run_duration": 60,
         "initial_fraction": 0.5, "first_stop_after": 10, "stop_interval": 10, "min_alive": 2, "restart_after": "",
     }  # fmt: skip
@@ -350,7 +350,7 @@ def test_create_a_round(staff_site):
     created = Round.objects.get(name="R1")
     assert created.competition == competition() and created.seed >= 0
     assert created.sandbox_params == {
-        "vms": 8, "networks": 4, "sites": 1, "max_interfaces": 3,
+        "vms": 8, "networks": 4, "sites": 1, "max_interfaces": 3, "vm_ram": 512,
         "game_plan": {"initial_fraction": 0.5, "first_stop_after": 600, "stop_interval": 600, "min_alive": 2,
                       "restart_after": None},
         "timing": {"worm_start_delay": 300, "run_duration": 3600},

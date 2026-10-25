@@ -119,7 +119,7 @@ window, its seed, and `sandbox_params`, which every run of the round gets
 
 | | Keys | Used by |
 |---|---|---|
-| sandbox | `vms`, `networks`, `sites`, `max_interfaces` | the round agent's `prepare` (`scripts/generate_sandbox.py`; validated again by the agent with the same bounds) |
+| sandbox | `vms`, `networks`, `sites`, `max_interfaces`, `vm_ram` (RAM ceiling per VM, MB; the host balloons the rest back, `docs/resources.md`) | the round agent's `prepare` (`scripts/generate_sandbox.py`; validated again by the agent with the same bounds) |
 | game plan | `game_plan`: `initial_fraction`, `first_stop_after`, `stop_interval`, `min_alive`, `restart_after` | the conductor (`gameplan.py`) |
 | timing | `timing`: `worm_start_delay`, `run_duration` (seconds) | the conductor (fuse, run length); defaults `ROUND_TIMING` |
 

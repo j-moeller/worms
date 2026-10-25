@@ -101,6 +101,7 @@ class Executor:
                 "--vms", str(params["vms"]),
                 "--sites", str(params["sites"]),
                 "--max-interfaces", str(params["max_interfaces"]),
+                "--vm-ram", str(params["vm_ram"]),
                 "--network-file", str(network_file),
             ],
             timeout=120,

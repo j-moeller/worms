@@ -115,3 +115,9 @@ proxmox_readonly_api_token_value: "{{ vault_proxmox_readonly_api_token_value | d
 #   true  = caches proxy/forward upstream (population), DNS forwards upstream
 #   false = standalone offline caches, no internet anywhere
 internet_enabled: "{{ '/run/worms/internet-allowed' is exists }}"
+
+# Central logging (Wazuh + auditd on every VM, SetupAudit.yml). Off for now to
+# save RAM: Wazuh's JVM indexer is the heaviest always-on VM (docs/resources.md).
+# The wazuh VM itself is also gated in OpenTofu (enable_wazuh, persistent
+# stack); flip both to re-enable.
+wazuh_enabled: false

@@ -47,6 +47,12 @@ variable "ram" {
   default = 2048
 }
 
+# Ballooning floor (MB): the host may reclaim down to this. null = half the ceiling.
+variable "ram_min" {
+  type    = number
+  default = null
+}
+
 variable "disk_size" {
   description = "Root disk size in GB (Zeek logs are kept locally for a while, see role network_monitor)."
   type        = number

@@ -6,6 +6,18 @@ variable "user_data_file_id" {}
 variable "pool_id" {}
 variable "dns_server" {}
 
+# A devbox VM or gateway is small (nftables router / a team's playground).
+variable "ram" {
+  type    = number
+  default = 512
+}
+
+# Ballooning floor (MB): the host may reclaim down to this under pressure.
+variable "ram_min" {
+  type    = number
+  default = 256
+}
+
 variable "limits" {
   type = object({
     cpu_units      = number

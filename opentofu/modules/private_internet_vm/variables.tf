@@ -2,6 +2,12 @@ variable "name" {}
 variable "proxmox_instance" {}
 variable "cpu" {}
 variable "ram" {}
+
+# Ballooning floor (MB): the host may reclaim down to this. null = half the ceiling.
+variable "ram_min" {
+  type    = number
+  default = null
+}
 variable "network_cidr" {}
 variable "maintenance_network_gateway" {}
 variable "maintenance_network_cidr" {}

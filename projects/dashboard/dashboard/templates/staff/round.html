@@ -18,7 +18,7 @@
         <header class="panel__head"><h2 class="panel__title" id="params-title">Every team's run</h2><p class="panel__meta">seed {{ round.seed }}</p></header>
         <div class="panel__body">
             <dl class="kv">
-                <div><dt>Sandbox</dt><dd>{{ params.vms|default:8 }} VMs on {{ params.networks|default:4 }} networks, {{ params.sites|default:1 }} site{{ params.sites|default:1|pluralize }}, up to {{ params.max_interfaces|default:3 }} interfaces per VM</dd></div>
+                <div><dt>Sandbox</dt><dd>{{ params.vms|default:8 }} VMs on {{ params.networks|default:4 }} networks, {{ params.sites|default:1 }} site{{ params.sites|default:1|pluralize }}, up to {{ params.max_interfaces|default:3 }} interfaces per VM, {{ params.vm_ram|default:512 }} MB RAM each</dd></div>
                 <div><dt>Fuse</dt><dd>{{ timing.worm_start_delay }} s from deploy to the worm's start</dd></div>
                 <div><dt>Run</dt><dd>{{ timing.run_duration }} s from the worm's start</dd></div>
                 {% with plan=params.game_plan %}
@@ -105,6 +105,7 @@
             {% include "staff/_field.html" with field=form.networks %}
             {% include "staff/_field.html" with field=form.sites %}
             {% include "staff/_field.html" with field=form.max_interfaces %}
+            {% include "staff/_field.html" with field=form.vm_ram %}
         </div></fieldset>
         <fieldset class="fieldset"><legend>Each run</legend><div class="fields">
             {% include "staff/_field.html" with field=form.worm_start_delay %}

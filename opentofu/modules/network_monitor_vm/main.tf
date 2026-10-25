@@ -66,7 +66,13 @@ resource "proxmox_virtual_environment_vm" "monitor" {
   node_name = var.proxmox_instance
 
   cpu { cores = var.cpu }
-  memory { dedicated = var.ram }
+  # Ballooning: the host may reclaim down to the floor (ram_min, default
+  # half the ceiling) when it is under memory pressure. Lets the node run
+  # more VMs than the sum of their ceilings (docs/resources.md).
+  memory {
+    dedicated = var.ram
+    floating  = var.ram_min != null ? var.ram_min : max(256, floor(var.ram / 2))
+  }
 
   # Only SSH is used: no guest agent (the host never parses guest-controlled
   # agent replies; stop/kill works without it), no serial console, no display,

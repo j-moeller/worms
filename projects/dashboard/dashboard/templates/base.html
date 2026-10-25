@@ -15,54 +15,90 @@
 
     <header class="site-header">
         <div class="site-header__inner">
-            <a class="brand" href="{% url 'index' %}">
+            <div class="site-header__group site-header__group--start">
+            {# The brand is the home link: the leaderboard (Sandbox) or the devbox (Dev). #}
+            <a class="brand" href="{% url 'index' %}" data-env-swap="brand">
                 <span class="brand__name">WORMS</span><span class="brand__sep">//</span><span class="brand__env">{% if dev %}DEV{% else %}SANDBOX{% endif %}</span>
             </a>
 
             {% if request.user.is_authenticated %}
-            <nav class="site-nav" aria-label="Main">
+            <nav class="site-nav" aria-label="Main" data-env-swap="nav">
                 <ul>
-                    <li><a href="{% url 'index' %}"{% if page == 'index' %} aria-current="page"{% endif %}>{% if dev %}Devbox{% else %}Leaderboard{% endif %}</a></li>
                     {% if request.team and not request.active_competition.is_registration_period %}
                     <li><a href="{% url 'upload' %}"{% if page == 'upload' %} aria-current="page"{% endif %}>Upload</a></li>
                     <li><a href="{% url 'captures' %}"{% if page == 'captures' %} aria-current="page"{% endif %}>Captures</a></li>
                     <li><a href="{% url 'logs' %}"{% if page == 'logs' %} aria-current="page"{% endif %}>Logs</a></li>
-                    <li><a href="{% url 'access' %}"{% if page == 'access' %} aria-current="page"{% endif %}>Access</a></li>
                     {% endif %}
                     {% if request.active_competition.is_registration_period %}
                     <li><a href="{% url 'team_registration' %}"{% if page == 'team_registration' %} aria-current="page"{% endif %}>Teams</a></li>
                     {% endif %}
                 </ul>
-                {% if request.user.is_staff %}
-                {# Staff-only tools. Non-staff can't reach these views, so the links are not shown to them. #}
-                <ul class="site-nav__admin" aria-label="Staff">
-                    <li class="site-nav__admin-label" aria-hidden="true">Staff</li>
-                    <li><a href="{% url 'todos' %}"{% if page == 'todos' %} aria-current="page"{% endif %}>Todos</a></li>
-                    <li><a href="{% url 'rounds' %}"{% if page == 'rounds' %} aria-current="page"{% endif %}>Rounds</a></li>
-                    <li><a href="{% url 'topology' %}"{% if page == 'topology' %} aria-current="page"{% endif %}>Topology</a></li>
-                </ul>
-                {% endif %}
             </nav>
             {% endif %}
-
-            {% with state=request.state_presentation %}
-            {% if state.label %}
-            <div class="site-status{% if state.warning %} is-warning{% endif %}{% if state.key == 'finished' %} is-finished{% endif %}" role="status">
-                <span class="dot" aria-hidden="true"></span>
-                <span class="site-status__label">{{ state.label }}</span>
-                {% if state.target %}
-                <span class="site-status__time">
-                    <time class="countdown" datetime="{{ state.target|date:'c' }}" data-countdown>{{ state.remaining }}</time>
-                    <span class="site-status__unit">left</span>
-                </span>
-                {% endif %}
             </div>
+
+            {% if request.user.is_authenticated and request.team %}
+            {% comment %}The environment switch, centred in the header. The knob slides
+            over — and hides — the environment you are leaving; the whole page recolours
+            via html[data-env]. With JavaScript it animates and swaps the page in place
+            (no reload); without it, it is a plain form post.{% endcomment %}
+            <form method="post" action="{% url 'set_environment' %}" class="envform">
+                {% csrf_token %}
+                <button type="submit" name="environment" value="{% if dev %}sandbox{% else %}dev{% endif %}"
+                        class="envtoggle" aria-pressed="{% if dev %}true{% else %}false{% endif %}"
+                        aria-label="Switch environment" data-env-toggle>
+                    <span class="envtoggle__label envtoggle__label--sandbox" aria-hidden="true">Sandbox</span>
+                    <span class="envtoggle__label envtoggle__label--dev" aria-hidden="true">Devbox</span>
+                    <span class="envtoggle__knob" aria-hidden="true"></span>
+                </button>
+            </form>
             {% endif %}
-            {% endwith %}
+
+            <div class="site-header__group site-header__group--end">
+            <div class="site-status-slot" data-env-swap="status">
+                {% with state=request.state_presentation %}
+                {% if state.label %}
+                <div class="site-status{% if state.warning %} is-warning{% endif %}{% if state.key == 'finished' %} is-finished{% endif %}" role="status">
+                    <span class="site-status__line">
+                        <span class="dot" aria-hidden="true"></span>
+                        <span class="site-status__label">{{ state.label }}</span>
+                    </span>
+                    {% if state.target %}
+                    <span class="site-status__time">
+                        <time class="countdown" datetime="{{ state.target|date:'c' }}" data-countdown>{{ state.remaining }}</time>
+                        <span class="site-status__unit">left</span>
+                    </span>
+                    {% endif %}
+                </div>
+                {% endif %}
+                {% endwith %}
+            </div>
 
             <div class="site-session">
                 {% if request.user.is_authenticated %}
-                <a class="site-session__user" href="{% url 'profile' %}"{% if page == 'profile' %} aria-current="page"{% endif %}>{{ request.user.username }}</a>
+                {% if request.user.is_staff %}
+                {% comment %}Staff tools live behind a top-right menu. Non-staff are
+                redirected from these views, so the links are not offered to them.
+                A <details> element is a working menu without JavaScript; enhance.js
+                only adds close-on-outside-click and Escape.{% endcomment %}
+                <details class="staff-menu" data-staff-menu>
+                    <summary class="staff-menu__trigger" aria-label="Staff tools" title="Staff tools">
+                        <svg class="staff-menu__icon" viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" focusable="false">
+                            <circle cx="8" cy="3" r="1.5"></circle>
+                            <circle cx="8" cy="8" r="1.5"></circle>
+                            <circle cx="8" cy="13" r="1.5"></circle>
+                        </svg>
+                    </summary>
+                    <div class="staff-menu__panel" role="menu">
+                        <p class="staff-menu__label" aria-hidden="true">Staff</p>
+                        <a role="menuitem" href="{% url 'todos' %}"{% if page == 'todos' %} aria-current="page"{% endif %}>Todos</a>
+                        <a role="menuitem" href="{% url 'rounds' %}"{% if page == 'rounds' %} aria-current="page"{% endif %}>Rounds</a>
+                        <a role="menuitem" href="{% url 'topology' %}"{% if page == 'topology' %} aria-current="page"{% endif %}>Topology</a>
+                    </div>
+                </details>
+                {% endif %}
+                {# Clicking the team name opens the profile, where the team's access tokens live. #}
+                <a class="site-session__user" href="{% url 'profile' %}"{% if page == 'profile' %} aria-current="page"{% endif %}>{% if request.team %}{{ request.team.name }}{% else %}{{ request.user.username }}{% endif %}</a>
                 <form method="post" action="{% url 'logout' %}">
                     {% csrf_token %}
                     <button type="submit" class="btn btn--ghost btn--sm">Sign out</button>
@@ -71,29 +107,8 @@
                 <a class="btn btn--sm" href="{% url 'login' %}">Sign in</a>
                 {% endif %}
             </div>
-        </div>
-
-        {% if request.user.is_authenticated and request.team %}
-        {% comment %}The big environment toggle. Which half is lit, and the whole
-        site's accent colour, say at a glance whether you are in Dev or Sandbox.{% endcomment %}
-        <div class="envbar">
-            <div class="envbar__inner">
-                <form method="post" action="{% url 'set_environment' %}" class="envswitch" role="group" aria-label="Environment">
-                    {% csrf_token %}
-                    <button type="submit" name="environment" value="sandbox" class="envswitch__option" aria-pressed="{% if dev %}false{% else %}true{% endif %}">
-                        <span class="envswitch__dot" aria-hidden="true"></span>Sandbox
-                    </button>
-                    <button type="submit" name="environment" value="dev" class="envswitch__option" aria-pressed="{% if dev %}true{% else %}false{% endif %}">
-                        <span class="envswitch__dot" aria-hidden="true"></span>Dev
-                    </button>
-                </form>
-                <p class="envbar__note">
-                    {% if dev %}You are in the <strong>Dev</strong> environment — your devbox. Nothing here counts toward the competition.
-                    {% else %}You are in the <strong>Sandbox</strong> environment — the live competition.{% endif %}
-                </p>
             </div>
         </div>
-        {% endif %}
     </header>
 
     <div class="flash" data-flash>
@@ -102,7 +117,7 @@
         {% endfor %}
     </div>
 
-    <main id="main" class="site-main" tabindex="-1">
+    <main id="main" class="site-main" tabindex="-1" data-env-swap="main">
         {% block content %}{% endblock %}
     </main>
 

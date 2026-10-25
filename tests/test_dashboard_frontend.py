@@ -124,18 +124,18 @@ def test_upload_rejects_a_non_zip_without_javascript(site, team_upload):  # noqa
 
 
 def test_environment_toggle_reflects_and_switches_the_session(site, team_upload):  # noqa: F811
-    """The big Dev/Sandbox toggle: both options are offered as plain POST
-    buttons, the current one is marked, and posting it flips the whole page's
-    environment (the brand, data-env, and which half is pressed)."""
+    """The environment switch: one sliding toggle that names both environments,
+    marks the current one and, when posted, flips the whole page (brand,
+    data-env, and the value the no-JS button would submit next). The animation
+    and in-place swap are JavaScript-only; the form post is the baseline."""
     page = site.get("/", **proxied(HOST)).content.decode()
-    assert 'class="envswitch"' in page
-    assert re.search(r'name="environment"\s+value="sandbox"', page)
-    assert re.search(r'name="environment"\s+value="dev"', page)
-    # Sandbox is the default, and the chrome says so at a glance.
+    assert "envtoggle" in page and "data-env-toggle" in page
+    assert ">Sandbox<" in page and ">Devbox<" in page  # both labels live in the track
+    # Sandbox is the default; the chrome says so, and the no-JS button submits dev.
     assert 'data-env="sandbox"' in page
     assert 'class="brand__env">SANDBOX<' in page
-    assert re.search(r'value="sandbox"[^>]*aria-pressed="true"', page)
-    assert re.search(r'value="dev"[^>]*aria-pressed="false"', page)
+    assert re.search(r'class="envtoggle"[^>]*aria-pressed="false"', page)
+    assert re.search(r'name="environment"\s+value="dev"', page)
 
     # Switching is a plain form post (works without JavaScript).
     token = _csrf(site, "/")
@@ -148,13 +148,14 @@ def test_environment_toggle_reflects_and_switches_the_session(site, team_upload)
     assert 'data-env="dev"' in page
     assert 'class="brand__env">DEV<' in page
     assert "WORMS//DEV" in page  # the <title>
-    assert re.search(r'value="dev"[^>]*aria-pressed="true"', page)
-    assert re.search(r'value="sandbox"[^>]*aria-pressed="false"', page)
+    assert re.search(r'class="envtoggle"[^>]*aria-pressed="true"', page)
+    assert re.search(r'name="environment"\s+value="sandbox"', page)  # now submits back
 
 
 def test_staff_tools_are_hidden_from_non_staff(site):  # noqa: F811
-    """Todos / Rounds / Topology redirect non-staff to the index, so their nav
-    links are shown only to staff: views a user can't reach are not displayed."""
+    """Todos / Rounds / Topology redirect non-staff to the index, so the
+    top-right staff menu is rendered only for staff: views a user can't reach
+    are not displayed."""
     from core.models.competition import ApplicationSetting
     from core.models.team import Team, TeamMembership
     from core.models.user import User
@@ -166,16 +167,36 @@ def test_staff_tools_are_hidden_from_non_staff(site):  # noqa: F811
 
     site.force_login(member)
     page = site.get("/", **proxied(HOST)).content.decode()
-    assert "site-nav__admin" not in page
+    assert "staff-menu" not in page
     for href in ('href="/todos/"', 'href="/rounds/"', 'href="/topology/"'):
         assert href not in page, href
     # And the views themselves are closed to them (hiding matches real access).
     for path in ("/todos/", "/rounds/", "/topology/"):
         assert site.get(path, **proxied(HOST)).status_code == 302, path
 
-    # Staff do see the tools.
+    # Staff do see the menu and its links.
     site.force_login(User.objects.get(username="admin"))
     staff_page = site.get("/", **proxied(HOST)).content.decode()
-    assert "site-nav__admin" in staff_page
+    assert "staff-menu" in staff_page
     for href in ('href="/todos/"', 'href="/rounds/"', 'href="/topology/"'):
         assert href in staff_page, href
+
+
+def test_brand_is_home_and_leaderboard_access_are_not_nav_links(site, team_upload):  # noqa: F811
+    """The brand links home (leaderboard/devbox), Access moved into the profile,
+    and the team name is the profile link — none of them are separate nav items."""
+    page = site.get("/", **proxied(HOST)).content.decode()
+    assert 'class="brand" href="/"' in page            # brand is the home link
+    assert ">Leaderboard</a>" not in page              # no separate leaderboard nav link
+    assert ">Access</a>" not in page                   # Access folded into the profile
+    assert re.search(r'class="site-session__user"[^>]*href="/profile/"', page)
+
+
+def test_access_tokens_moved_into_the_profile(site, team_upload):  # noqa: F811
+    """The standalone Access page is gone; the team's tokens, the create form
+    and the API docs now live on the profile page."""
+    assert site.get("/access/", **proxied(HOST)).status_code == 404
+    page = site.get("/profile/", **proxied(HOST)).content.decode()
+    assert "Access tokens" in page
+    assert 'action="/access-tokens/create/"' in page   # the create form
+    assert "/api/v1/rounds/" in page                   # the API docs moved too

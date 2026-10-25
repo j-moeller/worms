@@ -1,4 +1,4 @@
-from dashboard.views.access import access, create_access_token, revoke_access_token
+from dashboard.views.access import create_access_token, revoke_access_token
 from dashboard.views.auth import login_view, logout_view
 from dashboard.views.password import change_password
 from dashboard.views.debug import debug_login_as
@@ -68,14 +68,14 @@ urlpatterns = [
     path("topology/data/", topology_data, name="topology_data"),
     path("topology/runs/", topology_runs, name="topology_runs"),
     #
-    path("access/", access, name="access"),
+    # Team API tokens (shown in the profile; the standalone Access page is gone).
     path(
-        "access/access-tokens/create/",
+        "access-tokens/create/",
         create_access_token,
         name="create_access_token",
     ),
     path(
-        "access/access-tokens/<int:token_id>/revoke/",
+        "access-tokens/<int:token_id>/revoke/",
         revoke_access_token,
         name="revoke_access_token",
     ),

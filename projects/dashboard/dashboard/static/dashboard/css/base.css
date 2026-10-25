@@ -121,14 +121,20 @@ html[data-env="dev"] {
 }
 .site-header__inner {
     max-width: var(--maxw); margin: 0 auto; padding: 0 20px;
-    min-height: 58px; display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+    min-height: 58px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
 }
+/* Three parts: start group (brand + nav), the centred toggle, end group
+   (status + session). The two groups share the leftover space equally, which
+   holds the fixed-width toggle dead-centre whatever the side widths are. */
+.site-header__group { display: flex; align-items: center; gap: 16px; flex: 1 1 0; min-width: 0; flex-wrap: wrap; }
+.site-header__group--start { justify-content: flex-start; }
+.site-header__group--end { justify-content: flex-end; gap: 10px; }
 .brand { display: inline-flex; align-items: baseline; gap: 1px; font-family: var(--font-display); font-weight: 700; letter-spacing: .04em; }
 .brand:hover { text-decoration: none; }
 .brand__name { color: var(--text); }
 .brand__sep { color: var(--accent); margin: 0 1px; }
 .brand__env { color: var(--accent); font-weight: 700; }
-.site-nav { flex: 1; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.site-nav { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .site-nav ul { list-style: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 0; padding: 0; }
 .site-nav a {
     display: block; padding: 7px 12px; border-radius: var(--radius-sm);
@@ -137,43 +143,83 @@ html[data-env="dev"] {
 }
 .site-nav a:hover { color: var(--text); background: var(--surface); text-decoration: none; }
 .site-nav a[aria-current="page"] { color: var(--accent); background: var(--accent-weak); }
-.site-nav__staff a { color: var(--faint); }
 
-.site-status { display: inline-flex; align-items: center; gap: 9px; padding: 6px 12px; border: var(--border-w) solid var(--border); border-radius: 100px; background: var(--surface); font-size: .76rem; }
+/* Two lines — label on top, countdown below — so the badge stays narrow. */
+.site-status { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 12px; border: var(--border-w) solid var(--border); border-radius: var(--radius); background: var(--surface); font-size: .72rem; line-height: 1.3; }
+.site-status__line { display: inline-flex; align-items: center; gap: 7px; }
 .site-status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
 .site-status.is-warning .dot { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 25%, transparent); }
 .site-status.is-finished .dot { background: var(--faint); box-shadow: none; }
 .site-status__label { font-weight: 600; letter-spacing: .03em; }
-.site-status__time { color: var(--muted); }
+.site-status__time { color: var(--muted); padding-left: 15px; }  /* aligned under the label, clear of the dot */
 .site-status .countdown { font-family: var(--font-mono); color: var(--text); font-variant-numeric: tabular-nums; }
 .site-status__unit { color: var(--faint); margin-left: 3px; }
 
+.site-status-slot { display: inline-flex; align-items: center; }
 .site-session { display: inline-flex; align-items: center; gap: 10px; }
 .site-session form { margin: 0; }
 .site-session__user { color: var(--text); font-weight: 600; font-size: .85rem; }
 
-/* Staff-only tools, set apart from the team nav (non-staff never see them). */
-.site-nav__admin { border-left: var(--border-w) solid var(--border); padding-left: 14px; }
-.site-nav__admin-label { color: var(--faint); font-size: .64rem; text-transform: uppercase; letter-spacing: .14em; padding: 0 2px; }
-.site-nav__admin a { color: var(--faint); }
-
-/* ---- the environment toggle (Dev / Sandbox), in the sticky header ------- */
-.envbar { border-top: var(--border-w) solid var(--border); background: color-mix(in srgb, var(--accent) 9%, var(--header-bg)); }
-.envbar__inner { max-width: var(--maxw); margin: 0 auto; padding: 11px 20px; display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
-.envswitch { display: inline-flex; padding: 5px; gap: 5px; background: var(--surface); border: var(--border-w) solid var(--border-strong); border-radius: 100px; box-shadow: var(--shadow); }
-.envswitch__option {
-    display: inline-flex; align-items: center; gap: 9px; border: none; background: transparent;
-    color: var(--muted); font: inherit; font-weight: 700; font-size: 1rem; line-height: 1;
-    padding: 11px 28px; border-radius: 100px; cursor: pointer;
-    text-transform: var(--btn-transform); letter-spacing: var(--btn-spacing);
-    transition: color .12s, background .12s;
+/* ---- staff tools: a top-right dropdown (a native <details> menu) -------- */
+.staff-menu { position: relative; }
+.staff-menu__trigger {
+    list-style: none; display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; border-radius: var(--radius-sm); cursor: pointer;
+    color: var(--muted); border: var(--border-w) solid transparent;
 }
-.envswitch__option:hover { color: var(--text); }
-.envswitch__dot { width: 9px; height: 9px; border-radius: 50%; background: currentColor; opacity: .45; }
-.envswitch__option[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); box-shadow: var(--glow); }
-.envswitch__option[aria-pressed="true"] .envswitch__dot { opacity: 1; }
-.envbar__note { margin: 0; color: var(--muted); font-size: .88rem; }
-.envbar__note strong { color: var(--accent); }
+.staff-menu__trigger::-webkit-details-marker { display: none; }
+.staff-menu__trigger::marker { content: ""; }
+.staff-menu__trigger:hover { color: var(--text); background: var(--surface); }
+.staff-menu__trigger:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.staff-menu[open] .staff-menu__trigger { color: var(--accent); background: var(--accent-weak); border-color: var(--border); }
+.staff-menu__icon { display: block; fill: currentColor; }
+.staff-menu__panel {
+    position: absolute; top: calc(100% + 7px); right: 0; z-index: 30; min-width: 176px;
+    padding: 6px; background: var(--surface); border: var(--border-w) solid var(--border-strong);
+    border-radius: var(--radius); box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 2px;
+}
+.staff-menu__label { margin: 3px 9px 4px; color: var(--faint); font-size: .62rem; text-transform: uppercase; letter-spacing: .15em; }
+.staff-menu__panel a { display: block; padding: 7px 10px; border-radius: var(--radius-sm); color: var(--muted); font-size: .84rem; font-weight: 600; }
+.staff-menu__panel a:hover { color: var(--text); background: var(--surface-2); text-decoration: none; }
+.staff-menu__panel a[aria-current="page"] { color: var(--accent); background: var(--accent-weak); }
+
+/* ---- the environment switch: a small sliding toggle, centred in the header */
+.envform { flex: 0 0 auto; margin: 0; line-height: 0; }
+
+/* A compact rounded-rectangle track with a circular knob. The knob slides to
+   the side of the environment you are LEAVING and hides its (now faded-out)
+   label; the active label shows in the free space. Knob position, which label
+   shows and the whole page's accent all key off html[data-env], so one
+   attribute flip animates and recolours everything. */
+.envtoggle {
+    position: relative; display: inline-block; box-sizing: border-box;
+    width: 112px; height: 30px; padding: 0; cursor: pointer;
+    border: var(--border-w) solid var(--border-strong); border-radius: 999px;
+    background: var(--surface-2); box-shadow: inset 0 1px 3px rgba(0, 0, 0, .18);
+    font-family: inherit; -webkit-tap-highlight-color: transparent;
+}
+.envtoggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.envtoggle__label {
+    position: absolute; top: 0; height: 100%; width: 80px; display: inline-flex;
+    align-items: center; justify-content: center; pointer-events: none;
+    font-weight: 700; font-size: .8rem; letter-spacing: .01em; color: var(--accent);
+    text-transform: var(--btn-transform); transition: opacity .16s ease;
+}
+.envtoggle__label--sandbox { left: 4px; }    /* shown on the left when the knob is on the right */
+.envtoggle__label--dev { right: 4px; }         /* shown on the right when the knob is on the left */
+.envtoggle__knob {
+    position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%;
+    background: var(--accent); box-shadow: var(--shadow), var(--glow); z-index: 2;
+    transition: transform .3s cubic-bezier(.34, 1.3, .5, 1);
+}
+/* Sandbox: knob on the right (over the hidden "Devbox"), "Sandbox" shown. */
+html[data-env="sandbox"] .envtoggle__knob { transform: translateX(82px); }
+html[data-env="sandbox"] .envtoggle__label--sandbox { opacity: 1; }
+html[data-env="sandbox"] .envtoggle__label--dev { opacity: 0; }
+/* Dev: knob on the left (over the hidden "Sandbox"), "Devbox" shown. */
+html[data-env="dev"] .envtoggle__knob { transform: translateX(0); }
+html[data-env="dev"] .envtoggle__label--dev { opacity: 1; }
+html[data-env="dev"] .envtoggle__label--sandbox { opacity: 0; }
 
 /* ---- flash / alerts ----------------------------------------------------- */
 .flash { max-width: var(--maxw); margin: 0 auto; padding: 0 20px; width: 100%; }
@@ -382,8 +428,10 @@ textarea.input { resize: vertical; min-height: 64px; }
 @media (max-width: 860px) {
     .grid--2 { grid-template-columns: 1fr; }
     .site-header__inner { gap: 10px 14px; padding: 10px 16px; }
-    .site-nav { order: 3; flex-basis: 100%; }
-    .site-status { order: 2; }
+    /* Stack: brand+nav, then the toggle on its own centred line, then status+session. */
+    .site-header__group--start { flex-basis: 100%; }
+    .envform { order: 1; flex-basis: 100%; display: flex; justify-content: center; }
+    .site-header__group--end { order: 2; flex-basis: 100%; justify-content: space-between; }
     .site-main { padding: 20px 16px 40px; }
     .page-head__title { font-size: 1.5rem; }
 }

@@ -117,13 +117,13 @@
 <section class="panel" aria-labelledby="submit-api-title">
     <header class="panel__head"><h2 class="panel__title" id="submit-api-title">Submit flags and logs</h2></header>
     <div class="panel__body prose">
-        <p>From inside the sandbox, over the internal network:</p>
+        <p>From inside the sandbox, over the internal network. No token or team id: only one team runs at a time, so the server knows which. Capturing a VM means submitting its flag (<code>/etc/worms/flag</code> on each VM). The full contract for your worm is <code>docs/worm-contract.md</code>.</p>
         <pre class="code" data-copy><code>curl -X POST https://scoring.worms.internal/submit \
   -H "Content-Type: application/json" \
-  -d '{"team_api_token":"TOKEN","vm_flag":"FLAG"}'</code></pre>
+  -d '{"vm_flag":"FLAG"}'</code></pre>
         <pre class="code" data-copy><code>curl -X POST https://logging.worms.internal/submit \
   -H "Content-Type: application/json" \
-  -d '{"team_api_token":"TOKEN","log_data":{"event":"..."}}'</code></pre>
+  -d '{"log_data":{"event":"..."}}'</code></pre>
     </div>
 </section>
 

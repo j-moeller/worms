@@ -3,8 +3,8 @@
 This maps the platform's requirements to where they are implemented and how
 they are verified, with residual gaps called out. The detailed docs:
 `rounds.md`, `devbox.md`, `monitoring.md`, `accounts.md`, `management.md`,
-`team_api.md`, `visualization.md`, `testing.md`, and the security review in
-`security-assessment.md`.
+`team_api.md`, `visualization.md`, `testing.md`, `worm-contract.md` (what a
+team uploads), and the security review in `security-assessment.md`.
 
 Legend: ✅ implemented & covered offline · ⚠️ implemented, not yet exercised on
 a live Proxmox host (the standing caveat — no node is available here).

@@ -20,7 +20,8 @@ verification (C1); and locking devpi and the Docker registry to
 read-only/authenticated before re-enabling them (S2).
 
 ## Not yet built
-- Worm uploads polish and a dashboard design pass.
+- A dashboard design pass (the worm upload flow and the contract are
+  documented now -- docs/worm-contract.md).
 - Heartbeat: define the "vital" services per VM, a collector, and its DB schema.
 - GPU / inference-engine service (jailbreaking scenarios).
 - Richer sandbox topology generation: L2/L3 switches and seeded vulnerabilities.

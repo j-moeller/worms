@@ -360,7 +360,9 @@ pulls jobs from the database. The orchestrator itself only controls sandbox VM
 power (a pool-scoped token), for the game plan.
 
 Full design, lifecycle, game plan, the timeline data for the animated view,
-operations and open items: **`docs/rounds.md`**.
+operations and open items: **`docs/rounds.md`**. What a team uploads and how
+its worm runs (entry point, the flag path, how to capture a VM, the limits):
+**`docs/worm-contract.md`**.
 
 ```
 worms build provision     # installs the conductor daemon, the round agent and the

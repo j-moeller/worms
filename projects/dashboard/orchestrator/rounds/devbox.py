@@ -17,11 +17,43 @@ host_jobs.
 
 from __future__ import annotations
 
-from core.models.devbox import Devbox, DevboxVM
+from core.models.devbox import Devbox, DevboxSSHKey, DevboxVM
 from core.models.rounds import HostJob
 from core.models.team import Team
 from django.conf import settings
 from django.db import transaction
+
+MAX_TEAMS = 32  # the services block 10.2.0.32/27
+
+
+def team_slug(team) -> str:
+    # A stable, valid slug (scripts/generate_devbox.py / the agent accept it).
+    return f"t{team.id}"
+
+
+def team_authorized_keys(team) -> list[str]:
+    return list(DevboxSSHKey.objects.filter(team=team).order_by("id").values_list("public_key", flat=True))
+
+
+def team_spec(team, index) -> dict:
+    """One team's entry in a devbox host job: slug, addressing index, uuid and
+    its registered SSH keys. The agent regenerates the whole devbox stack from
+    the full list and (re)writes each team's authorized_keys from it."""
+    return {
+        "slug": team_slug(team),
+        "index": index,
+        "team_uuid": str(team.uuid),
+        "authorized_keys": team_authorized_keys(team),
+    }
+
+
+def provisioned_team_specs(competition) -> list[dict]:
+    """Specs for every provisioned team of `competition` (one that has a devbox
+    index), by id -- the full teams list a rebuild/reconfigure job needs so the
+    agent can regenerate the stack and (re)push every team's keys. A team with
+    no devbox yet (not provisioned) is left out: it is not in the stack."""
+    indices = {d.team_id: d.index for d in Devbox.objects.filter(team__competition=competition, index__isnull=False)}
+    return [team_spec(team, indices[team.id]) for team in Team.objects.filter(competition=competition).order_by("id") if team.id in indices]
 
 
 def _gateway_defaults():

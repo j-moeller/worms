@@ -19,6 +19,8 @@ from django.http import HttpRequest, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 
+from orchestrator.rounds.devbox import provisioned_team_specs
+
 
 def require_token(scope):
     """Allow the request only with the bearer token configured for `scope`."""
@@ -84,9 +86,17 @@ def devbox_reset(request: HttpRequest, team_uuid):
         devbox = Devbox.objects.filter(team=team).first()
         job = None
         if devbox is not None:
+            # The agent regenerates the whole devbox stack and re-pushes every
+            # team's SSH keys, so the job carries the full teams list (with
+            # keys), not just this team -- otherwise the rebuild fails
+            # validation and the VMs and keys are never updated.
             job = HostJob.objects.create(
                 kind=HostJob.Kind.DEVBOX_REBUILD,
-                params={"team_uuid": str(team.uuid), "devbox_version": team.devbox_version},
+                params={
+                    "team_uuid": str(team.uuid),
+                    "devbox_version": team.devbox_version,
+                    "teams": provisioned_team_specs(team.competition),
+                },
             )
     return JsonResponse(
         {
@@ -96,3 +106,37 @@ def devbox_reset(request: HttpRequest, team_uuid):
             "rebuild_enqueued": job is not None,
         }
     )
+
+
+@require_token("dashboard")
+@require_POST
+def devbox_reconfigure(request: HttpRequest, team_uuid):
+    """Re-push every team's SSH keys to the devbox VMs and the gateway without
+    rebuilding any VM (docs/devbox.md): enqueued when a team adds or removes a
+    key, or leaves. `team_uuid` is the team that triggered it (for logging and
+    de-duplication); the job itself carries the whole competition's teams,
+    because the gateway's authorized_keys is rewritten wholesale.
+
+    Does not bump the version or touch tokens. Coalesced: if a reconfigure is
+    already queued or running, no second one is enqueued."""
+    team = Team.objects.filter(uuid=team_uuid).first()
+    if team is None:
+        return JsonResponse({"error": "no such team"}, status=404)
+
+    with transaction.atomic():
+        Team.objects.select_for_update().get(pk=team.pk)
+        pending = HostJob.objects.filter(
+            kind=HostJob.Kind.DEVBOX_RECONFIGURE,
+            state__in=[HostJob.State.QUEUED, HostJob.State.RUNNING],
+        ).first()
+        if pending is not None:
+            return JsonResponse({"job": str(pending.uuid), "reconfigure_enqueued": False, "detail": "a reconfigure is already queued"})
+        teams = provisioned_team_specs(team.competition)
+        if not teams:
+            # No devbox provisioned yet: keys will be installed at provisioning.
+            return JsonResponse({"job": None, "reconfigure_enqueued": False, "detail": "no devbox provisioned yet"})
+        job = HostJob.objects.create(
+            kind=HostJob.Kind.DEVBOX_RECONFIGURE,
+            params={"team_uuid": str(team.uuid), "teams": teams},
+        )
+    return JsonResponse({"job": str(job.uuid), "reconfigure_enqueued": True})

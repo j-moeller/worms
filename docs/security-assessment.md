@@ -38,6 +38,8 @@ scoring/logging attribution and the round lifecycle.
 | S8 | Availability | dnsmasq query log is bounded by logrotate | `ansible/roles/dns/setup_dns/tasks/main.yml` |
 | S14 | Confidentiality | The Wazuh install bundle (all generated passwords) is pulled to the controller and shredded from the log-parsing VM | `ansible/roles/audit/wazuh_server/*` |
 | D2 | Availability | A devbox reset does not pile up rebuilds (one queued/running per team) | `projects/dashboard/orchestrator/api.py` |
+| D6 | Integrity (RCE) | A registered SSH key is no longer evaluated as a Jinja template on the host: strict comment validation on both sides, plus `!unsafe` in the agent's var file | `projects/dashboard/dashboard/views/devbox.py`, `scripts/round_agent/validation.py`, `scripts/round_agent/handlers.py` |
+| D7 | Isolation/integrity | A key blob is unique across teams (fail-closed in the agent); adding/removing a key or leaving a team re-pushes keys (`devbox_reconfigure`); reset now carries the teams spec so the rebuild actually installs keys | `projects/dashboard/dashboard/views/{devbox,teams}.py`, `projects/dashboard/orchestrator/{api.py,rounds/devbox.py}`, `scripts/round_agent/*` |
 
 ### The two isolation rules (as requested)
 
@@ -112,6 +114,35 @@ the DOM with `textContent`, and the bearer-token APIs are the only
 
 - **D1 (fixed):** anonymous requests created a session row each; now they don't.
 - **D2 (fixed):** devbox reset had no throttle; now one rebuild per team.
+- **D6 (fixed, High — template injection → root on the Proxmox host):** a team's
+  registered SSH key is attacker-controlled text that the round agent renders
+  through Jinja into the devbox and gateway `authorized_keys` (on the host, as
+  root). The comment field was unvalidated (`.{0,200}`), so a key such as
+  `ssh-ed25519 AAAA… {{ '{{' }} … {{ '}}' }}` was **evaluated** as a template
+  (confirmed on ansible-core 2.18 and 2.19). Fixed two ways: (a) both validators
+  — `dashboard/views/devbox.py:_valid_ssh_key` and
+  `scripts/round_agent/validation.py:ssh_keys` — now reject any key whose
+  comment contains template/shell/quote characters (`{ } % $ "` ' \ ; | < >`);
+  (b) the agent writes the keys to the Ansible var file tagged `!unsafe`
+  (`handlers._unsafe_yaml`), so key text is never templated even if validation
+  is loosened. A team *cannot* forge its gateway `permitopen`/`restrict` by the
+  key line itself (the options are emitted before the key; the comment is after
+  it, and no newline is allowed), but the Jinja path was the real escape.
+- **D7 (fixed — cross-team key / stale access):** a key could be registered by
+  more than one team (sshd matches a key to the first `authorized_keys` line, so
+  a shared key would let one team inherit another's gateway forward and log in
+  to its VMs), adding/removing a key did nothing until an operator
+  re-provisioned, a devbox *reset* enqueued a rebuild **without** the `teams`
+  list so the agent failed it (keys were never installed and the VMs never
+  rebuilt), and leaving a team kept the member's keys. Now: a key blob must be
+  unique across teams (rejected on the dashboard, and fail-closed in the agent's
+  `devbox_teams`); adding/removing a key enqueues a lightweight
+  `devbox_reconfigure` (re-push keys only, no VM rebuild); reset carries the full
+  teams spec; leaving a team removes that member's keys and reconfigures.
+  Residual: the cross-team uniqueness check is app-level (a simultaneous add by
+  two teams could still race past the dashboard, but the agent then fails the
+  job closed rather than installing a hijacking key); a DB fingerprint
+  constraint would close the race.
 - **D3 (not fixed):** no login brute-force protection. `fail2ban` is installed
   but has no jail. Recommended next: a jail (or a cache-based lockout) on the
   login endpoint.

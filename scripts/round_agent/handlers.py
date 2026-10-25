@@ -341,14 +341,51 @@ def devbox_rebuild(ex, cfg, params):
     return {"team_uuid": params["team_uuid"], "devbox_version": params["devbox_version"], "vms": rebuilt}
 
 
+class _Unsafe(str):
+    """A string written to the Ansible varfile with the `!unsafe` tag, so
+    Ansible never templates it (used for attacker-controlled SSH keys)."""
+
+
+def _unsafe_yaml(data) -> str:
+    """Serialise `data` to YAML, emitting `_Unsafe` strings tagged `!unsafe`.
+    PyYAML quotes/escapes every scalar, so even a key that slipped past
+    validation cannot break out of its string or carry an evaluated template."""
+    import yaml
+
+    class Dumper(yaml.SafeDumper):
+        pass
+
+    Dumper.add_representer(
+        _Unsafe,
+        lambda dumper, value: dumper.represent_scalar("!unsafe", str(value), style='"'),
+    )
+    return yaml.dump(data, Dumper=Dumper, default_flow_style=False, allow_unicode=True)
+
+
+def devbox_reconfigure(ex, cfg, params):
+    """Re-push every team's SSH keys to the devbox VMs and the gateway, and the
+    source->team map, without rebuilding any VM or touching tokens. Enqueued
+    when a team adds/removes a key or leaves (docs/devbox.md). Idempotent."""
+    teams = params["teams"]
+    _configure_devbox(ex, teams)
+    _write_devbox_map(ex, cfg, teams)
+    return {"reconfigured": [t["slug"] for t in teams]}
+
+
 def _configure_devbox(ex, teams):
     """Run the devbox + SSH-gateway Ansible with the teams' keys and VM targets
-    as extra vars (CA trust, team authorized_keys, confined gateway keys)."""
-    import json
+    as extra vars (CA trust, team authorized_keys, confined gateway keys).
+
+    A team's SSH key is attacker-controlled text that Ansible renders into the
+    devbox and gateway authorized_keys (on the Proxmox host, as root). Every
+    key string is therefore tagged `!unsafe` in the variable file, so a
+    `{{...}}`/`{%...%}` in it is never evaluated as a template -- defence in
+    depth behind the strict validation (validation.ssh_keys, which already
+    rejects template characters). See docs/security-assessment.md."""
     import tempfile
 
     devbox = ex.tofu_output("devbox").get("devbox", {}) or {}
-    team_keys = {t["slug"]: t["authorized_keys"] for t in teams}
+    team_keys = {t["slug"]: [_Unsafe(k) for k in t["authorized_keys"]] for t in teams}
     gateway_keys = []
     for t in teams:
         vms = (devbox.get(t["slug"], {}) or {}).get("vms", [])
@@ -359,10 +396,10 @@ def _configure_devbox(ex, teams):
         entry = f"devbox-{t['slug']}-a"
         targets = [f"{vm['ssh_fabric_ip']}:22" for vm in vms if vm["name"] == entry]
         for key in t["authorized_keys"]:
-            gateway_keys.append({"public_key": key, "comment": f"team={t['slug']}", "permitopen": targets})
+            gateway_keys.append({"public_key": _Unsafe(key), "comment": f"team={t['slug']}", "permitopen": targets})
     extra = {"devbox_team_keys": team_keys, "ssh_gateway_authorized_keys": gateway_keys}
-    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
-        json.dump(extra, fh)
+    with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False) as fh:
+        fh.write(_unsafe_yaml(extra))
         varfile = fh.name
     ex.worms("devbox-configure", timeout=1800, args=f"-e @{varfile}")
 
@@ -375,4 +412,5 @@ HANDLERS = {
     "teardown": teardown,
     "devbox_provision": devbox_provision,
     "devbox_rebuild": devbox_rebuild,
+    "devbox_reconfigure": devbox_reconfigure,
 }

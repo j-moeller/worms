@@ -133,6 +133,10 @@ class HostJob(models.Model):
         # not round-scoped). The team uuid and version are in params.
         DEVBOX_PROVISION = "devbox_provision"
         DEVBOX_REBUILD = "devbox_rebuild"
+        # Re-push every team's SSH keys to the devbox VMs and the gateway (and
+        # the source->team map) without rebuilding any VM: run when a team adds
+        # or removes a key, or leaves. Cheap and idempotent.
+        DEVBOX_RECONFIGURE = "devbox_reconfigure"
 
     class State(models.TextChoices):
         QUEUED = "queued"

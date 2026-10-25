@@ -216,3 +216,84 @@ def test_devbox_reset_without_a_devbox_is_an_error(site, team_upload):  # noqa: 
     team.refresh_from_db()
     assert team.devbox_version == before  # nothing was reset
     assert "no devbox to reset" in site.get("/", **proxied(HOST)).content.decode()
+
+
+def _post(site, path, data):
+    data = {**data, "csrfmiddlewaretoken": _csrf(site, "/")}
+    return site.post(path, data, HTTP_ORIGIN=f"https://{HOST}", **proxied(HOST))
+
+
+def _flash(site):
+    return site.get("/", **proxied(HOST)).content.decode()
+
+
+# A valid key blob to build test keys from (type + base64 + comment).
+_BLOB = "eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eA=="
+
+
+def test_devbox_ssh_key_add_remove_and_reconfigure(site, team_upload, monkeypatch):  # noqa: F811
+    """Adding or removing a key stores/removes it AND asks the orchestrator to
+    re-push keys (no VM rebuild). A key that could be a template, or that
+    belongs to another team, is refused."""
+    from core.models.devbox import Devbox, DevboxSSHKey
+    from core.models.team import Team
+    from dashboard import orchestrator_client
+
+    team, _ = team_upload
+    Devbox.objects.create(team=team, index=1)
+    calls = []
+    monkeypatch.setattr(orchestrator_client, "post", lambda path, timeout=15: calls.append(path) or {"reconfigure_enqueued": True})
+
+    # Add a good key -> stored, and a reconfigure is requested.
+    assert _post(site, "/devbox/ssh-keys/add/", {"name": "laptop", "public_key": f"ssh-ed25519 {_BLOB} me@laptop"}).status_code == 302
+    assert list(DevboxSSHKey.objects.filter(team=team).values_list("public_key", flat=True)) == [f"ssh-ed25519 {_BLOB} me@laptop"]
+    assert calls == [f"/devbox/{team.uuid}/reconfigure/"]
+
+    # A template/shell comment is refused (SSTI); nothing stored, no call.
+    calls.clear()
+    assert _post(site, "/devbox/ssh-keys/add/", {"name": "evil", "public_key": f"ssh-ed25519 {_BLOB} x={{{{7*7}}}}"}).status_code == 302
+    assert DevboxSSHKey.objects.filter(team=team).count() == 1 and calls == []
+    assert "not allowed" in _flash(site) or "not a single-line" in _flash(site)
+
+    # Another team's key cannot be registered (would hijack confinement).
+    other = Team.objects.create(name="blue", competition=team.competition)
+    from core.models.user import User
+
+    DevboxSSHKey.objects.create(team=other, name="k", public_key=f"ssh-ed25519 {_BLOB} blue", created_by=User.objects.create(username="b"))
+    calls.clear()
+    _post(site, "/devbox/ssh-keys/add/", {"name": "dup", "public_key": f"ssh-ed25519 {_BLOB} mine"})
+    assert DevboxSSHKey.objects.filter(team=team).count() == 1 and calls == []
+    assert "already registered" in _flash(site)
+
+    # Remove the key -> gone, and a reconfigure is requested.
+    calls.clear()
+    key = DevboxSSHKey.objects.get(team=team)
+    assert _post(site, f"/devbox/ssh-keys/{key.id}/delete/", {}).status_code == 302
+    assert DevboxSSHKey.objects.filter(team=team).count() == 0
+    assert calls == [f"/devbox/{team.uuid}/reconfigure/"]
+
+
+def test_leaving_a_team_removes_the_members_keys(site, team_upload, monkeypatch):  # noqa: F811
+    """A member who leaves no longer has devbox access: their keys are removed
+    and the orchestrator re-pushes the remaining ones."""
+    from core.models.competition import ApplicationSetting
+    from core.models.devbox import Devbox, DevboxSSHKey
+    from core.models.user import User
+    from dashboard import orchestrator_client
+    from django.utils import timezone
+
+    team, _ = team_upload
+    Devbox.objects.create(team=team, index=1)
+    admin = User.objects.get(username="admin")
+    DevboxSSHKey.objects.create(team=team, name="mine", public_key=f"ssh-ed25519 {_BLOB} admin", created_by=admin)
+    # Open registration so leaving is allowed.
+    comp = ApplicationSetting.get_current_competition()
+    comp.registration_starts_at = timezone.now() - timezone.timedelta(days=1)
+    comp.registration_ends_at = timezone.now() + timezone.timedelta(days=1)
+    comp.save()
+    calls = []
+    monkeypatch.setattr(orchestrator_client, "post", lambda path, timeout=15: calls.append(path) or {})
+
+    assert _post(site, f"/leave_team/{team.uuid}", {}).status_code == 302
+    assert DevboxSSHKey.objects.filter(team=team, created_by=admin).count() == 0
+    assert calls == [f"/devbox/{team.uuid}/reconfigure/"]

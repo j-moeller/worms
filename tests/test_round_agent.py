@@ -22,6 +22,20 @@ from round_agent import handlers, validation  # noqa: E402
 from round_agent.agent import Agent  # noqa: E402
 
 
+def _load_varfile_text(text):
+    """Parse an agent key varfile (YAML with `!unsafe` string tags)."""
+    import yaml
+
+    loader = yaml.SafeLoader
+    loader.add_constructor("!unsafe", lambda ldr, node: ldr.construct_scalar(node))
+    return yaml.load(text, Loader=loader)
+
+
+def _load_varfile(path):
+    with open(path) as fh:
+        return _load_varfile_text(fh.read())
+
+
 # --- validation ---------------------------------------------------------------
 
 
@@ -112,6 +126,44 @@ def test_validate_devbox_rebuild():
          "teams": [{"slug": "t1", "index": 0, "team_uuid": "11111111-2222-3333-4444-555555555555", "authorized_keys": []}]},
     )
     assert clean["devbox_version"] == 3
+
+
+BLOB = "AAAAC3NzaC1lZDI1NTE5AAAAIabcdefghijklmnopqrstuvwxyz0123456789AB"
+
+
+@pytest.mark.parametrize("comment", [
+    "marker={{ 7*7 }}",            # jinja expression
+    "{%set x=1%}",                 # jinja statement
+    "$(id)", "`id`",               # shell
+    'a"b', "a'b", "a\\b",          # quotes / backslash (break out of a YAML scalar)
+    "a;b", "a|b", "a<b", "a>b",    # other metacharacters
+])
+def test_ssh_key_rejects_template_and_shell_characters(comment):
+    """A key comment that could be evaluated as a template on the Proxmox host,
+    or break the varfile, is rejected (docs/security-assessment.md)."""
+    with pytest.raises(validation.Invalid):
+        validation.ssh_keys([f"ssh-ed25519 {BLOB} {comment}"])
+
+
+def test_ssh_key_accepts_ordinary_comments():
+    for comment in ("", " alice@laptop", " ci-runner_2024", " u@h.example", " key/for+ci:1"):
+        assert validation.ssh_keys([f"ssh-ed25519 {BLOB}{comment}"])
+
+
+def test_the_same_key_may_not_belong_to_two_teams():
+    """sshd matches a key to the first authorized_keys line, so a key shared by
+    two teams would hijack confinement: the agent fails the job closed."""
+    shared = f"ssh-ed25519 {BLOB} shared"
+    params = {"teams": [
+        {"slug": "t1", "index": 0, "team_uuid": "11111111-2222-3333-4444-555555555555", "authorized_keys": [shared]},
+        {"slug": "t2", "index": 1, "team_uuid": "22222222-2222-3333-4444-555555555555", "authorized_keys": [shared]},
+    ]}
+    with pytest.raises(validation.Invalid):
+        validation.validate("devbox_provision", params)
+    # The same team listing a key twice is fine (idempotent).
+    ok = {"teams": [{"slug": "t1", "index": 0, "team_uuid": "11111111-2222-3333-4444-555555555555",
+                     "authorized_keys": [shared, shared]}]}
+    assert validation.validate("devbox_provision", ok)
 
 
 def test_validate_prepare_bounds():
@@ -336,7 +388,7 @@ def test_devbox_gateway_permitopen_is_only_the_entry_vm():
     teams = [{"slug": "t1", "authorized_keys": ["ssh-ed25519 AAAA key-one", "ssh-ed25519 BBBB key-two"]}]
     handlers._configure_devbox(ex, teams)
 
-    extra = json.load(open(ex.args.split("@", 1)[1]))
+    extra = _load_varfile(ex.args.split("@", 1)[1])
     gateway_keys = extra["ssh_gateway_authorized_keys"]
     assert len(gateway_keys) == 2  # one confined line per registered key
     for entry in gateway_keys:
@@ -344,6 +396,20 @@ def test_devbox_gateway_permitopen_is_only_the_entry_vm():
         assert entry["comment"] == "team=t1"
     # The VMs themselves still authorize every registered key.
     assert extra["devbox_team_keys"]["t1"] == teams[0]["authorized_keys"]
+
+
+def test_devbox_key_varfile_tags_keys_unsafe():
+    """The keys are written with the YAML `!unsafe` tag so Ansible never
+    templates attacker-controlled key text (template injection defence in
+    depth; docs/security-assessment.md)."""
+    raw = handlers._unsafe_yaml(
+        {"devbox_team_keys": {"t1": [handlers._Unsafe("ssh-ed25519 AAAA marker={{ 7*7 }}")]},
+         "ssh_gateway_authorized_keys": [{"public_key": handlers._Unsafe("ssh-ed25519 AAAA x"), "comment": "team=t1", "permitopen": []}]}
+    )
+    assert "!unsafe" in raw and "{{ 7*7 }}" in raw and "49" not in raw
+    # It round-trips to the literal strings (the !unsafe tag is stripped on load).
+    loaded = _load_varfile_text(raw)
+    assert loaded["devbox_team_keys"]["t1"] == ["ssh-ed25519 AAAA marker={{ 7*7 }}"]
 
 
 # --- the database loop --------------------------------------------------------

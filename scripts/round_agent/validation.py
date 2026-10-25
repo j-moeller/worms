@@ -113,8 +113,15 @@ def release_secrets(params):
 
 # A team slug as scripts/generate_devbox.py accepts it.
 TEAM_SLUG = re.compile(r"^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$")
-# One OpenSSH public key line (type + base64 blob + optional comment).
-SSH_KEY = re.compile(r"^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp(256|384|521)|sk-[a-z0-9@.-]+) [A-Za-z0-9+/=]{20,} ?.{0,200}$")
+# One OpenSSH public key line: type + base64 blob + an optional comment. The
+# comment is restricted to a safe charset -- NO `{ } % $ "` ' \ etc. -- because
+# a registered key is rendered through Jinja on the Proxmox host (the devbox +
+# gateway authorized_keys, run by the agent as root): a `{{...}}` in a comment
+# would otherwise be evaluated (template injection). See docs/security-assessment.md.
+SSH_KEY = re.compile(
+    r"^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp(256|384|521)|sk-[a-z0-9@.-]+) "
+    r"[A-Za-z0-9+/=]{20,}( [A-Za-z0-9._@/+:,-]{1,200})?$"
+)
 
 
 def team_slug(value):
@@ -147,6 +154,12 @@ def devbox_team(value):
     }
 
 
+def _key_blob(key: str) -> str:
+    # The key without its comment: type + base64 blob. This is the identity an
+    # sshd uses to match an authorized_keys line, so it must map to one team.
+    return " ".join(key.split()[:2])
+
+
 def devbox_teams(value):
     if not isinstance(value, list) or not value:
         raise Invalid("teams must be a non-empty list")
@@ -157,6 +170,15 @@ def devbox_teams(value):
         raise Invalid("duplicate team slug")
     if len({t["index"] for t in teams}) != len(teams):
         raise Invalid("duplicate team index")
+    # The same public key must not be registered by two teams: sshd matches a
+    # key to the first authorized_keys line, so a shared key would let one team
+    # inherit another's gateway forward (and log in to its VMs). Fail closed.
+    owner: dict[str, str] = {}
+    for t in teams:
+        for key in t["authorized_keys"]:
+            blob = _key_blob(key)
+            if owner.setdefault(blob, t["slug"]) != t["slug"]:
+                raise Invalid(f"SSH key registered by more than one team (blob {blob[:28]}...)")
     return teams
 
 
@@ -172,6 +194,15 @@ def devbox_rebuild(params):
     }
 
 
+def devbox_reconfigure(params):
+    # team_uuid is informational (which team triggered it); the keys for the
+    # whole competition are re-pushed from `teams`.
+    return {
+        "team_uuid": team_uuid(params.get("team_uuid")),
+        "teams": devbox_teams(params.get("teams")),
+    }
+
+
 # Job kind -> validator. CHECK and TEARDOWN take no parameters.
 VALIDATORS = {
     "prepare": prepare,
@@ -181,6 +212,7 @@ VALIDATORS = {
     "teardown": lambda params: {},
     "devbox_provision": devbox_provision,
     "devbox_rebuild": devbox_rebuild,
+    "devbox_reconfigure": devbox_reconfigure,
 }
 
 

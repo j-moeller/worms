@@ -15,18 +15,13 @@ one); at most 32 teams (the services block 10.2.0.32/27).
 """
 
 from core.models.competition import ApplicationSetting
-from core.models.devbox import Devbox, DevboxSSHKey
+from core.models.devbox import Devbox
 from core.models.rounds import HostJob
 from core.models.team import Team
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-MAX_TEAMS = 32
-
-
-def team_slug(team) -> str:
-    # A stable, valid slug (generate_devbox / the agent accept [a-z0-9-]).
-    return f"t{team.id}"
+from orchestrator.rounds.devbox import MAX_TEAMS, team_spec
 
 
 class Command(BaseCommand):
@@ -60,16 +55,7 @@ class Command(BaseCommand):
                     devbox.services_source_ip = f"10.2.0.{32 + devbox.index}"
                     if not dry_run:
                         devbox.save(update_fields=["index", "services_source_ip"])
-                spec.append(
-                    {
-                        "slug": team_slug(team),
-                        "index": devbox.index,
-                        "team_uuid": str(team.uuid),
-                        "authorized_keys": list(
-                            DevboxSSHKey.objects.filter(team=team).values_list("public_key", flat=True)
-                        ),
-                    }
-                )
+                spec.append(team_spec(team, devbox.index))
 
             self.stdout.write(f"{len(spec)} team(s): " + ", ".join(f"{t['slug']}@{t['index']}" for t in spec))
             if dry_run:

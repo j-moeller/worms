@@ -42,8 +42,23 @@ def join_team(request: HttpRequest, uuid: uuid.UUID, competition: Competition):
 @require_POST
 @require_competition_registration_active
 def leave_team(request: HttpRequest, uuid, competition: Competition):
+    from core.models.devbox import Devbox, DevboxSSHKey
+    from dashboard import orchestrator_client
+
     team = get_object_or_404(Team, uuid=uuid)
-    team.users.remove(request.user)
+    with transaction.atomic():
+        team.users.remove(request.user)
+        # Remove the keys this member registered: they should not keep devbox
+        # access after leaving (docs/security-assessment.md).
+        removed, _ = DevboxSSHKey.objects.filter(team=team, created_by=request.user).delete()
     messages.success(request, f"You left {team.name}.")
+
+    # Re-push the remaining keys so the departing member's access is revoked on
+    # the gateway and the VMs (best effort; the next provision/reset also does).
+    if removed and Devbox.objects.filter(team=team).exists():
+        try:
+            orchestrator_client.post(f"/devbox/{team.uuid}/reconfigure/")
+        except orchestrator_client.OrchestratorError:
+            pass
 
     return redirect("team_registration")

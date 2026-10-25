@@ -57,7 +57,7 @@ record. Each team has a `devbox_version` (on `teams`). A reset:
 
 1. goes through the orchestrator (the dashboard role may not change the
    version): `POST /devbox/<team>/reset/` **increments** `devbox_version` and
-   enqueues a `devbox_rebuild` host job;
+   enqueues a `devbox_rebuild` host job (carrying the whole competition's teams and their keys, so the agent can regenerate the stack and re-install keys);
 2. the round agent rebuilds the team's VMs (fresh disks) and writes new tokens.
 
 Devbox captures and logs are **tagged with the version in force** when they are
@@ -148,7 +148,23 @@ The gateway protects itself in depth (docs/security-assessment.md):
 
 Teams manage their keys on the dashboard dev view (`DevboxSSHKey`); the keys are
 installed both on the gateway (for the jump) and on the devbox VMs (for the
-final auth) on the next provision/rebuild.
+final auth). Adding or removing a key enqueues a **`devbox_reconfigure`** host
+job (through the orchestrator, like reset) that re-pushes every team's keys to
+the VMs and the gateway without rebuilding anything; a reset and a full
+provision do the same as part of their work. Leaving a team removes that
+member's keys and reconfigures, so access is revoked.
+
+A registered key is **validated** on the dashboard and again in the agent: a
+single OpenSSH line, known type, base64 blob, and a comment restricted to a
+safe charset. The comment restriction is a security boundary, not cosmetic: the
+agent renders each key through Jinja into the devbox/gateway `authorized_keys`
+on the Proxmox host as root, so a `{{ … }}` in a comment would otherwise be
+evaluated (template injection). As defence in depth the agent also writes the
+keys to the Ansible var file tagged `!unsafe`, so key text is never templated.
+A given key may belong to **only one team** (the agent fails a job closed if a
+blob appears under two teams): sshd matches a key to the first
+`authorized_keys` line, so a shared key would let one team inherit another's
+confinement. See docs/security-assessment.md (D6, D7).
 
 ## Isolation: devbox ⇔ sandbox can never communicate
 
@@ -203,7 +219,7 @@ INSERT. (`tests/test_devbox.py`.)
 - Provisioning happens **when teams are created**: `worms teams create`
   (and `manage.py provision_devboxes`) ensures a `Devbox` per team and enqueues
   a `devbox_provision` host job; the round agent (`scripts/round_agent`,
-  handlers `devbox_provision` / `devbox_rebuild`) generates + applies the stack,
+  handlers `devbox_provision` / `devbox_rebuild` / `devbox_reconfigure`) generates + applies the stack,
   configures the VMs and the gateway (CA, team keys), writes the tokens and
   publishes the source→team map. `worms build devbox-apply` / `worms build devbox-configure`
   are the underlying targets.

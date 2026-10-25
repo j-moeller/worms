@@ -13,6 +13,7 @@ only runs when request.is_dev_environment is set.
 from __future__ import annotations
 
 import json
+import re
 
 from core.models.devbox import Devbox, DevboxCapture, DevboxLog, DevboxSSHKey, DevboxVM
 from core.models.team import Team
@@ -132,17 +133,55 @@ def devbox_reset(request: HttpRequest, team: Team):
     return redirect("index")
 
 
+def _key_blob(public_key: str) -> str:
+    # type + base64 blob, without the comment: the identity sshd matches on.
+    return " ".join(public_key.split(" ")[:2])
+
+
+def _reconfigure_devbox(request: HttpRequest, team: Team, changed: str):
+    """Ask the orchestrator to re-push the team's keys to the devbox and the
+    gateway (no VM rebuild). Reports honestly whether it took effect."""
+    from dashboard import orchestrator_client
+
+    if not Devbox.objects.filter(team=team).exists():
+        messages.success(request, f"SSH key {changed}. It will be installed when your devbox is first provisioned.")
+        return
+    try:
+        orchestrator_client.post(f"/devbox/{team.uuid}/reconfigure/")
+    except orchestrator_client.OrchestratorError as error:
+        if settings.DEBUG:
+            messages.success(request, f"SSH key {changed} (development mode: no orchestrator, so the devbox is not re-keyed).")
+        else:
+            messages.warning(
+                request,
+                f"SSH key {changed}, but applying it to your devbox failed: {error}. It will be applied at the "
+                "next reset or provision; retry or contact an organiser if it persists.",
+            )
+        return
+    messages.success(request, f"SSH key {changed}. It is being installed on your devbox and the SSH gateway now.")
+
+
 @login_required
 @require_POST
 @user_in_team_required
 def devbox_add_ssh_key(request: HttpRequest, team: Team):
     name = request.POST.get("name", "").strip()[:200]
     public_key = request.POST.get("public_key", "").strip()
-    if _valid_ssh_key(public_key):
-        DevboxSSHKey.objects.create(team=team, name=name, public_key=public_key, created_by=request.user)
-        messages.success(request, "SSH key added. It is installed on your devbox at the next rebuild.")
-    else:
-        messages.error(request, "That is not a single-line OpenSSH public key (ssh-ed25519, ssh-rsa, ecdsa, sk-…).")
+    if not _valid_ssh_key(public_key):
+        messages.error(request, "That is not a single-line OpenSSH public key (ssh-ed25519, ssh-rsa, ecdsa, sk-…), or it contains characters that are not allowed.")
+        return redirect("index")
+    blob = _key_blob(public_key)
+    # A key may belong to only one team: sshd matches a key to the first line,
+    # so a shared key would let another team inherit this team's gateway
+    # forward and log in to its devbox VMs (docs/security-assessment.md).
+    if any(_key_blob(k) == blob for k in DevboxSSHKey.objects.exclude(team=team).values_list("public_key", flat=True)):
+        messages.error(request, "That public key is already registered — by another team, or already by yours. Use a different key.")
+        return redirect("index")
+    if any(_key_blob(k) == blob for k in DevboxSSHKey.objects.filter(team=team).values_list("public_key", flat=True)):
+        messages.info(request, "Your team already has that key.")
+        return redirect("index")
+    DevboxSSHKey.objects.create(team=team, name=name, public_key=public_key, created_by=request.user)
+    _reconfigure_devbox(request, team, "added")
     return redirect("index")
 
 
@@ -152,7 +191,7 @@ def devbox_add_ssh_key(request: HttpRequest, team: Team):
 def devbox_delete_ssh_key(request: HttpRequest, team: Team, key_id: int):
     deleted, _ = DevboxSSHKey.objects.filter(id=key_id, team=team).delete()
     if deleted:
-        messages.success(request, "SSH key removed.")
+        _reconfigure_devbox(request, team, "removed")
     return redirect("index")
 
 
@@ -168,16 +207,28 @@ _SSH_TYPES = (
 )
 
 
+# A key comment is restricted to a safe charset. A registered key is rendered
+# through Jinja on the Proxmox host (the devbox + gateway authorized_keys, run
+# by the round agent as root), so a `{{...}}`/`{%...%}` in the comment would be
+# evaluated there (template injection). The agent's validator enforces the same
+# (scripts/round_agent/validation.py); this is the first gate. See
+# docs/security-assessment.md.
+_SSH_COMMENT = re.compile(r"^[A-Za-z0-9._@/+:,-]{1,200}$")
+
+
 def _valid_ssh_key(value: str) -> bool:
     if not value or "\n" in value or len(value) > 8192:
         return False
-    parts = value.split()
-    if len(parts) < 2 or parts[0] not in _SSH_TYPES:
+    parts = value.split(" ")
+    # type + base64 blob, then at most a one-token comment (no spaces).
+    if len(parts) < 2 or len(parts) > 3 or parts[0] not in _SSH_TYPES:
         return False
     import base64
 
     try:
         base64.b64decode(parts[1], validate=True)
     except Exception:
+        return False
+    if len(parts) == 3 and not _SSH_COMMENT.match(parts[2]):
         return False
     return True

@@ -182,6 +182,9 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
 STATIC_URL = "static/"
+# `manage.py collectstatic` writes here at deploy (role django_app); nginx
+# serves it at /static/.
+STATIC_ROOT = env("DJANGO_STATIC_ROOT", str(BASE_DIR / "staticfiles"))
 
 
 # Email

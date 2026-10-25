@@ -10,3 +10,6 @@ venv/
 __pycache__/
 .pytest_cache/
 .venv-test/
+
+# Test/runtime upload storage (no MEDIA_ROOT in offline tests)
+/malware-artifacts/

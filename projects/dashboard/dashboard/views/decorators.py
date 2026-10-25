@@ -1,14 +1,23 @@
 from functools import wraps
 
 from core.models.competition import Competition
-from django.http import HttpRequest, HttpResponse
+from django.http import HttpRequest
+
+
+def refuse(request: HttpRequest, message: str, status: int):
+    """A themed page explaining why the request was refused (same status
+    codes as before; a page instead of bare text, so it reads like the rest of
+    the site with or without JavaScript)."""
+    from dashboard.views.util import render_with_base_info
+
+    return render_with_base_info(request, "message.html", {"message": message}, status=status)
 
 
 def require_competition(view_func):
     @wraps(view_func)
     def wrapper(request: HttpRequest, *args, **kwargs):
         if request.competition is None:
-            return HttpResponse("No competition selected", status=500)
+            return refuse(request, "No competition selected", 500)
 
         return view_func(
             request,
@@ -25,7 +34,7 @@ def require_competition_registration_active(view_func):
     @wraps(view_func)
     def wrapper(request: HttpRequest, competition: Competition, *args, **kwargs):
         if not competition.is_registration_period():
-            return HttpResponse("Registration closed", status=400)
+            return refuse(request, "Registration closed", 400)
 
         return view_func(request, *args, competition=competition, **kwargs)
 
@@ -37,7 +46,7 @@ def require_competition_registration_inactive(view_func):
     @wraps(view_func)
     def wrapper(request: HttpRequest, competition: Competition, *args, **kwargs):
         if competition.is_registration_period():
-            return HttpResponse("Registration still open", status=400)
+            return refuse(request, "Registration still open", 400)
 
         return view_func(request, *args, competition=competition, **kwargs)
 
@@ -48,7 +57,7 @@ def user_in_team_required(view_func):
     @wraps(view_func)
     def wrapper(request: HttpRequest, *args, **kwargs):
         if request.team is None:
-            return HttpResponse("User not assigned to team yet", status=400)
+            return refuse(request, "User not assigned to team yet", 400)
 
         return view_func(
             request,
@@ -64,7 +73,7 @@ def user_not_in_team_required(view_func):
     @wraps(view_func)
     def wrapper(request: HttpRequest, *args, **kwargs):
         if request.team is not None:
-            return HttpResponse("User assigned to team already", status=400)
+            return refuse(request, "User assigned to team already", 400)
 
         return view_func(
             request,

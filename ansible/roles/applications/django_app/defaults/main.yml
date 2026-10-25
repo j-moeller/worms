@@ -21,6 +21,9 @@ django_app_group: www-data # shared with nginx so it can reach the gunicorn sock
 django_app_dir: "/opt/{{ django_app_name }}"
 django_source_dir: "/opt/{{ django_app_name }}/src"
 django_venv_dir: "/opt/{{ django_app_name }}/venv"
+# collectstatic target; nginx serves it at /static/ (role nginx_tls_django,
+# nginx_django_static_root -- keep the two equal).
+django_static_root: "/opt/{{ django_app_name }}/static"
 django_env_file: "/etc/{{ django_app_name }}/django.env"
 
 # The two apps live in the same Django project; the settings module selects the role.

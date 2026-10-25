@@ -1,355 +1,130 @@
-<!DOCTYPE html>
-<html lang="en">
+{% load static %}<!DOCTYPE html>
+{% with dev=request.session.is_dev_environment page=request.resolver_match.url_name %}
+<html lang="en" data-theme="{{ request.theme|default:'lab' }}" data-now="{{ request.time_now|date:'c' }}">
 <head>
-
-
-<link
-    rel="preconnect"
-    href="https://fonts.googleapis.com"
-/>
-
-<link
-    rel="preconnect"
-    href="https://fonts.gstatic.com"
-    crossorigin
-/>
-
-<link
-    href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Space+Grotesk:wght@400;600;700&display=swap"
-    rel="stylesheet"
-/>
-{% block header %}
-{% endblock %}
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}{% endblock %} · WORMS//{% if dev %}DEV{% else %}ARENA{% endif %}</title>
+    <link rel="stylesheet" href="{% static 'dashboard/css/base.css' %}">
+    {% block head %}{% endblock %}
+    <link rel="stylesheet" href="{% static request.theme_css|default:'dashboard/css/themes/lab.css' %}" data-theme-stylesheet>
+    <script src="{% static 'dashboard/js/enhance.js' %}" defer></script>
 </head>
-<body>
-    {% if request.is_debug_mode %}
-        <div class="debug-console">
+<body class="{% if dev %}is-dev{% else %}is-arena{% endif %}">
+    <a class="skip-link" href="#main">Skip to content</a>
 
-            <div class="debug-console-header">
-                <span>// DEBUG ACCESS</span>
-                <span class="debug-live">{{ request.time_now|date:"H:i:s" }}</span>
-                <span id="minutes-plus-one" class="buttonesque">+</span>
-                <span id="minutes-minus-one" class="buttonesque">-</span>
-            </div>
-
-            <div class="debug-console-title">
-                IMPERSONATE USER
-            </div>
-
-            <div class="debug-users">
-
-                {% for available_user in request.available_users %}
-
-                    <form
-                        method="post"
-                        action="{% url 'debug_login_as' available_user.uuid %}"
-                    >
-                        {% csrf_token %}
-
-                        <input
-                            type="hidden"
-                            name="next"
-                            value="{{ request.get_full_path }}"
-                        >
-
-                        <button type="submit">
-                            <span class="debug-user-index">
-                                {{ forloop.counter|stringformat:"02d" }}
-                            </span>
-
-                            <span>
-                                {{ available_user.username }}
-                            </span>
-
-                            <span class="debug-user-name">
-                                {{ available_user.first_name }}
-                            </span>
-                        </button>
-                    </form>
-
-                {% empty %}
-
-                    <div class="debug-empty">
-                        NO USERS AVAILABLE
-                    </div>
-
-                {% endfor %}
-
-            </div>
-        </div>
-    {% endif %}
-
-    <nav class="arena-nav">
-
-        <div class="nav-inner">
-
-            <a href="?live={% if request.session.is_dev_environment %}1{% else %}0{% endif %}">{{ request.competition.name }}</a>
-
-            <!-- BRAND -->
-
-            <a href="{% url 'index' %}" class="arena-brand">
-                <span class="brand-main">WORMS</span>
-                <span class="brand-separator">//</span>
-                <span class="brand-secondary">{% if request.session.is_dev_environment %}DEV{% else %}ARENA{% endif %}</span>
+    <header class="site-header">
+        <div class="site-header__inner">
+            <a class="brand" href="{% url 'index' %}">
+                <span class="brand__name">WORMS</span><span class="brand__sep">//</span><span class="brand__env">{% if dev %}DEV{% else %}ARENA{% endif %}</span>
             </a>
 
-            <!-- SYSTEM STATUS -->
-
-            <div class="nav-status
-                {% if request.state_presentation.warning %}nav-status-warning{% endif %}
-                {% if request.state_presentation.key == 'finished' %}nav-status-finished{% endif %}
-            ">
-
-                <span class="status-indicator"></span>
-
-                <div class="status-information">
-
-                    <span class="status-label">
-                        {{ request.state_presentation.label }}
-                    </span>
-
-                    {% if request.state_presentation.target %}
-
-                        <span
-                            class="status-countdown"
-                            data-countdown="{{ request.state_presentation.target|date:'c' }}"
-                        >
-                            <span class="countdown-value">--:--:--</span>
-                            REMAINING
-                        </span>
-
-                    {% else %}
-
-                        {% if request.session.is_dev_environment %}
-                            <span class="status-countdown">
-                                RUNNING
-                            </span>
-                        {% else %}
-                            <span class="status-countdown">
-                                ALL ROUNDS COMPLETE
-                            </span>
-                        {% endif %}
-
-                    {% endif %}
-
-                </div>
-
-            </div>
-
-
-            <!-- NAVIGATION -->
-
-            <div class="nav-links">
-
-                {% if request.user.is_authenticated %}
-
-                    {% if request.user.is_staff %}
-
-                        <a
-                            href="{% url 'todos' %}"
-                            class="nav-link {% if request.resolver_match.url_name == 'todos' %}active{% endif %}"
-                        >
-                            <span>TODOS</span>
-                        </a>
-
-                        <a
-                            href="{% url 'topology' %}"
-                            class="nav-link {% if request.resolver_match.url_name == 'topology' %}active{% endif %}"
-                        >
-                            <span>TOPOLOGY</span>
-                        </a>
-
-                    {% endif %}
-
+            {% if request.user.is_authenticated %}
+            <nav class="site-nav" aria-label="Main">
+                <ul>
+                    <li><a href="{% url 'index' %}"{% if page == 'index' %} aria-current="page"{% endif %}>{% if dev %}Devbox{% else %}Leaderboard{% endif %}</a></li>
                     {% if request.team and not request.active_competition.is_registration_period %}
-
-                        <a
-                            href="{% url 'access' %}"
-                            class="nav-link {% if request.resolver_match.url_name == 'access' %}active{% endif %}"
-                        >
-                            <span>ACCESS</span>
-                        </a>
-
-                        <a
-                            href="{% url 'captures' %}"
-                            class="nav-link {% if request.resolver_match.url_name == 'captures' %}active{% endif %}"
-                        >
-                            <span>CAPTURES</span>
-                        </a>
-
-                        <a
-                            href="{% url 'logs' %}"
-                            class="nav-link {% if request.resolver_match.url_name == 'logs' %}active{% endif %}"
-                        >
-                            <span>LOGS</span>
-                        </a>
-
-
-                        <a
-                            href="{% url 'upload' %}"
-                            class="nav-link {% if request.resolver_match.url_name == 'upload' %}active{% endif %}"
-                        >
-                            <span>UPLOAD</span>
-                        </a>
-
+                    <li><a href="{% url 'upload' %}"{% if page == 'upload' %} aria-current="page"{% endif %}>Upload</a></li>
+                    <li><a href="{% url 'captures' %}"{% if page == 'captures' %} aria-current="page"{% endif %}>Captures</a></li>
+                    <li><a href="{% url 'logs' %}"{% if page == 'logs' %} aria-current="page"{% endif %}>Logs</a></li>
+                    <li><a href="{% url 'access' %}"{% if page == 'access' %} aria-current="page"{% endif %}>Access</a></li>
                     {% endif %}
-
-
                     {% if request.active_competition.is_registration_period %}
-
-                        <a
-                            href="{% url 'team_registration' %}"
-                            class="nav-link {% if request.resolver_match.url_name == 'team_registration' %}active{% endif %}"
-                        >
-                            <span>TEAMS</span>
-                        </a>
-
+                    <li><a href="{% url 'team_registration' %}"{% if page == 'team_registration' %} aria-current="page"{% endif %}>Teams</a></li>
                     {% endif %}
+                    {% if request.user.is_staff %}
+                    <li class="site-nav__staff"><a href="{% url 'todos' %}"{% if page == 'todos' %} aria-current="page"{% endif %}>Todos</a></li>
+                    <li class="site-nav__staff"><a href="{% url 'rounds' %}"{% if page == 'rounds' %} aria-current="page"{% endif %}>Rounds</a></li>
+                    <li class="site-nav__staff"><a href="{% url 'topology' %}"{% if page == 'topology' %} aria-current="page"{% endif %}>Topology</a></li>
+                    {% endif %}
+                </ul>
+            </nav>
+            {% endif %}
 
-                {% else %}
-
-                    <a
-                        href="{% url 'login' %}"
-                        class="nav-link {% if request.resolver_match.url_name == 'login' %}active{% endif %}"
-                    >
-                        <span>LOGIN</span>
-                    </a>
-
+            {% with state=request.state_presentation %}
+            {% if state.label %}
+            <div class="site-status{% if state.warning %} is-warning{% endif %}{% if state.key == 'finished' %} is-finished{% endif %}" role="status">
+                <span class="dot" aria-hidden="true"></span>
+                <span class="site-status__label">{{ state.label }}</span>
+                {% if state.target %}
+                <span class="site-status__time">
+                    <time class="countdown" datetime="{{ state.target|date:'c' }}" data-countdown>{{ state.remaining }}</time>
+                    <span class="site-status__unit">left</span>
+                </span>
                 {% endif %}
-
             </div>
+            {% endif %}
+            {% endwith %}
 
-
-            <!-- USER / SESSION -->
-
-            <div class="nav-session">
-
+            <div class="site-session">
                 {% if request.user.is_authenticated %}
-
-                    <a
-                        href="{% url 'logout' %}"
-                        class="logout-link"
-                    >
-                        EXIT
-                    </a>
-
+                <form method="post" action="{% url 'set_environment' %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="environment" value="{% if dev %}arena{% else %}dev{% endif %}">
+                    <button type="submit" class="btn btn--ghost btn--sm" title="Switch to the {% if dev %}competition{% else %}development{% endif %} view">{% if dev %}Arena{% else %}Dev{% endif %} view</button>
+                </form>
+                <a class="site-session__user" href="{% url 'profile' %}"{% if page == 'profile' %} aria-current="page"{% endif %}>{{ request.user.username }}</a>
+                <form method="post" action="{% url 'logout' %}">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn--ghost btn--sm">Sign out</button>
+                </form>
+                {% elif page != 'login' %}
+                <a class="btn btn--sm" href="{% url 'login' %}">Sign in</a>
                 {% endif %}
-
             </div>
-
         </div>
+    </header>
 
-    </nav>
+    <div class="flash" data-flash>
+        {% for message in messages %}
+        <p class="alert alert--{{ message.tags|default:'info' }}" role="{% if message.level >= 40 %}alert{% else %}status{% endif %}">{{ message }}</p>
+        {% endfor %}
+    </div>
 
-
-    <!-- PAGE CONTENT -->
-
-    <main class="arena-main">
-
-        {% block content %}
-        {% endblock %}
-
+    <main id="main" class="site-main" tabindex="-1">
+        {% block content %}{% endblock %}
     </main>
 
-{% if request.is_debug_mode %}
-<script>
-    function getCurrentTime() {
-        return new Date("{{ request.time_now|date:'c' }}");
-    }
-</script>
-{% else %}
-<script>
-    function getCurrentTime() {
-        return Date.now();
-    }
-</script>
-{% endif %}
+    <footer class="site-footer">
+        <p class="site-footer__line">WORMS — an arena for autonomous worms</p>
+        <form method="post" action="{% url 'set_theme' %}" class="theme-picker" data-theme-picker>
+            {% csrf_token %}
+            <input type="hidden" name="next" value="{{ request.get_full_path }}">
+            <span class="theme-picker__label" id="theme-picker-label">Design</span>
+            <span class="theme-picker__options" role="group" aria-labelledby="theme-picker-label">
+                {% for key, name in request.themes %}
+                <button type="submit" name="theme" value="{{ key }}" class="theme-picker__option" aria-pressed="{% if key == request.theme %}true{% else %}false{% endif %}" data-stylesheet="{% static 'dashboard/css/themes/'|add:key|add:'.css' %}">{{ name }}</button>
+                {% endfor %}
+            </span>
+        </form>
+    </footer>
 
-<script>
-    function updateCompetitionCountdown() {
-        const countdowns = document.querySelectorAll(
-            "[data-countdown]"
-        );
-
-        const now = getCurrentTime()
-
-        countdowns.forEach(element => {
-            const target = new Date(
-                element.dataset.countdown
-            ).getTime();
-
-            let remaining = Math.max(0, target - now);
-
-            const totalSeconds = Math.floor(
-                remaining / 1000
-            );
-
-            const days = Math.floor(
-                totalSeconds / 86400
-            );
-
-            const hours = Math.floor(
-                (totalSeconds % 86400) / 3600
-            );
-
-            const minutes = Math.floor(
-                (totalSeconds % 3600) / 60
-            );
-
-            const seconds = totalSeconds % 60;
-
-            let text;
-
-            if (days > 0) {
-                text =
-                    `${days}d ` +
-                    `${String(hours).padStart(2, "0")}:` +
-                    `${String(minutes).padStart(2, "0")}:` +
-                    `${String(seconds).padStart(2, "0")}`;
-            } else {
-                text =
-                    `${String(hours).padStart(2, "0")}:` +
-                    `${String(minutes).padStart(2, "0")}:` +
-                    `${String(seconds).padStart(2, "0")}`;
-            }
-
-            const value = element.querySelector(
-                ".countdown-value"
-            );
-
-            if (value) {
-                value.textContent = text;
-            }
-        });
-    }
-
-    updateCompetitionCountdown();
-
-    setInterval(
-        updateCompetitionCountdown,
-        1000
-    );
-
-</script>
-{% if request.is_debug_mode %}
-<script>
-    document.getElementById("minutes-plus-one").addEventListener("click", () => {
-        fetch("/debug/minutes-plus-one", {"method": "POST"}).then(() => {
-            location.reload(); 
-        });
-    });
-</script>
-
-<script>
-    document.getElementById("minutes-minus-one").addEventListener("click", () => {
-        fetch("/debug/minutes-minus-one", {"method": "POST"}).then(() => {
-            location.reload(); 
-        });
-    });
-</script>
-{% endif %}
+    {% if request.is_debug_mode %}
+    <details class="debug">
+        <summary>Debug · {{ request.time_now|date:"Y-m-d H:i:s" }}</summary>
+        <div class="debug__body">
+            <div class="debug__clock">
+                <span>Clock</span>
+                <form method="post" action="{% url 'minutes-minus-one' %}">{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><button type="submit" class="btn btn--sm">−1 min</button></form>
+                <form method="post" action="{% url 'minutes-plus-one' %}">{% csrf_token %}<input type="hidden" name="next" value="{{ request.get_full_path }}"><button type="submit" class="btn btn--sm">+1 min</button></form>
+            </div>
+            <p class="debug__title">Impersonate</p>
+            <ul class="debug__users">
+                {% for available_user in request.available_users %}
+                <li>
+                    <form method="post" action="{% url 'debug_login_as' available_user.uuid %}">
+                        {% csrf_token %}
+                        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                        <button type="submit" class="btn btn--ghost btn--sm">{{ available_user.username }}</button>
+                    </form>
+                </li>
+                {% empty %}
+                <li>No users.</li>
+                {% endfor %}
+            </ul>
+        </div>
+    </details>
+    {% endif %}
 </body>
-
 </html>
-
-
+{% endwith %}

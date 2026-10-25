@@ -23,6 +23,7 @@ import topology_fixtures
 from conftest import REPO
 
 TEMPLATES = REPO / "projects" / "dashboard" / "dashboard" / "templates"
+STATIC = REPO / "projects" / "dashboard" / "dashboard" / "static" / "dashboard"
 DRIVER = REPO / "tests" / "browser" / "topology_player.js"
 
 
@@ -37,25 +38,29 @@ pytestmark = pytest.mark.skipif(not _playwright_available(), reason="Node.js Pla
 
 
 def page_html() -> str:
+    # What templates/topology.html serves: the markup-only player partial, the
+    # topology stylesheet and script from static/, endpoints pointing at the
+    # fixtures.
     player = (TEMPLATES / "topology" / "player.html").read_text()
-    app = (TEMPLATES / "topology" / "app.js").read_text()
-    # The same structure as templates/topology.html renders, with the
-    # endpoints pointing at the fixtures.
+    css = (STATIC / "css" / "topology.css").read_text()
+    app = (STATIC / "js" / "topology.js").read_text()
     return (
-        "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'><title>topology</title></head><body>"
+        "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'><title>topology</title>"
+        f"<style>{css}</style></head><body>"
         "<div class='topo' id='topo' data-model='/model' data-runs='/runs' data-refresh-ms='700' "
         "data-timeline='/rounds/00000000-0000-0000-0000-000000000000/timeline/'>"
         f"{player}</div><script>{app}</script></body></html>"
     )
 
 
-def test_the_page_has_no_template_syntax_collisions():
-    """app.js and player.html are pulled in with {% include %}, so Django
-    would interpret any template syntax inside them."""
-    for name in ("app.js", "player.html"):
-        text = (TEMPLATES / "topology" / name).read_text()
+def test_the_player_partial_is_template_free():
+    """player.html is pulled in with {% include %}, so Django would interpret
+    any template syntax inside it; the moved-out JS/CSS must also be clean."""
+    files = [TEMPLATES / "topology" / "player.html", STATIC / "js" / "topology.js", STATIC / "css" / "topology.css"]
+    for path in files:
+        text = path.read_text()
         for token in ("{%", "{{", "{#"):
-            assert token not in text, (name, token)
+            assert token not in text, (path.name, token)
 
 
 @pytest.fixture(scope="module")

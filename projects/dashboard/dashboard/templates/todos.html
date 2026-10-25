@@ -1,64 +1,35 @@
 {% extends "base.html" %}
-
-{% block header %}
-<title>WORMS//ARENA — Todo</title>
-{% endblock %}
-
-
+{% block title %}Todos{% endblock %}
 {% block content %}
+<header class="page-head">
+    <p class="page-head__kicker">Staff</p>
+    <h1 class="page-head__title">Round readiness</h1>
+    <p class="page-head__lead">Each upcoming round needs at least one VM and one worm deployment before it can run.</p>
+</header>
 
-
-{% if user.is_staff and round_staff_information %}
 <section class="panel">
-    <div class="panel-header">
-        <div class="panel-title">
-            // TODOs
-        </div>
-    </div>
-
-    <div class="table-wrapper">
-        <table>
-            <tr>
-                <td>Round</td>
-                <td>Number of VMs</td>
-                <td>Number of Worm Deployments</td>
-            </tr>
-        {% for round in round_staff_information %}
-        {% if round.state == "passed" %}
-
-        {% else %}
-        <tr>
-            <td
-                {% if round.state == 'in_progress' %}
-                    {% if round.virtual_machine_count == 0 or round.worm_deployment_count == 0 %}
-                    class="nav-status nav-status-death"
-                    {% else %}
-                    class="nav-status nav-status-finished"
-                    {% endif %}
-                {% elif round.state == 'incoming' %}
-                    {% if round.virtual_machine_count == 0 or round.worm_deployment_count == 0 %}
-                    class="nav-status nav-status-warning"
-                    {% else %}
-                    class="nav-status nav-status-finished"
-                    {% endif %}
-                {% elif round.state == 'scheduled' %}
-                
+    <div class="table-wrap">
+        <table class="table">
+            <thead><tr><th scope="col">Round</th><th scope="col" class="num">VMs</th><th scope="col" class="num">Deployments</th><th scope="col">State</th></tr></thead>
+            <tbody>
+                {% for round in round_staff_information %}
+                {% if round.state != "passed" %}
+                <tr class="{% if round.virtual_machine_count and round.worm_deployment_count %}{% elif round.state == 'in_progress' %}is-bad{% else %}is-warning{% endif %}">
+                    <th scope="row">{{ round.name }}</th>
+                    <td class="num" data-count>{{ round.virtual_machine_count }}</td>
+                    <td class="num" data-count>{{ round.worm_deployment_count }}</td>
+                    <td>
+                        {% if round.virtual_machine_count and round.worm_deployment_count %}<span class="badge badge--ok">{{ round.state }}</span>
+                        {% elif round.state == 'in_progress' %}<span class="badge badge--bad">{{ round.state }} · not ready</span>
+                        {% else %}<span class="badge badge--warn">{{ round.state }} · not ready</span>{% endif %}
+                    </td>
+                </tr>
                 {% endif %}
-            >
-                <span {% if round.state == 'passed' %}class="strike"{% endif %}>{{round.name}}</span>
-                <span class="status-indicator"></span>
-            </td>
-            <td>
-                <span {% if round.state == 'passed' %}class="strike"{% endif %}>{{round.virtual_machine_count}}</span>
-            </td>
-            <td>
-                <span {% if round.state == 'passed' %}class="strike"{% endif %}>{{round.worm_deployment_count}}</span>
-            </td>
-        </tr>
-        {% endif %}
-        {% endfor %}
+                {% empty %}
+                <tr><td colspan="4" class="empty">No rounds.</td></tr>
+                {% endfor %}
+            </tbody>
         </table>
     </div>
 </section>
-{% endif %}
 {% endblock %}

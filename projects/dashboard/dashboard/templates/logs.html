@@ -1,218 +1,37 @@
 {% extends "base.html" %}
-{% load tz %}
-
+{% block title %}Logs{% endblock %}
 {% block content %}
-
-
-<div class="logging-page">
-
-    <!-- =====================================================
-         LOG VIEWER
-         ===================================================== -->
-
-    <section class="logging-panel">
-
-        <div class="logging-panel-header">
-
-            <div class="logging-panel-title">
-                // EVENT DATA
-            </div>
-
-        </div>
-
-
-        <div class="log-viewer-wrapper">
-
-            <pre id="log-viewer"><code>Select a logging event to view its JSON.</code></pre>
-
-        </div>
-
-    </section>
-
-
-    <!-- =====================================================
-         EVENT LOG
-         ===================================================== -->
-
-    <section class="logging-panel">
-
-        <div class="logging-panel-header">
-
-            <div class="logging-panel-title">
-                // LOGGING EVENTS
-            </div>
-
-            <div class="logging-panel-status">
-                EVENT STREAM
-            </div>
-
-        </div>
-
-
-        <div class="logging-table-wrapper">
-
-            <table class="logging-table">
-
-                <thead>
-                    <tr>
-                        <th>Round</th>
-                        <th>Timestamp</th>
-                    </tr>
-                </thead>
-
-
-                <tbody>
-
-                    {% for group in rounds %}
-
-                        {% for event in group.events %}
-
-                            <tr
-                                class="logging-event"
-                                data-uuid="{{ event.logging_attempt.uuid }}"
-                                tabindex="0"
-                            >
-
-                                {% if forloop.first %}
-
-                                    <td
-                                        rowspan="{{ group.events|length }}"
-                                        class="logging-round"
-                                    >
-                                        {{ group.round.name }}
-                                    </td>
-
-                                {% endif %}
-
-
-                                <td class="logging-timestamp">
-
-                                    <span class="event-marker">
-                                        [LOG]
-                                    </span>
-
-                                    {{ event.created_at }}
-
-                                </td>
-
-                            </tr>
-
-                        {% endfor %}
-
-                    {% empty %}
-
-                        <tr>
-                            <td
-                                colspan="2"
-                                class="logging-empty"
-                            >
-                                NO LOGGING EVENTS FOUND
-                            </td>
-                        </tr>
-
-                    {% endfor %}
-
-                </tbody>
-
-            </table>
-
-        </div>
-
-    </section>
-</div>
-
-
-<script>
-    const logViewer = document.querySelector("#log-viewer code");
-
-    async function showLoggingEvent(row) {
-
-        const uuid = row.dataset.uuid;
-
-        logViewer.textContent = "Loading event telemetry...";
-
-
-        document
-            .querySelectorAll(".logging-event")
-            .forEach(eventRow => {
-                eventRow.classList.remove("selected");
-            });
-
-
-        row.classList.add("selected");
-
-
-        try {
-
-            const response = await fetch(
-                `/logging/events/${encodeURIComponent(uuid)}/`,
-                {
-                    method: "GET",
-
-                    credentials: "same-origin",
-
-                    headers: {
-                        "Accept": "application/json",
-                    },
-                }
-            );
-
-
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
-            }
-
-
-            const data = await response.json();
-
-
-            /*
-             * IMPORTANT:
-             *
-             * textContent is intentional.
-             * Never use innerHTML here because the JSON
-             * originates from the server.
-             */
-
-            logViewer.textContent =
-                JSON.stringify(data, null, 2);
-
-        } catch (error) {
-
-            console.error(
-                "Failed to load logging event:",
-                error
-            );
-
-            logViewer.textContent =
-                "Unable to load logging event.";
-        }
-    }
-
-
-    document
-        .querySelectorAll(".logging-event")
-        .forEach(row => {
-
-            row.addEventListener("click", () => {
-                showLoggingEvent(row);
-            });
-
-
-            row.addEventListener("keydown", event => {
-
-                if (
-                    event.key === "Enter" ||
-                    event.key === " "
-                ) {
-
-                    event.preventDefault();
-
-                    showLoggingEvent(row);
-                }
-            });
-
-        });
-</script>
-
+<header class="page-head">
+    <p class="page-head__kicker">Telemetry</p>
+    <h1 class="page-head__title">Worm logs</h1>
+    <p class="page-head__lead">What your worm reported, newest first. Open an entry to read its data.</p>
+</header>
+
+{% for group in rounds %}
+<section class="panel" aria-label="Round {{ group.round.name }}">
+    <header class="panel__head"><h2 class="panel__title">{{ group.round.name }}</h2></header>
+    <div class="panel__body log-list">
+        {% for item in group.events %}
+        <details class="log-entry">
+            <summary>
+                <span class="log-entry__dot" aria-hidden="true"></span>
+                <time datetime="{{ item.event.created_at|date:'c' }}" data-localtime>{{ item.event.created_at }}</time>
+            </summary>
+            <pre class="code"><code>{{ item.data }}</code></pre>
+            <p class="log-entry__raw"><a href="{% url 'logging_event_data' item.event.logging_attempt.uuid %}">Raw JSON</a></p>
+        </details>
+        {% endfor %}
+    </div>
+</section>
+{% empty %}
+<section class="panel"><div class="panel__body"><p class="empty">No logs yet.</p></div></section>
+{% endfor %}
+
+{% if page.has_other_pages %}
+<nav class="pager" aria-label="Pages">
+    {% if page.has_previous %}<a class="btn btn--ghost btn--sm" href="?page={{ page.previous_page_number }}" rel="prev">Newer</a>{% else %}<span class="btn btn--ghost btn--sm is-disabled" aria-disabled="true">Newer</span>{% endif %}
+    <span class="pager__at">Page {{ page.number }} of {{ page.paginator.num_pages }}</span>
+    {% if page.has_next %}<a class="btn btn--ghost btn--sm" href="?page={{ page.next_page_number }}" rel="next">Older</a>{% else %}<span class="btn btn--ghost btn--sm is-disabled" aria-disabled="true">Older</span>{% endif %}
+</nav>
+{% endif %}
 {% endblock %}

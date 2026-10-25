@@ -8,6 +8,7 @@ flag is cleared and the session is kept alive.
 """
 
 from dashboard.views.util import render_with_base_info
+from django.contrib import messages
 from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import SetPasswordForm
@@ -28,6 +29,7 @@ def change_password(request: HttpRequest):
             if user.must_change_password:
                 user.must_change_password = False
                 user.save(update_fields=["must_change_password"])
+            messages.success(request, "Password saved.")
             return redirect("profile")
     else:
         form = SetPasswordForm(user)

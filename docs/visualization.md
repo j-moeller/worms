@@ -168,9 +168,10 @@ database: run_events, virtual_machines, network_flows,
           flag_capture_attempts/flag_captures, logging_attempts/logging
             └ orchestrator/rounds/timeline.py  build(run, infra=address index) → /rounds/<uuid>/timeline/
 round_runs/rounds  → /topology/runs/  (the tabs)
-page: templates/topology.html  (endpoints)
-      templates/topology/player.html  (markup + styles, no template tags)
-      templates/topology/app.js  (the scene, the player)
+page: templates/topology.html  (endpoints; links the static CSS/JS)
+      templates/topology/player.html  (markup only, no template tags)
+      static/dashboard/css/topology.css  (the player's styles)
+      static/dashboard/js/topology.js   (the scene, the player)
 ```
 
 | Endpoint | View | Returns |

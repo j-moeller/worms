@@ -1,19 +1,19 @@
 {% extends "base.html" %}
-
-{% block header %}
-<title>WORMS//ARENA — Topology</title>
-{% endblock %}
-
+{% load static %}
+{% block title %}Topology{% endblock %}
+{% block head %}<link rel="stylesheet" href="{% static 'dashboard/css/topology.css' %}">{% endblock %}
 {% block content %}
-{# The player is template-free (topology/player.html + topology/app.js) so the #}
-{# browser test can load it with fixture data; only the endpoints come from here. #}
+<header class="page-head">
+    <p class="page-head__kicker">Staff</p>
+    <h1 class="page-head__title">Topology</h1>
+    <p class="page-head__lead">The live infrastructure, and a replay of any team's run. This view needs JavaScript.</p>
+</header>
+{# The player markup is template-free (player.html) so the browser test can load it with fixture data; the endpoints come from here. #}
 <div class="topo" id="topo"
      data-model="{% url 'topology_data' %}"
      data-runs="{% url 'topology_runs' %}"
      data-timeline="{% url 'round_timeline_data' '00000000-0000-0000-0000-000000000000' %}">
 {% include "topology/player.html" %}
 </div>
-<script>
-{% include "topology/app.js" %}
-</script>
+<script src="{% static 'dashboard/js/topology.js' %}" defer></script>
 {% endblock %}

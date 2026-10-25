@@ -47,6 +47,7 @@
   loop:
     - "{{ django_app_dir }}"
     - "{{ django_source_dir }}"
+    - "{{ django_static_root }}"
 
 - name: Synchronize Django application
   ansible.posix.synchronize:
@@ -62,6 +63,7 @@
       - "--exclude=*.pyc"
       - "--exclude=.pytest_cache"
       - "--exclude=db.sqlite3"
+      - "--exclude=staticfiles"
   notify:
     - Restart Django
 
@@ -107,6 +109,28 @@
   no_log: "{{ hide_secrets }}"
   notify:
     - Restart Django
+
+# The dashboard's CSS/JS (and the admin's) as plain files for nginx: the app
+# never serves /static/ itself. Settings are imported, so it needs the same
+# environment as the service (no database connection is made).
+- name: Collect static files (served by nginx at /static/)
+  ansible.builtin.command:
+    cmd: "{{ django_venv_dir }}/bin/python manage.py collectstatic --noinput"
+    chdir: "{{ django_source_dir }}"
+  become_user: "{{ django_app_user }}"
+  no_log: "{{ hide_secrets }}"
+  register: django_collectstatic
+  changed_when: django_collectstatic.stdout is not search('^0 static files copied', multiline=True)
+  environment: "{{ django_static_env | combine(django_extra_env) }}"
+  vars:
+    django_static_env:
+      PRODUCTION: "1"
+      DJANGO_SETTINGS_MODULE: "{{ django_settings_module }}"
+      DJANGO_SECRET_KEY: "{{ django_secret_key }}"
+      DJANGO_ALLOWED_HOSTS: "{{ django_allowed_hosts }}"
+      DJANGO_STATIC_ROOT: "{{ django_static_root }}"
+      DB_USER: "{{ django_db_user }}"
+      DB_PASSWORD: "{{ django_db_password }}"
 
 # Only the orchestrator migrates; the public-facing dashboard has no migrator
 # credentials at all (they are not in its env file either).

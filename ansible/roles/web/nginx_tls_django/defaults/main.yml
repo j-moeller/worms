@@ -13,3 +13,9 @@ nginx_team_api_burst_per_token: 10
 nginx_team_api_connections_per_ip: 8
 nginx_team_api_timeout: 15s
 
+# collectstatic output of this host's Django app (role django_app,
+# django_static_root -- keep the two equal).
+nginx_django_static_root: "/opt/{{ django_variant | default('dashboard') }}/static"
+# Body limit of the worm upload (/upload/; dashboard only, group_vars). Empty:
+# no upload location, nginx's default 1 MiB applies everywhere.
+nginx_upload_max_body_size: ""

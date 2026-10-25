@@ -1,41 +1,30 @@
 {% extends "base.html" %}
-
-{% block header %}
-<title>WORMS//ARENA — Rounds</title>
-{% endblock %}
-
+{% block title %}Rounds{% endblock %}
 {% block content %}
-<div style="max-width: 980px; margin: 0 auto; padding: 24px; font-family: system-ui, sans-serif;">
-  <h1>Round runs</h1>
-  <p style="color:#5f6b7a;">
-    One run per team and round. Replay a run in the
-    <a href="{% url 'topology' %}">TOPOLOGY</a> view (pick the round, then the
-    team); its raw timeline is served as JSON at
-    <code>/rounds/&lt;uuid&gt;/timeline/</code>.
-  </p>
-  <table style="width:100%; border-collapse: collapse;">
-    <thead>
-      <tr style="text-align:left; border-bottom:1px solid #d5dae1;">
-        <th style="padding:6px;">Round</th>
-        <th style="padding:6px;">#</th>
-        <th style="padding:6px;">Team</th>
-        <th style="padding:6px;">State</th>
-        <th style="padding:6px;">Replay</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for run in runs %}
-      <tr style="border-bottom:1px solid #eef1f4;">
-        <td style="padding:6px;">{{ run.round }}</td>
-        <td style="padding:6px;">{{ run.position }}</td>
-        <td style="padding:6px;">{{ run.team }}</td>
-        <td style="padding:6px;">{{ run.state }}</td>
-        <td style="padding:6px;"><a href="{% url 'topology' %}#run={{ run.uuid }}">play</a> · <a href="{% url 'round_timeline_data' run.uuid %}">JSON</a></td>
-      </tr>
-      {% empty %}
-      <tr><td colspan="5" style="padding:12px; color:#5f6b7a;">No runs yet.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
+<header class="page-head">
+    <p class="page-head__kicker">Staff</p>
+    <h1 class="page-head__title">Round runs</h1>
+    <p class="page-head__lead">One run per team and round. Replay a run in the <a href="{% url 'topology' %}">topology</a> view.</p>
+</header>
+
+<section class="panel">
+    <div class="table-wrap">
+        <table class="table">
+            <thead><tr><th scope="col">Round</th><th scope="col" class="num">#</th><th scope="col">Team</th><th scope="col">State</th><th scope="col">Replay</th></tr></thead>
+            <tbody>
+                {% for run in runs %}
+                <tr>
+                    <th scope="row">{{ run.round }}</th>
+                    <td class="num">{{ run.position }}</td>
+                    <td>{{ run.team }}</td>
+                    <td><span class="badge badge--state">{{ run.state }}</span></td>
+                    <td class="row-action"><a class="btn btn--ghost btn--sm" href="{% url 'topology' %}#run={{ run.uuid }}">Play</a> <a class="btn btn--ghost btn--sm" href="{% url 'round_timeline_data' run.uuid %}">JSON</a></td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="5" class="empty">No runs yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
 {% endblock %}

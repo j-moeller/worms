@@ -10,6 +10,7 @@ from dashboard.views.decorators import (
     user_in_team_required,
 )
 from dashboard.views.util import render_with_base_info
+from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest
 from django.shortcuts import get_object_or_404, redirect
@@ -56,6 +57,7 @@ def create_access_token(request: HttpRequest, team: Team, *, competition: Compet
     description = request.POST.get("description", "")
 
     if not name.strip():
+        messages.error(request, "Give the token a name.")
         return redirect("access")
 
     # Generate the raw token. It is never stored in the database.
@@ -93,5 +95,6 @@ def revoke_access_token(
         access_token.revoked = True
         access_token.revoked_at = request.time_now
         access_token.save(update_fields=["revoked", "revoked_at"])
+        messages.success(request, f"Access token “{access_token.name}” revoked.")
 
     return redirect("access")

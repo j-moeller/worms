@@ -22,6 +22,18 @@ class CompetitionPresentation:
     detail: str
     target: datetime | None = None
     warning: bool = False
+    # The time left until `target`, rendered on the server (so it reads right
+    # without JavaScript; enhance.js keeps it ticking).
+    remaining: str = ""
+
+
+def format_remaining(delta) -> str:
+    seconds = max(0, int(delta.total_seconds()))
+    days, seconds = divmod(seconds, 86400)
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    clock = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    return f"{days}d {clock}" if days else clock
 
 
 def get_current_round(rounds: list[Round], now) -> Round | None:
@@ -216,5 +228,9 @@ def render_with_base_info(
     request.state_presentation = get_competition_state_presentation(
         request.competition_state, request.active_competition, request.team
     )
+    if request.state_presentation.target:
+        request.state_presentation.remaining = format_remaining(
+            request.state_presentation.target - request.time_now
+        )
 
     return render(request, template, context, *args, **kwargs)

@@ -18,6 +18,7 @@ from dashboard.views.decorators import user_in_team_required
 from dashboard.views.leaderboard import leaderboard
 from dashboard.views.util import render_with_base_info
 from django.conf import settings
+from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
 from django.db.models import F
@@ -57,11 +58,14 @@ def devbox_home(request: HttpRequest, team: Team):
             f":{devbox.ssh_gateway_port} root@{main_vm.ssh_fabric_ip}"
         )
 
-    logs = list(
-        DevboxLog.objects.filter(team=team, devbox_version=version)
+    from dashboard.views.logging import pretty
+
+    logs = [
+        {"entry": entry, "data": pretty(entry.logging_attempt.log_data)}
+        for entry in DevboxLog.objects.filter(team=team, devbox_version=version)
         .select_related("logging_attempt")
         .order_by("-created_at")[:200]
-    )
+    ]
     ssh_keys = list(DevboxSSHKey.objects.filter(team=team).order_by("-created_at"))
 
     context = {
@@ -88,13 +92,18 @@ def devbox_reset(request: HttpRequest, team: Team):
     from dashboard import orchestrator_client
 
     try:
-        orchestrator_client.post(f"/devbox/{team.uuid}/reset/")
+        result = orchestrator_client.post(f"/devbox/{team.uuid}/reset/")
     except orchestrator_client.OrchestratorError:
         if settings.DEBUG:
             with transaction.atomic():
                 Team.objects.filter(pk=team.pk).update(devbox_version=F("devbox_version") + 1)
+            result = {"rebuild_enqueued": True}
         else:
             raise
+    if result.get("rebuild_enqueued", True):
+        messages.success(request, "Reset requested: your devbox VMs are being rebuilt and the score starts over.")
+    else:
+        messages.info(request, "A rebuild of your devbox is already in progress.")
     return redirect("index")
 
 
@@ -106,6 +115,9 @@ def devbox_add_ssh_key(request: HttpRequest, team: Team):
     public_key = request.POST.get("public_key", "").strip()
     if _valid_ssh_key(public_key):
         DevboxSSHKey.objects.create(team=team, name=name, public_key=public_key, created_by=request.user)
+        messages.success(request, "SSH key added. It is installed on your devbox at the next rebuild.")
+    else:
+        messages.error(request, "That is not a single-line OpenSSH public key (ssh-ed25519, ssh-rsa, ecdsa, sk-…).")
     return redirect("index")
 
 
@@ -113,7 +125,9 @@ def devbox_add_ssh_key(request: HttpRequest, team: Team):
 @require_POST
 @user_in_team_required
 def devbox_delete_ssh_key(request: HttpRequest, team: Team, key_id: int):
-    DevboxSSHKey.objects.filter(id=key_id, team=team).delete()
+    deleted, _ = DevboxSSHKey.objects.filter(id=key_id, team=team).delete()
+    if deleted:
+        messages.success(request, "SSH key removed.")
     return redirect("index")
 
 

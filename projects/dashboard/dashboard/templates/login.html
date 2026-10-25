@@ -1,78 +1,31 @@
 {% extends "base.html" %}
-
-{% block header %}
-<title>WORM//ARENA — Login</title>
-{% endblock %}
-
-
+{% block title %}Sign in{% endblock %}
 {% block content %}
-
-
-<div class="login-page">
-
-    <section class="login-panel">
-
-        <form method="post" class="login-form">
-
+<div class="auth">
+    <section class="panel auth__panel" aria-labelledby="login-title">
+        <header class="panel__head">
+            <h1 class="panel__title" id="login-title">Sign in</h1>
+            <p class="panel__meta">Team accounts</p>
+        </header>
+        <form method="post" class="panel__body form">
             {% csrf_token %}
-
-
+            <input type="hidden" name="next" value="{{ request.GET.next }}">
             {% if error %}
-                <div class="login-error">
-                    {{ error }}
-                </div>
+            <p class="alert alert--error" role="alert">{{ error }}</p>
             {% endif %}
-
-
-            <div class="form-field">
-
-                <label for="username">
-                    Username
-                </label>
-
-                <input
-                    type="text"
-                    id="username"
-                    name="username"
-                    placeholder="ENTER USERNAME"
-                    autocomplete="username"
-                    required
-                    autofocus
-                >
-
+            <div class="field">
+                <label class="field__label" for="username">Username</label>
+                <input class="input" type="text" id="username" name="username" value="{{ username }}" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus>
             </div>
-
-
-            <div class="form-field">
-
-                <label for="password">
-                    Password
-                </label>
-
-                <input
-                    type="password"
-                    id="password"
-                    name="password"
-                    placeholder="ENTER PASSWORD"
-                    autocomplete="current-password"
-                    required
-                >
-
+            <div class="field">
+                <label class="field__label" for="password">Password</label>
+                <input class="input" type="password" id="password" name="password" autocomplete="current-password" required>
             </div>
-
-
-            <button
-                type="submit"
-                class="login-submit"
-            >
-                Authenticate →
-            </button>
-
-
+            <div class="form__actions">
+                <button type="submit" class="btn btn--primary">Sign in</button>
+            </div>
+            <p class="form__note">First time here? Use the one-time password you were given; you will choose your own next.</p>
         </form>
-
     </section>
-
 </div>
-
 {% endblock %}

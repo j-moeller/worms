@@ -8,6 +8,7 @@ from dashboard.views.decorators import (
     user_not_in_team_required,
 )
 from dashboard.views.util import render_with_base_info
+from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
 from django.http import HttpRequest
@@ -30,6 +31,9 @@ def join_team(request: HttpRequest, uuid: uuid.UUID, competition: Competition):
         team = get_object_or_404(Team, uuid=uuid)
         if team.users.count() < team.max_members:
             team.users.add(request.user)
+            messages.success(request, f"You joined {team.name}.")
+        else:
+            messages.error(request, f"{team.name} is full.")
 
         return redirect("team_registration")
 
@@ -40,5 +44,6 @@ def join_team(request: HttpRequest, uuid: uuid.UUID, competition: Competition):
 def leave_team(request: HttpRequest, uuid, competition: Competition):
     team = get_object_or_404(Team, uuid=uuid)
     team.users.remove(request.user)
+    messages.success(request, f"You left {team.name}.")
 
     return redirect("team_registration")

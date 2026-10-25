@@ -1,115 +1,32 @@
 {% extends "base.html" %}
-
-{% block header %}
-<title>WORMS//ARENA — Leaderboard</title>
-{% endblock %}
-
-
+{% block title %}Leaderboard{% endblock %}
 {% block content %}
-
-<div class="leaderboard-page">
-    <!-- LEADERBOARD -->
-
-    <section class="panel leaderboard">
-
-        <div class="panel-header">
-            <div class="panel-title">
-                // CURRENT RANKINGS
-            </div>
-        </div>
-
-        <div class="table-wrapper">
-
-            <table>
-                <thead>
-                    <tr>
-                        <th>Rank</th>
-                        <th>Team</th>
-                        <th>Points</th>
-                    </tr>
-                </thead>
-
-                <tbody>
-                    {% for team in teams %}
-
-                        <tr
-                            class="{% if team.is_user_team %}highlight{% endif %}"
-                        >
-                            <td>
-                                {% if not team.skip_place %}
-                                    {{ team.place|stringformat:"02d" }}
-                                {% endif %}
-                            </td>
-
-                            <td>
-                                {{ team.name }}
-
-                                {% if false %}
-                                {% if team.is_current_winner %}
-                                    <span
-                                        class="winner-star"
-                                        title="Current winner"
-                                        aria-label="Current winner"
-                                    >👑</span>
-                                {% endif %}
-                                {% endif %}
-
-                                {% if current_round %}
-                                {% if team.is_current_leader %}
-                                    <span
-                                        class="leader-star"
-                                        title="Current leader — {{ current_round.name }}"
-                                        aria-label="Current leader — {{ current_round.name }}"
-                                    >🔥</span>
-                                {% endif %}
-                                {% endif %}
-
-                                {% for round_name in team.round_wins %}
-                                    <span
-                                        class="round-star"
-                                        title="{{ round_name }}"
-                                        aria-label="{{ round_name }}"
-                                    >⭐️</span>
-                                {% endfor %}
-                            </td>
-
-                            {% if is_round_active %}
-                            <td>
-                                {{ team.total_points }} <span class="ephemeral-points">(+{{ team.current_round_points }})</span>
-                            </td>
-                            {% else %}
-                            <td>
-                                {{ team.total_points }}
-                            </td>
-                            {% endif %}
-                        </tr>
-
-                    {% empty %}
-
-                        <tr>
-                            <td colspan="3" class="empty">
-                                NO ACTIVE TEAMS DETECTED.
-                            </td>
-                        </tr>
-
-                    {% endfor %}
-                </tbody>
-            </table>
-
-        </div>
-
-    </section>
-
-    <footer class="page-footer">
-        <span>
-            WORMS//ARENA — AUTONOMOUS AI COMPETITION
-        </span>
-
-        <span>
-            NO HUMAN OPERATORS DETECTED
-        </span>
-    </footer>
-
-</div>
-
+<header class="page-head">
+    <p class="page-head__kicker">{{ request.active_competition.name|default:"Arena" }}</p>
+    <h1 class="page-head__title">Leaderboard</h1>
+    {% if current_round %}<p class="page-head__lead">{{ current_round.name }} is running. Points in brackets are this round's, not yet final.</p>{% endif %}
+</header>
+<section class="panel" aria-labelledby="ranking-title"{% if is_round_active %} id="ranking" data-autorefresh="30"{% endif %}>
+    <header class="panel__head">
+        <h2 class="panel__title" id="ranking-title">Ranking</h2>
+        <p class="panel__meta">{{ teams|length }} team{{ teams|length|pluralize }}</p>
+    </header>
+    <div class="table-wrap">
+        <table class="table table--ranking">
+            <thead><tr><th scope="col" class="num">#</th><th scope="col">Team</th><th scope="col">Rounds won</th><th scope="col" class="num">Points</th></tr></thead>
+            <tbody>
+            {% for team in teams %}
+            <tr{% if team.is_user_team %} class="is-mine"{% endif %}{% if not team.skip_place %} data-rank="{{ team.place }}"{% endif %}>
+                <td class="num rank">{% if not team.skip_place %}{{ team.place|stringformat:"02d" }}{% endif %}</td>
+                <th scope="row" class="team">{{ team.name }}{% if team.is_user_team %} <span class="badge badge--accent">your team</span>{% endif %}{% if current_round and team.is_current_leader %} <span class="badge badge--hot">leading</span>{% endif %}</th>
+                <td>{% for round_name in team.round_wins %}<span class="trophy" title="Won {{ round_name }}">{{ round_name }}</span>{% empty %}<span class="muted">—</span>{% endfor %}</td>
+                <td class="num points">{{ team.total_points }}{% if is_round_active %} <span class="points__live" title="This round, not yet final">+{{ team.current_round_points }}</span>{% endif %}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="4" class="empty">No teams yet.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
 {% endblock %}

@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}{{ title|default:"Notice" }}{% endblock %}
+{% block content %}
+<div class="auth">
+    <section class="panel auth__panel">
+        <div class="panel__body prose">
+            <p class="lead">{{ message }}</p>
+            <p class="panel__actions"><a class="btn" href="{% url 'index' %}">Back to the dashboard</a></p>
+        </div>
+    </section>
+</div>
+{% endblock %}

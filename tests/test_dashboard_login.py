@@ -95,7 +95,7 @@ def test_next_never_leaves_the_site(site):
     for target in ("https://evil.example/", "//evil.example/", "http:/evil.example"):
         response = login(site, HOST, f"https://{HOST}", next_=target)
         assert response.status_code == 302 and response["Location"] == "/profile/", target
-        site.get("/logout/", **proxied(HOST))
+        site.logout()
 
 
 def test_pages_render_without_competition_dates(site):

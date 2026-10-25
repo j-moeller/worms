@@ -37,8 +37,8 @@ def test_uploads_page_lists_the_teams_uploads(site, team_upload):  # noqa: F811
     page = response.content.decode()
     assert "ab" * 32 in page and "admin" in page
     # Not used in any round yet.
-    assert 'class="referenced"' not in page
-    assert not re.search(r'class="upload-round"', page)
+    assert 'is-referenced' not in page
+    assert not re.search(r'upload-round', page)
 
 
 def test_todos_page_counts_vms_and_deployments(site, team_upload):  # noqa: F811
@@ -54,7 +54,7 @@ def test_todos_page_counts_vms_and_deployments(site, team_upload):  # noqa: F811
     assert response.status_code == 200
     page = response.content.decode()
     assert "Round 1" in page
-    counts = re.findall(r"<span >(\d+)</span>", page)
+    counts = re.findall(r"data-count>(\d+)<", page)
     assert counts == ["0", "0"], counts  # no VMs, no worm deployments
 
 
@@ -110,8 +110,8 @@ def test_uploads_page_shows_the_rounds_an_upload_ran_in(site, team_upload):  # n
     run_with(team, upload, "Round 1", now - timedelta(days=2))
     run_with(team, upload, "Round 2", now - timedelta(days=1))
     page = site.get("/upload/", **proxied(HOST)).content.decode()
-    assert 'class="referenced"' in page
-    assert re.findall(r'class="upload-round">\s*(.*?)\s*<', page) == ["Round 2", "Round 1"]
+    assert 'is-referenced' in page
+    assert re.findall(r'class="[^"]*upload-round">\s*(.*?)\s*<', page) == ["Round 2", "Round 1"]
 
 
 def test_todos_counts_the_runs_that_deploy_an_upload(site, team_upload):  # noqa: F811
@@ -121,7 +121,7 @@ def test_todos_counts_the_runs_that_deploy_an_upload(site, team_upload):  # noqa
 
     team, upload = team_upload
     run_with(team, upload, "Round 1", clock.now() + timedelta(days=1))
-    counts = re.findall(r"<span >(\d+)</span>", site.get("/todos/", **proxied(HOST)).content.decode())
+    counts = re.findall(r"data-count>(\d+)<", site.get("/todos/", **proxied(HOST)).content.decode())
     assert counts == ["0", "1"], counts
 
 

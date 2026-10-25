@@ -5,6 +5,7 @@ from typing import List, Optional
 from core import clock
 from core.models.competition import ApplicationSetting, Competition, Round
 from core.models.team import TeamMembership
+from dashboard import themes
 from django.conf import settings
 from django.http import HttpRequest
 from django.shortcuts import redirect
@@ -86,6 +87,9 @@ class UserMetadataMiddleware:
         if request.path.startswith(API_PREFIX):
             return self.get_response(request)
         request.time_now = clock.now()
+        request.theme = themes.resolve(request)
+        request.theme_css = themes.stylesheet(request.theme)
+        request.themes = list(themes.THEMES.items())
         # Default rather than require the key: EnvironmentTransitionMiddleware
         # only sets it for authenticated users, so reading it must not assume it
         # exists and must not itself create a session (docs/security-assessment.md, D1).
@@ -132,11 +136,9 @@ class EnvironmentTransitionMiddleware:
         # shared database disk for no reason (docs/security-assessment.md, D1).
         if request.path.startswith(API_PREFIX) or not request.user.is_authenticated:
             return self.get_response(request)
+        # Switching between the two views is a POST (views/environment.py),
+        # never a side effect of a GET.
         request.session.setdefault("is_dev_environment", False)
-
-        env_toggle = request.GET.get("live")
-        if env_toggle is not None:
-            request.session["is_dev_environment"] = env_toggle == "0"
 
         return self.get_response(request)
 

@@ -27,6 +27,10 @@ ORCHESTRATOR_API = {
     "token": env("ORCHESTRATOR_API_TOKEN", ""),
 }
 
+# The design every visitor sees by default (dashboard/themes.py); a visitor
+# can switch in the footer, which is remembered in a cookie.
+DASHBOARD_THEME = env("DASHBOARD_THEME", "lab")
+
 LOGGING["loggers"]["dashboard"] = {
     "handlers": ["console"],
     "level": LOG_LEVEL,

@@ -12,5 +12,13 @@ class Migration(migrations.Migration):
     dependencies = [("core", "0001_squashed_0013_team_api_indexes")]
 
     operations = [
-        migrations.RunSQL("DROP TABLE IF EXISTS worm_deployments, worm_deployment_plans", migrations.RunSQL.noop),
+        # One table per statement: SQLite's DROP TABLE takes a single table,
+        # so a combined "DROP TABLE a, b" (valid on PostgreSQL) fails there.
+        migrations.RunSQL(
+            [
+                "DROP TABLE IF EXISTS worm_deployments",
+                "DROP TABLE IF EXISTS worm_deployment_plans",
+            ],
+            migrations.RunSQL.noop,
+        ),
     ]

@@ -1,5 +1,4 @@
 import os
-import socket
 import sys
 from pathlib import Path
 
@@ -135,7 +134,8 @@ TEMPLATES = [
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
 if DEBUG:
-    assert socket.gethostname() == "worms-pve"
+    # Local development uses a throwaway SQLite file in the project directory;
+    # production (PRODUCTION=1) uses PostgreSQL, configured per app below.
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",

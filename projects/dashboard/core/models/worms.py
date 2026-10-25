@@ -18,10 +18,22 @@ class Upload(models.Model):
         on_delete=models.CASCADE,
         related_name="uploads",
     )
+    # Who uploaded it...
     user = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
         related_name="uploads",
+    )
+    # ...for which team: the team's latest upload before a round's start is
+    # its entry (orchestrator/rounds/planner.py), whoever is in the team now.
+    # A member who changes teams does not take their uploads along. Null only
+    # for uploads from before this was recorded that could not be attributed.
+    team = models.ForeignKey(
+        "core.Team",
+        on_delete=models.CASCADE,
+        related_name="uploads",
+        null=True,
+        blank=True,
     )
     created_at = models.DateTimeField(default=clock.now)
 
@@ -31,4 +43,5 @@ class Upload(models.Model):
             models.Index(fields=["artifact"]),
             models.Index(fields=["user"]),
             models.Index(fields=["created_at"]),
+            models.Index(fields=["team", "created_at"], name="uploads_team_time"),
         ]

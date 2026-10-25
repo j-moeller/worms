@@ -156,7 +156,7 @@ def one_run(db_clean):
     artifact = MalwareArtifact.objects.create(content_hash="abc", storage_key="k")
     past = timezone.now() - timezone.timedelta(minutes=1)
     # Upload before the round's deadline (round_start).
-    Upload.objects.create(artifact=artifact, user=user, created_at=past - timezone.timedelta(minutes=5))
+    Upload.objects.create(artifact=artifact, user=user, team=team, created_at=past - timezone.timedelta(minutes=5))
     round = Round.objects.create(seed=5, name="R1", competition=competition, round_start=past, round_end=past + timezone.timedelta(days=1))
     # Short game-plan intervals so stops and delayed secrets happen within the
     # 600 s test round (the conductor's round_duration below).
@@ -795,3 +795,68 @@ def test_a_submission_just_before_the_dated_start_counts(one_run):
                                       created_at=run.worm_start_at - clock_delta(20))  # fmt: skip
     captures.process_flags(conductor.cfg["capture_grace"])
     assert FlagCapture.objects.filter(vm=vm).count() == 1
+
+
+# --- the round's end and the team's own uploads -----------------------------------
+
+
+def test_a_run_that_cannot_finish_before_the_round_ends_is_skipped(one_run):
+    from core.models.rounds import HostJob, RoundRun
+
+    run, round_obj = one_run["run"], one_run["round"]
+    power, clock = FakePower(), Clock()
+    conductor = make_conductor(power, clock)
+    # 10 s fuse + 600 s run + 5 s drain + 900 s overhead > what is left.
+    round_obj.round_end = clock.now() + clock_delta(conductor.slot_seconds(run) - 1)
+    round_obj.save()
+    conductor.tick()
+    run.refresh_from_db()
+    assert run.state == RoundRun.State.SKIPPED and "not enough time left" in run.error
+    assert not run.jobs.filter(kind=HostJob.Kind.PREPARE).exists()
+
+    run.state, run.error = RoundRun.State.PENDING, ""
+    run.save()
+    round_obj.round_end = clock.now() + clock_delta(conductor.slot_seconds(run) + 1)
+    round_obj.save()
+    conductor.tick()
+    run.refresh_from_db()
+    assert run.state == RoundRun.State.PREPARING
+
+
+def test_a_team_without_an_upload_is_skipped_with_the_reason(one_run):
+    from core.models.rounds import RoundRun
+
+    run = one_run["run"]
+    run.upload = None
+    run.save()
+    conductor = make_conductor(FakePower(), Clock())
+    conductor.tick()
+    run.refresh_from_db()
+    assert run.state == RoundRun.State.SKIPPED and run.error == "no upload before the round's start"
+
+
+def test_the_entry_is_the_teams_own_latest_upload(db_clean):
+    """A member who changes teams does not take their uploads along."""
+    from core.models.competition import Competition, Round
+    from core.models.team import Team, TeamMembership
+    from core.models.user import User
+    from core.models.worms import MalwareArtifact, Upload
+    from django.utils import timezone
+    from orchestrator.rounds.planner import plan_round
+
+    competition = Competition.objects.create(name="c")
+    red, blue = (Team.objects.create(name=n, competition=competition) for n in ("red", "blue"))
+    mover, stayer = User.objects.create(username="mover"), User.objects.create(username="stayer")
+    TeamMembership.objects.create(user=stayer, team=blue)
+    start = timezone.now()
+    art = [MalwareArtifact.objects.create(content_hash=c * 64, storage_key=c) for c in "abc"]
+    red_entry = Upload.objects.create(artifact=art[0], user=mover, team=red, created_at=start - clock_delta(300))
+    # The mover leaves red for blue (their red upload stays red's) and uploads for blue.
+    TeamMembership.objects.create(user=mover, team=blue)
+    blue_entry = Upload.objects.create(artifact=art[1], user=mover, team=blue, created_at=start - clock_delta(200))
+    Upload.objects.create(artifact=art[2], user=stayer, team=blue, created_at=start + clock_delta(10))  # too late
+    round_obj = Round.objects.create(competition=competition, name="R", seed=1, round_start=start,
+                                     round_end=start + clock_delta(86400))  # fmt: skip
+    runs = {run.team_id: run for run in plan_round(round_obj)}
+    assert runs[red.id].upload_id == red_entry.id
+    assert runs[blue.id].upload_id == blue_entry.id

@@ -163,14 +163,10 @@ def get_competition_state_presentation(
             needs_upload = True
 
         else:
-            # The upload belongs to a USER, but the competition
-            # state belongs to a TEAM.
-            #
-            # Therefore find the latest upload by ANY member
-            # of this team.
+            # The team's latest upload (made for this team, by any member).
             latest_upload = (
                 Upload.objects.filter(
-                    user__team_memberships__team=team,
+                    team=team,
                 )
                 .order_by("-created_at")
                 .first()

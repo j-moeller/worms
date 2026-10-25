@@ -42,6 +42,7 @@ CONFIG = {
     "end_drain": 120,               # ENDING: let the monitor catch up before teardown
     "job_timeout": 1800,            # a host job with no heartbeat for this long failed
     "capture_grace": 120,           # captures/logs accepted this long after ends_at
+    "slot_overhead": 900,           # allowance for prepare/check/deploy/teardown (core/schedule.py)
 }
 
 
@@ -118,6 +119,12 @@ class Conductor:
             "run_duration": pick("run_duration", self.cfg["round_duration"]),
         }
 
+    def slot_seconds(self, run):
+        """How long the run occupies the host, start to teardown (the same
+        estimate the dashboard uses when a round is created)."""
+        timing = self.timing(run)
+        return timing["worm_start_delay"] + timing["run_duration"] + self.cfg["end_drain"] + self.cfg["slot_overhead"]
+
     def _teardown_pending(self) -> bool:
         """True while a sandbox teardown has not completed, so the host may
         still hold a sandbox and the next run must not build over it. A teardown
@@ -155,10 +162,25 @@ class Conductor:
         if self._teardown_pending():
             return False
 
-        nxt = RoundRun.objects.filter(state=RoundRun.State.PENDING).order_by("round_id", "position").first()
+        nxt = (
+            RoundRun.objects.filter(state=RoundRun.State.PENDING)
+            .select_related("round")
+            .order_by("round_id", "position")
+            .first()
+        )
         if nxt is not None:
             if nxt.upload_id is None:
-                self.set_state(nxt, RoundRun.State.SKIPPED, finished_at=self.now())
+                self.set_state(nxt, RoundRun.State.SKIPPED, finished_at=self.now(),
+                               error="no upload before the round's start")  # fmt: skip
+                return True
+            # A run that cannot finish before the round ends is not started:
+            # the round's results are final at its end (the leaderboard).
+            end = nxt.round.round_end
+            if end is not None and self.now() + timedelta(seconds=self.slot_seconds(nxt)) > end:
+                self.set_state(
+                    nxt, RoundRun.State.SKIPPED, finished_at=self.now(),
+                    error=f"not enough time left in the round (a run needs {self.slot_seconds(nxt)} s)",
+                )  # fmt: skip
                 return True
             self.set_state(nxt, RoundRun.State.PREPARING)
             self.request_job(nxt, HostJob.Kind.PREPARE, seed=nxt.seed, sandbox_params=nxt.sandbox_params)

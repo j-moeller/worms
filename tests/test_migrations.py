@@ -229,3 +229,48 @@ def test_removed_tables_are_gone(cluster, baseline_migrations):
     assert django(cluster, "gone_upgraded", "migrate", "--no-input", "--database=migrator").returncode == 0
     for db in ("gone_fresh", "gone_upgraded"):
         assert not REMOVED & set(schema(cluster, db)), db
+
+
+def test_existing_uploads_are_attributed_to_their_team(cluster, baseline_migrations):
+    """Uploads from before Upload.team: the team the uploader had joined by
+    then (migration 0005); a user without a team leaves it empty."""
+    create_database(cluster, "uploads_team")
+    proc = django(cluster, "uploads_team", "migrate", "--no-input", "--database=migrator",
+                  extra_path=baseline_migrations, settings="baseline_settings")  # fmt: skip
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    conn = cluster.connect(dbname="uploads_team")
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO competitions (name, created_at, is_dev_competition) VALUES ('c', now(), false) RETURNING id")
+        competition = cur.fetchone()[0]
+        ids = {}
+        for name in ("red", "blue"):
+            cur.execute("INSERT INTO teams (name, competition_id, uuid, max_members, created_at)"
+                        " VALUES (%s, %s, gen_random_uuid(), 2, now()) RETURNING id", (name, competition))  # fmt: skip
+            ids[name] = cur.fetchone()[0]
+        for user in ("early", "later", "loner"):
+            cur.execute(
+                "INSERT INTO users (uuid, password, is_superuser, username, is_staff, is_active, date_joined,"
+                " first_name, last_name, email, created_at) VALUES (gen_random_uuid(), 'x', false, %s, false, true,"
+                " now(), '', '', '', now()) RETURNING id", (user,),
+            )  # fmt: skip
+            ids[user] = cur.fetchone()[0]
+        # `later` was in red when uploading, joined blue afterwards (red's row kept here).
+        memberships = [("early", "red", "1 day"), ("later", "red", "3 days"), ("later", "blue", "1 hour")]
+        for user, team, ago in memberships:
+            cur.execute("INSERT INTO team_memberships (user_id, team_id, created_at) VALUES (%s, %s, now() - %s::interval)",
+                        (ids[user], ids[team], ago))  # fmt: skip
+        cur.execute("INSERT INTO malware_artifacts (content_hash, storage_key, created_at) VALUES ('h', 'k', now()) RETURNING id")
+        artifact = cur.fetchone()[0]
+        for user, ago in (("early", "1 hour"), ("later", "2 days"), ("loner", "1 hour")):
+            cur.execute("INSERT INTO uploads (artifact_id, user_id, created_at) VALUES (%s, %s, now() - %s::interval)",
+                        (artifact, ids[user], ago))  # fmt: skip
+    conn.close()
+
+    proc = django(cluster, "uploads_team", "migrate", "--no-input", "--database=migrator")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    conn = cluster.connect(dbname="uploads_team")
+    with conn.cursor() as cur:
+        cur.execute("SELECT u.username, t.name FROM uploads up JOIN users u ON u.id = up.user_id"
+                    " LEFT JOIN teams t ON t.id = up.team_id ORDER BY u.username")  # fmt: skip
+        assert cur.fetchall() == [("early", "red"), ("later", "red"), ("loner", None)]
+    conn.close()

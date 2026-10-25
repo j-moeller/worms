@@ -3,8 +3,8 @@
 A plain multipart form (works without JavaScript); the static enhance.js only
 adds drag and drop and a progress bar to the very same request. An artifact is
 identified by the SHA-256 of the file's content: the same zip uploaded twice is
-stored once. The team's latest upload before a round starts is its entry
-(orchestrator/rounds/planner.py).
+stored once. An upload belongs to the uploader's team at the time; the team's
+latest upload before a round starts is its entry (orchestrator/rounds/planner.py).
 """
 
 import hashlib
@@ -33,7 +33,7 @@ ENVELOPE = 64 * 1024
 @user_in_team_required
 def upload(request: HttpRequest, team: Team):
     if request.method == "POST":
-        return _receive(request)
+        return _receive(request, team)
     if request.method != "GET":
         return HttpResponseNotAllowed(["GET", "POST"])
     return _history(request, team)
@@ -41,7 +41,7 @@ def upload(request: HttpRequest, team: Team):
 
 def _history(request: HttpRequest, team: Team):
     uploads = (
-        Upload.objects.filter(user__team_memberships__team=team)
+        Upload.objects.filter(team=team)
         .select_related("user", "artifact")
         .prefetch_related("runs__round")
         .order_by("-created_at")
@@ -85,7 +85,7 @@ def _check_zip(uploaded) -> str | None:
     return None
 
 
-def _receive(request: HttpRequest):
+def _receive(request: HttpRequest, team: Team):
     limit = settings.MAX_UPLOAD_SIZE
     # Refuse an oversized body before reading it (nginx caps it, too).
     try:
@@ -130,7 +130,7 @@ def _receive(request: HttpRequest):
                     messages.error(request, "The upload could not be stored; try again.")
                     return redirect("upload")
             artifact = MalwareArtifact.objects.create(content_hash=content_hash, storage_key=storage_key)
-        Upload.objects.create(artifact=artifact, user=request.user)
+        Upload.objects.create(artifact=artifact, user=request.user, team=team)
 
     messages.success(
         request,

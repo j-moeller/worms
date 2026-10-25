@@ -35,9 +35,12 @@ a live Proxmox host (the standing caveat — no node is available here).
 - **Dev view**: ✅ devbox score (tokens found at the current version), devbox
   logs, SSH-key management, reset (version bump + rebuild job), and the SSH
   command to the main VM through the gateway (`devbox.md`).
-- **Prod view**: ✅ leaderboard, zip upload, round countdown/status
-  (`dashboard/views/leaderboard.py`, `uploads.py`, the status presentation in
-  `views/util.py`).
+- **Prod view**: ✅ leaderboard (overall points, and per round every team
+  ranked by the VMs it captured, with its sandbox's size), zip upload (a
+  team's uploads are its own, `Upload.team`; a zip must have `main.py` at its
+  top level), round countdown/status (`dashboard/views/leaderboard.py`,
+  `uploads.py`, the status presentation in `views/util.py`,
+  `tests/test_leaderboard.py`).
 - **Round progression**: ✅ a team replays its rounds (Live: its run; Dev: its
   devbox) on the PROGRESSION page — only the VMs it captured, scoring,
   logging and the private internet; never another team's devbox, other

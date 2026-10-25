@@ -4,7 +4,7 @@
 <header class="page-head">
     <p class="page-head__kicker">{{ request.active_competition.name|default:"Arena" }}</p>
     <h1 class="page-head__title">Leaderboard</h1>
-    {% if current_round %}<p class="page-head__lead">{{ current_round.name }} is running. Points in brackets are this round's, not yet final.</p>{% endif %}
+    {% if current_round %}<p class="page-head__lead">{{ current_round.name }} is running. The +points next to a total are this round's, not yet final.</p>{% endif %}
 </header>
 <section class="panel" aria-labelledby="ranking-title"{% if is_round_active %} id="ranking" data-autorefresh="30"{% endif %}>
     <header class="panel__head">
@@ -29,4 +29,28 @@
         </table>
     </div>
 </section>
+
+{% for result in round_results %}
+<section class="panel" aria-labelledby="round-{{ result.round.pk }}-title">
+    <header class="panel__head">
+        <h2 class="panel__title" id="round-{{ result.round.pk }}-title">{{ result.round.name }}</h2>
+        <p class="panel__meta">{% if result.finished %}final{% else %}running — provisional{% endif %} · VMs captured</p>
+    </header>
+    <div class="table-wrap">
+        <table class="table table--ranking">
+            <thead><tr><th scope="col" class="num">#</th><th scope="col">Team</th><th scope="col" class="num">VMs captured</th><th scope="col" class="num">Points</th></tr></thead>
+            <tbody>
+            {% for row in result.rows %}
+            <tr{% if row.team.pk == request.team.pk %} class="is-mine"{% endif %}>
+                <td class="num rank">{% if not row.shared %}{{ row.place|stringformat:"02d" }}{% endif %}</td>
+                <th scope="row" class="team">{{ row.team.name }}{% if row.state == 'skipped' %} <span class="badge">skipped</span>{% elif row.state and row.state != 'finished' and row.state != 'failed' and not result.finished %} <span class="badge badge--state">{{ row.state }}</span>{% elif row.state == 'failed' %} <span class="badge badge--bad">failed</span>{% endif %}</th>
+                <td class="num">{{ row.captured }}{% if row.vms %} <span class="muted">/ {{ row.vms }}</span>{% endif %}</td>
+                <td class="num points">{{ row.points }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endfor %}
 {% endblock %}

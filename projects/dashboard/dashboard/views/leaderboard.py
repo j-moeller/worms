@@ -68,7 +68,7 @@ def score_rounds_won(
     passed_points = defaultdict(int)
 
     for round in rounds:
-        if round.is_finished(clock.now()):
+        if not round.is_finished(clock.now()):
             continue
 
         standings = FlagCapture.get_round_standings(round)
@@ -154,7 +154,7 @@ def score_formula_one(
         if current_round and round.id == current_round.id:
             for team_id, points in round_points.items():
                 current_points[team_id] += points
-        elif round.round_end <= clock.now():
+        elif round.is_finished(clock.now()):
             for team_id, points in round_points.items():
                 passed_points[team_id] += points
 
@@ -283,8 +283,6 @@ def leaderboard(request: HttpRequest, competition: Competition):
     else:
         is_round_active = False
 
-    print(team_results)
-
     return render_with_base_info(
         request,
         "leaderboard.html",
@@ -292,5 +290,44 @@ def leaderboard(request: HttpRequest, competition: Competition):
             "current_round": current_round,
             "teams": team_results,
             "is_round_active": is_round_active,
+            "round_results": round_results(request.active_competition, rounds, request.time_now),
         },
     )
+
+
+def round_results(competition, rounds, now) -> list[dict]:
+    """Each started round's own ranking, newest first: every team of the
+    competition by the VMs it captured in that round (equal counts share a
+    place), with the round's points (FORMULA_ONE_POINTS) and the size of the
+    team's sandbox. A running round's standings are provisional."""
+    from core.models.rounds import RoundRun
+    from django.db.models import Count
+
+    teams = list(Team.objects.filter(competition=competition).order_by("name")) if competition else []
+    results = []
+    for round in reversed(rounds):
+        if round.round_start is None or round.round_start > now:
+            continue
+        captured = dict(FlagCapture.get_round_standings(round))
+        runs = {
+            run.team_id: run
+            for run in RoundRun.objects.filter(round=round).annotate(vm_count=Count("virtual_machines"))
+        }
+        standings = sorted(((team, captured.get(team.id, 0)) for team in teams), key=lambda item: (-item[1], item[0].name))
+        points = get_formula_one_points([(team.id, score) for team, score in standings if score > 0])
+        rows, place, previous = [], 0, None
+        for index, (team, score) in enumerate(standings):
+            if score != previous:
+                place, previous = index + 1, score
+            run = runs.get(team.id)
+            rows.append({
+                "place": place,
+                "shared": index > 0 and score == standings[index - 1][1],
+                "team": team,
+                "captured": score,
+                "vms": run.vm_count if run is not None and run.vm_count else None,
+                "state": run.state if run is not None else None,
+                "points": points.get(team.id, 0),
+            })  # fmt: skip
+        results.append({"round": round, "finished": round.is_finished(now), "rows": rows})
+    return results

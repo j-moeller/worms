@@ -26,7 +26,7 @@ def plan_round(round, base_seed=None, sandbox_params=None):
         sandbox_params = round.sandbox_params or {}
     latest_upload = (
         Upload.objects.filter(
-            user__team_memberships__team=OuterRef("pk"),
+            team=OuterRef("pk"),
             created_at__lt=round.round_start,
         )
         .order_by("-created_at", "-id")

@@ -26,7 +26,7 @@ def team_upload(site):  # noqa: F811
     team = Team.objects.create(name="red", competition=competition)
     TeamMembership.objects.create(user=admin, team=team)
     artifact = MalwareArtifact.objects.create(content_hash="ab" * 32, storage_key="malware-artifacts/x.zip")
-    upload = Upload.objects.create(artifact=artifact, user=admin)
+    upload = Upload.objects.create(artifact=artifact, user=admin, team=team)
     assert login(site, HOST, f"https://{HOST}").status_code == 302
     return team, upload
 

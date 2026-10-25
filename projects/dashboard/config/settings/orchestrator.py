@@ -71,6 +71,7 @@ ROUND_CONDUCTOR = {
     "worm_start_delay": ROUND_TIMING["worm_start_delay"],
     "round_duration": ROUND_TIMING["run_duration"],
     "end_drain": ROUND_TIMING["end_drain"],
+    "slot_overhead": ROUND_TIMING["slot_overhead"],
     "job_timeout": int(env("ROUND_JOB_TIMEOUT", "1800")),
     "capture_grace": int(env("ROUND_CAPTURE_GRACE", "120")),
 }

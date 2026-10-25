@@ -35,7 +35,7 @@ def _team(request, uuid):
 
 
 def team_uploads(team):
-    return Upload.objects.filter(user__team_memberships__team=team)
+    return Upload.objects.filter(team=team)
 
 
 @staff_required

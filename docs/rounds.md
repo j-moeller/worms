@@ -91,7 +91,7 @@ FINISHED ◀── TEARING_DOWN ◀── ENDING ◀─────────�
 
 | State | Who | What |
 |---|---|---|
-| PENDING | — | planned, waiting its turn; no upload → SKIPPED |
+| PENDING | — | planned, waiting its turn; no upload, or not enough time left before the round's end for a whole run → SKIPPED (the reason is the run's error) |
 | PREPARING | agent (`prepare`) | generate + apply the sandbox, install the internal CA into the sandbox guests (SetupSandbox.yml), register its VMs and topology (the ephemeral/private-internet VMs are not rebuilt per run: `worms build round-reset-services` between rounds) |
 | CHECKING | agent (`check`) | firewalls up, mirror receive-only, every sandbox VM running |
 | DEPLOYING | agent (`deploy`) | fetch + verify the worm, copy it to the start VM and unpack it there (a zip without `main.py` at its top level fails the run), release the initial secrets, arm the fuse; report when it was armed |
@@ -103,8 +103,12 @@ FINISHED ◀── TEARING_DOWN ◀── ENDING ◀─────────�
 
 The deadline, uploads and the running order are the planner's
 (`orchestrator/rounds/planner.py`): one run per team in a seed-shuffled order,
-each with the team's latest upload before `round.round_start`, and each with
-the round's parameters (below).
+each with the team's latest upload before `round.round_start` (an upload
+belongs to the team its uploader was in when uploading, `Upload.team`; a
+member who changes teams does not take uploads along), and each with the
+round's parameters (below). A run starts only if it can finish before the
+round's end (fuse + run + drain + `slot_overhead`); otherwise it is skipped,
+so a round's results are final at its end.
 
 ## Defining a round (dashboard, staff)
 
@@ -267,7 +271,6 @@ themselves are covered offline in `tests/test_rounds.py` and
 
 ## What is not done here
 
-- **Scoring/standing display** of captures over the round.
 - **A way from one sandbox VM to the next.** The sandbox VMs accept SSH with
   the operator's key only and run no other service, so a worm has no designed
   way onto a second VM; it can capture its start VM's flag. Seeded

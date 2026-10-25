@@ -298,7 +298,8 @@ def test_delete_only_teams_without_history(staff_site):
 
     kept = Team.objects.create(name="kept", competition=competition())
     TeamMembership.objects.create(team=kept, user=member)
-    Upload.objects.create(user=member, artifact=MalwareArtifact.objects.create(content_hash="c" * 64, storage_key="k"))
+    Upload.objects.create(user=member, team=kept,
+                          artifact=MalwareArtifact.objects.create(content_hash="c" * 64, storage_key="k"))
     response = post(staff_site, f"/staff/teams/{kept.uuid}/delete/")
     assert response.status_code == 302 and Team.objects.filter(pk=kept.pk).exists()
     assert kept.users.filter(pk=member.pk).exists()  # nothing half-deleted

@@ -39,3 +39,21 @@ BEGIN
   END LOOP;
 END
 $$;
+{# The accounts a guarded role (the public dashboard) inserts are never staff
+   or superuser: column grants cannot express that, a trigger can. Updates are
+   covered by the column grants (is_staff / is_superuser are not granted). #}
+CREATE OR REPLACE FUNCTION public.worms_users_guard() RETURNS trigger
+LANGUAGE plpgsql AS $guard$
+BEGIN
+  IF (NEW.is_staff OR NEW.is_superuser) AND current_user::text = ANY (TG_ARGV) THEN
+    RAISE EXCEPTION 'role % may not create staff or superuser accounts', current_user
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  RETURN NEW;
+END
+$guard$;
+DROP TRIGGER IF EXISTS worms_users_guard ON public.users;
+{% if postgresql_account_guard_roles %}
+CREATE TRIGGER worms_users_guard BEFORE INSERT ON public.users FOR EACH ROW
+  EXECUTE FUNCTION public.worms_users_guard({{ postgresql_account_guard_roles | map('regex_replace', '^(.*)$', "'\\1'") | join(', ') }});
+{% endif %}

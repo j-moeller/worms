@@ -132,29 +132,6 @@ def user_rows() -> list[dict]:
     return rows
 
 
-def create_team(name: str) -> str:
-    from core.models.competition import ApplicationSetting
-    from core.models.team import Team
-
-    competition = _require_competition()
-    if Team.objects.filter(competition=competition, name=name).exists():
-        raise ValueError(f"a team named {name!r} already exists in {competition.name!r}")
-    Team.objects.create(name=name, competition=competition)
-    return f"created team {name!r} in {competition.name!r}"
-
-
-def rename_team(old: str, new: str) -> str:
-    from core.models.team import Team
-
-    competition = _require_competition()
-    team = _get_team(competition, old)
-    if Team.objects.filter(competition=competition, name=new).exclude(pk=team.pk).exists():
-        raise ValueError(f"a team named {new!r} already exists")
-    team.name = new
-    team.save(update_fields=["name"])
-    return f"renamed {old!r} -> {new!r}"
-
-
 def delete_team(name: str) -> str:
     """Delete a team. Memberships are removed (cascade); the user accounts
     themselves are untouched."""

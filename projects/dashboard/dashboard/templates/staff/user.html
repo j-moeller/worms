@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}{{ subject.username }}{% endblock %}
+{% block content %}
+<header class="page-head">
+    <p class="page-head__kicker">Staff · Users</p>
+    <h1 class="page-head__title">{{ subject.username }}</h1>
+    <p class="page-head__lead">
+        {% if subject.is_superuser %}The dashboard admin: managed on the console (<code>worms admin reset-password</code>), not here.
+        {% elif not manageable %}{% if subject.pk == request.user.pk %}Your own account: change your password on your <a href="{% url 'profile' %}">profile</a>.{% else %}A staff account: only the admin manages it.{% endif %}
+        {% elif not subject.is_active %}Deactivated: cannot sign in.
+        {% elif subject.must_change_password %}Has not replaced the one-time password yet.
+        {% else %}Active.{% endif %}
+    </p>
+</header>
+{% include "staff/_tabs.html" with section="users" %}
+
+<div class="grid grid--2">
+    <section class="panel" aria-labelledby="account-title">
+        <header class="panel__head"><h2 class="panel__title" id="account-title">Account</h2></header>
+        <div class="panel__body">
+            <dl class="kv">
+                <div><dt>Role</dt><dd>{% if subject.is_superuser %}admin{% elif subject.is_staff %}staff{% else %}student{% endif %}</dd></div>
+                <div><dt>Team</dt><dd>{% if team %}<a href="{% url 'staff_team' team.uuid %}">{{ team.name }}</a>{% else %}—{% endif %}</dd></div>
+                <div><dt>Created</dt><dd>{{ subject.created_at|date:"Y-m-d H:i" }}</dd></div>
+                <div><dt>Last sign-in</dt><dd>{{ subject.last_login|date:"Y-m-d H:i"|default:"never" }}</dd></div>
+            </dl>
+        </div>
+        {% if manageable %}
+        <form method="post" class="panel__body form">
+            {% csrf_token %}
+            {% with form=edit_form %}
+            {% include "staff/_errors.html" %}
+            <div class="fields">
+                {% include "staff/_field.html" with field=form.first_name %}
+                {% include "staff/_field.html" with field=form.last_name %}
+            </div>
+            {% include "staff/_field.html" with field=form.email %}
+            {% endwith %}
+            <p class="form__note">The username stays {{ subject.username }}.</p>
+            <div class="form__actions"><button type="submit" class="btn btn--primary">Save</button></div>
+        </form>
+        {% endif %}
+    </section>
+
+    <section class="panel" aria-labelledby="actions-title">
+        <header class="panel__head"><h2 class="panel__title" id="actions-title">Team and access</h2></header>
+        {% if manageable %}
+        <form method="post" action="{% url 'staff_user_team' subject.uuid %}" class="panel__body form form--inline">
+            {% csrf_token %}
+            <div class="field field--grow">{% include "staff/_field.html" with field=team_form.team %}</div>
+            <div class="form__actions"><button type="submit" class="btn">Set team</button></div>
+        </form>
+        <div class="panel__body">
+            <div class="panel__actions">
+                <details class="confirm">
+                    <summary class="btn">New one-time password</summary>
+                    <div class="confirm__body">
+                        <p>The current password stops working and every session of {{ subject.username }} ends.</p>
+                        <form method="post" action="{% url 'staff_user_password' subject.uuid %}">{% csrf_token %}<button type="submit" class="btn btn--primary btn--danger btn--sm">Reset password</button></form>
+                    </div>
+                </details>
+                <form method="post" action="{% url 'staff_user_active' subject.uuid %}">
+                    {% csrf_token %}
+                    {% if subject.is_active %}
+                    <input type="hidden" name="active" value="0"><button type="submit" class="btn btn--danger">Deactivate</button>
+                    {% else %}
+                    <input type="hidden" name="active" value="1"><button type="submit" class="btn">Reactivate</button>
+                    {% endif %}
+                </form>
+            </div>
+        </div>
+        {% else %}
+        <div class="panel__body"><p class="empty">Nothing to change here.</p></div>
+        {% endif %}
+    </section>
+</div>
+
+<section class="panel" aria-labelledby="uploads-title">
+    <header class="panel__head"><h2 class="panel__title" id="uploads-title">Uploads</h2><p class="panel__meta">latest 10</p></header>
+    <div class="table-wrap">
+        <table class="table">
+            <thead><tr><th scope="col">Uploaded</th><th scope="col">Content hash</th></tr></thead>
+            <tbody>
+                {% for upload in uploads %}
+                <tr><td>{{ upload.created_at|date:"Y-m-d H:i" }}</td><td class="mono truncate">{{ upload.artifact.content_hash }}</td></tr>
+                {% empty %}
+                <tr><td colspan="2" class="empty">No uploads.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endblock %}

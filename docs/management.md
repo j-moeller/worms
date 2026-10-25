@@ -18,11 +18,11 @@ worms secrets set proxmox-token   # enter a Proxmox token (prompted; or from std
 worms node trust                  # once, for VMs that predate the WORMS key (or without an agent)
 worms status                      # components, internet, competition, rounds
 worms teams                       # teams + members' login status
-worms teams create "Neural Net"
-worms teams rename "Old" "New"
-worms teams delete "Neural Net"   # users are NOT affected
+worms teams delete "Neural Net"   # a team with its history; users are NOT affected
+worms devbox provision            # build the devboxes of new teams (host job)
 worms users                       # all users: team, login, one-time password
 worms admin reset-password        # one-time password for the dashboard admin (printed once)
+worms admin create-staff EMAIL    # a tutor account, one-time password printed once
 worms leaderboard                 # the production leaderboard, in the console
 worms build                       # full idempotent end-to-end setup (= make)
 worms build firewall              # one component; `worms build --list`
@@ -32,6 +32,18 @@ worms emergency-stop              # freeze: hard-stop ALL VMs (does NOT destroy)
 
 Everything also has `--help`, and `--dry-run` prints the `make`/SQL it would
 run without doing it.
+
+## Console or dashboard
+
+What only writes the database is done by staff on the dashboard (staff menu:
+Competition, Users, Teams, Rounds): student accounts, teams and their
+members, the registration window, round definitions (`docs/accounts.md` §3).
+The console keeps what needs the Proxmox host or more than the public
+dashboard may do: building the platform and the devboxes (`worms build`,
+`worms devbox provision`), the admin and staff accounts (`worms admin`),
+deleting a team with its history, and the live status (`worms status`).
+Teams used to be created here (`worms teams create`); a team created on the
+dashboard gets its devbox with `worms devbox provision`.
 
 ## Configuration
 
@@ -109,9 +121,10 @@ Proxmox, not from a local file that can drift.
 
 `tests/test_manage_cli.py` (offline, part of `worms test`) runs the DB-backed
 commands against a throwaway PostgreSQL with the real migrations and grants:
-team create/rename/delete (and that deleting a team keeps its users), the
-status and leaderboard output, the user listing, `reset-database` and
-`admin reset-password`. The no-configuration paths (`--help`, and `status`
+the team listing and delete (deleting a team keeps its users), `devbox
+provision` (a Devbox per team and one queued provision job), the status and
+leaderboard output, the user listing, `reset-database`, `admin
+reset-password` and `admin create-staff`. The no-configuration paths (`--help`, and `status`
 degrading to `n/a`) are checked too. `tests/test_secrets.py` covers the vault,
 `tests/test_laptop.py` where each step runs and what it gets, the laptop
 inventory and the round agent's workspace sync, `tests/test_pipeline.py` the

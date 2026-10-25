@@ -19,8 +19,11 @@ from django.db.models import OuterRef, Subquery
 
 def plan_round(round, base_seed=None, sandbox_params=None):
     """Create the missing runs for `round`. Idempotent: existing runs are left
-    as they are. Returns the runs in running order."""
+    as they are. Returns the runs in running order. Every run gets the round's
+    parameters (sandbox size, game plan, timing; set on the dashboard)."""
     base_seed = base_seed if base_seed is not None else round.seed
+    if sandbox_params is None:
+        sandbox_params = round.sandbox_params or {}
     latest_upload = (
         Upload.objects.filter(
             user__team_memberships__team=OuterRef("pk"),

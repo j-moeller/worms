@@ -10,6 +10,17 @@ limit_req_zone $http_authorization zone=team_api_token:10m rate={{ nginx_team_ap
 limit_conn_zone $binary_remote_addr zone=team_api_conn:10m;
 
 {% endif %}
+{% if nginx_login_rate %}
+# Sign-ins (dashboard only): a password guesser gets {{ nginx_login_rate }} per
+# address. Only POSTs count (the map's empty key is not limited), so viewing
+# the page is free. The staff pages live on this site too.
+map $request_method $worms_login_key {
+    POST    $binary_remote_addr;
+    default "";
+}
+limit_req_zone $worms_login_key zone=login:10m rate={{ nginx_login_rate }};
+
+{% endif %}
 server {
     listen 80;
     listen [::]:80;
@@ -69,6 +80,18 @@ server {
         add_header X-Content-Type-Options nosniff always;
     }
 
+{% if nginx_login_rate %}
+    location = /login/ {
+        limit_req zone=login burst={{ nginx_login_burst }} nodelay;
+        limit_req_status 429;
+        proxy_pass http://unix:/run/django/django.sock;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+{% endif %}
 {% if nginx_upload_max_body_size %}
     # Worm uploads: a plain multipart form; Django caps the file itself at
     # MAX_UPLOAD_SIZE (dashboard/views/uploads.py). Everywhere else keeps

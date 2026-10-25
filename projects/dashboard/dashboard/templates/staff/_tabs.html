@@ -1,0 +1,8 @@
+{% comment %}The staff sections. Database records only: infrastructure is built
+from the console (worms build, worms devbox provision) and by the round agent.{% endcomment %}
+<nav class="round-tabs" aria-label="Staff sections">
+    <a class="round-tabs__tab" href="{% url 'staff_competition' %}"{% if section == 'competition' %} aria-current="page"{% endif %}>Competition</a>
+    <a class="round-tabs__tab" href="{% url 'staff_users' %}"{% if section == 'users' %} aria-current="page"{% endif %}>Users</a>
+    <a class="round-tabs__tab" href="{% url 'staff_teams' %}"{% if section == 'teams' %} aria-current="page"{% endif %}>Teams</a>
+    <a class="round-tabs__tab" href="{% url 'staff_rounds' %}"{% if section == 'rounds' %} aria-current="page"{% endif %}>Rounds</a>
+</nav>

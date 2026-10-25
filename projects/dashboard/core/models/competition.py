@@ -15,6 +15,17 @@ class Competition(models.Model):
     registration_starts_at = models.DateTimeField(null=True, blank=True)
     registration_ends_at = models.DateTimeField(null=True, blank=True)
 
+    # The competition's development competition (is_dev_competition): the
+    # Dev environment of its teams (docs/devbox.md). Teams created in the
+    # dashboard get it as their Team.development_competition.
+    development_competition = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+
     class Meta:
         db_table = "competitions"
         constraints = [
@@ -83,6 +94,14 @@ class Round(models.Model):
         related_name="rounds",
     )
     created_at = models.DateTimeField(default=clock.now)
+
+    # What every run of this round gets (copied into RoundRun.sandbox_params
+    # when the runs are planned): the sandbox generator's size (vms, networks,
+    # sites, max_interfaces -- validated again by the round agent), the game
+    # plan (orchestrator/rounds/gameplan.py) and the timing of a run
+    # (core/schedule.py). Set by staff on the dashboard (docs/rounds.md).
+    # db_default too: rounds inserted with raw SQL (the simulation) get {}.
+    sandbox_params = models.JSONField(default=dict, db_default={}, blank=True)
 
     class Meta:
         db_table = "rounds"

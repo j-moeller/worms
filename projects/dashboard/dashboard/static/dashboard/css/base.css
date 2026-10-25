@@ -432,6 +432,20 @@ textarea.input { resize: vertical; min-height: 64px; }
 .debug__users { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 5px; }
 
 /* ---- responsive --------------------------------------------------------- */
+/* ---- staff pages (templates/staff/) ---------------------------------- */
+.field--check { display: flex; align-items: center; gap: 8px; }
+.field--check .field__label { margin: 0; order: 2; }
+.field--check input { width: 16px; height: 16px; accent-color: var(--accent); }
+.field--check .field__help, .field--check .field__error { order: 3; margin: 0; }
+.fields { display: grid; gap: 0 16px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+.fieldset { border: 0; padding: 0; margin: 0 0 6px; }
+.fieldset legend { font-size: .78rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); margin-bottom: 8px; }
+.stats { display: grid; gap: var(--gap); grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.stats .stat__value { font-size: 1.9rem; }
+.checklist { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.checklist li { display: flex; gap: 10px; align-items: baseline; }
+.secret { font-family: var(--font-mono); user-select: all; }
+
 @media (max-width: 860px) {
     .grid--2 { grid-template-columns: 1fr; }
     .site-header__inner { gap: 10px 14px; padding: 10px 16px; }

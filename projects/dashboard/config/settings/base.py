@@ -42,6 +42,18 @@ def postgres_database(user, password):
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 MiB
 CHUNK_SIZE = 1024 * 1024  # 1 MiB
 
+# The default timing of one team's run in a round, in seconds (core/schedule.py).
+# A round created on the dashboard stores its own copy in sandbox_params; the
+# conductor (orchestrator) falls back to these. slot_overhead is the allowance
+# for building, checking and tearing down a sandbox, used to tell whether every
+# team's run fits in the round.
+ROUND_TIMING = {
+    "worm_start_delay": int(env("ROUND_WORM_START_DELAY", "300")),
+    "run_duration": int(env("ROUND_DURATION", "3600")),
+    "end_drain": int(env("ROUND_END_DRAIN", "120")),
+    "slot_overhead": int(env("ROUND_SLOT_OVERHEAD", "900")),
+}
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 

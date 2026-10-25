@@ -13,6 +13,12 @@ nginx_team_api_burst_per_token: 10
 nginx_team_api_connections_per_ip: 8
 nginx_team_api_timeout: 15s
 
+# Sign-in attempts per client address (POST /login/; dashboard only:
+# group_vars/dashboard.yml). Empty: not limited. The burst lets a person
+# mistype a few times; a guesser is slowed to the rate.
+nginx_login_rate: ""
+nginx_login_burst: 5
+
 # collectstatic output of this host's Django app (role django_app,
 # django_static_root -- keep the two equal).
 nginx_django_static_root: "/opt/{{ django_variant | default('dashboard') }}/static"

@@ -216,9 +216,10 @@ INSERT. (`tests/test_devbox.py`.)
   bridges, VMs and gateway, and the shared SSH gateway. `generated_devboxes.tf`
   is written by `scripts/generate_devbox.py` (one block per team, deterministic
   addressing from the index). Validated with `tofu validate`.
-- Provisioning happens **when teams are created**: `worms teams create`
-  (and `manage.py provision_devboxes`) ensures a `Devbox` per team and enqueues
-  a `devbox_provision` host job; the round agent (`scripts/round_agent`,
+- Provisioning is a console step after teams are created (on the dashboard,
+  which builds no infrastructure): `worms devbox provision` (`manage.py
+  provision_devboxes`) ensures a `Devbox` per team and enqueues a
+  `devbox_provision` host job (one queued job per team list); the round agent (`scripts/round_agent`,
   handlers `devbox_provision` / `devbox_rebuild` / `devbox_reconfigure`) generates + applies the stack,
   configures the VMs and the gateway (CA, team keys), writes the tokens and
   publishes the source→team map. `worms build devbox-apply` / `worms build devbox-configure`
@@ -228,7 +229,7 @@ INSERT. (`tests/test_devbox.py`.)
 
 ```
 worms build devbox                 # make devbox-apply + devbox-configure
-worms teams create "Neural Net"    # also enqueues devbox provisioning
+worms devbox provision             # teams created on the dashboard get their devbox
 # a team resets from the dashboard dev view (Reset devbox), or:
 #   POST https://orchestrator/devbox/<team-uuid>/reset/   (dashboard token)
 ```

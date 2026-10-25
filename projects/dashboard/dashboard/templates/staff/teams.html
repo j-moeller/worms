@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Teams{% endblock %}
+{% block content %}
+<header class="page-head">
+    <p class="page-head__kicker">Staff</p>
+    <h1 class="page-head__title">Teams</h1>
+    <p class="page-head__lead">The teams of {{ request.competition.name }}. Every team's worm runs once per round, one team after another.</p>
+</header>
+{% include "staff/_tabs.html" with section="teams" %}
+
+{% if without_devbox %}
+<p class="alert alert--warn">{{ without_devbox }} team{{ without_devbox|pluralize }} {{ without_devbox|pluralize:"has,have" }} no devbox yet. Devboxes are built on the Proxmox host: run <code>worms devbox provision</code> on the console.</p>
+{% endif %}
+
+<div class="grid grid--2">
+    <section class="panel" aria-labelledby="teams-title">
+        <header class="panel__head"><h2 class="panel__title" id="teams-title">Teams</h2><p class="panel__meta">{{ teams|length }}</p></header>
+        <div class="table-wrap">
+            <table class="table">
+                <thead><tr><th scope="col">Team</th><th scope="col">Members</th><th scope="col">Latest upload</th><th scope="col">Devbox</th></tr></thead>
+                <tbody>
+                    {% for row in teams %}
+                    <tr>
+                        <th scope="row"><a href="{% url 'staff_team' row.team.uuid %}">{{ row.team.name }}</a></th>
+                        <td>{{ row.team.members }} / {{ row.team.max_members }}</td>
+                        <td>{{ row.latest_upload|date:"Y-m-d H:i"|default:"—" }}</td>
+                        <td>{% if row.devbox %}{% if row.devbox.index is not None %}<span class="badge badge--ok">#{{ row.devbox.index }}</span>{% else %}<span class="badge">pending</span>{% endif %}{% else %}<span class="badge badge--warn">none</span>{% endif %}</td>
+                    </tr>
+                    {% empty %}
+                    <tr><td colspan="4" class="empty">No teams yet.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="panel" aria-labelledby="new-team-title">
+        <header class="panel__head"><h2 class="panel__title" id="new-team-title">New team</h2></header>
+        <form method="post" class="panel__body form">
+            {% csrf_token %}
+            {% include "staff/_errors.html" %}
+            {% include "staff/_field.html" with field=form.name %}
+            {% include "staff/_field.html" with field=form.max_members %}
+            <p class="form__note">Add members on the team's page, or let students join while registration is open.</p>
+            <div class="form__actions"><button type="submit" class="btn btn--primary">Create team</button></div>
+        </form>
+    </section>
+</div>
+{% endblock %}

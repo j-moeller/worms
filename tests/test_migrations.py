@@ -29,6 +29,9 @@ DASHBOARD = REPO / "projects" / "dashboard"
 MIGRATIONS = "projects/dashboard/core/migrations"
 BASELINE = "6bb490a"  # the last commit with the original 13 migrations
 REMOVED = {"worm_deployment_plans", "worm_deployments"}  # unused models, dropped
+# The squash and the clean-up after it end here; migrations after this one
+# change the schema on purpose (test_baseline_schema_is_kept compares at it).
+SQUASH_ERA_END = "0003_alter_hostjob_kind"
 
 
 @pytest.fixture(scope="module")
@@ -192,14 +195,18 @@ def test_an_old_database_upgrades_to_the_fresh_schema(cluster, baseline_migratio
 
 
 def test_baseline_schema_is_kept(cluster, baseline_migrations):
-    """Apart from the removed tables, a fresh install has the BASELINE schema
-    (squashing must not change a column, constraint or index)."""
+    """Apart from the removed tables, a fresh install at the end of the squash
+    era has the BASELINE schema (squashing must not change a column,
+    constraint or index). It also proves the later migrations reverse."""
     create_database(cluster, "baseline")
     proc = django(cluster, "baseline", "migrate", "--no-input", "--database=migrator",
                   extra_path=baseline_migrations, settings="baseline_settings")  # fmt: skip
     assert proc.returncode == 0, proc.stdout + proc.stderr
     create_database(cluster, "current")
     proc = django(cluster, "current", "migrate", "--no-input", "--database=migrator")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    # Back to the end of the squash era (later migrations add to the schema).
+    proc = django(cluster, "current", "migrate", "core", SQUASH_ERA_END, "--no-input", "--database=migrator")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     baseline, current = schema(cluster, "baseline"), schema(cluster, "current")
     for table in REMOVED:  # their foreign keys were theirs; nothing else pointed at them

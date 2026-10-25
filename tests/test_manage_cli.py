@@ -90,39 +90,51 @@ def test_status_degrades_without_config(tmp_path):
     assert "no database configured" in proc.stdout
 
 
-def test_teams_crud_and_listing(initialised):
+def add_team(cluster, name):
+    """A team in the current competition (teams are created on the dashboard,
+    not by the CLI any more: dashboard/views/staff_teams.py)."""
+    sql(cluster, "INSERT INTO teams (uuid, name, competition_id, max_members, created_at, devbox_version) "
+        "SELECT gen_random_uuid(), %s, current_competition_id, 2, now(), 1 FROM application_setting "
+        "WHERE key = 'current'", (name,), role=MIGRATOR)
+
+
+def test_teams_listing_and_delete(initialised):
     cluster = initialised
-    worms(cluster, "teams", "create", "Alpha")
-    worms(cluster, "teams", "create", "Beta")
-    assert sql(cluster, "SELECT count(*) FROM teams WHERE name IN ('Alpha','Beta')")[0][0] == 2
-
-    # Duplicate create is refused.
-    dup = worms(cluster, "teams", "create", "Alpha", check=False)
-    assert dup.returncode != 0 and "already exists" in (dup.stdout + dup.stderr)
-
-    worms(cluster, "teams", "rename", "Alpha", "Gamma")
-    assert sql(cluster, "SELECT count(*) FROM teams WHERE name = 'Gamma'")[0][0] == 1
-
+    add_team(cluster, "Alpha")
+    add_team(cluster, "Beta")
     listing = worms(cluster, "teams")
-    assert "Gamma" in listing.stdout and "Beta" in listing.stdout
+    assert "Alpha" in listing.stdout and "Beta" in listing.stdout
 
     worms(cluster, "teams", "delete", "Beta", "--yes")
     assert sql(cluster, "SELECT count(*) FROM teams WHERE name = 'Beta'")[0][0] == 0
 
 
-def test_create_team_enqueues_devbox_provision(initialised):
+def test_teams_are_created_on_the_dashboard_not_here(initialised):
+    proc = worms(initialised, "teams", "create", "Nope", check=False)
+    assert proc.returncode != 0
+    assert "dashboard" in worms(initialised, "teams", "--help").stdout
+
+
+def test_devbox_provision_enqueues_a_host_job(initialised):
+    """Building devboxes is infrastructure work: the console enqueues it for
+    the round agent (the dashboard only creates the team)."""
     cluster = initialised
-    worms(cluster, "teams", "create", "DevTeam")
+    add_team(cluster, "DevTeam")
+    worms(cluster, "devbox", "provision")
     # A Devbox row with a stable index + source address, and a provision job.
     row = sql(cluster, "SELECT index, services_source_ip FROM devboxes d "
               "JOIN teams t ON t.id = d.team_id WHERE t.name = 'DevTeam'")
     assert row and row[0][0] is not None and row[0][1].startswith("10.2.0.")
-    assert sql(cluster, "SELECT count(*) FROM host_jobs WHERE kind = 'devbox_provision'")[0][0] >= 1
+    jobs = sql(cluster, "SELECT count(*) FROM host_jobs WHERE kind = 'devbox_provision' AND state = 'queued'")[0][0]
+    assert jobs >= 1
+    # The same team list again: the queued job already covers it.
+    worms(cluster, "devbox", "provision")
+    assert sql(cluster, "SELECT count(*) FROM host_jobs WHERE kind = 'devbox_provision' AND state = 'queued'")[0][0] == jobs
 
 
 def test_delete_team_keeps_users(initialised):
     cluster = initialised
-    worms(cluster, "teams", "create", "WithMembers")
+    add_team(cluster, "WithMembers")
     # A user and a membership (as the table owner).
     sql(cluster, "INSERT INTO users (uuid, password, is_superuser, username, is_staff, is_active, "
         "date_joined, first_name, last_name, email, must_change_password, created_at) VALUES "
@@ -141,7 +153,7 @@ def test_status_and_leaderboard_with_db(initialised):
     cluster = initialised
     # (The DB is a shared session fixture, so the current competition name may
     # have been set by another test; assert structure, not a specific name.)
-    worms(cluster, "teams", "create", "Solo")
+    add_team(cluster, "Solo")
     status = worms(cluster, "status")
     assert "competition" in status.stdout
     assert "teams" in status.stdout
@@ -163,7 +175,7 @@ def test_users_listing(initialised):
 
 def test_reset_database(initialised):
     cluster = initialised
-    worms(cluster, "teams", "create", "Doomed")
+    add_team(cluster, "Doomed")
     assert sql(cluster, "SELECT count(*) FROM teams")[0][0] >= 1
     worms(cluster, "reset-database", "--yes")
     # Teams wiped; init recreated the admin + default competition.
@@ -311,3 +323,17 @@ def test_admin_reset_password_never_promotes_a_student(initialised):
     proc = worms(initialised, "admin", "reset-password", "--username", "stud@x", "--yes", check=False)
     assert proc.returncode != 0 and "not an admin account" in proc.stderr
     assert sql(initialised, "SELECT is_superuser, password FROM users WHERE username = 'stud@x'") == [(False, "x")]
+
+
+def test_admin_create_staff_prints_a_one_time_password(initialised):
+    """Staff (tutor) accounts are made on the console: the dashboard's role
+    cannot create one (setup_db_permissions)."""
+    cluster = initialised
+    proc = worms(cluster, "admin", "create-staff", "tutor@uni.example", "--first-name", "Tu")
+    password = proc.stdout.strip()
+    assert len(password) >= 10 and "\n" not in password
+    row = sql(cluster, "SELECT is_staff, is_superuser, must_change_password, first_name FROM users "
+              "WHERE username = 'tutor@uni.example'")
+    assert row == [(True, False, True, "Tu")]
+    again = worms(cluster, "admin", "create-staff", "tutor@uni.example", check=False)
+    assert again.returncode != 0 and "already exists" in again.stderr

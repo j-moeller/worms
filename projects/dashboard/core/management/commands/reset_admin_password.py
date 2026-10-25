@@ -13,7 +13,8 @@ Creates the account if it is missing (like `init`). Refuses an existing account
 that is not a superuser, so it cannot turn a student into an admin.
 """
 
-from core.management.commands.create_users import _write_db, generate_password
+from core.accounts import generate_password
+from core.management.commands.create_users import _write_db
 from core.models.user import User
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction

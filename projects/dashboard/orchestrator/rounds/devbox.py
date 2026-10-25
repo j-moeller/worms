@@ -56,6 +56,50 @@ def provisioned_team_specs(competition) -> list[dict]:
     return [team_spec(team, indices[team.id]) for team in Team.objects.filter(competition=competition).order_by("id") if team.id in indices]
 
 
+class ProvisionError(ValueError):
+    pass
+
+
+def _next_free_index(used):
+    for i in range(MAX_TEAMS):
+        if i not in used:
+            return i
+    raise ProvisionError(f"no free devbox index (at most {MAX_TEAMS} teams)")
+
+
+def provision(competition, dry_run=False):
+    """Ensure every team of `competition` has a Devbox with a stable index and
+    services-source address, and enqueue one devbox_provision host job with
+    the full team list. The agent's provisioning is idempotent, so this is
+    safe whenever teams change (`manage.py provision_devboxes`, run by the
+    operator as `worms devbox provision`). Indices are assigned once and kept.
+
+    Returns (spec, job): job is None on a dry run or when a queued provision
+    job already carries exactly this spec (nothing new to build)."""
+    teams = list(Team.objects.filter(competition=competition).order_by("id"))
+    if len(teams) > MAX_TEAMS:
+        raise ProvisionError(f"{len(teams)} teams exceeds the devbox maximum of {MAX_TEAMS}")
+    with transaction.atomic():
+        used = set(Devbox.objects.filter(index__isnull=False).values_list("index", flat=True))
+        spec = []
+        for team in teams:
+            devbox, _ = Devbox.objects.get_or_create(team=team)
+            if devbox.index is None:
+                devbox.index = _next_free_index(used)
+                used.add(devbox.index)
+                devbox.services_source_ip = f"10.2.0.{32 + devbox.index}"
+                if not dry_run:
+                    devbox.save(update_fields=["index", "services_source_ip"])
+            spec.append(team_spec(team, devbox.index))
+        if dry_run or not spec:
+            return spec, None
+        queued = HostJob.objects.filter(kind=HostJob.Kind.DEVBOX_PROVISION, state=HostJob.State.QUEUED)
+        if any(job.params.get("teams") == spec for job in queued):
+            return spec, None
+        job = HostJob.objects.create(kind=HostJob.Kind.DEVBOX_PROVISION, params={"teams": spec})
+    return spec, job
+
+
 def _gateway_defaults():
     cfg = getattr(settings, "DEVBOX", {}) or {}
     return cfg.get("ssh_gateway_host", ""), int(cfg.get("ssh_gateway_port", 2222)), cfg.get("ssh_gateway_user", "team")

@@ -99,7 +99,29 @@ FINISHED ◀── TEARING_DOWN ◀── ENDING ◀─────────�
 
 The deadline, uploads and the running order are the planner's
 (`orchestrator/rounds/planner.py`): one run per team in a seed-shuffled order,
-each with the team's latest upload before `round.round_start`.
+each with the team's latest upload before `round.round_start`, and each with
+the round's parameters (below).
+
+## Defining a round (dashboard, staff)
+
+Staff create rounds on the dashboard (Staff → Rounds;
+`dashboard/views/staff_rounds.py`). A round is only a database record: its
+window, its seed, and `sandbox_params`, which every run of the round gets
+(`core/schedule.py`):
+
+| | Keys | Used by |
+|---|---|---|
+| sandbox | `vms`, `networks`, `sites`, `max_interfaces` | the round agent's `prepare` (`scripts/generate_sandbox.py`; validated again by the agent with the same bounds) |
+| game plan | `game_plan`: `initial_fraction`, `first_stop_after`, `stop_interval`, `min_alive`, `restart_after` | the conductor (`gameplan.py`) |
+| timing | `timing`: `worm_start_delay`, `run_duration` (seconds) | the conductor (fuse, run length); defaults `ROUND_TIMING` |
+
+Nothing is built when a round is created. Runs are sequential, so the form
+refuses a Live round too short for every team's slot (fuse + run + drain +
+`slot_overhead` for build and teardown, per team) and rounds that overlap. A
+round can be edited until it starts (afterwards only its end), and deleted
+until its runs exist. The page then shows the runs, their host jobs and
+errors, and what each `prepare` built. A Dev round (the development
+competition) is only a time window for the devbox progression.
 
 ## The game plan
 
@@ -190,8 +212,9 @@ The player is the TOPOLOGY page (pick the round, then the team;
 
 worms build provision
 
-# The conductor plans and runs rounds on its own once a round's deadline
-# (round_start) has passed. To watch:
+# Create a round on the dashboard (Staff → Rounds). The conductor plans and
+# runs it on its own once its deadline (round_start) has passed. The dashboard
+# shows the runs and host jobs; to watch the services themselves:
 ssh debian@10.3.0.19 'journalctl -u orchestrator-conduct-rounds -f'    # conductor
 ssh debian@10.3.0.19 'journalctl -u orchestrator-process-attempts -f'  # captures/logs
 ssh root@<proxmox>  'journalctl -u worms-round-agent -f'              # host agent
@@ -201,9 +224,10 @@ SELECT team_id, state, position FROM round_runs ORDER BY round_id, position;
 SELECT kind, state, error FROM host_jobs ORDER BY id DESC LIMIT 10;
 ```
 
-Timings (`ROUND_CONDUCTOR` in `config/settings/orchestrator.py`, env-tunable):
-`worm_start_delay` (the fuse, 300 s), `round_duration` (3600 s),
-`end_drain`, `job_timeout`, `capture_grace`.
+Timings: a round's own `timing` (set on the dashboard) for the fuse and the
+run length; otherwise `ROUND_TIMING` (`config/settings/base.py`, env-tunable:
+`worm_start_delay` 300 s, `run_duration` 3600 s, `end_drain`, `slot_overhead`)
+and `ROUND_CONDUCTOR` (`job_timeout`, `capture_grace`).
 
 Rebuilding the ephemeral and private-internet VMs for a clean slate is
 `worms build round-reset-services` on the controller (it owns those stacks; the

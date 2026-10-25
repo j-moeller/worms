@@ -168,17 +168,19 @@ def test_staff_tools_are_hidden_from_non_staff(site):  # noqa: F811
     site.force_login(member)
     page = site.get("/", **proxied(HOST)).content.decode()
     assert "staff-menu" not in page
-    for href in ('href="/todos/"', 'href="/rounds/"', 'href="/topology/"'):
+    staff_links = ('href="/todos/"', 'href="/staff/"', 'href="/staff/users/"', 'href="/staff/teams/"',
+                   'href="/staff/rounds/"', 'href="/topology/"')  # fmt: skip
+    for href in staff_links:
         assert href not in page, href
     # And the views themselves are closed to them (hiding matches real access).
-    for path in ("/todos/", "/rounds/", "/topology/"):
+    for path in ("/todos/", "/staff/", "/staff/users/", "/staff/teams/", "/staff/rounds/", "/topology/"):
         assert site.get(path, **proxied(HOST)).status_code == 302, path
 
     # Staff do see the menu and its links.
     site.force_login(User.objects.get(username="admin"))
     staff_page = site.get("/", **proxied(HOST)).content.decode()
     assert "staff-menu" in staff_page
-    for href in ('href="/todos/"', 'href="/rounds/"', 'href="/topology/"'):
+    for href in staff_links:
         assert href in staff_page, href
 
 

@@ -15,10 +15,11 @@ The standing caveat and the first live steps are in docs/testing.md.
   them (docs/rounds.md), so the `deploy` job's artifact fetch works.
 
 ## Security hardening
-Tracked in docs/security-assessment.md ("not done"): login brute-force
-protection (D3), team-join consent/race (D4), current-password on a voluntary
-change (D5); Proxmox provider TLS verification (C1); and locking devpi and the
-Docker registry to read-only/authenticated before re-enabling them (S2).
+Tracked in docs/security-assessment.md ("not done"): a per-account login
+lockout (D3; per-address rate limiting is done), team-join consent/race (D4),
+current-password on a voluntary change (D5); Proxmox provider TLS
+verification (C1); and locking devpi and the Docker registry to
+read-only/authenticated before re-enabling them (S2).
 
 ## Not yet built
 - Worm uploads polish and a dashboard design pass.

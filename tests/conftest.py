@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -201,3 +202,43 @@ def db_clean(django_env):
             " django_session RESTART IDENTITY CASCADE"
         )
     return django_env
+
+
+@pytest.fixture(scope="session")
+def app_roles(django_env, render):
+    """The application roles with their real table privileges
+    (setup_db_permissions, rendered privileges.sql.j2) in the in-process
+    Django database, so a test can run code as a service's own role (as_role)
+    instead of the superuser -- e.g. the public dashboard writing only what
+    its grants allow."""
+    import pg
+
+    privileges = render("ansible/roles/database/setup_db_permissions", "privileges.sql.j2")
+    conn = django_env.connect(dbname=pg.DB_NAME)
+    with conn.cursor() as cur:
+        for role in pg.application_roles():
+            cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", [role["name"]])
+            if cur.fetchone() is None:
+                cur.execute(f'CREATE ROLE "{role["name"]}" LOGIN PASSWORD %s', (pg.PASSWORD,))
+        conn.autocommit = False
+        cur.execute(privileges)
+        conn.commit()
+    conn.close()
+    return django_env
+
+
+@contextmanager
+def as_role(role):
+    """Django's default connection as `role` for the block (needs app_roles)."""
+    import pg
+    from django.db import connection
+
+    settings = connection.settings_dict
+    saved = settings["USER"], settings["PASSWORD"]
+    connection.close()
+    settings["USER"], settings["PASSWORD"] = role, pg.PASSWORD
+    try:
+        yield
+    finally:
+        connection.close()
+        settings["USER"], settings["PASSWORD"] = saved

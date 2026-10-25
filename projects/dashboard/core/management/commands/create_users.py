@@ -1,12 +1,9 @@
 """Create student accounts from a CSV and print their one-time passwords.
 
-Input CSV (header row required), one student per row, columns for first name,
-surname and email. Column names are matched case-insensitively and both
-English and the German export headers are accepted:
-
-    first name | firstname | vorname          -> first name
-    surname    | last name | lastname | name | nachname -> surname
-    email      | e-mail    | e-mail-adresse   -> email
+The dashboard's staff pages do the same (Staff → Users → Import); this command
+is the console route. Input CSV (header row required), one student per row,
+columns for first name, surname and email (core/accounts.py; English and
+German headers are accepted, an optional `team` column is ignored here).
 
 For every email not already present, a user is created with:
   * username = email, is_staff = False, is_active = True;
@@ -23,39 +20,19 @@ a secure channel.
     manage.py create_users students.csv --output credentials.csv
     manage.py create_users students.csv --password-length 16
 
-Writes go through the `migrator` connection where configured (the student
-table is owned by the migrator; the application role cannot create users).
+Writes go through the `migrator` connection where configured (the orchestrator
+has it), otherwise through the default connection.
 """
 
 import csv
-import secrets
-import string
-import sys
 
-from core.models.user import User
+from core import accounts
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connections, transaction
-
-# Unambiguous alphabet for a password a person may have to type once (no
-# O/0, l/1/I): still 59^len, ~5.9 bits/char.
-PASSWORD_ALPHABET = "".join(
-    c for c in (string.ascii_letters + string.digits) if c not in "O0lI1"
-)
-
-# Accepted header spellings (lower-cased, stripped) for each field.
-FIELD_ALIASES = {
-    "first_name": ("first name", "firstname", "first", "vorname", "given name"),
-    "last_name": ("surname", "last name", "lastname", "last", "name", "nachname", "family name"),
-    "email": ("email", "e-mail", "e-mail-adresse", "email address", "e-mail address", "mail"),
-}
 
 
 def _write_db():
     return "migrator" if "migrator" in connections else "default"
-
-
-def generate_password(length: int) -> str:
-    return "".join(secrets.choice(PASSWORD_ALPHABET) for _ in range(length))
 
 
 class Command(BaseCommand):
@@ -72,8 +49,8 @@ class Command(BaseCommand):
         parser.add_argument(
             "--password-length",
             type=int,
-            default=14,
-            help="Length of the generated one-time passwords (default 14).",
+            default=accounts.PASSWORD_LENGTH,
+            help=f"Length of the generated one-time passwords (default {accounts.PASSWORD_LENGTH}).",
         )
         parser.add_argument(
             "--staff",
@@ -84,79 +61,33 @@ class Command(BaseCommand):
     def handle(self, csv_file, output, password_length, staff, *args, **options):
         if password_length < 10:
             raise CommandError("--password-length must be at least 10.")
-
-        rows = self._read_csv(csv_file)
-        if not rows:
+        try:
+            with open(csv_file, newline="", encoding="utf-8-sig") as handle:
+                text = handle.read()
+        except OSError as exc:
+            raise CommandError(f"Cannot open {csv_file!r}: {exc}")
+        try:
+            parsed = accounts.parse_csv(text)
+        except accounts.CsvError as exc:
+            raise CommandError(f"{csv_file!r}: {exc}")
+        for problem in parsed.problems:
+            self.stderr.write(problem)
+        if not parsed.rows:
             raise CommandError(f"No data rows found in {csv_file!r}.")
 
-        created = []  # (email, password)
-        skipped = []
+        created, skipped = [], []
         using = _write_db()
-
         with transaction.atomic(using=using):
-            for first_name, last_name, email in rows:
-                if User.objects.using(using).filter(username=email).exists():
-                    skipped.append(email)
-                    continue
-                password = generate_password(password_length)
-                user = User(
-                    username=email,
-                    first_name=first_name,
-                    last_name=last_name,
-                    email=email,
-                    is_staff=staff,
-                    is_active=True,
-                    must_change_password=True,
-                )
-                user.set_password(password)
-                user.save(using=using)
-                created.append((email, password))
-
+            for row in parsed.rows:
+                result = accounts.create_account(
+                    row.email, row.first_name, row.last_name,
+                    staff=staff, using=using, password_length=password_length,
+                )  # fmt: skip
+                if result is None:
+                    skipped.append(row.email)
+                else:
+                    created.append((row.email, result.password))
         self._report(created, skipped, output)
-
-    # -- CSV parsing ---------------------------------------------------------
-
-    def _read_csv(self, path):
-        try:
-            handle = open(path, newline="", encoding="utf-8-sig")
-        except OSError as exc:
-            raise CommandError(f"Cannot open {path!r}: {exc}")
-        with handle:
-            reader = csv.DictReader(handle)
-            if reader.fieldnames is None:
-                raise CommandError(f"{path!r} has no header row.")
-            mapping = self._match_columns(reader.fieldnames)
-            rows = []
-            for line_no, line in enumerate(reader, start=2):
-                email = (line.get(mapping["email"]) or "").strip()
-                if not email:
-                    self.stderr.write(f"row {line_no}: no email, skipped")
-                    continue
-                rows.append(
-                    (
-                        (line.get(mapping["first_name"]) or "").strip(),
-                        (line.get(mapping["last_name"]) or "").strip(),
-                        email,
-                    )
-                )
-        return rows
-
-    def _match_columns(self, fieldnames):
-        normalised = {name.strip().lower(): name for name in fieldnames}
-        mapping = {}
-        for field, aliases in FIELD_ALIASES.items():
-            match = next((normalised[a] for a in aliases if a in normalised), None)
-            if match is None:
-                if field == "email":
-                    raise CommandError(
-                        f"CSV needs an email column (one of: {', '.join(FIELD_ALIASES['email'])}). "
-                        f"Found: {', '.join(fieldnames)}"
-                    )
-                match = None  # first/last name are optional
-            mapping[field] = match
-        return mapping
-
-    # -- output --------------------------------------------------------------
 
     def _report(self, created, skipped, output):
         writer = csv.writer(self.stdout)

@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}{{ team.name }}{% endblock %}
+{% block content %}
+<header class="page-head">
+    <p class="page-head__kicker">Staff · Teams</p>
+    <h1 class="page-head__title">{{ team.name }}</h1>
+    <p class="page-head__lead">{{ members|length }} of {{ team.max_members }} members{% if team.development_competition %} · Dev: {{ team.development_competition.name }}{% endif %}</p>
+</header>
+{% include "staff/_tabs.html" with section="teams" %}
+
+<div class="grid grid--2">
+    <section class="panel" aria-labelledby="members-title">
+        <header class="panel__head"><h2 class="panel__title" id="members-title">Members</h2></header>
+        <div class="table-wrap">
+            <table class="table">
+                <tbody>
+                    {% for member in members %}
+                    <tr>
+                        <th scope="row"><a href="{% url 'staff_user' member.uuid %}">{{ member.username }}</a></th>
+                        <td class="row-action">
+                            <details class="confirm confirm--inline">
+                                <summary class="btn btn--ghost btn--sm">Remove</summary>
+                                <div class="confirm__body">
+                                    <p>{{ member.username }} leaves {{ team.name }}; their devbox SSH keys are removed.</p>
+                                    <form method="post" action="{% url 'staff_team_remove_member' team.uuid member.uuid %}">{% csrf_token %}<button type="submit" class="btn btn--primary btn--danger btn--sm">Remove</button></form>
+                                </div>
+                            </details>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr><td class="empty">No members.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% if full %}
+        <div class="panel__body"><p class="form__note">The team is full; raise its limit to add someone.</p></div>
+        {% else %}
+        <form method="post" action="{% url 'staff_team_add_member' team.uuid %}" class="panel__body form form--inline">
+            {% csrf_token %}
+            <div class="field field--grow">{% include "staff/_field.html" with field=add_form.user %}</div>
+            <div class="form__actions"><button type="submit" class="btn">Add</button></div>
+        </form>
+        {% endif %}
+    </section>
+
+    <section class="panel" aria-labelledby="settings-title">
+        <header class="panel__head"><h2 class="panel__title" id="settings-title">Settings</h2></header>
+        <form method="post" class="panel__body form">
+            {% csrf_token %}
+            {% include "staff/_errors.html" %}
+            {% include "staff/_field.html" with field=form.name %}
+            {% include "staff/_field.html" with field=form.max_members %}
+            <div class="form__actions"><button type="submit" class="btn btn--primary">Save</button></div>
+        </form>
+    </section>
+</div>
+
+<div class="grid grid--2">
+    <section class="panel" aria-labelledby="devbox-title">
+        <header class="panel__head"><h2 class="panel__title" id="devbox-title">Devbox</h2></header>
+        <div class="panel__body">
+            {% if devbox and devbox.index is not None %}
+            <dl class="kv">
+                <div><dt>Index</dt><dd>#{{ devbox.index }}</dd></div>
+                <div><dt>Source address</dt><dd class="mono">{{ devbox.services_source_ip|default:"—" }}</dd></div>
+                <div><dt>VMs</dt><dd>{% for vm in devbox.vms.all %}{{ vm.vm_identifier }}{% if not forloop.last %}, {% endif %}{% empty %}not built yet{% endfor %}</dd></div>
+                <div><dt>Version</dt><dd>{{ team.devbox_version }}</dd></div>
+            </dl>
+            {% else %}
+            <p class="empty">No devbox yet. {{ devbox_hint }}</p>
+            {% endif %}
+        </div>
+    </section>
+
+    <section class="panel" aria-labelledby="runs-title">
+        <header class="panel__head"><h2 class="panel__title" id="runs-title">Runs</h2></header>
+        <div class="table-wrap">
+            <table class="table">
+                <thead><tr><th scope="col">Round</th><th scope="col">State</th></tr></thead>
+                <tbody>
+                    {% for run in runs %}
+                    <tr><th scope="row"><a href="{% url 'staff_round' run.round.pk %}">{{ run.round.name }}</a></th><td><span class="badge badge--state">{{ run.state }}</span></td></tr>
+                    {% empty %}
+                    <tr><td colspan="2" class="empty">No runs yet.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+</div>
+
+<section class="panel" aria-labelledby="uploads-title">
+    <header class="panel__head"><h2 class="panel__title" id="uploads-title">Uploads</h2><p class="panel__meta">latest 10; the latest before a round's start runs</p></header>
+    <div class="table-wrap">
+        <table class="table">
+            <thead><tr><th scope="col">Uploaded</th><th scope="col">By</th><th scope="col">Content hash</th></tr></thead>
+            <tbody>
+                {% for upload in uploads %}
+                <tr><td>{{ upload.created_at|date:"Y-m-d H:i" }}</td><td>{{ upload.user.username }}</td><td class="mono truncate">{{ upload.artifact.content_hash }}</td></tr>
+                {% empty %}
+                <tr><td colspan="3" class="empty">No uploads.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<section class="panel" aria-labelledby="delete-title">
+    <header class="panel__head"><h2 class="panel__title" id="delete-title">Delete</h2></header>
+    <div class="panel__body">
+        {% if history %}
+        <p>{{ team.name }} has {{ history|join:", " }}, so it is kept here. <code>worms teams delete</code> on the console removes it with everything it owns.</p>
+        {% else %}
+        <details class="confirm">
+            <summary class="btn btn--danger">Delete team</summary>
+            <div class="confirm__body">
+                <p>{{ team.name }} is deleted; its members have no team afterwards.</p>
+                <form method="post" action="{% url 'staff_team_delete' team.uuid %}">{% csrf_token %}<button type="submit" class="btn btn--primary btn--danger btn--sm">Delete {{ team.name }}</button></form>
+            </div>
+        </details>
+        {% endif %}
+    </div>
+</section>
+{% endblock %}

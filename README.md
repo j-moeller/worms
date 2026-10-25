@@ -328,7 +328,7 @@ the devbox⇔sandbox isolation and the SSH gateway: **`docs/devbox.md`**.
 
 ```
 worms build devbox                 # build + configure devboxes and the SSH gateway
-worms teams create "Neural Net"    # creating a team also provisions its devbox
+worms devbox provision             # after creating teams on the dashboard: their devboxes
 ssh -J team@<proxmox-wan>:2222 root@<devbox VM>
 ```
 
@@ -336,12 +336,17 @@ ssh -J team@<proxmox-wan>:2222 root@<devbox VM>
 
 - **Admin + competition**: `manage.py init` (idempotent) creates the `admin`
   account (login disabled) and the default competition `WORMS <year>`;
-  `worms admin reset-password` prints a one-time password for it, once. Student accounts come from a CSV with
-  one-time passwords (`manage.py create_users`), and the dashboard forces a
-  password change on first login. See **`docs/accounts.md`**.
-- **`worms` CLI** (`src/manage.py`): one tool for status, teams, users,
-  leaderboard and building — run from your laptop with access tokens, with live
-  status from the database and Proxmox. See **`docs/management.md`**.
+  `worms admin reset-password` prints a one-time password for it, once.
+- **Staff pages on the dashboard** (staff menu, top right): the registration
+  window and the development competition, student accounts (one by one or a
+  CSV, one-time passwords shown once, the dashboard forces a change at the
+  first login), teams and members, and the rounds (definition, then runs,
+  host jobs and errors). Database records only: the dashboard's role is
+  column-scoped and cannot create staff. Staff accounts: `worms admin
+  create-staff`. See **`docs/accounts.md`** §3.
+- **`worms` CLI** (`src/manage.py`): building, the admin and staff accounts,
+  devbox provisioning, live status from the database and Proxmox — run from
+  your laptop. See **`docs/management.md`**.
 
 # Rounds (orchestration)
 

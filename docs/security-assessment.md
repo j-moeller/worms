@@ -143,14 +143,33 @@ the DOM with `textContent`, and the bearer-token APIs are the only
   two teams could still race past the dashboard, but the agent then fails the
   job closed rather than installing a hijacking key); a DB fingerprint
   constraint would close the race.
-- **D3 (not fixed):** no login brute-force protection. `fail2ban` is installed
-  but has no jail. Recommended next: a jail (or a cache-based lockout) on the
-  login endpoint.
+- **D3 (partly fixed):** sign-in POSTs are rate-limited per client address
+  by nginx (`nginx_login_rate`, 10/min with a burst of 5, dashboard only),
+  which matters more now that the staff pages are on the public dashboard. No
+  per-account lockout yet (a distributed guesser is only slowed per address).
 - **D4 (not fixed):** team-join is open and racy (no consent, no row lock).
 - **D5 (not fixed):** the voluntary password change does not require the current
   password (first-login change legitimately does not).
 - **D8 (not fixed):** no Content-Security-Policy (defense in depth; no XSS sink
   found).
+- **D9 (fixed — production breakage found while adding the staff pages):** the
+  dashboard's role had no `INSERT`/`DELETE` on `team_memberships`, so joining
+  or leaving a team failed in production, and the first-login password change
+  saved the whole user row although the role may update only
+  `password`/`must_change_password`, so it failed too. Both are granted/fixed
+  and now run under the real grants in `tests/test_staff_admin.py`.
+- **D10 (design — staff pages on the public dashboard):** staff manage
+  database records there (student accounts, teams, the registration window,
+  round definitions). The role stays column-scoped: no `username`,
+  `is_staff`, `is_superuser` updates; an `INSERT` of a staff or superuser row
+  by `django_dashboard` is refused by a trigger (`privileges.sql.j2`), so a
+  compromised dashboard cannot mint staff accounts (`worms admin
+  create-staff` on the console does); teams and rounds are deleted only while
+  nothing refers to them (no cascade rights). Nothing on these pages builds
+  infrastructure: devboxes are provisioned from the console, sandboxes by
+  the round agent when a round starts. A stolen staff session can still
+  create rounds (bounded parameters, validated again by the agent) and
+  accounts.
 
 ### Cross-cutting / infrastructure (C)
 

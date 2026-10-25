@@ -23,12 +23,13 @@ def change_password(request: HttpRequest):
     if request.method == "POST":
         form = SetPasswordForm(user, request.POST)
         if form.is_valid():
-            form.save()
+            # Only these two columns: the dashboard's database role may not
+            # update the rest of the row (form.save() would save it all).
+            form.save(commit=False)
+            user.must_change_password = False
+            user.save(update_fields=["password", "must_change_password"])
             # Keep the user logged in after the password hash changes.
             update_session_auth_hash(request, form.user)
-            if user.must_change_password:
-                user.must_change_password = False
-                user.save(update_fields=["must_change_password"])
             messages.success(request, "Password saved.")
             return redirect("profile")
     else:

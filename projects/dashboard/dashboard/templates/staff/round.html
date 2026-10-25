@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}{{ round.name }}{% endblock %}
+{% block content %}
+<header class="page-head">
+    <p class="page-head__kicker">Staff · Rounds · {% if is_dev %}Dev{% else %}Live{% endif %}</p>
+    <h1 class="page-head__title">{{ round.name }} <span class="badge{% if status == 'active' %} badge--accent{% endif %}">{{ status }}</span></h1>
+    <p class="page-head__lead">{{ round.round_start|date:"Y-m-d H:i" }} – {{ round.round_end|date:"Y-m-d H:i" }} UTC.
+        {% if is_dev %}A window for the devbox progression; nothing is built.
+        {% elif runs %}The runs are planned; the round can no longer change.
+        {% elif started %}Started: the conductor plans its runs at its next tick. Only its end can still move.
+        {% else %}Nothing is built until it starts.{% endif %}</p>
+</header>
+{% include "staff/_tabs.html" with section="rounds" %}
+
+{% if not is_dev %}
+<div class="grid grid--2">
+    <section class="panel" aria-labelledby="params-title">
+        <header class="panel__head"><h2 class="panel__title" id="params-title">Every team's run</h2><p class="panel__meta">seed {{ round.seed }}</p></header>
+        <div class="panel__body">
+            <dl class="kv">
+                <div><dt>Sandbox</dt><dd>{{ params.vms|default:8 }} VMs on {{ params.networks|default:4 }} networks, {{ params.sites|default:1 }} site{{ params.sites|default:1|pluralize }}, up to {{ params.max_interfaces|default:3 }} interfaces per VM</dd></div>
+                <div><dt>Fuse</dt><dd>{{ timing.worm_start_delay }} s from deploy to the worm's start</dd></div>
+                <div><dt>Run</dt><dd>{{ timing.run_duration }} s from the worm's start</dd></div>
+                {% with plan=params.game_plan %}
+                {% if plan %}<div><dt>Game plan</dt><dd>{{ plan.initial_fraction }} of the secrets up front; first stop at {{ plan.first_stop_after }} s, then every {{ plan.stop_interval }} s, keeping {{ plan.min_alive }} running{% if plan.restart_after %}; restarts after {{ plan.restart_after }} s{% endif %}</dd></div>{% endif %}
+                {% endwith %}
+            </dl>
+            <p class="form__note">Every team's sandbox is generated from its own seed derived from the round's, so the VM count is the same for all teams while the layout differs.</p>
+        </div>
+    </section>
+
+    <section class="panel" aria-labelledby="schedule-title">
+        <header class="panel__head"><h2 class="panel__title" id="schedule-title">Schedule</h2></header>
+        <div class="panel__body">
+            <div class="stats">
+                <p class="stat"><span class="stat__value">{{ estimate.teams }}</span><span class="stat__label">teams, one after another</span></p>
+                <p class="stat"><span class="stat__value">{{ estimate.slot|floatformat:0 }}</span><span class="stat__label">seconds per team (incl. build/teardown)</span></p>
+                <p class="stat"><span class="stat__value">{{ estimate.max_teams|default:"—" }}</span><span class="stat__label">teams fit in the round</span></p>
+            </div>
+            {% if not estimate.fits %}<p class="alert alert--error">Not every team fits: runs that cannot finish before the round ends are skipped. Make the round longer or the runs shorter.</p>{% endif %}
+        </div>
+    </section>
+</div>
+
+<section class="panel" aria-labelledby="runs-title">
+    <header class="panel__head"><h2 class="panel__title" id="runs-title">Runs</h2><p class="panel__meta">{% if runs %}in running order{% else %}planned at the start{% endif %}</p></header>
+    <div class="table-wrap">
+        <table class="table">
+            <thead><tr><th scope="col" class="num">#</th><th scope="col">Team</th><th scope="col">State</th><th scope="col">Upload</th><th scope="col">Worm start</th><th scope="col">Sandbox</th><th scope="col" class="num">Captured</th><th scope="col">Replay</th></tr></thead>
+            <tbody>
+                {% for run in runs %}
+                <tr>
+                    <td class="num">{{ run.position }}</td>
+                    <th scope="row"><a href="{% url 'staff_team' run.team.uuid %}">{{ run.team.name }}</a></th>
+                    <td><span class="badge badge--state">{{ run.state }}</span>{% if run.error %}<br><span class="muted truncate">{{ run.error|truncatechars:120 }}</span>{% endif %}</td>
+                    <td class="mono">{% if run.upload %}{{ run.upload.artifact.content_hash|slice:":12" }}{% else %}<span class="muted">none</span>{% endif %}</td>
+                    <td>{{ run.worm_start_at|date:"H:i:s"|default:"—" }}</td>
+                    <td>{% if run.vm_count %}{{ run.vm_count }} VMs{% if run.network_count %}, {{ run.network_count }} networks{% endif %}{% else %}<span class="muted">—</span>{% endif %}</td>
+                    <td class="num">{{ run.captured }}</td>
+                    <td class="row-action"><a class="btn btn--ghost btn--sm" href="{% url 'topology' %}#run={{ run.uuid }}">Play</a> <a class="btn btn--ghost btn--sm" href="{% url 'run_progression' run.uuid %}">JSON</a> <a class="btn btn--ghost btn--sm" href="{% url 'run_progression_download' run.uuid %}">Zip</a></td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="8" class="empty">No runs yet: the conductor plans one per team when the round starts.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<section class="panel" aria-labelledby="jobs-title">
+    <header class="panel__head"><h2 class="panel__title" id="jobs-title">Host jobs</h2><p class="panel__meta">the round agent's work on the Proxmox host</p></header>
+    <div class="table-wrap">
+        <table class="table">
+            <thead><tr><th scope="col">Job</th><th scope="col">Team</th><th scope="col">State</th><th scope="col">Requested</th><th scope="col">Finished</th><th scope="col">Error</th></tr></thead>
+            <tbody>
+                {% for job in jobs %}
+                <tr><td class="mono">{{ job.kind }}</td><td>{{ job.run.team.name }}</td><td><span class="badge badge--state">{{ job.state }}</span></td><td>{{ job.requested_at|date:"H:i:s" }}</td><td>{{ job.finished_at|date:"H:i:s"|default:"—" }}</td><td class="mono truncate">{{ job.error|truncatechars:160 }}</td></tr>
+                {% empty %}
+                <tr><td colspan="6" class="empty">No host jobs yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endif %}
+
+{% if form %}
+<section class="panel" aria-labelledby="edit-title">
+    <header class="panel__head"><h2 class="panel__title" id="edit-title">{% if started %}Move the end{% else %}Edit{% endif %}</h2><p class="panel__meta">times in UTC</p></header>
+    <form method="post" class="panel__body form">
+        {% csrf_token %}
+        {% include "staff/_errors.html" %}
+        {% if started %}
+        {% include "staff/_field.html" with field=form.round_end %}
+        {% else %}
+        <div class="fields">
+            {% include "staff/_field.html" with field=form.name %}
+            {% include "staff/_field.html" with field=form.round_start %}
+            {% include "staff/_field.html" with field=form.round_end %}
+            {% include "staff/_field.html" with field=form.seed %}
+        </div>
+        {% if not is_dev %}
+        <fieldset class="fieldset"><legend>Each team's sandbox</legend><div class="fields">
+            {% include "staff/_field.html" with field=form.vms %}
+            {% include "staff/_field.html" with field=form.networks %}
+            {% include "staff/_field.html" with field=form.sites %}
+            {% include "staff/_field.html" with field=form.max_interfaces %}
+        </div></fieldset>
+        <fieldset class="fieldset"><legend>Each run</legend><div class="fields">
+            {% include "staff/_field.html" with field=form.worm_start_delay %}
+            {% include "staff/_field.html" with field=form.run_duration %}
+        </div></fieldset>
+        <fieldset class="fieldset"><legend>Game plan</legend><div class="fields">
+            {% include "staff/_field.html" with field=form.initial_fraction %}
+            {% include "staff/_field.html" with field=form.first_stop_after %}
+            {% include "staff/_field.html" with field=form.stop_interval %}
+            {% include "staff/_field.html" with field=form.min_alive %}
+            {% include "staff/_field.html" with field=form.restart_after %}
+        </div></fieldset>
+        {% endif %}
+        {% endif %}
+        <div class="form__actions"><button type="submit" class="btn btn--primary">Save</button></div>
+    </form>
+</section>
+
+<section class="panel" aria-labelledby="delete-title">
+    <header class="panel__head"><h2 class="panel__title" id="delete-title">Delete</h2></header>
+    <div class="panel__body">
+        <details class="confirm">
+            <summary class="btn btn--danger">Delete round</summary>
+            <div class="confirm__body">
+                <p>{{ round.name }} is deleted. Possible only while it has no runs.</p>
+                <form method="post" action="{% url 'staff_round_delete' round.pk %}">{% csrf_token %}<button type="submit" class="btn btn--primary btn--danger btn--sm">Delete {{ round.name }}</button></form>
+            </div>
+        </details>
+    </div>
+</section>
+{% endif %}
+{% endblock %}

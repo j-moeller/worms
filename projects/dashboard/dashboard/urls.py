@@ -16,11 +16,12 @@ from dashboard.views.uploads import upload
 from dashboard.views.todos import todos
 from dashboard import api
 from dashboard.views import progression
-from dashboard.views.rounds import rounds
+from dashboard.views import staff, staff_rounds, staff_teams, staff_users
 from dashboard.views.topology import topology, topology_data, topology_runs
 from django.conf import settings
 from django.contrib import admin
 from django.urls import path
+from django.views.generic import RedirectView
 
 urlpatterns = [
     # Dispatches to the leaderboard (production) or the devbox (development).
@@ -57,7 +58,8 @@ urlpatterns = [
     #
     path("todos/", todos, name="todos"),
     #
-    path("rounds/", rounds, name="rounds"),
+    # The staff's round list moved to the staff pages (below).
+    path("rounds/", RedirectView.as_view(pattern_name="staff_rounds")),
     # One run's progression, for staff (the TOPOLOGY player).
     path("rounds/<uuid:uuid>/progression/", progression.run_document, name="run_progression"),
     path("rounds/<uuid:uuid>/progression/flows/", progression.run_flows, name="run_progression_flows"),
@@ -75,6 +77,30 @@ urlpatterns = [
         name="api_round_progression_log",
     ),
     path("api/v1/rounds/<int:round_id>/progression.zip", api.round_progression_zip, name="api_round_progression_zip"),
+    #
+    # Staff administration (dashboard/views/staff*.py): database records only;
+    # infrastructure is built from the console and the round agent.
+    path("staff/", staff.competition, name="staff_competition"),
+    path("staff/competition/development/", staff.development_competition, name="staff_dev_competition"),
+    path("staff/users/", staff_users.users, name="staff_users"),
+    path("staff/users/import/", staff_users.import_users, name="staff_users_import"),
+    path("staff/users/<uuid:uuid>/", staff_users.user_detail, name="staff_user"),
+    path("staff/users/<uuid:uuid>/password/", staff_users.user_password, name="staff_user_password"),
+    path("staff/users/<uuid:uuid>/active/", staff_users.user_active, name="staff_user_active"),
+    path("staff/users/<uuid:uuid>/team/", staff_users.user_team, name="staff_user_team"),
+    path("staff/teams/", staff_teams.teams, name="staff_teams"),
+    path("staff/teams/<uuid:uuid>/", staff_teams.team_detail, name="staff_team"),
+    path("staff/teams/<uuid:uuid>/members/", staff_teams.team_add_member, name="staff_team_add_member"),
+    path(
+        "staff/teams/<uuid:uuid>/members/<uuid:user_uuid>/remove/",
+        staff_teams.team_remove_member,
+        name="staff_team_remove_member",
+    ),
+    path("staff/teams/<uuid:uuid>/delete/", staff_teams.team_delete, name="staff_team_delete"),
+    path("staff/rounds/", staff_rounds.rounds, name="staff_rounds"),
+    path("staff/rounds/<int:round_id>/", staff_rounds.round_detail, name="staff_round"),
+    path("staff/rounds/<int:round_id>/delete/", staff_rounds.round_delete, name="staff_round_delete"),
+    #
     path("topology/", topology, name="topology"),
     path("topology/data/", topology_data, name="topology_data"),
     path("topology/runs/", topology_runs, name="topology_runs"),

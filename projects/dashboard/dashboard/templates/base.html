@@ -90,9 +90,12 @@
                     </summary>
                     <div class="staff-menu__panel">
                         <p class="staff-menu__label" aria-hidden="true">Staff</p>
-                        <a href="{% url 'todos' %}"{% if page == 'todos' %} aria-current="page"{% endif %}>Todos</a>
-                        <a href="{% url 'rounds' %}"{% if page == 'rounds' %} aria-current="page"{% endif %}>Rounds</a>
+                        <a href="{% url 'staff_competition' %}"{% if page == 'staff_competition' %} aria-current="page"{% endif %}>Competition</a>
+                        <a href="{% url 'staff_users' %}"{% if page == 'staff_users' or page == 'staff_user' %} aria-current="page"{% endif %}>Users</a>
+                        <a href="{% url 'staff_teams' %}"{% if page == 'staff_teams' or page == 'staff_team' %} aria-current="page"{% endif %}>Teams</a>
+                        <a href="{% url 'staff_rounds' %}"{% if page == 'staff_rounds' or page == 'staff_round' %} aria-current="page"{% endif %}>Rounds</a>
                         <a href="{% url 'topology' %}"{% if page == 'topology' %} aria-current="page"{% endif %}>Topology</a>
+                        <a href="{% url 'todos' %}"{% if page == 'todos' %} aria-current="page"{% endif %}>Todos</a>
                     </div>
                 </details>
                 {% endif %}

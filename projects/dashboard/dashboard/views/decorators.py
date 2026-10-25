@@ -95,3 +95,20 @@ def user_in_team_optional(view_func):
         )
 
     return wrapper
+
+
+def staff_required(view_func):
+    """Staff pages (dashboard/views/staff*.py): signed-in staff only. Anyone
+    else goes to the login (anonymous) or the home page (students), as the
+    other staff views do."""
+    from django.contrib.auth.decorators import login_required
+    from django.shortcuts import redirect
+
+    @login_required
+    @wraps(view_func)
+    def wrapper(request: HttpRequest, *args, **kwargs):
+        if not request.user.is_staff:
+            return redirect("index")
+        return view_func(request, *args, **kwargs)
+
+    return wrapper

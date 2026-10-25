@@ -93,6 +93,20 @@ class Conductor:
     def active_job(self, run, kind):
         return run.jobs.filter(kind=kind).order_by("-id").first()
 
+    def timing(self, run):
+        """The run's fuse and duration: its round's own (sandbox_params
+        "timing", set on the dashboard; core/schedule.py), else the defaults."""
+        own = (run.sandbox_params or {}).get("timing") or {}
+
+        def pick(key, default):
+            value = own.get(key)
+            return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else default
+
+        return {
+            "worm_start_delay": pick("worm_start_delay", self.cfg["worm_start_delay"]),
+            "run_duration": pick("run_duration", self.cfg["round_duration"]),
+        }
+
     def _teardown_pending(self) -> bool:
         """True while a sandbox teardown has not completed, so the host may
         still hold a sandbox and the next run must not build over it. A teardown
@@ -198,7 +212,7 @@ class Conductor:
             team_uuid=str(run.team.uuid),
             artifact={"storage_key": artifact.storage_key, "content_hash": artifact.content_hash},
             initial_secrets=[s.vm.vm_identifier for s in self._initial_secret_steps(run)],
-            worm_delay=self.cfg["worm_start_delay"],
+            worm_delay=self.timing(run)["worm_start_delay"],
         )  # fmt: skip
         return True
 
@@ -207,7 +221,8 @@ class Conductor:
         if result is None:
             return run.state == RoundRun.State.FAILED
         self._apply_released(run, result.get("released", []))
-        start = self.now() + timedelta(seconds=self.cfg["worm_start_delay"])
+        timing = self.timing(run)
+        start = self.now() + timedelta(seconds=timing["worm_start_delay"])
         RunEvent.objects.create(run=run, kind=RunEvent.Kind.WORM_DEPLOYED, data={"worm_start_at": start.isoformat()})
         for step in self._initial_secret_steps(run):
             step.state = GamePlanStep.State.DONE
@@ -215,7 +230,7 @@ class Conductor:
             step.save(update_fields=["state", "executed_at"])
         self.set_state(
             run, RoundRun.State.ARMED,
-            worm_start_at=start, ends_at=start + timedelta(seconds=self.cfg["round_duration"]),
+            worm_start_at=start, ends_at=start + timedelta(seconds=timing["run_duration"]),
         )  # fmt: skip
         return True
 
@@ -279,7 +294,7 @@ class Conductor:
             return
         vms = {vm.vm_identifier: vm for vm in run.virtual_machines.all()}
         plan = gameplan.generate(
-            list(vms), run.seed, self.cfg["round_duration"], run.sandbox_params.get("game_plan")
+            list(vms), run.seed, self.timing(run)["run_duration"], run.sandbox_params.get("game_plan")
         )
         run.sandbox_params = {**run.sandbox_params, "start_vm": plan.start_vm}
         run.save(update_fields=["sandbox_params"])

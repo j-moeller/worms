@@ -49,6 +49,13 @@ a live Proxmox host (the standing caveat — no node is available here).
 - **Team API**: ✅ teams download their round scoring, logs and progression
   (JSON, zip) with an access token (bearer), with item/byte/time/rate limits
   (`dashboard/api.py`, `docs/team_api.md`, `tests/test_team_api.py`).
+- **Staff administration**: ✅ the registration window and the development
+  competition, student accounts (single or CSV, one-time passwords shown
+  once, reset, deactivation, team), teams and members, round definitions
+  (window, seed, sandbox size, game plan, timing; schedule check) and their
+  runs/host jobs — database records only, with column-scoped grants; staff
+  accounts and all infrastructure stay on the console
+  (`dashboard/views/staff*.py`, `docs/accounts.md` §3, `tests/test_staff_admin.py`).
 - **Admin**: ✅ leaderboard + infrastructure/sandbox topology (VMs as nodes
   with their status, firewall groups/rules/bridges on hover, the operational
   connections) and a round/team replay of every run — the TOPOLOGY view,

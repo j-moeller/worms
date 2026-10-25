@@ -71,7 +71,7 @@ VM's `/32`** (`pg_hba`, `roles/database/setup_db_base`). Grants in
 | `admin` | `SUPERUSER` — manual administration / the `worms` CLI; no service uses it | Proxmox host `/32` |
 | `django_migrator` | owns the tables (DDL); runs migrations | orchestrator `/32` |
 | `django_orchestrator` | `SELECT` all; `INSERT`/`UPDATE` only its own result tables (`round_runs`, `game_plan_steps`, `virtual_machines`, `topology_snapshots`, `devboxes`, `devbox_vms`), `INSERT` `host_jobs`/`run_events`/`flag_captures`/`logging`/`devbox_captures`/`devbox_logs`, `UPDATE teams(devbox_version)` and attempts(`processed`) | orchestrator `/32` |
-| `django_dashboard` | `SELECT` all; `INSERT` `uploads`/`malware_artifacts`/`access_tokens`; `UPDATE access_tokens(revoked)`, `users(last_login, password, must_change_password)`; sessions; `INSERT`/`DELETE devbox_ssh_keys` | dashboard `/32` |
+| `django_dashboard` | `SELECT` all; `INSERT` `uploads`/`malware_artifacts`/`access_tokens`; `UPDATE access_tokens(revoked)`, `users(last_login, password, must_change_password)`; sessions; `INSERT`/`DELETE devbox_ssh_keys`, `team_memberships`. Staff administration (§3): `INSERT users` — student rows only, a trigger refuses staff/superuser rows from this role — and `UPDATE users(first_name, last_name, email, is_active)`; `INSERT`/`DELETE teams`, `UPDATE teams(name, max_members, development_competition_id)`; `INSERT competitions`, `UPDATE competitions(name, registration_*, development_competition_id)`; `INSERT`/`DELETE rounds`, `UPDATE rounds(name, seed, round_start, round_end, sandbox_params)`. Never `username`, `is_staff`, `is_superuser`; no delete on anything a team or round owns (a referenced team/round cannot be deleted) | dashboard `/32` |
 | `dbuser_scoring` | `INSERT (team_uuid, vm_flag_hash, devbox)` on `flag_capture_attempts` — only | scoring `/32` (conn-limit 8) |
 | `dbuser_logging` | `INSERT (uuid, team_uuid, log_data, devbox)` on `logging_attempts` — only | logging `/32` (conn-limit 8) |
 | `dbuser_network_monitor` | `INSERT` on `network_flows`/`network_events` — only (cannot read) | monitor `/32` (conn-limit 4) |
@@ -82,8 +82,8 @@ VM's `/32`** (`pg_hba`, `roles/database/setup_db_base`). Grants in
 | Account | Privilege | Source |
 |---|---|---|
 | **admin** | Django superuser, `is_staff=True` (Django admin + staff-only pages) | `manage.py init` (login disabled); one-time password from `worms admin reset-password` |
-| **students** | plain users, `is_staff=False`, `must_change_password=True` | `manage.py create_users` (CSV → one-time passwords) |
-| **tutors/staff** (optional) | `is_staff=True` | `manage.py create_users --staff` |
+| **students** | plain users, `is_staff=False`, `must_change_password=True` | the dashboard, Staff → Users (one by one or a CSV → one-time passwords); or `manage.py create_users` |
+| **tutors/staff** (optional) | `is_staff=True`: the staff pages | `worms admin create-staff EMAIL` (console; the dashboard cannot create staff) |
 | **team access tokens** | read-only: the team's own round scoring, logs and progression through the team API (`docs/team_api.md`) — nothing of other teams, nothing writable | created/revoked by team members on their profile; stored as SHA-256 only |
 
 ### 1.4 Other credentials (the stores)
@@ -173,6 +173,22 @@ as a dedicated non-root user with `NoNewPrivileges`.
 Operational how-to for the accounts in [§1.3](#13-dashboard--django). (Network
 and infrastructure accounts are not managed here — see §1.1/§1.2.)
 
+What needs only database writes is done on the dashboard by staff (the staff
+menu, top right: **Competition, Users, Teams, Rounds**; `dashboard/views/staff*.py`).
+What needs more stays on the console: the admin account itself, staff
+accounts, and everything that builds infrastructure.
+
+| Task | Where |
+|---|---|
+| registration window, development competition | dashboard: Staff → Competition |
+| student accounts: create, CSV import, edit, new one-time password, (de)activate, team | dashboard: Staff → Users |
+| teams: create, rename, size, members; delete while nothing refers to them | dashboard: Staff → Teams |
+| rounds: create, edit/delete before their runs exist; runs, host jobs, errors | dashboard: Staff → Rounds (`docs/rounds.md`) |
+| the admin's one-time password | `worms admin reset-password` |
+| staff (tutor) accounts | `worms admin create-staff EMAIL` |
+| devboxes for new teams | `worms devbox provision` (`docs/devbox.md`) |
+| a team with history (uploads, runs, tokens, devbox), with everything it owns | `worms teams delete NAME` |
+
 ### Admin + default competition — `manage.py init` (idempotent)
 
 Creates the `admin` account (`is_staff` + superuser) and the default competition
@@ -201,23 +217,41 @@ that). It creates the account if it is missing and refuses an existing
 account that is not a superuser (`--username` cannot promote a student).
 Same as `manage.py reset_admin_password` on the orchestrator.
 
-### Students — `manage.py create_users <csv>`
+### Staff accounts — `worms admin create-staff EMAIL`
 
-CSV with first name / surname / email (English or German headers). Each new
-email becomes a user with a one-time random password and `must_change_password`;
-existing emails are skipped. Prints an `email,password` CSV to stdout (the only
-time the password is shown; `--output creds.csv` to a file). `--staff` for
-tutors.
+A tutor account (`is_staff`, not superuser) with a one-time password printed
+once, like the admin's. The dashboard cannot make one: its database role may
+not insert a staff row or set `is_staff` (a public-facing service must not be
+able to mint staff accounts, even if compromised). On the dashboard staff
+manage student accounts; the admin also manages staff accounts' passwords
+and activation; nobody manages the admin there.
+
+### Students — Staff → Users (or `manage.py create_users <csv>`)
+
+One by one (email, names, team) or from a CSV with a header row (email, first
+name, surname, optionally team; English or German headers: `core/accounts.py`).
+Each new email becomes a user with a one-time random password and
+`must_change_password`; existing emails are skipped and listed. The passwords
+are shown **once**, on the page that answers the request (`Cache-Control:
+no-store`), also as an `email,password` CSV to copy. A team named in the CSV
+is joined if it exists and has room; otherwise the row is reported. Later:
+a new one-time password, deactivation (no login; the account and its results
+stay), another team.
+
+`manage.py create_users` on the orchestrator does the same import from a file
+and prints an `email,password` CSV to stdout (`--output creds.csv` to a file).
 
 ### First login forces a password change
 
 An account with `must_change_password` is held on `/change-password/` by
 `ForcePasswordChangeMiddleware` until it sets its own password
 (`dashboard/views/password.py`). The public `django_dashboard` DB role is granted
-exactly `UPDATE(password, must_change_password)` on `users` for this and nothing
-more.
+`UPDATE(password, must_change_password)` on `users` for this; the view writes
+exactly those two columns (a full-row save would be refused).
 
-Covered offline by `tests/test_accounts.py` (`worms test`).
+Covered offline by `tests/test_accounts.py` and `tests/test_staff_admin.py`
+(the staff pages and the first-login change run as `django_dashboard` with
+its real grants).
 
 
 ---

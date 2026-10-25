@@ -158,6 +158,31 @@ def test_dashboard_may_change_password_only(database):
     # Allowed: set the password and clear the one-time flag (first-login change).
     run(database, "django_dashboard", "UPDATE users SET password = 'new', must_change_password = false WHERE username = 'pwtest'")
 
+    # Allowed: staff edit a student's name and email and deactivate it
+    # (dashboard/views/staff_users.py).
+    run(database, "django_dashboard", "UPDATE users SET first_name = 'P', email = 'p@x', is_active = false WHERE username = 'pwtest'")
+
     # Denied: the public role must not grant itself staff or touch other columns.
-    with pytest.raises(psycopg2.errors.InsufficientPrivilege):
-        run(database, "django_dashboard", "UPDATE users SET is_staff = true WHERE username = 'pwtest'")
+    for column in ("is_staff = true", "is_superuser = true", "username = 'renamed'"):
+        with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+            run(database, "django_dashboard", f"UPDATE users SET {column} WHERE username = 'pwtest'")
+
+
+@pytest.mark.parametrize("staff, superuser", [(False, False), (True, False), (False, True)])
+def test_dashboard_creates_student_accounts_only(database, staff, superuser):
+    """The staff pages create student accounts as the dashboard's role; a
+    staff or superuser row is refused by the database (a trigger), so even a
+    compromised dashboard cannot mint one. The console's admin role can."""
+    insert = (
+        "INSERT INTO users (uuid, password, is_superuser, username, is_staff, is_active, date_joined, "
+        "first_name, last_name, email, must_change_password, created_at) VALUES (gen_random_uuid(), 'x', "
+        f"{str(superuser).lower()}, %s, {str(staff).lower()}, true, now(), '', '', '', true, now())"
+    )
+    name = f"guard-{staff}-{superuser}"
+    if staff or superuser:
+        with pytest.raises(psycopg2.errors.InsufficientPrivilege, match="may not create staff"):
+            run(database, "django_dashboard", insert % f"'{name}'")
+        run(database, MIGRATOR, insert % f"'{name}-console'")
+    else:
+        run(database, "django_dashboard", insert % f"'{name}'")
+        assert run(database, "postgres", "SELECT count(*) FROM users WHERE username = %s", (name,))[0][0] == 1

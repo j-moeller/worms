@@ -1,0 +1,9 @@
+{% with kind=field.widget_type %}
+<div class="field{% if field.errors %} field--invalid{% endif %}{% if kind == 'checkbox' %} field--check{% endif %}">
+    {% if kind == 'checkbox' %}{{ field }}{% endif %}
+    <label class="field__label" for="{{ field.id_for_label }}">{{ field.label }}{% if not field.field.required and kind != 'checkbox' %} <span class="field__opt">(optional)</span>{% endif %}</label>
+    {% if kind != 'checkbox' %}{{ field }}{% endif %}
+    {% for error in field.errors %}<p class="field__error">{{ error }}</p>{% endfor %}
+    {% if field.help_text %}<p class="field__help">{{ field.help_text }}</p>{% endif %}
+</div>
+{% endwith %}

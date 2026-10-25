@@ -12,9 +12,11 @@ Ansible run there, with the secrets of the vault), or on the Proxmox node.
     worms build                       # full idempotent end-to-end setup (= make)
     worms build <component>           # one step (see `worms build --list`)
     worms status                      # components, internet, competition, rounds
-    worms teams [create|rename|delete]
+    worms teams [delete]              # teams are created/edited on the dashboard
+    worms devbox provision            # build the devboxes of new teams (host job)
     worms users / worms leaderboard
     worms admin reset-password        # one-time password for the dashboard admin
+    worms admin create-staff EMAIL    # a tutor account (students: on the dashboard)
     worms simulate                    # end-to-end simulation (was make simulate)
     worms test                        # the offline test suite (was make test)
     worms debug <host>                # Ansible connection diagnostics
@@ -206,20 +208,6 @@ def cmd_teams(config, args) -> int:
     from worms_cli import queries
 
     action = args.team_action
-    if action == "create":
-        print(queries.create_team(args.name))
-        # Provisioning the devboxes happens when teams are created
-        # (docs/devbox.md): ensure a devbox + enqueue a provision host job.
-        try:
-            from django.core.management import call_command
-
-            call_command("provision_devboxes")
-        except Exception as exc:  # noqa: BLE001
-            output.warn(f"team created, but devbox provisioning was not enqueued: {exc}")
-        return 0
-    if action == "rename":
-        print(queries.rename_team(args.old, args.new))
-        return 0
     if action == "delete":
         if not build.confirm(f"Delete team {args.name!r} (users are kept)?", getattr(args, "yes", False)):
             return 1
@@ -240,6 +228,23 @@ def cmd_teams(config, args) -> int:
         ) or output.color("(empty)", "grey")
         table_rows.append([row["name"], f"{row['n_members']}/{row['max_members']}", members])
     print(output.table(table_rows, headers=["Team", "Members", "Who"]))
+    return 0
+
+
+def cmd_devbox(config, args) -> int:
+    """`worms devbox provision`: give every team of the current competition a
+    devbox and enqueue the provision host job; the round agent on the node
+    builds them (docs/devbox.md). Teams are created on the dashboard, which
+    builds no infrastructure; run this after adding teams."""
+    _with_db(config)
+    from django.core.management import call_command
+    from django.core.management.base import CommandError
+
+    try:
+        call_command("provision_devboxes", dry_run=args.dry_run)
+    except CommandError as exc:
+        output.error(str(exc))
+        return 1
     return 0
 
 
@@ -269,11 +274,27 @@ def cmd_users(config, args) -> int:
 def cmd_admin(config, args) -> int:
     """`worms admin reset-password`: a new one-time password for the dashboard
     admin, printed once here (stdout), never stored (manage.py
-    reset_admin_password)."""
+    reset_admin_password). `worms admin create-staff EMAIL`: a staff (tutor)
+    account with a one-time password -- the public dashboard manages student
+    accounts but cannot create staff (docs/accounts.md)."""
     _with_db(config)
     from core.models.user import User
     from django.core.management import call_command
     from django.core.management.base import CommandError
+
+    if args.admin_action == "create-staff":
+        from core import accounts
+
+        if args.dry_run:
+            print(output.color(f"(dry run) would create the staff account {args.email!r}", "yellow"))
+            return 0
+        created = accounts.create_account(args.email, args.first_name, args.last_name, staff=True)
+        if created is None:
+            output.error(f"an account {args.email!r} already exists")
+            return 1
+        print(f"staff: created {created.user.username!r}; one-time password below (shown once):", file=sys.stderr)
+        print(created.password)
+        return 0
 
     admin = User.objects.filter(username=args.username).first()
     if admin is not None and admin.has_usable_password() and not admin.must_change_password:
@@ -497,16 +518,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("status", help="components, internet, competition, rounds")
 
-    p_teams = sub.add_parser("teams", help="list teams; create/rename/delete")
+    teams_help = "list teams; delete one with its history (create/edit them on the dashboard: Staff → Teams)"
+    p_teams = sub.add_parser("teams", help=teams_help, description=teams_help)
     team_sub = p_teams.add_subparsers(dest="team_action")
-    p_create = team_sub.add_parser("create", help="create a team in the current competition")
-    p_create.add_argument("name")
-    p_rename = team_sub.add_parser("rename", help="rename a team")
-    p_rename.add_argument("old")
-    p_rename.add_argument("new")
-    p_delete = team_sub.add_parser("delete", help="delete a team (users unaffected)")
+    p_delete = team_sub.add_parser("delete", help="delete a team with everything it owns (users unaffected)")
     p_delete.add_argument("name")
     p_delete.add_argument("--yes", action="store_true", help="skip confirmation")
+
+    devbox_help = "the team devboxes: `provision` enqueues the build of new teams' devboxes for the round agent"
+    p_devbox = sub.add_parser("devbox", help="the team devboxes", description=devbox_help)
+    devbox_sub = p_devbox.add_subparsers(dest="devbox_action", required=True)
+    devbox_sub.add_parser("provision", help="give new teams a devbox: enqueue the provision host job")
 
     sub.add_parser("users", help="all users: team, login status, one-time password")
     sub.add_parser("leaderboard", help="the production leaderboard, in the console")
@@ -516,6 +538,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_reset_pw = admin_sub.add_parser("reset-password", help="new one-time password, printed once (created if missing)")
     p_reset_pw.add_argument("--username", default="admin")
     p_reset_pw.add_argument("--yes", action="store_true", help="skip confirmation")
+    p_staff = admin_sub.add_parser("create-staff", help="a staff (tutor) account; one-time password printed once")
+    p_staff.add_argument("email")
+    p_staff.add_argument("--first-name", default="")
+    p_staff.add_argument("--last-name", default="")
 
     p_secrets = sub.add_parser("secrets", help="the vault: what is set (never values); set the Proxmox tokens")
     secrets_sub = p_secrets.add_subparsers(dest="secrets_action")
@@ -558,6 +584,8 @@ def main(argv=None) -> int:
         return cmd_status(config, args)
     if args.command == "teams":
         return cmd_teams(config, args)
+    if args.command == "devbox":
+        return cmd_devbox(config, args)
     if args.command == "users":
         return cmd_users(config, args)
     if args.command == "leaderboard":

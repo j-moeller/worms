@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Competition{% endblock %}
+{% block content %}
+<header class="page-head">
+    <p class="page-head__kicker">Staff</p>
+    <h1 class="page-head__title">{{ comp.name }}</h1>
+    <p class="page-head__lead">Accounts, teams, the registration window and the rounds are managed here. Infrastructure is not: it is built from the console and, for every round, by the round agent on the Proxmox host.</p>
+</header>
+{% include "staff/_tabs.html" with section="competition" %}
+
+<div class="grid grid--2">
+    <section class="panel" aria-labelledby="status-title">
+        <header class="panel__head">
+            <h2 class="panel__title" id="status-title">Status</h2>
+            <p class="panel__meta">{% if registration_open %}registration open{% elif summary.active %}{{ summary.active.name }} running{% elif summary.upcoming %}next: {{ summary.upcoming.0.name }}{% else %}no round ahead{% endif %}</p>
+        </header>
+        <div class="panel__body">
+            <div class="stats">
+                <p class="stat"><span class="stat__value">{{ summary.teams }}</span><span class="stat__label">teams{% if summary.empty_teams %} ({{ summary.empty_teams }} empty){% endif %}</span></p>
+                <p class="stat"><span class="stat__value">{{ summary.students }}</span><span class="stat__label">students</span></p>
+                <p class="stat"><span class="stat__value">{{ summary.without_team }}</span><span class="stat__label">without a team</span></p>
+                <p class="stat"><span class="stat__value">{{ summary.one_time }}</span><span class="stat__label">one-time password still set</span></p>
+                <p class="stat"><span class="stat__value">{{ summary.staff }}</span><span class="stat__label">staff</span></p>
+                <p class="stat"><span class="stat__value">{{ summary.rounds }}</span><span class="stat__label">rounds</span></p>
+            </div>
+        </div>
+    </section>
+
+    <section class="panel" aria-labelledby="todo-title">
+        <header class="panel__head"><h2 class="panel__title" id="todo-title">Next steps</h2></header>
+        <div class="panel__body">
+            <ul class="checklist">
+                {% if not comp.registration_starts_at %}<li><span class="badge badge--warn">to do</span> Set the registration window below, so students can join teams.</li>{% endif %}
+                {% if not summary.teams %}<li><span class="badge badge--warn">to do</span> <a href="{% url 'staff_teams' %}">Create the teams.</a></li>{% endif %}
+                {% if not summary.students %}<li><span class="badge badge--warn">to do</span> <a href="{% url 'staff_users' %}">Create the student accounts</a> (one by one or from a CSV).</li>{% endif %}
+                {% if summary.without_team %}<li><span class="badge">open</span> <a href="{% url 'staff_users' %}?show=no-team">{{ summary.without_team }} student{{ summary.without_team|pluralize }} without a team.</a></li>{% endif %}
+                {% if not dev_competition %}<li><span class="badge">optional</span> Create the development competition below (the Dev environment's rounds).</li>{% endif %}
+                {% if not summary.upcoming and not summary.active %}<li><span class="badge badge--warn">to do</span> <a href="{% url 'staff_rounds' %}">Create a round.</a></li>{% endif %}
+                {% if summary.teams and summary.students and comp.registration_starts_at and summary.upcoming %}<li><span class="badge badge--ok">ready</span> Teams, accounts and a round are in place.</li>{% endif %}
+            </ul>
+        </div>
+    </section>
+</div>
+
+<section class="panel" aria-labelledby="settings-title">
+    <header class="panel__head">
+        <h2 class="panel__title" id="settings-title">Competition</h2>
+        <p class="panel__meta">times in UTC</p>
+    </header>
+    <form method="post" class="panel__body form">
+        {% csrf_token %}
+        {% include "staff/_errors.html" %}
+        <div class="fields">
+            {% include "staff/_field.html" with field=form.name %}
+            {% include "staff/_field.html" with field=form.registration_starts_at %}
+            {% include "staff/_field.html" with field=form.registration_ends_at %}
+        </div>
+        <p class="form__note">Students join and leave teams themselves while registration is open; staff can move them at any time (Users, Teams). Without a window nobody can join a team by themselves.</p>
+        <div class="form__actions"><button type="submit" class="btn btn--primary">Save</button></div>
+    </form>
+</section>
+
+<div class="grid grid--2">
+    <section class="panel" aria-labelledby="dev-title">
+        <header class="panel__head"><h2 class="panel__title" id="dev-title">Development competition</h2></header>
+        <div class="panel__body prose">
+            {% if dev_competition %}
+            <p><strong>{{ dev_competition.name }}</strong> — the Dev environment of this competition's teams. Its rounds are only time windows for a team's devbox progression; nothing is built for them.</p>
+            {% if teams_without_dev %}
+            <p>{{ teams_without_dev }} team{{ teams_without_dev|pluralize }} {{ teams_without_dev|pluralize:"is,are" }} not linked to it yet.</p>
+            <form method="post" action="{% url 'staff_dev_competition' %}">{% csrf_token %}<button type="submit" class="btn btn--sm">Link every team</button></form>
+            {% endif %}
+            {% else %}
+            <p>None yet. The Dev environment (each team's devbox) shows its rounds' progression once there is one.</p>
+            <form method="post" action="{% url 'staff_dev_competition' %}">{% csrf_token %}<button type="submit" class="btn btn--primary btn--sm">Create it</button></form>
+            {% endif %}
+        </div>
+    </section>
+
+    <section class="panel" aria-labelledby="console-title">
+        <header class="panel__head"><h2 class="panel__title" id="console-title">On the console</h2></header>
+        <div class="panel__body prose">
+            <p>Infrastructure needs the Proxmox host and stays with the <code>worms</code> CLI (docs/management.md):</p>
+            <ul>
+                <li><code>worms devbox provision</code> — build the devboxes of new teams</li>
+                <li><code>worms build</code> — the platform; <code>worms status</code> — what is running</li>
+                <li><code>worms admin reset-password</code> — the admin's own one-time password</li>
+                <li><code>worms teams delete</code> — a team with history, with everything it owns</li>
+            </ul>
+        </div>
+    </section>
+</div>
+{% endblock %}

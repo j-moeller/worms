@@ -1,5 +1,5 @@
 from config.settings.base import *  # noqa: F401,F403
-from config.settings.base import DEBUG, LOG_LEVEL, LOGGING, env, postgres_database
+from config.settings.base import DEBUG, LOG_LEVEL, LOGGING, ROUND_TIMING, env, postgres_database
 
 # Application definition
 
@@ -65,11 +65,12 @@ ORCHESTRATOR_TOKENS = {
 }
 
 # Round conductor (orchestrator/rounds, manage.py conduct_rounds). Times in
-# seconds. See docs/rounds.md.
+# seconds. See docs/rounds.md. A run's own timing (the round's sandbox_params,
+# core/schedule.py) takes precedence over worm_start_delay/round_duration.
 ROUND_CONDUCTOR = {
-    "worm_start_delay": int(env("ROUND_WORM_START_DELAY", "300")),
-    "round_duration": int(env("ROUND_DURATION", "3600")),
-    "end_drain": int(env("ROUND_END_DRAIN", "120")),
+    "worm_start_delay": ROUND_TIMING["worm_start_delay"],
+    "round_duration": ROUND_TIMING["run_duration"],
+    "end_drain": ROUND_TIMING["end_drain"],
     "job_timeout": int(env("ROUND_JOB_TIMEOUT", "1800")),
     "capture_grace": int(env("ROUND_CAPTURE_GRACE", "120")),
 }

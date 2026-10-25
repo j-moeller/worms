@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import configparser
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -217,6 +218,26 @@ def test_dashboard_nginx_rate_limits_the_team_api(render):
 
     off = render(NGINX_DJANGO, "worms-tls.conf.j2", tls_dns_name="orchestrator.worms.internal")
     assert "limit_req" not in off and "location /api/" not in off and "location / {" in off
+
+
+def test_dashboard_nginx_limits_sign_ins(render, tmp_path):
+    """The staff pages are on the public dashboard: sign-in POSTs are limited
+    per client address (password guessing), page views are not."""
+    dashboard = yaml.safe_load((REPO / "ansible" / "group_vars" / "dashboard.yml").read_text())
+    orchestrator = yaml.safe_load((REPO / "ansible" / "group_vars" / "orchestrator.yml").read_text())
+    assert dashboard.get("nginx_login_rate") and not orchestrator.get("nginx_login_rate")
+
+    conf = render(NGINX_DJANGO, "worms-tls.conf.j2", nginx_login_rate="10r/m", tls_dns_name="dashboard.worms.internal")
+    assert "map $request_method $worms_login_key {" in conf
+    assert re.search(r"POST\s+\$binary_remote_addr;\s+default\s+\"\";", conf)
+    assert "limit_req_zone $worms_login_key zone=login:10m rate=10r/m;" in conf
+    login = conf[conf.index("location = /login/"):]
+    login = login[:login.index("}")]
+    assert "limit_req zone=login burst=5 nodelay;" in login and "limit_req_status 429;" in login
+    assert "proxy_set_header Host $http_host;" in login
+
+    off = render(NGINX_DJANGO, "worms-tls.conf.j2", tls_dns_name="orchestrator.worms.internal")
+    assert "zone=login" not in off and "location = /login/" not in off
 
 
 def test_sandbox_api_nginx_limits_are_per_source(render):

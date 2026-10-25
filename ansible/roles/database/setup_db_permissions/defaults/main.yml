@@ -25,14 +25,44 @@ postgresql_table_privileges:
     - privs: UPDATE (last_login)
       tables: [users]
     # First-login password change for students (dashboard/views/password.py):
-    # set their own password and clear the one-time flag.
+    # set their own password and clear the one-time flag. Also a staff reset
+    # to a new one-time password (core/accounts.py).
     - privs: UPDATE (password, must_change_password)
       tables: [users]
     - privs: INSERT, UPDATE, DELETE
       tables: [django_session]
-    # Devbox: teams add/remove their own SSH keys (docs/devbox.md).
+    # Students join and leave teams during registration (dashboard/views/teams.py);
+    # staff add and remove members (dashboard/views/staff_teams.py).
+    - privs: INSERT, DELETE
+      tables: [team_memberships]
+    # Devbox: teams add/remove their own SSH keys (docs/devbox.md); a member
+    # removed from a team loses theirs.
     - privs: INSERT, DELETE
       tables: [devbox_ssh_keys]
+    # Staff administration on the dashboard (dashboard/views/staff*.py,
+    # docs/accounts.md): student accounts, teams, the competition's
+    # registration window and development competition, rounds. Column-scoped:
+    # username, is_staff and is_superuser are never updated here, and the
+    # accounts it inserts can be neither (postgresql_account_guard_roles);
+    # staff accounts are made on the console (`worms admin create-staff`).
+    # Teams and rounds are deleted only while nothing refers to them (the
+    # foreign keys refuse it otherwise; no cascade rights).
+    - privs: INSERT
+      tables: [users]
+    - privs: UPDATE (first_name, last_name, email, is_active)
+      tables: [users]
+    - privs: INSERT, DELETE
+      tables: [teams]
+    - privs: UPDATE (name, max_members, development_competition_id)
+      tables: [teams]
+    - privs: INSERT
+      tables: [competitions]
+    - privs: UPDATE (name, registration_starts_at, registration_ends_at, development_competition_id)
+      tables: [competitions]
+    - privs: INSERT, DELETE
+      tables: [rounds]
+    - privs: UPDATE (name, seed, round_start, round_end, sandbox_params)
+      tables: [rounds]
 
   # Reads competition/round/team/upload/VM state; writes only its own results.
   django_orchestrator:
@@ -97,6 +127,11 @@ postgresql_table_privileges:
       tables: [host_jobs]
     - privs: UPDATE (state, started_at, heartbeat_at, finished_at, result, error)
       tables: [host_jobs]
+
+# Roles whose INSERT into users is refused when the row is staff or superuser
+# (a trigger, privileges.sql.j2): the public dashboard creates student
+# accounts only, even if it is compromised.
+postgresql_account_guard_roles: [django_dashboard]
 
 # The roles' table, column and sequence privileges as one sorted list; compared
 # before and after the grants to report "changed" only on a real change.

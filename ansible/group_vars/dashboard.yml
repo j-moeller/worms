@@ -14,6 +14,8 @@ dashboard_public_hosts: []
 django_allowed_hosts: "{{ (['dashboard.worms.internal', infrastructure_ips.dashboard] + dashboard_public_hosts) | join(',') }}"
 # The team API (/api/v1/, docs/team_api.md) is served here, rate-limited by nginx.
 nginx_team_api: true
+# Sign-in attempts per client address (staff pages are on this site too).
+nginx_login_rate: 10r/m
 # MAX_UPLOAD_SIZE (100 MiB) plus the multipart envelope.
 nginx_upload_max_body_size: 101m
 # Public facing: no migrator credentials, migrations run on the orchestrator.

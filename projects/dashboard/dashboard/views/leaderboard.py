@@ -254,80 +254,108 @@ def add_current_round_leaders(
         team.is_current_leader = team.id in leader_ids
 
 
+def leaderboard_tabs(request, rounds, now, selected):
+    """The leaderboard's tab row: All (the overall ranking, the default),
+    then one tab per started round. `selected` is the chosen round or None
+    (All)."""
+    tabs = [{"name": "All", "url": request.path, "selected": selected is None, "active": False}]
+    for round in rounds:
+        if round.round_start is None or round.round_start > now:
+            continue
+        tabs.append({
+            "name": round.name,
+            "url": f"{request.path}?round={round.id}",
+            "selected": selected is not None and round.id == selected.id,
+            "active": round.is_active(now),
+        })  # fmt: skip
+    return tabs
+
+
 @require_competition
 def leaderboard(request: HttpRequest, competition: Competition):
-    team_results = get_teams(request.active_competition, request)
-    rounds = get_rounds(request.active_competition)
-    captures = get_flag_captures(request.active_competition)
-    current_round = get_current_round(rounds, request.time_now)
+    active_competition = request.active_competition
+    rounds = get_rounds(active_competition)
+    now = request.time_now
 
-    score_teams(
-        teams=team_results,
-        rounds=rounds,
-        captures=captures,
-        current_round=current_round,
-    )
+    # A ?round=<id> of a started round shows that round's ranking; otherwise
+    # the overall leaderboard over all rounds (the default "All" tab).
+    requested = request.GET.get("round")
+    selected = None
+    if requested:
+        selected = next(
+            (r for r in rounds if str(r.id) == requested and r.round_start is not None and r.round_start <= now),
+            None,
+        )
+    tabs = leaderboard_tabs(request, rounds, now, selected)
 
+    if selected is not None:
+        result = round_result(active_competition, selected, now)
+        return render_with_base_info(
+            request,
+            "leaderboard.html",
+            {
+                "tabs": tabs,
+                "round_result": result,
+                "is_round_active": result["running"],
+            },
+        )
+
+    team_results = get_teams(active_competition, request)
+    captures = get_flag_captures(active_competition)
+    current_round = get_current_round(rounds, now)
+
+    score_teams(teams=team_results, rounds=rounds, captures=captures, current_round=current_round)
     # The leaderboard is always sorted by the configured total score.
     team_results.sort(key=lambda team: (-team.total_points, team.name))
-
     add_places(team_results)
     add_round_winners(team_results, rounds, captures)
     add_current_round_leaders(team_results, current_round, captures)
-
-    if team_results:
-        team_results[0].is_current_winner = True
-
-    if current_round:
-        is_round_active = current_round.is_active(request.time_now)
-    else:
-        is_round_active = False
 
     return render_with_base_info(
         request,
         "leaderboard.html",
         {
+            "tabs": tabs,
             "current_round": current_round,
             "teams": team_results,
-            "is_round_active": is_round_active,
-            "round_results": round_results(request.active_competition, rounds, request.time_now),
+            "is_round_active": bool(current_round) and current_round.is_active(now),
         },
     )
 
 
-def round_results(competition, rounds, now) -> list[dict]:
-    """Each started round's own ranking, newest first: every team of the
-    competition by the VMs it captured in that round (equal counts share a
-    place), with the round's points (FORMULA_ONE_POINTS) and the size of the
-    team's sandbox. A running round's standings are provisional."""
+def round_result(competition, round, now) -> dict:
+    """One round's ranking: every team of the competition by the VMs it
+    captured (equal counts share a place), with the round's points
+    (FORMULA_ONE_POINTS) and the size of its sandbox. The leader(s) of a
+    running round get the 🔥 badge; the winner(s) of a finished one the ⭐️."""
     from core.models.rounds import RoundRun
     from django.db.models import Count
 
     teams = list(Team.objects.filter(competition=competition).order_by("name")) if competition else []
-    results = []
-    for round in reversed(rounds):
-        if round.round_start is None or round.round_start > now:
-            continue
-        captured = dict(FlagCapture.get_round_standings(round))
-        runs = {
-            run.team_id: run
-            for run in RoundRun.objects.filter(round=round).annotate(vm_count=Count("virtual_machines"))
-        }
-        standings = sorted(((team, captured.get(team.id, 0)) for team in teams), key=lambda item: (-item[1], item[0].name))
-        points = get_formula_one_points([(team.id, score) for team, score in standings if score > 0])
-        rows, place, previous = [], 0, None
-        for index, (team, score) in enumerate(standings):
-            if score != previous:
-                place, previous = index + 1, score
-            run = runs.get(team.id)
-            rows.append({
-                "place": place,
-                "shared": index > 0 and score == standings[index - 1][1],
-                "team": team,
-                "captured": score,
-                "vms": run.vm_count if run is not None and run.vm_count else None,
-                "state": run.state if run is not None else None,
-                "points": points.get(team.id, 0),
-            })  # fmt: skip
-        results.append({"round": round, "finished": round.is_finished(now), "rows": rows})
-    return results
+    captured = dict(FlagCapture.get_round_standings(round))
+    runs = {
+        run.team_id: run
+        for run in RoundRun.objects.filter(round=round).annotate(vm_count=Count("virtual_machines"))
+    }
+    standings = sorted(((team, captured.get(team.id, 0)) for team in teams), key=lambda item: (-item[1], item[0].name))
+    points = get_formula_one_points([(team.id, score) for team, score in standings if score > 0])
+    finished, running = round.is_finished(now), round.is_active(now)
+    top = standings[0][1] if standings else 0
+    rows, place, previous = [], 0, None
+    for index, (team, score) in enumerate(standings):
+        if score != previous:
+            place, previous = index + 1, score
+        run = runs.get(team.id)
+        leads = score > 0 and score == top
+        rows.append({
+            "place": place,
+            "shared": index > 0 and score == standings[index - 1][1],
+            "team": team,
+            "captured": score,
+            "vms": run.vm_count if run is not None and run.vm_count else None,
+            "state": run.state if run is not None else None,
+            "winner": finished and leads,
+            "leader": running and leads,
+            "points": points.get(team.id, 0),
+        })  # fmt: skip
+    return {"round": round, "finished": finished, "running": running, "rows": rows}

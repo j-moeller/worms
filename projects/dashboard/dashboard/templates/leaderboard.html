@@ -4,23 +4,38 @@
 <header class="page-head">
     <p class="page-head__kicker">{{ request.active_competition.name|default:"Arena" }}</p>
     <h1 class="page-head__title">Leaderboard</h1>
-    {% if current_round %}<p class="page-head__lead">{{ current_round.name }} is running. The +points next to a total are this round's, not yet final.</p>{% endif %}
+    {% if round_result %}
+    <p class="page-head__lead">{{ round_result.round.name }} — teams ranked by the VMs they captured. {% if round_result.running %}The round is running, so this is provisional.{% elif round_result.finished %}Final.{% endif %}</p>
+    {% elif current_round %}
+    <p class="page-head__lead">Overall ranking across all rounds. {{ current_round.name }} is running — the +points next to a total are this round's, not yet final.</p>
+    {% else %}
+    <p class="page-head__lead">Overall ranking across all rounds. <span class="flame" role="img" aria-label="fire">🔥</span> leads the running round; <span class="star" role="img" aria-label="star">⭐️</span> won a round.</p>
+    {% endif %}
 </header>
+
+<nav class="round-tabs" aria-label="Leaderboard rounds">
+    {% for tab in tabs %}
+    <a class="round-tabs__tab" href="{{ tab.url }}"{% if tab.selected %} aria-current="page"{% endif %}>{{ tab.name }}{% if tab.active %} <span class="flame" role="img" aria-label="round running">🔥</span>{% endif %}</a>
+    {% endfor %}
+</nav>
+
+{% if round_result %}
+{# One round's ranking (a selected tab). #}
 <section class="panel" aria-labelledby="ranking-title"{% if is_round_active %} id="ranking" data-autorefresh="30"{% endif %}>
     <header class="panel__head">
-        <h2 class="panel__title" id="ranking-title">Ranking</h2>
-        <p class="panel__meta">{{ teams|length }} team{{ teams|length|pluralize }}</p>
+        <h2 class="panel__title" id="ranking-title">{{ round_result.round.name }}</h2>
+        <p class="panel__meta">{% if round_result.finished %}final{% elif round_result.running %}running — provisional{% else %}not finished{% endif %} · VMs captured</p>
     </header>
     <div class="table-wrap">
         <table class="table table--ranking">
-            <thead><tr><th scope="col" class="num">#</th><th scope="col">Team</th><th scope="col">Rounds won</th><th scope="col" class="num">Points</th></tr></thead>
+            <thead><tr><th scope="col" class="num">#</th><th scope="col">Team</th><th scope="col" class="num">VMs captured</th><th scope="col" class="num">Points</th></tr></thead>
             <tbody>
-            {% for team in teams %}
-            <tr{% if team.is_user_team %} class="is-mine"{% endif %}{% if not team.skip_place %} data-rank="{{ team.place }}"{% endif %}>
-                <td class="num rank">{% if not team.skip_place %}{{ team.place|stringformat:"02d" }}{% endif %}</td>
-                <th scope="row" class="team">{{ team.name }}{% if team.is_user_team %} <span class="badge badge--accent">your team</span>{% endif %}{% if current_round and team.is_current_leader %} <span class="badge badge--hot">leading</span>{% endif %}</th>
-                <td>{% for round_name in team.round_wins %}<span class="trophy" title="Won {{ round_name }}">{{ round_name }}</span>{% empty %}<span class="muted">—</span>{% endfor %}</td>
-                <td class="num points">{{ team.total_points }}{% if is_round_active %} <span class="points__live" title="This round, not yet final">+{{ team.current_round_points }}</span>{% endif %}</td>
+            {% for row in round_result.rows %}
+            <tr{% if row.team.pk == request.team.pk %} class="is-mine"{% endif %}{% if not row.shared %} data-rank="{{ row.place }}"{% endif %}>
+                <td class="num rank">{% if not row.shared %}{{ row.place|stringformat:"02d" }}{% endif %}</td>
+                <th scope="row" class="team">{{ row.team.name }}{% if row.team.pk == request.team.pk %} <span class="badge badge--accent">your team</span>{% endif %}{% if row.winner %} <span class="star" role="img" aria-label="won {{ round_result.round.name }}" title="Won {{ round_result.round.name }}">⭐️</span>{% endif %}{% if row.leader %} <span class="flame" role="img" aria-label="leading {{ round_result.round.name }}" title="Leading {{ round_result.round.name }}">🔥</span>{% endif %}{% if row.state == 'skipped' %} <span class="muted">skipped</span>{% elif row.state == 'failed' %} <span class="muted">failed</span>{% endif %}</th>
+                <td class="num">{{ row.captured }}{% if row.vms %} <span class="muted">/ {{ row.vms }}</span>{% endif %}</td>
+                <td class="num points">{{ row.points }}</td>
             </tr>
             {% empty %}
             <tr><td colspan="4" class="empty">No teams yet.</td></tr>
@@ -30,27 +45,29 @@
     </div>
 </section>
 
-{% for result in round_results %}
-<section class="panel" aria-labelledby="round-{{ result.round.pk }}-title">
+{% else %}
+{# The overall leaderboard (the default "All" tab). #}
+<section class="panel" aria-labelledby="ranking-title"{% if is_round_active %} id="ranking" data-autorefresh="30"{% endif %}>
     <header class="panel__head">
-        <h2 class="panel__title" id="round-{{ result.round.pk }}-title">{{ result.round.name }}</h2>
-        <p class="panel__meta">{% if result.finished %}final{% else %}running — provisional{% endif %} · VMs captured</p>
+        <h2 class="panel__title" id="ranking-title">Ranking</h2>
+        <p class="panel__meta">{{ teams|length }} team{{ teams|length|pluralize }}</p>
     </header>
     <div class="table-wrap">
         <table class="table table--ranking">
-            <thead><tr><th scope="col" class="num">#</th><th scope="col">Team</th><th scope="col" class="num">VMs captured</th><th scope="col" class="num">Points</th></tr></thead>
+            <thead><tr><th scope="col" class="num">#</th><th scope="col">Team</th><th scope="col" class="num">Points</th></tr></thead>
             <tbody>
-            {% for row in result.rows %}
-            <tr{% if row.team.pk == request.team.pk %} class="is-mine"{% endif %}>
-                <td class="num rank">{% if not row.shared %}{{ row.place|stringformat:"02d" }}{% endif %}</td>
-                <th scope="row" class="team">{{ row.team.name }}{% if row.state == 'skipped' %} <span class="badge">skipped</span>{% elif row.state and row.state != 'finished' and row.state != 'failed' and not result.finished %} <span class="badge badge--state">{{ row.state }}</span>{% elif row.state == 'failed' %} <span class="badge badge--bad">failed</span>{% endif %}</th>
-                <td class="num">{{ row.captured }}{% if row.vms %} <span class="muted">/ {{ row.vms }}</span>{% endif %}</td>
-                <td class="num points">{{ row.points }}</td>
+            {% for team in teams %}
+            <tr{% if team.is_user_team %} class="is-mine"{% endif %}{% if not team.skip_place %} data-rank="{{ team.place }}"{% endif %}>
+                <td class="num rank">{% if not team.skip_place %}{{ team.place|stringformat:"02d" }}{% endif %}</td>
+                <th scope="row" class="team">{{ team.name }}{% if team.is_user_team %} <span class="badge badge--accent">your team</span>{% endif %}{% if current_round and team.is_current_leader %} <span class="flame" role="img" aria-label="leading {{ current_round.name }}" title="Leading {{ current_round.name }}">🔥</span>{% endif %}{% for round_name in team.round_wins %} <span class="star" role="img" aria-label="won {{ round_name }}" title="Won {{ round_name }}">⭐️</span>{% endfor %}</th>
+                <td class="num points">{{ team.total_points }}{% if is_round_active %} <span class="points__live" title="This round, not yet final">+{{ team.current_round_points }}</span>{% endif %}</td>
             </tr>
+            {% empty %}
+            <tr><td colspan="3" class="empty">No teams yet.</td></tr>
             {% endfor %}
             </tbody>
         </table>
     </div>
 </section>
-{% endfor %}
+{% endif %}
 {% endblock %}

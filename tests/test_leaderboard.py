@@ -1,5 +1,6 @@
-"""The leaderboard (dashboard/views/leaderboard.py): the overall ranking and,
-per round, the teams ranked by the VMs they captured in it."""
+"""The leaderboard (dashboard/views/leaderboard.py): the overall ranking over
+all rounds (the default), a tab per started round showing that round's ranking
+by VMs captured, and the 🔥 / ⭐️ badges."""
 
 from __future__ import annotations
 
@@ -11,6 +12,9 @@ import pytest
 from test_dashboard_login import HOST, proxied, site  # noqa: F401 (fixture)
 
 pytest.importorskip("django")
+
+FLAME = "\U0001f525"   # 🔥 leads the running round
+STAR = "⭐️"  # ⭐️ won a round (with the emoji variation selector)
 
 
 def _round(competition, name, start, end):
@@ -54,36 +58,103 @@ def board(site):  # noqa: F811
     _captures(r1, teams["cats"], 3)
     r2 = _round(comp, "R2", now - timedelta(hours=1), now + timedelta(hours=5))
     _captures(r2, teams["dogs"], 2, sandbox=6)
-    _round(comp, "R3", now + timedelta(days=1), now + timedelta(days=2))  # not started: not shown
-    return teams
+    r3 = _round(comp, "R3", now + timedelta(days=1), now + timedelta(days=2))  # not started
+    return {"teams": teams, "r1": r1, "r2": r2, "r3": r3}
 
 
-def _rows(page, round_name):
-    section = page[page.index(f">{round_name}</h2>"):]
-    section = section[: section.index("</section>")]
+def _get(site, path="/"):  # noqa: F811
+    return site.get(path, **proxied(HOST)).content.decode()
+
+
+def _tabs(page):
+    nav = re.search(r'<nav class="round-tabs"[^>]*>(.*?)</nav>', page, flags=re.S).group(1)
+    return [re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", tab)).strip()
+            for tab in re.findall(r"<a [^>]*>(.*?)</a>", nav, flags=re.S)]
+
+
+def _current_tab(page):
+    nav = re.search(r'<nav class="round-tabs"[^>]*>(.*?)</nav>', page, flags=re.S).group(1)
+    current = re.search(r'<a [^>]*aria-current="page"[^>]*>(.*?)</a>', nav, flags=re.S)
+    if not current:
+        return None
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", current.group(1))).replace(FLAME, "").strip()
+
+
+def _rows(page):
+    body = re.search(r"<tbody>(.*?)</tbody>", page, flags=re.S).group(1)
     rows = []
-    for row in re.findall(r"<tr[^>]*>(.*?)</tr>", section, flags=re.S)[1:]:
-        cells = [re.sub(r"<[^>]+>", " ", c) for c in re.findall(r"<t[hd][^>]*>(.*?)</t[hd]>", row, flags=re.S)]
-        rows.append([re.sub(r"\s+", " ", c).strip() for c in cells])
+    for row in re.findall(r"<tr[^>]*>(.*?)</tr>", body, flags=re.S):
+        cells = [re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", c)).strip()
+                 for c in re.findall(r"<t[hd][^>]*>(.*?)</t[hd]>", row, flags=re.S)]
+        rows.append(cells)
     return rows
 
 
-def test_each_round_ranks_the_teams_by_captured_vms(site, board):  # noqa: F811
-    page = site.get("/", **proxied(HOST)).content.decode()
-    r1 = _rows(page, "R1")
-    assert r1 == [
-        ["01", "bees", "5 / 8", "25"],
-        ["02", "ants", "3 / 8", "18"],
-        ["", "cats", "3 / 8", "18"],     # a shared place
-        ["04", "dogs", "0", "0"],         # no run, nothing captured
+# --- the tabs ---------------------------------------------------------------------
+
+
+def test_the_tabs_are_all_plus_every_started_round(site, board):  # noqa: F811
+    page = _get(site)
+    assert _tabs(page) == ["All", "R1", "R2" + f" {FLAME}"]   # R3 has not started; R2 is running
+    assert _current_tab(page) == "All"                        # All is the default
+
+
+def test_an_unknown_or_unstarted_round_falls_back_to_all(site, board):  # noqa: F811
+    for query in (f"?round={board['r3'].id}", "?round=999", "?round=notanumber"):
+        page = _get(site, "/" + query)
+        assert _current_tab(page) == "All"
+        assert ">Ranking</h2>" in page
+
+
+# --- the overall ("All") leaderboard ----------------------------------------------
+
+
+def test_the_default_is_the_overall_ranking_with_badges(site, board):  # noqa: F811
+    page = _get(site)
+    assert ">Ranking</h2>" in page and "Overall ranking across all rounds" in page
+    # bees 25, dogs 0+25 (running), ants/cats 18 -> bees, dogs, ants, cats.
+    assert _rows(page) == [
+        ["01", f"bees {STAR}", "25 +0"],    # won R1, nothing in the running round
+        ["", f"dogs {FLAME}", "25 +25"],    # also 25 (shared place), leading the running R2
+        ["03", "ants", "18 +0"],
+        ["", "cats", "18 +0"],              # also 18 (shared place)
     ]
-    r2 = _rows(page, "R2")
-    assert r2[0] == ["01", "dogs", "2 / 6", "25"]
-    assert "running — provisional" in page and "final" in page
-    assert ">R3</h2>" not in page
-    # The overall ranking adds the round points up: bees 25, ants/cats 18, dogs 25 (+25 running).
-    overall = page[: page.index(">R2</h2>")]
-    assert "bees" in overall and "Rounds won" in overall
+    # No "running"/"leading" word badges -- only the emoji.
+    assert "leading</span>" not in page and ">running<" not in page
+
+
+def test_no_running_badge_anywhere(site, board):  # noqa: F811
+    for path in ("/", f"/?round={board['r1'].id}", f"/?round={board['r2'].id}"):
+        page = _get(site, path)
+        assert "badge--state" not in page
+        assert not re.search(r">\s*running\s*<", page)
+
+
+# --- a single round's tab ---------------------------------------------------------
+
+
+def test_a_finished_round_tab_ranks_by_captured_vms_and_stars_the_winner(site, board):  # noqa: F811
+    page = _get(site, f"/?round={board['r1'].id}")
+    assert _current_tab(page) == "R1"
+    assert "Final." in page
+    assert _rows(page) == [
+        ["01", f"bees {STAR}", "5 / 8", "25"],   # won it
+        ["02", "ants", "3 / 8", "18"],
+        ["", "cats", "3 / 8", "18"],              # shared place
+        ["04", "dogs", "0", "0"],                 # no run, nothing captured
+    ]
+    assert FLAME not in _rows(page)[0][1]          # finished -> star, not flame
+
+
+def test_a_running_round_tab_flames_the_leader(site, board):  # noqa: F811
+    page = _get(site, f"/?round={board['r2'].id}")
+    assert _current_tab(page) == "R2"
+    assert "provisional" in page
+    assert _rows(page)[0] == ["01", f"dogs {FLAME}", "2 / 6", "25"]
+    assert STAR not in page.split("</nav>")[1]     # running -> flame, not star (ignore the tab flame)
+
+
+# --- scoring regressions ----------------------------------------------------------
 
 
 def test_rounds_won_counts_finished_rounds(board):
@@ -105,3 +176,5 @@ def test_a_round_without_dates_does_not_break_the_board(site, board):  # noqa: F
 
     Round.objects.create(competition=ApplicationSetting.get_current_competition(), name="undated", seed=1)
     assert site.get("/", **proxied(HOST)).status_code == 200
+    # An undated round is not a tab (it has not started).
+    assert "undated" not in _tabs(_get(site))

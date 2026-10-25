@@ -16,28 +16,28 @@
         <table class="table table--teams">
             <thead><tr><th scope="col">Team</th><th scope="col">Members</th><th scope="col"><span class="visually-hidden">Action</span></th></tr></thead>
             <tbody>
-                {% for team in request.competition.teams.all %}
-                {% with count=team.users.count full=team.users.count >= team.max_members %}
-                <tr{% if user in team.users.all %} class="is-mine"{% endif %}>
+                {% for row in rows %}
+                {% with team=row.team %}
+                <tr{% if row.mine %} class="is-mine"{% endif %}>
                     <th scope="row">{{ team.name }}</th>
                     <td>
                         <span class="occupancy">
-                            <span class="occupancy__count">{{ count }} / {{ team.max_members }}</span>
-                            <span class="meter" role="meter" aria-valuenow="{{ count }}" aria-valuemin="0" aria-valuemax="{{ team.max_members }}"><span class="meter__fill{% if full %} is-full{% endif %}" data-fill="{{ count }}/{{ team.max_members }}"></span></span>
+                            <span class="occupancy__count">{{ row.count }} / {{ team.max_members }}</span>
+                            <span class="meter" role="meter" aria-valuenow="{{ row.count }}" aria-valuemin="0" aria-valuemax="{{ team.max_members }}"><span class="meter__fill{% if row.full %} is-full{% endif %}" data-fill="{{ row.count }}/{{ team.max_members }}"></span></span>
                         </span>
                     </td>
                     <td class="row-action">
                         {% if request.active_competition.is_registration_period %}
-                            {% if user in team.users.all %}
+                            {% if row.mine %}
                             <form method="post" action="{% url 'leave_team' team.uuid %}">{% csrf_token %}<button type="submit" class="btn btn--ghost btn--sm">Leave</button></form>
                             {% elif request.team %}
                             <span class="muted">—</span>
-                            {% elif full %}
+                            {% elif row.full %}
                             <span class="badge">full</span>
                             {% else %}
                             <form method="post" action="{% url 'join_team' team.uuid %}">{% csrf_token %}<button type="submit" class="btn btn--primary btn--sm">Join</button></form>
                             {% endif %}
-                        {% elif user in team.users.all %}
+                        {% elif row.mine %}
                             <span class="badge badge--accent">your team</span>
                         {% endif %}
                     </td>

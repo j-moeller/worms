@@ -147,7 +147,10 @@ the DOM with `textContent`, and the bearer-token APIs are the only
   by nginx (`nginx_login_rate`, 10/min with a burst of 5, dashboard only),
   which matters more now that the staff pages are on the public dashboard. No
   per-account lockout yet (a distributed guesser is only slowed per address).
-- **D4 (not fixed):** team-join is open and racy (no consent, no row lock).
+- **D4 (partly fixed):** joining locks the user and the team rows, so concurrent
+  joins can neither overfill a team nor put one person into two teams, and only
+  teams of the current competition can be joined (`tests/test_team_registration.py`).
+  Still open: joining needs no consent of the team's members.
 - **D5 (not fixed):** the voluntary password change does not require the current
   password (first-login change legitimately does not).
 - **D8 (not fixed):** no Content-Security-Policy (defense in depth; no XSS sink

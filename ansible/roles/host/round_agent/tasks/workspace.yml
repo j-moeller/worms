@@ -48,6 +48,11 @@
     src: "{{ round_agent_controller_repo }}/"
     dest: "{{ round_agent_repo_root }}/"
     delete: true
+    # rsync spawns its own ssh: use the connection's ssh args, not default keys
+    # (same reason as django_app's sync). The node is reached directly today, so
+    # this only adds ansible.cfg's ControlMaster opts; it stays correct if the
+    # node is ever reached through a jump.
+    use_ssh_args: true
     rsync_opts: "{{ round_agent_sync_rsync_opts }}"
 
 - name: Find the workspace's sandbox and devbox definitions

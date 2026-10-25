@@ -64,6 +64,12 @@
     dest: "{{ django_source_dir }}/"
     delete: true
     recursive: true
+    # rsync spawns its own ssh; without this it ignores the connection's
+    # ssh args and uses default keys/config -> "Permission denied (publickey)"
+    # against VMs reached through the node (ProxyJump) with the WORMS key in a
+    # private agent (IdentityAgent=$WORMS_SSH_AUTH_SOCK). use_ssh_args makes it
+    # use the same ssh_common_args every other task uses. Keep it.
+    use_ssh_args: true
     rsync_opts:
       - "--exclude=.git"
       - "--exclude=.venv"

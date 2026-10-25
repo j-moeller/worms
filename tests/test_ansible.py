@@ -350,6 +350,28 @@ def test_speed_settings():
     assert ssh["pipelining"] == "true" and "ControlPersist=10m" in ssh["ssh_args"]
 
 
+def test_synchronize_tasks_use_the_connections_ssh_args():
+    """ansible.posix.synchronize spawns its own rsync->ssh, which ignores the
+    connection's ssh args unless use_ssh_args is set. The VMs are reached
+    through the node (ProxyJump) with the WORMS key in a private agent
+    (IdentityAgent=$WORMS_SSH_AUTH_SOCK); without use_ssh_args rsync falls back
+    to default keys and fails with "Permission denied (publickey)". Every
+    synchronize task must opt in, so a sync against a jumped host keeps working.
+    """
+    found = 0
+    for path in (ANSIBLE / "roles").rglob("*.yml"):
+        for task in yaml.safe_load(path.read_text()) or []:
+            if not isinstance(task, dict):
+                continue
+            sync = task.get("ansible.posix.synchronize") or task.get("synchronize")
+            if isinstance(sync, dict):
+                found += 1
+                assert sync.get("use_ssh_args") is True, (
+                    f"{path.relative_to(ANSIBLE)}: {task.get('name')} must set use_ssh_args: true"
+                )
+    assert found >= 2, "expected the django_app and round_agent synchronize tasks"
+
+
 def test_apt_refreshes_its_index_at_most_hourly():
     """apt-get update on every run costs seconds per host and task; each apt
     task that refreshes the index says how old it may be."""

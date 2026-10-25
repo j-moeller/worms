@@ -89,11 +89,11 @@
                             <circle cx="8" cy="13" r="1.5"></circle>
                         </svg>
                     </summary>
-                    <div class="staff-menu__panel" role="menu">
+                    <div class="staff-menu__panel">
                         <p class="staff-menu__label" aria-hidden="true">Staff</p>
-                        <a role="menuitem" href="{% url 'todos' %}"{% if page == 'todos' %} aria-current="page"{% endif %}>Todos</a>
-                        <a role="menuitem" href="{% url 'rounds' %}"{% if page == 'rounds' %} aria-current="page"{% endif %}>Rounds</a>
-                        <a role="menuitem" href="{% url 'topology' %}"{% if page == 'topology' %} aria-current="page"{% endif %}>Topology</a>
+                        <a href="{% url 'todos' %}"{% if page == 'todos' %} aria-current="page"{% endif %}>Todos</a>
+                        <a href="{% url 'rounds' %}"{% if page == 'rounds' %} aria-current="page"{% endif %}>Rounds</a>
+                        <a href="{% url 'topology' %}"{% if page == 'topology' %} aria-current="page"{% endif %}>Topology</a>
                     </div>
                 </details>
                 {% endif %}

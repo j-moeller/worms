@@ -172,6 +172,14 @@
             });
             if (!response.ok) throw new Error("reload");
             const doc = new DOMParser().parseFromString(await response.text(), "text/html");
+            // Trust the server, not the optimistic flip. If the page did not come
+            // back in the environment we asked for — the session expired and the
+            // POST redirected to the login page, or the switch was refused — a
+            // full reload keeps the content and the chrome in sync.
+            if (doc.documentElement.getAttribute("data-env") !== value) {
+                location.reload();
+                return;
+            }
             regions().forEach((current) => {
                 const key = current.getAttribute("data-env-swap");
                 const fresh = doc.querySelector('[data-env-swap="' + key + '"]');

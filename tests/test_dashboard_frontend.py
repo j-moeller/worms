@@ -121,3 +121,61 @@ def test_upload_rejects_a_non_zip_without_javascript(site, team_upload):  # noqa
     )  # fmt: skip
     assert response.status_code == 302
     assert Upload.objects.count() == before  # nothing stored
+
+
+def test_environment_toggle_reflects_and_switches_the_session(site, team_upload):  # noqa: F811
+    """The big Dev/Sandbox toggle: both options are offered as plain POST
+    buttons, the current one is marked, and posting it flips the whole page's
+    environment (the brand, data-env, and which half is pressed)."""
+    page = site.get("/", **proxied(HOST)).content.decode()
+    assert 'class="envswitch"' in page
+    assert re.search(r'name="environment"\s+value="sandbox"', page)
+    assert re.search(r'name="environment"\s+value="dev"', page)
+    # Sandbox is the default, and the chrome says so at a glance.
+    assert 'data-env="sandbox"' in page
+    assert 'class="brand__env">SANDBOX<' in page
+    assert re.search(r'value="sandbox"[^>]*aria-pressed="true"', page)
+    assert re.search(r'value="dev"[^>]*aria-pressed="false"', page)
+
+    # Switching is a plain form post (works without JavaScript).
+    token = _csrf(site, "/")
+    switched = site.post(
+        "/environment/", {"csrfmiddlewaretoken": token, "environment": "dev"},
+        HTTP_ORIGIN=f"https://{HOST}", **proxied(HOST),
+    )  # fmt: skip
+    assert switched.status_code == 302
+    page = site.get("/", **proxied(HOST)).content.decode()
+    assert 'data-env="dev"' in page
+    assert 'class="brand__env">DEV<' in page
+    assert "WORMS//DEV" in page  # the <title>
+    assert re.search(r'value="dev"[^>]*aria-pressed="true"', page)
+    assert re.search(r'value="sandbox"[^>]*aria-pressed="false"', page)
+
+
+def test_staff_tools_are_hidden_from_non_staff(site):  # noqa: F811
+    """Todos / Rounds / Topology redirect non-staff to the index, so their nav
+    links are shown only to staff: views a user can't reach are not displayed."""
+    from core.models.competition import ApplicationSetting
+    from core.models.team import Team, TeamMembership
+    from core.models.user import User
+
+    competition = ApplicationSetting.get_current_competition()
+    member = User.objects.create(username="player", is_staff=False)
+    team = Team.objects.create(name="blue", competition=competition)
+    TeamMembership.objects.create(user=member, team=team)
+
+    site.force_login(member)
+    page = site.get("/", **proxied(HOST)).content.decode()
+    assert "site-nav__admin" not in page
+    for href in ('href="/todos/"', 'href="/rounds/"', 'href="/topology/"'):
+        assert href not in page, href
+    # And the views themselves are closed to them (hiding matches real access).
+    for path in ("/todos/", "/rounds/", "/topology/"):
+        assert site.get(path, **proxied(HOST)).status_code == 302, path
+
+    # Staff do see the tools.
+    site.force_login(User.objects.get(username="admin"))
+    staff_page = site.get("/", **proxied(HOST)).content.decode()
+    assert "site-nav__admin" in staff_page
+    for href in ('href="/todos/"', 'href="/rounds/"', 'href="/topology/"'):
+        assert href in staff_page, href

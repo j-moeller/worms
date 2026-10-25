@@ -26,6 +26,8 @@
     --bad: #ff6584;
     --hot: #ff8a5c;
     --focus: #8f7cff;
+    --accent-dev: #22d3ee;        /* cyan: Dev, distinct from the violet Sandbox accent */
+    --accent-ink-dev: #04171c;
 
     --radius: 12px;
     --radius-sm: 9px;

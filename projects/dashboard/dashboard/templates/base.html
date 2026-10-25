@@ -1,22 +1,22 @@
 {% load static %}<!DOCTYPE html>
 {% with dev=request.session.is_dev_environment page=request.resolver_match.url_name %}
-<html lang="en" data-theme="{{ request.theme|default:'lab' }}" data-now="{{ request.time_now|date:'c' }}">
+<html lang="en" data-theme="{{ request.theme|default:'lab' }}" data-env="{% if dev %}dev{% else %}sandbox{% endif %}" data-now="{{ request.time_now|date:'c' }}">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{% block title %}{% endblock %} · WORMS//{% if dev %}DEV{% else %}ARENA{% endif %}</title>
+    <title>{% block title %}{% endblock %} · WORMS//{% if dev %}DEV{% else %}SANDBOX{% endif %}</title>
     <link rel="stylesheet" href="{% static 'dashboard/css/base.css' %}">
     {% block head %}{% endblock %}
     <link rel="stylesheet" href="{% static request.theme_css|default:'dashboard/css/themes/lab.css' %}" data-theme-stylesheet>
     <script src="{% static 'dashboard/js/enhance.js' %}" defer></script>
 </head>
-<body class="{% if dev %}is-dev{% else %}is-arena{% endif %}">
+<body>
     <a class="skip-link" href="#main">Skip to content</a>
 
     <header class="site-header">
         <div class="site-header__inner">
             <a class="brand" href="{% url 'index' %}">
-                <span class="brand__name">WORMS</span><span class="brand__sep">//</span><span class="brand__env">{% if dev %}DEV{% else %}ARENA{% endif %}</span>
+                <span class="brand__name">WORMS</span><span class="brand__sep">//</span><span class="brand__env">{% if dev %}DEV{% else %}SANDBOX{% endif %}</span>
             </a>
 
             {% if request.user.is_authenticated %}
@@ -32,12 +32,16 @@
                     {% if request.active_competition.is_registration_period %}
                     <li><a href="{% url 'team_registration' %}"{% if page == 'team_registration' %} aria-current="page"{% endif %}>Teams</a></li>
                     {% endif %}
-                    {% if request.user.is_staff %}
-                    <li class="site-nav__staff"><a href="{% url 'todos' %}"{% if page == 'todos' %} aria-current="page"{% endif %}>Todos</a></li>
-                    <li class="site-nav__staff"><a href="{% url 'rounds' %}"{% if page == 'rounds' %} aria-current="page"{% endif %}>Rounds</a></li>
-                    <li class="site-nav__staff"><a href="{% url 'topology' %}"{% if page == 'topology' %} aria-current="page"{% endif %}>Topology</a></li>
-                    {% endif %}
                 </ul>
+                {% if request.user.is_staff %}
+                {# Staff-only tools. Non-staff can't reach these views, so the links are not shown to them. #}
+                <ul class="site-nav__admin" aria-label="Staff">
+                    <li class="site-nav__admin-label" aria-hidden="true">Staff</li>
+                    <li><a href="{% url 'todos' %}"{% if page == 'todos' %} aria-current="page"{% endif %}>Todos</a></li>
+                    <li><a href="{% url 'rounds' %}"{% if page == 'rounds' %} aria-current="page"{% endif %}>Rounds</a></li>
+                    <li><a href="{% url 'topology' %}"{% if page == 'topology' %} aria-current="page"{% endif %}>Topology</a></li>
+                </ul>
+                {% endif %}
             </nav>
             {% endif %}
 
@@ -58,11 +62,6 @@
 
             <div class="site-session">
                 {% if request.user.is_authenticated %}
-                <form method="post" action="{% url 'set_environment' %}">
-                    {% csrf_token %}
-                    <input type="hidden" name="environment" value="{% if dev %}arena{% else %}dev{% endif %}">
-                    <button type="submit" class="btn btn--ghost btn--sm" title="Switch to the {% if dev %}competition{% else %}development{% endif %} view">{% if dev %}Arena{% else %}Dev{% endif %} view</button>
-                </form>
                 <a class="site-session__user" href="{% url 'profile' %}"{% if page == 'profile' %} aria-current="page"{% endif %}>{{ request.user.username }}</a>
                 <form method="post" action="{% url 'logout' %}">
                     {% csrf_token %}
@@ -73,6 +72,28 @@
                 {% endif %}
             </div>
         </div>
+
+        {% if request.user.is_authenticated and request.team %}
+        {% comment %}The big environment toggle. Which half is lit, and the whole
+        site's accent colour, say at a glance whether you are in Dev or Sandbox.{% endcomment %}
+        <div class="envbar">
+            <div class="envbar__inner">
+                <form method="post" action="{% url 'set_environment' %}" class="envswitch" role="group" aria-label="Environment">
+                    {% csrf_token %}
+                    <button type="submit" name="environment" value="sandbox" class="envswitch__option" aria-pressed="{% if dev %}false{% else %}true{% endif %}">
+                        <span class="envswitch__dot" aria-hidden="true"></span>Sandbox
+                    </button>
+                    <button type="submit" name="environment" value="dev" class="envswitch__option" aria-pressed="{% if dev %}true{% else %}false{% endif %}">
+                        <span class="envswitch__dot" aria-hidden="true"></span>Dev
+                    </button>
+                </form>
+                <p class="envbar__note">
+                    {% if dev %}You are in the <strong>Dev</strong> environment — your devbox. Nothing here counts toward the competition.
+                    {% else %}You are in the <strong>Sandbox</strong> environment — the live competition.{% endif %}
+                </p>
+            </div>
+        </div>
+        {% endif %}
     </header>
 
     <div class="flash" data-flash>

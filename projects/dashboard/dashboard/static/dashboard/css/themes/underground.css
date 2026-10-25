@@ -26,6 +26,8 @@
     --bad: #ff4d5e;
     --hot: #ff8a3d;
     --focus: #39ff88;
+    --accent-dev: #ffb000;        /* amber: the Dev console, not the green Sandbox */
+    --accent-ink-dev: #140c00;
 
     --radius: 3px;
     --radius-sm: 2px;

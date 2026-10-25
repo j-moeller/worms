@@ -26,6 +26,8 @@
     --bad: #cf3b4a;
     --hot: #d2622b;
     --focus: #1766d6;
+    --accent-dev: #c2410c;        /* burnt orange: unmistakably not the blue Sandbox accent */
+    --accent-ink-dev: #ffffff;
 
     --radius: 8px;
     --radius-sm: 6px;

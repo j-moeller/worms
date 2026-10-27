@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections import Counter
 
 from core import clock, schedule
+from core.locking import serialized_resource
 from core.models.competition import Competition, Round
 from core.models.rounds import HostJob, RoundRun
 from core.models.scoring import FlagCapture
@@ -173,19 +174,28 @@ def round_detail(request: HttpRequest, round_id):
                 params = round_obj.sandbox_params if started else form.sandbox_params()
                 with transaction.atomic():
                     Competition.objects.select_for_update().get(pk=round_obj.competition_id)
-                    _check_window(form, round_obj.competition, start, end, exclude=round_obj)
-                    if not round_obj.competition.is_dev_competition:
-                        _check_fit(form, start, end, params, Team.objects.filter(competition=round_obj.competition).count())
-                    if not form.errors:
-                        if started:
-                            round_obj.round_end = end
-                            round_obj.save(update_fields=["round_end"])
-                        else:
-                            round_obj.name, round_obj.round_start, round_obj.round_end = data["name"], start, end
-                            round_obj.seed, round_obj.sandbox_params = form.chosen_seed(), params
-                            round_obj.save(update_fields=["name", "seed", "round_start", "round_end", "sandbox_params"])
-                        messages.success(request, f"Saved {round_obj.name}.")
-                        return redirect("staff_round", round_id=round_obj.pk)
+                    with serialized_resource("round-plan", round_obj.pk):
+                        round_obj = get_object_or_404(Round, pk=round_obj.pk,
+                            competition__in=[c for c in (comp, dev) if c is not None])
+                        if RoundRun.objects.filter(round=round_obj).exists():
+                            messages.error(request, "The round's runs are planned; it can no longer be changed.")
+                            return redirect("staff_round", round_id=round_obj.pk)
+                        if not started and round_obj.round_start is not None and round_obj.round_start <= clock.now():
+                            messages.error(request, "The round has started; reload before editing its end.")
+                            return redirect("staff_round", round_id=round_obj.pk)
+                        _check_window(form, round_obj.competition, start, end, exclude=round_obj)
+                        if not round_obj.competition.is_dev_competition:
+                            _check_fit(form, start, end, params, Team.objects.filter(competition=round_obj.competition).count())
+                        if not form.errors:
+                            if started:
+                                round_obj.round_end = end
+                                round_obj.save(update_fields=["round_end"])
+                            else:
+                                round_obj.name, round_obj.round_start, round_obj.round_end = data["name"], start, end
+                                round_obj.seed, round_obj.sandbox_params = form.chosen_seed(), params
+                                round_obj.save(update_fields=["name", "seed", "round_start", "round_end", "sandbox_params"])
+                            messages.success(request, f"Saved {round_obj.name}.")
+                            return redirect("staff_round", round_id=round_obj.pk)
     elif request.method == "POST":
         messages.error(request, "The round's runs are planned; it can no longer be changed.")
         return redirect("staff_round", round_id=round_obj.pk)
@@ -211,8 +221,9 @@ def round_detail(request: HttpRequest, round_id):
 def round_delete(request: HttpRequest, round_id):
     comp, dev = _competitions(request)
     round_obj = get_object_or_404(Round, pk=round_id, competition__in=[c for c in (comp, dev) if c is not None])
-    if RoundRun.objects.filter(round=round_obj).exists() or not delete_unreferenced(Round, round_obj.pk):
-        messages.error(request, f"{round_obj.name} has runs and is kept.")
-        return redirect("staff_round", round_id=round_obj.pk)
+    with serialized_resource("round-plan", round_obj.pk):
+        if RoundRun.objects.filter(round=round_obj).exists() or not delete_unreferenced(Round, round_obj.pk):
+            messages.error(request, f"{round_obj.name} has runs and is kept.")
+            return redirect("staff_round", round_id=round_obj.pk)
     messages.success(request, f"Round {round_obj.name} deleted.")
     return redirect("staff_rounds")

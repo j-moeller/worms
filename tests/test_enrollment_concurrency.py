@@ -79,7 +79,7 @@ def _clients():
     return clients
 
 
-def _race(cluster, table, row_id, requests):
+def _race(cluster, table, row_id, requests, *, role="django_dashboard"):
     """Both requests must be blocked on the parent row before release."""
     from django.db import connection
 
@@ -104,7 +104,7 @@ def _race(cluster, table, row_id, requests):
                 while time.monotonic() < deadline:
                     with observer.cursor() as cur:
                         cur.execute("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
-                                    "AND usename = 'django_dashboard' AND wait_event_type = 'Lock'")
+                                    "AND usename = %s AND wait_event_type = 'Lock'", [role])
                         waiting = cur.fetchone()[0]
                     if waiting >= 2:
                         break

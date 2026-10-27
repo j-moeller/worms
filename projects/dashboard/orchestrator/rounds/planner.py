@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import random
 
+from core.locking import serialized_resource
+from core.models.competition import Round
 from core.models.rounds import RoundRun
 from core.models.team import Team
 from core.models.worms import Upload
@@ -21,6 +23,16 @@ def plan_round(round, base_seed=None, sandbox_params=None):
     """Create the missing runs for `round`. Idempotent: existing runs are left
     as they are. Returns the runs in running order. Every run gets the round's
     parameters (sandbox size, game plan, timing; set on the dashboard)."""
+    # Staff editing/deletion and other planner processes use the same lock.
+    # Re-read the round after waiting: its seed/window may have changed.
+    with serialized_resource("round-plan", round.pk):
+        current = Round.objects.filter(pk=round.pk).first()
+        if current is None:
+            return []
+        return _plan_round(current, base_seed, sandbox_params)
+
+
+def _plan_round(round, base_seed, sandbox_params):
     base_seed = base_seed if base_seed is not None else round.seed
     if sandbox_params is None:
         sandbox_params = round.sandbox_params or {}

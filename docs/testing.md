@@ -116,9 +116,8 @@ FAIL ("sandbox deployed"); the other checks still run.
 
 ## Not covered (yet)
 
-- Most dashboard views (the TOPOLOGY endpoints and page are covered:
-  `test_rounds.py`, `test_topology_page.py`) and the topology collector
-  against a real Proxmox API.
+- The topology collector against a real Proxmox API. Dashboard workflows
+  are covered by the isolated rehearsal below and the dashboard-specific tests.
 - A full live round driven by the conductor + agent on a real Proxmox host
   (the simulation checks capture scoring with an injected finished run, not a
   sandbox the conductor built; the lifecycle itself is covered offline in
@@ -148,3 +147,64 @@ The conductor and agent are exercised against a real PostgreSQL with the real
 migrations and grants, but no sandbox is built on a live Proxmox node (none is
 available here), so the actual tofu/qm/ssh calls are only checked at the
 "which commands run" level.
+
+## Isolated dashboard rehearsal
+
+Use Python 3.12+, PostgreSQL server binaries (`initdb`, `pg_ctl`, `pg_config`)
+and OpenSSL on PATH. The test requirements include Ansible and its PostgreSQL
+collection. No Docker, vault, production database or Proxmox access is needed.
+
+```sh
+python3 -m venv .venv-test
+.venv-test/bin/pip install -r tests/requirements.txt
+PATH="$PWD/.venv-test/bin:$PATH" .venv-test/bin/python scripts/dashboard_e2e.py
+```
+
+On Homebrew, add `$(brew --prefix postgresql@17)/bin` to PATH if those binaries
+are not already available. The script prints the local URL and a generated
+admin password, also saved in its private temporary `session.json`. It binds
+only to loopback: HTTP on localhost:28180 for browser testing and HTTPS on
+localhost:28181 for clients that explicitly trust the printed certificate.
+The certificate is never installed into the system trust store. The server
+uses production middleware, Secure cookies and the restricted
+`django_dashboard` database role; migrations and grants match the deployed
+configuration. Open the HTTP URL as `localhost` (browsers treat Secure cookies
+on localhost specially). Ctrl-C removes the temporary PostgreSQL cluster.
+Media and session metadata remain in the printed work directory. This is a
+local test server, not a deployment server.
+
+The repeatable journey starts its own isolated instance on random ports:
+
+```sh
+PATH="$PWD/.venv-test/bin:$PATH" .venv-test/bin/python -m pytest -q \
+  tests/test_dashboard_e2e.py tests/test_enrollment_concurrency.py
+```
+
+For the real browser replay/download check, install Node Playwright and its
+Chromium browser (as for `test_topology_page.py`). `NODE_PATH` may point at an
+installation outside the repository; `WORMS_SCREENSHOTS` selects where browser
+screenshots are saved. The browser test opens the running server, reads the
+stored log, downloads the ZIP, checks student/staff access and records
+JavaScript and HTTP errors. The HTTPS journey still runs without Playwright.
+
+It covers staff account/CSV creation, student first login and password change,
+team join/leave and staff assignments, valid/invalid uploads, round creation,
+log/score HTTP ingestion as the INSERT-only service roles, processing as the
+orchestrator role, team/staff replay and ZIP downloads, cross-team refusals,
+CSRF/origin rejection, deactivation and password reset. Run/VM records are
+fixtures; no conductor or node agent runs and no sandbox is built. The
+concurrency regressions synchronize real PostgreSQL requests to check duplicate
+accounts/team names, the last team place, simultaneous assignments, resizing,
+and committing membership changes before SSH keys are re-pushed.
+
+The case-insensitive uniqueness migration preserves existing spellings. Before
+applying it to an existing deployment, check for previously allowed collisions:
+
+```sql
+SELECT lower(username), count(*) FROM users GROUP BY lower(username) HAVING count(*) > 1;
+SELECT competition_id, lower(name), count(*) FROM teams
+GROUP BY competition_id, lower(name) HAVING count(*) > 1;
+```
+
+Any collisions must be resolved by the operator first. The migration does not
+merge or delete accounts or teams automatically.

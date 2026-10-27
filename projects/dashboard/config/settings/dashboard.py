@@ -29,7 +29,8 @@ ORCHESTRATOR_API = {
     "token": env("ORCHESTRATOR_API_TOKEN", ""),
     # The internal CA is installed in the service host's trust store.
     # Requests otherwise uses certifi's separate public-CA bundle.
-    "ca_bundle": env("ORCHESTRATOR_CA_BUNDLE") or ssl.get_default_verify_paths().cafile,
+    "ca_bundle": (env("ORCHESTRATOR_CA_BUNDLE") or env("REQUESTS_CA_BUNDLE")
+                  or env("CURL_CA_BUNDLE") or ssl.get_default_verify_paths().cafile),
 }
 
 # The design every visitor sees by default (dashboard/themes.py); a visitor

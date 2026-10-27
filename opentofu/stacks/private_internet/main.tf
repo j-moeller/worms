@@ -52,7 +52,7 @@ locals {
   #       apt-cache for the VM's own package installs (apt_client, by IP) --
   #       a dead end, no other egress to the services bridge.
   # net1: SSH from the host; internet egress while internet access is allowed (Internet.yml);
-  #       syslog to wazuh (routed by the host).
+  #       audit logs to the syslog VM (routed by the host).
   firewall_rules = [
     { group = local.sg.private_internet, iface = "net0" },
     { group = local.sg.pi_apt_client, iface = "net0" },

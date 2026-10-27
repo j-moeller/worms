@@ -1,0 +1,13 @@
+# Managed by Ansible (role syslog_server). DO NOT EDIT.
+{{ syslog_server_dir }}/*/*.log {
+    daily
+    rotate {{ syslog_server_keep_days }}
+    missingok
+    notifempty
+    compress
+    delaycompress
+    sharedscripts
+    postrotate
+        /usr/lib/rsyslog/rsyslog-rotate
+    endscript
+}

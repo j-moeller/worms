@@ -1,0 +1,11 @@
+---
+# Central rsyslog server: receives the audit logs of every infrastructure VM
+# (role auditd) on tcp 514 and writes one file per sending VM:
+#   /var/log/remote/<VM address>/audit.log
+# The firewall (security group syslog, host nftables) decides who may send.
+syslog_server_address: "{{ infrastructure_ips.syslog }}"
+syslog_server_port: 514
+syslog_server_dir: /var/log/remote
+
+# Rotation: daily, compressed, kept this many days.
+syslog_server_keep_days: 30

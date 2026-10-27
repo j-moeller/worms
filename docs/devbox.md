@@ -181,7 +181,7 @@ Enforced in depth, by construction:
 What a devbox **can** reach: its own team's devbox VMs (the experiment),
 scoring and logging (team-attributed), the private internet, and DNS — all via
 its devbox-gw. What it **cannot** reach: the Proxmox host, the database, the
-dashboard, the orchestrator, the monitor, wazuh, the sandbox, and other teams'
+dashboard, the orchestrator, the monitor, syslog, the sandbox, and other teams'
 devboxes.
 
 ## Resources, limits, maintenance

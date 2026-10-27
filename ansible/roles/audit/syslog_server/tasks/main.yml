@@ -1,0 +1,34 @@
+---
+- name: Install rsyslog
+  ansible.builtin.apt:
+    name: rsyslog
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create the log directory
+  ansible.builtin.file:
+    path: "{{ syslog_server_dir }}"
+    state: directory
+    owner: root
+    group: adm
+    mode: "0750"
+
+- name: Receive the audit logs of the infrastructure VMs
+  ansible.builtin.template:
+    src: 10-remote.conf.j2
+    dest: /etc/rsyslog.d/10-remote.conf
+    mode: "0644"
+  notify: Restart rsyslog
+
+- name: Rotate the received logs
+  ansible.builtin.template:
+    src: logrotate-remote.j2
+    dest: /etc/logrotate.d/worms-remote
+    mode: "0644"
+
+- name: Enable rsyslog
+  ansible.builtin.service:
+    name: rsyslog
+    enabled: true
+    state: started

@@ -7,7 +7,7 @@
 #
 # * FORWARD default drop. The host routes only dashboard -> database/
 #   orchestrator, scoring/logging/monitor -> database and syslog (tcp 514)
-#   from the infrastructure VMs -> wazuh (+ internet -> dashboard:443 if
+#   from the infrastructure VMs -> the syslog VM (+ internet -> dashboard:443 if
 #   published). Nothing is forwarded from the sandbox,
 #   services or mirror bridges; the host has no address on them.
 # * INPUT from VM bridges: replies to host-initiated connections (SSH) and
@@ -92,7 +92,7 @@ table inet worms {
     iifname "{{ b.ingest }}" oifname "{{ b.core }}" ip saddr { {{ infrastructure_ips.scoring }}, {{ infrastructure_ips.logging }}, {{ infrastructure_ips.monitor }} } ip daddr {{ infrastructure_ips.database }} tcp dport 5432 accept comment "ingest -> database"
     # Audit logs (rsyslog) of every infrastructure VM, sent via its default
     # route: dmz/core/ingest, or mgmt-exposed for DNS and private internet.
-    iifname { "{{ b.dmz }}", "{{ b.core }}", "{{ b.ingest }}", "{{ b.mgmt_exposed }}" } oifname "{{ b.siem }}" ip daddr {{ infrastructure_ips.wazuh }} tcp dport 514 accept comment "syslog -> wazuh"
+    iifname { "{{ b.dmz }}", "{{ b.core }}", "{{ b.ingest }}", "{{ b.mgmt_exposed }}" } oifname "{{ b.siem }}" ip daddr {{ infrastructure_ips.syslog }} tcp dport 514 accept comment "audit logs -> syslog"
 {% if host_publish_dashboard %}
     iifname "{{ host_wan_interface }}" oifname "{{ b.dmz }}" ip daddr {{ infrastructure_ips.dashboard }} tcp dport 443 ct status dnat accept comment "internet -> dashboard"
 {% endif %}

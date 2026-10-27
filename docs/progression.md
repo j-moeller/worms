@@ -24,7 +24,7 @@ see, not filtered in the browser:
 |---|---|
 | the sandbox VMs it **captured in the round** (Live) — a VM appears faint until the moment of its capture | sandbox VMs it did not capture: not as a node, not as the far end of a connection, not in an event (an event or a flow involving one is dropped; a submitted flag's VM or an inferred sender that is not visible is blanked) |
 | its **own devbox** VMs whose token it submitted during the round (Dev) | other teams' devboxes, other teams' data |
-| scoring, logging, the private internet (DNS and the mirrors) — what the sandbox can reach | the database, orchestrator, dashboard, monitor, wazuh, the Proxmox host, the gateways (traffic to them is dropped) |
+| scoring, logging, the private internet (DNS and the mirrors) — what the sandbox can reach | the database, orchestrator, dashboard, monitor, syslog, the Proxmox host, the gateways (traffic to them is dropped) |
 | its VMs' addresses and networks (by CIDR, under an opaque id: `net-1`, …) | bridge names (`vmbr…`), Proxmox VMIDs, maintenance and SSH-fabric addresses, pools |
 | run state changes (`{state}` only), worm start, secrets released and VM stops/starts **of its visible VMs**, its captures, submissions (result, hash prefix of what it submitted) and logs | firewall rules, security groups, NICs, run errors, the generator's architecture, internal ids (run uuid, attempt ids), secrets, tokens, passwords |
 

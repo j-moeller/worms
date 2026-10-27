@@ -15,7 +15,7 @@ monitor's flows, the scoring/logging records).
 
 ```
  [Proxmox host]              [orchestrator]               [dashboard]
-           [monitor]          [ database ]          ([wazuh])
+           [monitor]          [ database ]          ([syslog])
                        [scoring]        [logging]
  ┌ Devbox team-a ◇┐  ┌──────── SANDBOX ◇ ─────────┐  ┌ PRIVATE INTERNET ┐
  │ A ── B ── C    │  │  vm  vm  vm                 │  │ dns              │
@@ -55,7 +55,7 @@ monitor's flows, the scoring/logging records).
   (with the NIC they are on) and the effective rules. **Click** for the full
   tables in the side panel. Hover an edge for why it exists (the rule/group),
   a hub for its members, a ◇ for the gateway VM.
-- **Auxiliary VMs** (checkbox): wazuh, the devbox SSH gateway and unclassified
+- **Auxiliary VMs** (checkbox): syslog, the devbox SSH gateway and unclassified
   VMs. Gateways are always represented by their ◇.
 
 ### Tabs: a round, then a team
@@ -182,7 +182,7 @@ documents built for them (`docs/progression.md`).
 
 - `nodes` — the Proxmox host (id `proxmox`; its addresses are its bridge
   addresses) and every guest (`vm:<vmid>`): `role` (proxmox, orchestrator,
-  dashboard, database, scoring, logging, monitor, wazuh, dns,
+  dashboard, database, scoring, logging, monitor, syslog, dns,
   private_internet, sandbox, sandbox_gw, devbox, devbox_gw, ssh_gateway,
   other — from the VM name, tags and pool as OpenTofu sets them), `status`,
   `active`, `team`/`devbox_role` for devbox VMs, `aux`, operational

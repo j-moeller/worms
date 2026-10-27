@@ -54,10 +54,10 @@ DEVBOX_NAME = re.compile(r"^devbox-(?P<team>[a-z0-9-]+?)-(?P<role>[abc])$")
 DEVBOX_GW_NAME = re.compile(r"^devbox-(?P<team>[a-z0-9-]+?)-gw$")
 
 # Infrastructure VMs are recognised by their OpenTofu name (= the VM name).
-INFRA_ROLES = {"orchestrator", "dashboard", "database", "scoring", "logging", "monitor", "wazuh"}
+INFRA_ROLES = {"orchestrator", "dashboard", "database", "scoring", "logging", "monitor", "syslog"}
 # Plumbing rather than the picture the operator asked for; the view hides
 # these unless "auxiliary VMs" is switched on.
-AUX_ROLES = {"wazuh", "sandbox_gw", "devbox_gw", "ssh_gateway", "other"}
+AUX_ROLES = {"syslog", "sandbox_gw", "devbox_gw", "ssh_gateway", "other"}
 UNTRUSTED_ROLES = {"sandbox", "devbox"}
 GATEWAY_ROLES = {"sandbox_gw", "devbox_gw"}
 PI_ROLES = {"private_internet", "dns"}

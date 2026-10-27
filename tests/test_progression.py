@@ -205,7 +205,7 @@ def forbidden(world):
     hidden = world["vm"]["vm-hidden"]
     return [
         str(hidden.uuid), "vm-hidden", "10.64.2.12", "10.64.2.0/24", "vmbr", "9777", "10.4.0.",
-        "worms-pve", "sandbox-gw", "proxmox", "database", "orchestrator", "dashboard", "monitor", "wazuh", "firewall", "rules",
+        "worms-pve", "sandbox-gw", "proxmox", "database", "orchestrator", "dashboard", "monitor", "syslog", "firewall", "rules",
         "security_groups", "nics", "ERRSECRET", "id_ed25519", "ARCH-SECRET", "architecture", str(world["run"].uuid), "team-b",
         str(world["b"].uuid), "team b's secret", "devbox-t2", "9888", "10.7.", "10.6.", str(world["logs"]["hidden"].log_data),
     ]

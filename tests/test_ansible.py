@@ -55,7 +55,7 @@ def test_every_vm_group_is_in_the_inventory():
     """A VM key in OpenTofu whose group is missing from inventory.yml would
     get no role groups (and e.g. no audit logging)."""
     groups = yaml.safe_load((ANSIBLE / "inventory.yml").read_text())["all"]["children"]
-    for vm in ("database", "dashboard", "orchestrator", "scoring", "logging", "monitor", "dns", "wazuh"):
+    for vm in ("database", "dashboard", "orchestrator", "scoring", "logging", "monitor", "dns", "syslog"):
         assert vm in groups
     audit = groups["audit_hosts"]["children"]
     assert "monitor" in audit and "monitor" in groups["tls_hosts"]["children"]
@@ -290,7 +290,7 @@ ROLES = {
     "logging": [*TLS_WEB, "sandbox_api", "auditd"],
     "monitor": ["ca_distribute", "network_monitor", "auditd"],
     "dns": ["setup_dns", "auditd"],
-    "wazuh": ["wazuh_server"],
+    "syslog": ["syslog_server"],
     **{pi: ["apt_client", pi, "auditd"] for pi in ("apt_cache", "devpi", "docker_registry", "manpages", "ntp",
                                                    "cve_search", "wikipedia")},
 }  # fmt: skip

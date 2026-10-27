@@ -92,21 +92,20 @@ locals {
       ]
     }
 
-    # Central log server (Wazuh all-in-one: manager, indexer, dashboard).
-    # Receives syslog (audit logs) from every infrastructure VM; the dashboard
-    # is reachable from the Proxmox host only (SSH tunnel). Management on
-    # mgmt-exposed: it parses logs of VMs that may be compromised.
-    wazuh = {
-      user_data_file_id = local.platform.cloud_init.wazuh.file_id
-      cpu               = 4
-      ram               = 2048 # below Wazuh's 8 GB; indexer heap capped (role wazuh_server)
-      disk_size         = 50
+    # Central log server: rsyslog receives the audit logs of every
+    # infrastructure VM (role syslog_server) and stores them per VM. Management
+    # on mgmt-exposed: it parses logs of VMs that may be compromised.
+    syslog = {
+      user_data_file_id = local.platform.cloud_init.syslog.file_id
+      cpu               = 1
+      ram               = 512
+      disk_size         = 20
       nics = [
-        { bridge = local.nw.siem.name, cidr = "${local.infrastructure_ips.wazuh}/24", gateway = local.host_ips.siem },
-        { bridge = local.nw.mgmt_exposed.name, cidr = "${local.management_ips.wazuh}/24" },
+        { bridge = local.nw.siem.name, cidr = "${local.infrastructure_ips.syslog}/24", gateway = local.host_ips.siem },
+        { bridge = local.nw.mgmt_exposed.name, cidr = "${local.management_ips.syslog}/24" },
       ]
       firewall_rules = [
-        { group = local.sg.wazuh, iface = "net0" },
+        { group = local.sg.syslog, iface = "net0" },
         { group = local.sg.provisioning, iface = "net0" },
         { group = local.sg.ssh, iface = "net1" },
       ]
@@ -114,17 +113,10 @@ locals {
   }
 }
 
-# Build every persistent VM, minus wazuh while it is disabled (enable_wazuh).
-variable "enable_wazuh" {
-  description = "Create the Wazuh central-log VM. Off for now to save RAM (docs/resources.md)."
-  type        = bool
-  default     = false
-}
-
 module "infrastructure_vms" {
   source = "../../../modules/infrastructure_vm"
 
-  for_each = { for name, vm in local.persistent : name => vm if name != "wazuh" || var.enable_wazuh }
+  for_each = local.persistent
 
   proxmox_instance   = var.proxmox_instance
   name               = each.key

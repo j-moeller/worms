@@ -9,7 +9,7 @@ locals {
     blank           = { file = "vm-blank.yml", hostname = "vm" }
     postgresql      = { file = "vm-postgresq.yml", hostname = "postgresql" }
     django          = { file = "vm-django.yml", hostname = "django" }
-    wazuh           = { file = "vm-wazuh.yml", hostname = "wazuh" }
+    syslog          = { file = "vm-syslog.yml", hostname = "syslog" }
     dns             = { file = "vm-dns.yml", hostname = "dns" }
     flask           = { file = "vm-flask.yml", hostname = "flask" }
     network_monitor = { file = "vm-network-monitor.yml", hostname = "network-monitor" }

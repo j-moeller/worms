@@ -35,7 +35,7 @@ all:
     ntp:
     cve_search:
     wikipedia:
-    wazuh:
+    syslog:
     monitor:
     sandbox_gw:
     sandbox:
@@ -92,12 +92,12 @@ all:
       children:
         monitor:
 
-    # Central log server (role wazuh_server).
-    wazuh_hosts:
+    # Central log server (role syslog_server).
+    syslog_hosts:
       children:
-        wazuh:
+        syslog:
 
-    # auditd + log forwarding to wazuh (role auditd): every infrastructure VM.
+    # auditd + log forwarding to the syslog VM (role auditd): every infrastructure VM.
     audit_hosts:
       children:
         database:

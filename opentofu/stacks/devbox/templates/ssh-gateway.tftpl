@@ -17,6 +17,10 @@ ssh_authorized_keys:
   - ${key}
 %{ endfor ~}
 
+# Ansible owns every package install and update; cloud-init never touches apt.
+package_update: false
+package_upgrade: false
+
 write_files:
   - path: /etc/ssh/sshd_config.d/10-devbox-gateway.conf
     permissions: "0644"

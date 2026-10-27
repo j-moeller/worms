@@ -3,6 +3,10 @@
 # services) the data disk. Software is installed by the VM's Ansible role.
 ssh_pwauth: false
 
+# Ansible owns every package install and update; cloud-init never touches apt.
+package_update: false
+package_upgrade: false
+
 hostname: ${hostname}
 
 ssh_authorized_keys:

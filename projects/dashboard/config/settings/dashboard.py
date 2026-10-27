@@ -1,3 +1,5 @@
+import ssl
+
 from config.settings.base import *  # noqa: F401,F403
 from config.settings.base import DEBUG, LOG_LEVEL, LOGGING, env, postgres_database
 
@@ -25,6 +27,9 @@ ORCHESTRATOR_API = {
     "url": env("ORCHESTRATOR_URL", ""),
     "tls_name": env("ORCHESTRATOR_TLS_NAME", "orchestrator.worms.internal"),
     "token": env("ORCHESTRATOR_API_TOKEN", ""),
+    # The internal CA is installed in the service host's trust store.
+    # Requests otherwise uses certifi's separate public-CA bundle.
+    "ca_bundle": env("ORCHESTRATOR_CA_BUNDLE") or ssl.get_default_verify_paths().cafile,
 }
 
 # The design every visitor sees by default (dashboard/themes.py); a visitor

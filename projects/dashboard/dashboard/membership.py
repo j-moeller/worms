@@ -12,6 +12,7 @@ operator runs `worms devbox provision` (docs/devbox.md).
 
 from __future__ import annotations
 
+from core.membership import membership_change
 from core.models.devbox import Devbox, DevboxSSHKey
 from core.models.team import TeamMembership
 from dashboard import orchestrator_client
@@ -21,11 +22,11 @@ from django.db import transaction
 def remove_member(team, user) -> int:
     """Remove `user` from `team` with their devbox keys; re-push the keys if
     any were removed. Returns the number of keys removed."""
-    with transaction.atomic():
+    with membership_change(user):
         TeamMembership.objects.filter(team=team, user=user).delete()
         removed, _ = DevboxSSHKey.objects.filter(team=team, created_by=user).delete()
-    if removed and Devbox.objects.filter(team=team).exists():
-        request_devbox_reconfigure(team)
+        if removed and Devbox.objects.filter(team=team).exists():
+            transaction.on_commit(lambda: request_devbox_reconfigure(team))
     return removed
 
 

@@ -3,6 +3,7 @@ import uuid
 from core import clock
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from django.db.models.functions import Lower
 
 
 class User(AbstractUser):
@@ -26,3 +27,4 @@ class User(AbstractUser):
 
     class Meta:
         db_table = "users"
+        constraints = [models.UniqueConstraint(Lower("username"), name="users_username_case_insensitive")]

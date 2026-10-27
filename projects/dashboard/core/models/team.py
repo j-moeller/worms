@@ -5,6 +5,7 @@ from core import clock
 from core.models.competition import Competition
 from core.models.user import User
 from django.db import models
+from django.db.models.functions import Lower
 from django.http import HttpRequest
 
 
@@ -45,6 +46,7 @@ class Team(models.Model):
                 fields=["competition", "name"],
                 name="unique_team_per_competition",
             ),
+            models.UniqueConstraint(Lower("name"), "competition", name="teams_name_case_insensitive"),
         ]
 
     def __str__(self):

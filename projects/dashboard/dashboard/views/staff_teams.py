@@ -10,6 +10,7 @@ delete`, which removes it with everything it owns.
 
 from __future__ import annotations
 
+from core.membership import membership_change
 from core.models.devbox import Devbox, DevboxSSHKey
 from core.models.rounds import RoundRun
 from core.models.team import AccessTokens, Team, TeamMembership
@@ -21,7 +22,7 @@ from dashboard.views.decorators import refuse, staff_required
 from dashboard.views.staff import delete_unreferenced
 from dashboard.views.util import render_with_base_info
 from django.contrib import messages
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Count, Max
 from django.http import HttpRequest
 from django.shortcuts import get_object_or_404, redirect
@@ -47,14 +48,21 @@ def teams(request: HttpRequest):
     if request.method == "POST":
         form = TeamForm(request.POST, competition=competition)
         if form.is_valid():
-            team = Team.objects.create(
-                name=form.cleaned_data["name"],
-                max_members=form.cleaned_data["max_members"],
-                competition=competition,
-                development_competition=competition.development_competition,
-            )
-            messages.success(request, f"Team {team.name} created. {DEVBOX_HINT}")
-            return redirect("staff_team", uuid=team.uuid)
+            try:
+                with transaction.atomic():
+                    team = Team.objects.create(
+                        name=form.cleaned_data["name"],
+                        max_members=form.cleaned_data["max_members"],
+                        competition=competition,
+                        development_competition=competition.development_competition,
+                    )
+            except IntegrityError:
+                if not Team.objects.filter(competition=competition, name__iexact=form.cleaned_data["name"]).exists():
+                    raise
+                form.add_error("name", "A team with this name already exists.")
+            else:
+                messages.success(request, f"Team {team.name} created. {DEVBOX_HINT}")
+                return redirect("staff_team", uuid=team.uuid)
 
     rows = (
         Team.objects.filter(competition=competition)
@@ -82,13 +90,22 @@ def team_detail(request: HttpRequest, uuid):
     team = _team(request, uuid)
     form = TeamForm(initial={"name": team.name, "max_members": team.max_members}, competition=team.competition, team=team)
     if request.method == "POST":
-        form = TeamForm(request.POST, competition=team.competition, team=team)
-        if form.is_valid():
-            team.name = form.cleaned_data["name"]
-            team.max_members = form.cleaned_data["max_members"]
-            team.save(update_fields=["name", "max_members"])
-            messages.success(request, f"Saved {team.name}.")
-            return redirect("staff_team", uuid=team.uuid)
+        with transaction.atomic():
+            team = Team.objects.select_for_update().get(pk=team.pk)
+            form = TeamForm(request.POST, competition=team.competition, team=team)
+            if form.is_valid():
+                team.name = form.cleaned_data["name"]
+                team.max_members = form.cleaned_data["max_members"]
+                try:
+                    with transaction.atomic():
+                        team.save(update_fields=["name", "max_members"])
+                except IntegrityError:
+                    if not Team.objects.filter(competition=team.competition, name__iexact=team.name).exclude(pk=team.pk).exists():
+                        raise
+                    form.add_error("name", "A team with this name already exists.")
+                else:
+                    messages.success(request, f"Saved {team.name}.")
+                    return redirect("staff_team", uuid=team.uuid)
     devbox = Devbox.objects.filter(team=team).prefetch_related("vms").first()
     return render_with_base_info(request, "staff/team.html", {
         "team": team,
@@ -125,11 +142,16 @@ def team_add_member(request: HttpRequest, uuid):
     form = AddMemberForm(request.POST, competition=team.competition)
     if not form.is_valid():
         messages.error(request, "Choose a user who is not in a team yet.")
-    elif team.users.count() >= team.max_members:
-        messages.error(request, f"{team.name} is full ({team.max_members} members); raise its limit first.")
     else:
-        TeamMembership.objects.create(team=team, user=form.cleaned_data["user"])
-        messages.success(request, f"{form.cleaned_data['user'].username} joined {team.name}.")
+        user = form.cleaned_data["user"]
+        with membership_change(user, team) as team:
+            if TeamMembership.objects.filter(user=user, team__competition=team.competition).exists():
+                messages.error(request, "Choose a user who is not in a team yet.")
+            elif team.users.count() >= team.max_members:
+                messages.error(request, f"{team.name} is full ({team.max_members} members); raise its limit first.")
+            else:
+                TeamMembership.objects.create(team=team, user=user)
+                messages.success(request, f"{user.username} joined {team.name}.")
     return redirect("staff_team", uuid=team.uuid)
 
 

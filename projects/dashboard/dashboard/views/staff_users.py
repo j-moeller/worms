@@ -14,6 +14,7 @@ deactivation); nobody manages the admin here (`worms admin reset-password`).
 from __future__ import annotations
 
 from core import accounts
+from core.membership import membership_change
 from core.models.team import TeamMembership
 from core.models.user import User
 from dashboard.forms import UserCreateForm, UserEditForm, UserImportForm, UserTeamForm
@@ -72,11 +73,11 @@ def users(request: HttpRequest):
             with transaction.atomic():
                 created = accounts.create_account(data["email"], data["first_name"], data["last_name"])
                 if created is not None and data.get("team") is not None:
-                    team = data["team"]
-                    if team.users.count() >= team.max_members:
-                        messages.error(request, f"{team.name} is full; {created.user.username} has no team yet.")
-                    else:
-                        TeamMembership.objects.create(user=created.user, team=team)
+                    with membership_change(created.user, data["team"]) as team:
+                        if team.users.count() >= team.max_members:
+                            messages.error(request, f"{team.name} is full; {created.user.username} has no team yet.")
+                        else:
+                            TeamMembership.objects.create(user=created.user, team=team)
             if created is None:
                 create_form.add_error("email", "An account with this email already exists.")
             else:
@@ -195,17 +196,18 @@ def user_team(request: HttpRequest, uuid):
         messages.error(request, "Choose a team of this competition.")
         return redirect("staff_user", uuid=user.uuid)
     new = form.cleaned_data["team"]
-    old = _team_of(competition).get(user.id)
-    if new is not None and old is not None and new.pk == old.pk:
-        return redirect("staff_user", uuid=user.uuid)
-    if new is not None and new.users.count() >= new.max_members:
-        messages.error(request, f"{new.name} is full ({new.max_members} members); raise its limit first.")
-        return redirect("staff_user", uuid=user.uuid)
-    if old is not None:
-        remove_member(old, user)
-    if new is not None:
-        TeamMembership.objects.create(user=user, team=new)
-        messages.success(request, f"{user.username} is now in {new.name}.")
-    else:
-        messages.success(request, f"{user.username} has no team now.")
+    with membership_change(user, new) as new:
+        old = _team_of(competition).get(user.id)
+        if new is not None and old is not None and new.pk == old.pk:
+            return redirect("staff_user", uuid=user.uuid)
+        if new is not None and new.users.count() >= new.max_members:
+            messages.error(request, f"{new.name} is full ({new.max_members} members); raise its limit first.")
+            return redirect("staff_user", uuid=user.uuid)
+        if old is not None:
+            remove_member(old, user)
+        if new is not None:
+            TeamMembership.objects.create(user=user, team=new)
+            messages.success(request, f"{user.username} is now in {new.name}.")
+        else:
+            messages.success(request, f"{user.username} has no team now.")
     return redirect("staff_user", uuid=user.uuid)

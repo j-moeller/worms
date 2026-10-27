@@ -109,6 +109,7 @@ def development_competition(request: HttpRequest):
     if comp is None:
         return refuse(request, "No current competition.", 500)
     with transaction.atomic():
+        comp = Competition.objects.select_for_update().get(pk=comp.pk)
         dev = comp.development_competition
         if dev is None:
             dev = Competition.objects.create(name=f"{comp.name} · dev", is_dev_competition=True)

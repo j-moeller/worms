@@ -11,6 +11,7 @@ delete`, which removes it with everything it owns.
 from __future__ import annotations
 
 from core.membership import membership_change
+from core.models.competition import Competition
 from core.models.devbox import Devbox, DevboxSSHKey
 from core.models.rounds import RoundRun
 from core.models.team import AccessTokens, Team, TeamMembership
@@ -50,6 +51,7 @@ def teams(request: HttpRequest):
         if form.is_valid():
             try:
                 with transaction.atomic():
+                    competition = Competition.objects.select_for_update().get(pk=competition.pk)
                     team = Team.objects.create(
                         name=form.cleaned_data["name"],
                         max_members=form.cleaned_data["max_members"],

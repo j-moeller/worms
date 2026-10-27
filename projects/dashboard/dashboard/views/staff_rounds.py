@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections import Counter
 
 from core import clock, schedule
-from core.models.competition import Round
+from core.models.competition import Competition, Round
 from core.models.rounds import HostJob, RoundRun
 from core.models.scoring import FlagCapture
 from core.models.team import Team
@@ -27,6 +27,7 @@ from dashboard.views.decorators import refuse, staff_required
 from dashboard.views.staff import delete_unreferenced
 from dashboard.views.util import render_with_base_info
 from django.contrib import messages
+from django.db import transaction
 from django.db.models import Count
 from django.http import HttpRequest
 from django.shortcuts import get_object_or_404, redirect
@@ -93,16 +94,19 @@ def rounds(request: HttpRequest):
             if target is None:
                 form.add_error("environment", "Create the development competition first (Staff → Competition).")
             else:
-                _check_window(form, target, start, end)
-                if not form.is_dev:
-                    _check_fit(form, start, end, params, teams)
-            if not form.errors:
-                created = Round.objects.create(
-                    competition=target, name=data["name"], seed=form.chosen_seed(),
-                    round_start=start, round_end=end, sandbox_params=params,
-                )  # fmt: skip
-                messages.success(request, f"Round {created.name} created. Its runs are planned when it starts.")
-                return redirect("staff_round", round_id=created.pk)
+                with transaction.atomic():
+                    Competition.objects.select_for_update().get(pk=target.pk)
+                    teams = Team.objects.filter(competition=comp).count()
+                    _check_window(form, target, start, end)
+                    if not form.is_dev:
+                        _check_fit(form, start, end, params, teams)
+                    if not form.errors:
+                        created = Round.objects.create(
+                            competition=target, name=data["name"], seed=form.chosen_seed(),
+                            round_start=start, round_end=end, sandbox_params=params,
+                        )  # fmt: skip
+                        messages.success(request, f"Round {created.name} created. Its runs are planned when it starts.")
+                        return redirect("staff_round", round_id=created.pk)
 
     def listing(competition):
         if competition is None:
@@ -167,19 +171,21 @@ def round_detail(request: HttpRequest, round_id):
                 start = data.get("round_start", round_obj.round_start)
                 end = data["round_end"]
                 params = round_obj.sandbox_params if started else form.sandbox_params()
-                _check_window(form, round_obj.competition, start, end, exclude=round_obj)
-                if not round_obj.competition.is_dev_competition:
-                    _check_fit(form, start, end, params, Team.objects.filter(competition=round_obj.competition).count())
-                if not form.errors:
-                    if started:
-                        round_obj.round_end = end
-                        round_obj.save(update_fields=["round_end"])
-                    else:
-                        round_obj.name, round_obj.round_start, round_obj.round_end = data["name"], start, end
-                        round_obj.seed, round_obj.sandbox_params = form.chosen_seed(), params
-                        round_obj.save(update_fields=["name", "seed", "round_start", "round_end", "sandbox_params"])
-                    messages.success(request, f"Saved {round_obj.name}.")
-                    return redirect("staff_round", round_id=round_obj.pk)
+                with transaction.atomic():
+                    Competition.objects.select_for_update().get(pk=round_obj.competition_id)
+                    _check_window(form, round_obj.competition, start, end, exclude=round_obj)
+                    if not round_obj.competition.is_dev_competition:
+                        _check_fit(form, start, end, params, Team.objects.filter(competition=round_obj.competition).count())
+                    if not form.errors:
+                        if started:
+                            round_obj.round_end = end
+                            round_obj.save(update_fields=["round_end"])
+                        else:
+                            round_obj.name, round_obj.round_start, round_obj.round_end = data["name"], start, end
+                            round_obj.seed, round_obj.sandbox_params = form.chosen_seed(), params
+                            round_obj.save(update_fields=["name", "seed", "round_start", "round_end", "sandbox_params"])
+                        messages.success(request, f"Saved {round_obj.name}.")
+                        return redirect("staff_round", round_id=round_obj.pk)
     elif request.method == "POST":
         messages.error(request, "The round's runs are planned; it can no longer be changed.")
         return redirect("staff_round", round_id=round_obj.pk)

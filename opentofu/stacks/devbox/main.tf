@@ -195,6 +195,7 @@ module "devbox_vm" {
     devbox            = local.sg.devbox
     devbox_ssh_target = local.sg.devbox_ssh_target
     ssh               = local.sg.ssh
+    llm_access        = local.sg.llm_access
   }
 
   depends_on = [proxmox_network_linux_bridge.devbox]

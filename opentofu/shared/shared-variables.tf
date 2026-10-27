@@ -27,6 +27,16 @@ variable "ssh_public_key" {
   default     = "~/.ssh/id_rsa.pub"
 }
 
+# The one external IP the sandbox/devbox VMs may reach on TCP 443 (the
+# `llm-access` security group, egress only). shared-variables.tf is symlinked
+# into every stack, so this carries a safe placeholder default (loopback =
+# effectively no access); set the real LLM endpoint with TF_VAR_llm_access_ip.
+variable "llm_access_ip" {
+  description = "IP the sandbox/devbox VMs may reach on TCP 443 for LLM access (egress only)."
+  type        = string
+  default     = "127.0.0.1"
+}
+
 # =============================================================================
 # SINGLE SOURCE OF TRUTH for all non-sandbox network addressing.
 #

@@ -61,7 +61,7 @@ variable "management" {
 }
 
 variable "security_groups" {
-  description = "Security-group names to apply (keys: devbox|devbox_gw, devbox_ssh_target, services_client, ssh)."
+  description = "Security-group names to apply (keys: devbox|devbox_gw, devbox_ssh_target, services_client, ssh; plain VMs also llm_access)."
   type        = map(string)
 }
 

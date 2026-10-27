@@ -160,6 +160,15 @@ resource "proxmox_virtual_environment_firewall_rules" "vm" {
     }
   }
 
+  # LLM endpoint egress (443). Passed for plain devbox VMs, not the gateways.
+  dynamic "rule" {
+    for_each = contains(keys(var.security_groups), "llm_access") ? [1] : []
+    content {
+      security_group = var.security_groups["llm_access"]
+      comment        = "LLM endpoint egress (443)"
+    }
+  }
+
   # Management NIC: host SSH (Ansible).
   rule {
     security_group = var.security_groups["ssh"]

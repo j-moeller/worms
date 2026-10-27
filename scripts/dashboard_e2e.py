@@ -45,11 +45,11 @@ def main():
     bindir = pg.pg_bindir()
     if bindir is None:
         parser.error("Put PostgreSQL server binaries (initdb, pg_ctl) on PATH")
-    work = args.work_dir or Path(tempfile.mkdtemp(prefix="worms-dashboard-e2e-"))
+    work = (args.work_dir or Path(tempfile.mkdtemp(prefix="worms-dashboard-e2e-"))).resolve()
     work.mkdir(parents=True, exist_ok=True)
-    work.chmod(0o700)
     if (work / "session.json").exists():
         parser.error("Use a fresh work directory; session.json already exists")
+    work.chmod(0o700)
     # Drop inherited live connection settings inside this process only.
     for key in list(os.environ):
         if key.startswith(("DB_", "WORMS_", "PROXMOX_", "ORCHESTRATOR_", "DJANGO_")):

@@ -131,7 +131,7 @@ finally:
     server.shutdown()
     server.server_close()
 '''
-    constants = (f"CONFIG = {config!r}\nKIND = {kind!r}\nTEAM = {team!r}\nPAYLOAD = {payload!r}\n"
+    constants = (f"CONFIG = {{'work_directory': {config['work_directory']!r}}}\nKIND = {kind!r}\nTEAM = {team!r}\nPAYLOAD = {payload!r}\n"
                  f"APP = {str(REPO / 'ansible/roles/applications/sandbox_api/files/app.py')!r}\n")
     django_command(config, constants + code, role=f"dbuser_{kind}")
 
@@ -253,8 +253,16 @@ print(json.dumps(out))
     ingest(config, "logging", red["team"], {"log_data": {"private": "RED-ONLY-MARKER"}})
     ingest(config, "scoring", blue["team"], {"vm_flag": blue["flag"]})
     ingest(config, "scoring", red["team"], {"vm_flag": red["flag"]})
-    django_command(config, "from django.core.management import call_command\ncall_command('process_attempts', once=True)",
-                   role="django_orchestrator")
+    if not config.get("attempt_processor"):
+        django_command(config, "from django.core.management import call_command\ncall_command('process_attempts', once=True)",
+                       role="django_orchestrator")
+    else:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            count = django_command(config, "from core.models.logging import Logging\nimport json\nprint(json.dumps(Logging.objects.count()))")
+            if count == 2:
+                break
+            time.sleep(0.2)
     counts = django_command(config, "from core.models.scoring import FlagCapture\n"
                             "from core.models.logging import Logging\nimport json\n"
                             "print(json.dumps([FlagCapture.objects.count(), Logging.objects.count()]))")

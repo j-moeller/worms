@@ -2,14 +2,17 @@
 const fs = require('fs');
 const path = require('path');
 const assert = require('assert/strict');
-const { chromium } = require('playwright');
+const engines = require('playwright');
 const input = JSON.parse(fs.readFileSync(0, 'utf8'));
 
 (async () => {
-    const browser = await chromium.launch();
+    const browser = await engines[input.engine || "chromium"].launch();
     const errors = [];
     try {
-        const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+        const context = await browser.newContext({ viewport: { width: 1440, height: 1000 },
+            // Only the disposable fixture server uses a self-signed certificate.
+            // The independent requests journey verifies that certificate.
+            ignoreHTTPSErrors: Boolean(input.fixtureTLS) });
         // Keep all browser traffic inside this local test instance.
         await context.route('**/*', route => {
             const url = new URL(route.request().url());

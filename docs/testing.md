@@ -217,3 +217,56 @@ check that queued reconfiguration jobs receive current keys and that changes
 during a running job get a follow-up. Deployment must apply the database
 permission role too: the orchestrator now needs column-scoped `UPDATE (params)`
 on `host_jobs` to refresh an unclaimed job; it still cannot change job state.
+
+## Linux stack and failure recovery
+
+The container includes PostgreSQL, nginx, Gunicorn, Chromium, Firefox, WebKit,
+OpenTofu and the Linux network-test tools. Build it with the `tests` directory
+as its context; it copies requirements/tools, never the application's secrets.
+
+```sh
+docker build -f tests/docker/Dockerfile -t worms-dashboard-e2e:local tests
+# Preserve access to history when this checkout is a Git worktree:
+git_common=$(git rev-parse --path-format=absolute --git-common-dir)
+docker run --rm --privileged --shm-size=1g --memory=3g \
+  --mount "type=bind,source=$PWD,target=/repo,readonly" \
+  --mount "type=bind,source=$git_common,target=$git_common,readonly" \
+  worms-dashboard-e2e:local
+```
+
+Select the `colima` Docker context explicitly if Docker Desktop is inactive
+(`docker --context colima …`); no global context change is necessary. Privilege
+is needed only for the separate host-network tests' private network namespaces.
+The dashboard stack tests themselves work without `--privileged` and can be
+selected with `python -m pytest -q tests/test_linux_stack.py` after the image
+name. Code is mounted read-only and no live infrastructure is contacted.
+
+`scripts/dashboard_linux.py --work-dir /tmp/fresh-stack` starts the stack for
+interactive inspection inside that image. It runs the rendered deployment
+nginx template, three dashboard Gunicorn workers, a separate orchestrator API,
+and the real continuous attempt processor against disposable PostgreSQL with
+service grants. Only local paths, ports and test identities are substituted;
+there is no conductor or Proxmox agent. Container processes use the invoking
+user; this does not reproduce the production systemd sandbox. Stop it with
+Ctrl-C to remove the database. For browser access publish only loopback ports,
+e.g. `-p 127.0.0.1:28190:28190 -p 127.0.0.1:28191:28191`.
+
+The stack tests cover verified HTTPS/CSRF through nginx, forged headers,
+static files, body limits, dashboard-to-orchestrator certificate trust,
+three-browser log/replay/download flows, twelve concurrent student first
+logins competing for three team places, killing/replacing a worker while
+retaining sessions, and stopping/restarting PostgreSQL while submissions are
+processed. Browser contexts permit the self-signed fixture server; independent HTTPS
+clients verify its certificate and reject an untrusted one.
+
+Concurrent functional tests use a higher **test-only** sign-in rate so they
+exercise the application rather than the throttle. A separate check restores
+and verifies production's **10 attempts/minute per source IP**, plus the API
+limits. Consequently a class behind one NAT address can hit that sign-in limit;
+the concurrency result is not a production capacity guarantee for shared IPs.
+
+The populated-upgrade tests preserve password hashes, memberships, uploads and
+logs, and prove that a case collision fails atomically without deleting data.
+Daemon tests also exercise reconnecting a closed database session. Staff
+configuration and planning race tests protect the single development
+environment, non-overlapping schedule and parameters of already-planned runs.

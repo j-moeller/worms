@@ -59,6 +59,8 @@ const input = JSON.parse(fs.readFileSync(0, 'utf8'));
         assert.equal(new URL(page.url()).pathname, '/');
         await page.screenshot({ path: path.join(input.output, 'student-scores.png'), fullPage: true });
         await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+        // The enhanced form may finish its fetch/navigation after click().
+        await page.waitForURL(input.base + '/login/');
         await login(input.admin, input.adminPassword, '/staff/rounds/');
         await page.getByRole('link', { name: 'Journey Round', exact: true }).first().click();
         await page.getByRole('heading', { name: 'Runs', exact: true }).waitFor();

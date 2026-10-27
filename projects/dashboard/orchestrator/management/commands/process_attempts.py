@@ -20,6 +20,7 @@ import time
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
+from django.db import close_old_connections
 
 from orchestrator.rounds import captures
 
@@ -67,6 +68,8 @@ class Command(BaseCommand):
             return
         self.stdout.write("attempt processor started")
         while True:
+            # Daemons have no request boundary to retire dead ORM connections.
+            close_old_connections()
             try:
                 busy = self.pass_once(grace)
             except Exception:  # a transient DB error must not kill the loop

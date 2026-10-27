@@ -59,7 +59,7 @@ PACKAGES = {
                 "openssl", "ca-certificates"],
     "monitor": ["tcpdump", "tshark", "iproute2", "ethtool", "python3", "python3-venv", "ca-certificates",
                 "curl", "gpg"],
-    "dns": ["dnsmasq", "ca-certificates", "bind9-dnsutils"],
+    "dns": ["bind9", "ca-certificates", "bind9-dnsutils"],
     "wazuh": ["curl", "ca-certificates", "gnupg"],
     "apt_cache": ["apt-cacher-ng", "ca-certificates"],
     "devpi": ["python3-pip", "python3-venv", "acl", "ca-certificates"],

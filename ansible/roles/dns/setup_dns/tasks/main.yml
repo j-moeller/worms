@@ -1,8 +1,8 @@
 ---
-# Before resolv.conf points at the (not yet installed) local dnsmasq.
-- name: Install dnsmasq
+# Before resolv.conf points at the (not yet installed) local resolver.
+- name: Install BIND
   ansible.builtin.apt:
-    name: [dnsmasq, bind9-dnsutils, ca-certificates]
+    name: [bind9, bind9-dnsutils, ca-certificates]
     state: present
     update_cache: "{{ internet_enabled | bool }}"
     cache_valid_time: 3600
@@ -27,47 +27,46 @@
     group: root
     mode: '0644'
 
-- name: Ensure dnsmasq configuration directory exists
+# BIND logs every query (see named.conf.options); its own channel bounds the
+# file, so a query flood from a sandbox/devbox cannot fill the disk and take
+# DNS down for everyone (docs/security-assessment.md, S8).
+- name: Create the BIND query-log directory
   ansible.builtin.file:
-    path: /etc/dnsmasq.d
+    path: /var/log/named
     state: directory
-    owner: root
-    group: root
-    mode: '0755'
+    owner: bind
+    group: bind
+    mode: '0750'
 
-- name: Deploy dnsmasq private network config
+- name: Deploy BIND options
   ansible.builtin.template:
-    src: private-internet.conf.j2
-    dest: /etc/dnsmasq.d/private-internet.conf
+    src: named.conf.options.j2
+    dest: /etc/bind/named.conf.options
     owner: root
-    group: root
+    group: bind
     mode: '0644'
-  notify: Restart dnsmasq
+  notify: Restart named
 
-- name: Bound the dnsmasq query log so a query flood cannot fill the disk
-  ansible.builtin.copy:
-    dest: /etc/logrotate.d/dnsmasq-worms
-    content: |
-      # Managed by Ansible (role setup_dns). DO NOT EDIT.
-      # dnsmasq logs every query (log-queries); the DNS VM is shared by every
-      # sandbox and devbox, so a query flood would otherwise fill its disk and
-      # take DNS down for all of them (docs/security-assessment.md, S8).
-      /var/log/dnsmasq.log {
-          daily
-          rotate 3
-          maxsize 20M
-          missingok
-          notifempty
-          compress
-          delaycompress
-          copytruncate
-      }
+- name: Deploy the worms.internal zone declaration
+  ansible.builtin.template:
+    src: named.conf.local.j2
+    dest: /etc/bind/named.conf.local
     owner: root
-    group: root
-    mode: "0644"
+    group: bind
+    mode: '0644'
+  notify: Restart named
 
-- name: Enable and start dnsmasq
+- name: Deploy the worms.internal zone data
+  ansible.builtin.template:
+    src: db.worms.internal.j2
+    dest: /etc/bind/db.worms.internal
+    owner: root
+    group: bind
+    mode: '0644'
+  notify: Restart named
+
+- name: Enable and start named
   ansible.builtin.systemd:
-    name: dnsmasq
+    name: named
     enabled: true
     state: started

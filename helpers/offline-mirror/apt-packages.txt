@@ -7,7 +7,7 @@
 ## --- private-internet service VMs (what we install) ---
 apt-cacher-ng
 squid
-dnsmasq
+bind9
 docker-registry
 chrony
 apache2

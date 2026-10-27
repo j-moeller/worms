@@ -136,7 +136,8 @@
   no_log: "{{ hide_secrets }}"
   register: django_collectstatic
   changed_when: django_collectstatic.stdout is not search('^0 static files copied', multiline=True)
-  environment: "{{ django_static_env | combine(django_extra_env) }}"
+  # The orchestrator's settings also require the migrator role (only it has one).
+  environment: "{{ django_static_env | combine(django_extra_env) | combine(django_migrator_env if django_run_migrations | bool else {}) }}"
   vars:
     django_static_env:
       PRODUCTION: "1"
@@ -144,8 +145,14 @@
       DJANGO_SECRET_KEY: "{{ django_secret_key }}"
       DJANGO_ALLOWED_HOSTS: "{{ django_allowed_hosts }}"
       DJANGO_STATIC_ROOT: "{{ django_static_root }}"
+      # Required by the settings (postgres_database), even with no connection.
+      DB_NAME: "{{ django_db_name }}"
+      DB_HOST: "{{ django_db_host }}"
       DB_USER: "{{ django_db_user }}"
       DB_PASSWORD: "{{ django_db_password }}"
+    django_migrator_env:
+      DB_MIGRATOR_USER: "{{ postgres_migrator_name }}"
+      DB_MIGRATOR_PASSWORD: "{{ postgres_migrator_password }}"
 
 # Only the orchestrator migrates; the public-facing dashboard has no migrator
 # credentials at all (they are not in its env file either).

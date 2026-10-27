@@ -155,3 +155,37 @@ def test_devbox_reset_is_post_only_and_for_known_teams(api, team):
     assert api.get(f"/devbox/{team.uuid}/reset/", HTTP_AUTHORIZATION=f"Bearer {TOKEN}").status_code == 405
     unknown = api.post(f"/devbox/{uuid.uuid4()}/reset/", HTTP_AUTHORIZATION=f"Bearer {TOKEN}")
     assert unknown.status_code == 404
+
+
+def test_queued_reconfigure_refreshes_the_keys_after_a_removal(api, team, app_roles):
+    from conftest import as_role
+    from core.models.devbox import DevboxSSHKey
+    from core.models.rounds import HostJob
+
+    with as_role("django_orchestrator"):
+        assert reconfigure(api, team).status_code == 200
+    DevboxSSHKey.objects.filter(team=team).delete()
+    with as_role("django_orchestrator"):
+        assert reconfigure(api, team).status_code == 200
+    job = HostJob.objects.get(kind=HostJob.Kind.DEVBOX_RECONFIGURE)
+    red = next(t for t in job.params["teams"] if t["slug"] == f"t{team.pk}")
+    assert red["authorized_keys"] == []  # never re-install a revoked key
+
+
+def test_running_reconfigure_gets_a_follow_up_after_a_key_change(api, team, app_roles):
+    from conftest import as_role
+    from core.models.devbox import DevboxSSHKey
+    from core.models.rounds import HostJob
+
+    with as_role("django_orchestrator"):
+        reconfigure(api, team)
+    job = HostJob.objects.get(kind=HostJob.Kind.DEVBOX_RECONFIGURE)
+    job.state = HostJob.State.RUNNING
+    job.save(update_fields=["state"])
+    DevboxSSHKey.objects.filter(team=team).delete()
+    with as_role("django_orchestrator"):
+        response = reconfigure(api, team)
+    assert response.json()["reconfigure_enqueued"] is True
+    next_job = HostJob.objects.get(kind=HostJob.Kind.DEVBOX_RECONFIGURE, state=HostJob.State.QUEUED)
+    red = next(t for t in next_job.params["teams"] if t["slug"] == f"t{team.pk}")
+    assert red["authorized_keys"] == []

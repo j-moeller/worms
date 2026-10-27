@@ -7,9 +7,14 @@ stored once. An upload belongs to the uploader's team at the time; the team's
 latest upload before a round starts is its entry (orchestrator/rounds/planner.py).
 """
 
+from contextlib import suppress
 import hashlib
+import logging
+import os
+import uuid
 import zipfile
 
+from core.locking import serialized_resource
 from core.models.team import Team
 from core.models.worms import MalwareArtifact, Upload
 from dashboard.views.decorators import user_in_team_required
@@ -18,10 +23,11 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.files.storage import default_storage
-from django.db import transaction
 from django.http import HttpRequest, HttpResponseNotAllowed
 from django.shortcuts import redirect
 from django.template.defaultfilters import filesizeformat
+
+log = logging.getLogger("dashboard")
 
 FIELD = "artifact"
 ENTRY = "main.py"
@@ -85,6 +91,30 @@ def _check_zip(uploaded) -> str | None:
     return None
 
 
+def _store_upload(uploaded, storage_key, digest):
+    """Publish a complete file atomically; interrupted copies stay unreferenced.
+
+    This application and the round agent share a local MEDIA_ROOT. Repair a
+    missing/corrupt copy on re-upload, even when its database row still exists.
+    """
+    if default_storage.exists(storage_key):
+        with default_storage.open(storage_key, "rb") as existing:
+            stored = hashlib.sha256()
+            for chunk in existing.chunks():
+                stored.update(chunk)
+            if stored.hexdigest() == digest:
+                return
+    staging = f"{storage_key}.pending-{uuid.uuid4().hex}"
+    saved = staging
+    try:
+        uploaded.seek(0)
+        saved = default_storage.save(staging, uploaded)
+        os.replace(default_storage.path(saved), default_storage.path(storage_key))
+    finally:
+        with suppress(OSError):
+            default_storage.delete(saved)
+
+
 def _receive(request: HttpRequest, team: Team):
     limit = settings.MAX_UPLOAD_SIZE
     # Refuse an oversized body before reading it (nginx caps it, too).
@@ -117,20 +147,17 @@ def _receive(request: HttpRequest, team: Team):
     # accepts exactly this shape (scripts/round_agent/validation.py).
     storage_key = f"malware-artifacts/{content_hash[:2]}/{content_hash[2:4]}/{content_hash}.zip"
 
-    with transaction.atomic():
-        artifact = MalwareArtifact.objects.filter(content_hash=content_hash).first()
-        if artifact is None:
-            # The same bytes may already be on disk (a record removed since):
-            # keep that file instead of letting the storage invent a new name.
-            if not default_storage.exists(storage_key):
-                uploaded.seek(0)
-                saved_key = default_storage.save(storage_key, uploaded)
-                if saved_key != storage_key:
-                    default_storage.delete(saved_key)
-                    messages.error(request, "The upload could not be stored; try again.")
-                    return redirect("upload")
-            artifact = MalwareArtifact.objects.create(content_hash=content_hash, storage_key=storage_key)
-        Upload.objects.create(artifact=artifact, user=request.user, team=team)
+    try:
+        with serialized_resource("upload", content_hash):
+            _store_upload(uploaded, storage_key, content_hash)
+            artifact, _ = MalwareArtifact.objects.get_or_create(
+                content_hash=content_hash, defaults={"storage_key": storage_key},
+            )
+            Upload.objects.create(artifact=artifact, user=request.user, team=team)
+    except OSError:
+        log.exception("Could not store uploaded artifact")
+        messages.error(request, "Could not store your upload. Please try again or contact an organiser.")
+        return redirect("upload")
 
     messages.success(
         request,

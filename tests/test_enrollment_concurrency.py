@@ -86,7 +86,8 @@ def _race(cluster, table, row_id, requests):
     holder = cluster.connect()
     holder.autocommit = False
     with holder.cursor() as cur:
-        cur.execute(f'SELECT id FROM "{table}" WHERE id = %s FOR UPDATE', [row_id])
+        cur.execute(f'SELECT id FROM "{table}" WHERE id = ANY(%s) FOR UPDATE',
+                    [row_id if isinstance(row_id, list) else [row_id]])
     observer = cluster.connect()
 
     def run(request):

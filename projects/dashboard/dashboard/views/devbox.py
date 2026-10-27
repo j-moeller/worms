@@ -12,11 +12,14 @@ only runs when request.is_dev_environment is set.
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 
 from core.models.devbox import Devbox, DevboxCapture, DevboxLog, DevboxSSHKey, DevboxVM
-from core.models.team import Team
+from core.locking import serialized_resource
+from core.membership import membership_change
+from core.models.team import Team, TeamMembership
 from dashboard.views.decorators import user_in_team_required
 from dashboard.views.leaderboard import leaderboard
 from dashboard.views.util import render_with_base_info
@@ -135,7 +138,9 @@ def devbox_reset(request: HttpRequest, team: Team):
 
 def _key_blob(public_key: str) -> str:
     # type + base64 blob, without the comment: the identity sshd matches on.
-    return " ".join(public_key.split(" ")[:2])
+    key_type, encoded = public_key.split(" ")[:2]
+    canonical = base64.b64encode(base64.b64decode(encoded, validate=True)).decode("ascii")
+    return f"{key_type} {canonical}"
 
 
 def _reconfigure_devbox(request: HttpRequest, team: Team, changed: str):
@@ -171,16 +176,25 @@ def devbox_add_ssh_key(request: HttpRequest, team: Team):
         messages.error(request, "That is not a single-line OpenSSH public key (ssh-ed25519, ssh-rsa, ecdsa, sk-…), or it contains characters that are not allowed.")
         return redirect("index")
     blob = _key_blob(public_key)
-    # A key may belong to only one team: sshd matches a key to the first line,
-    # so a shared key would let another team inherit this team's gateway
-    # forward and log in to its devbox VMs (docs/security-assessment.md).
-    if any(_key_blob(k) == blob for k in DevboxSSHKey.objects.exclude(team=team).values_list("public_key", flat=True)):
-        messages.error(request, "That public key is already registered — by another team, or already by yours. Use a different key.")
-        return redirect("index")
-    if any(_key_blob(k) == blob for k in DevboxSSHKey.objects.filter(team=team).values_list("public_key", flat=True)):
-        messages.info(request, "Your team already has that key.")
-        return redirect("index")
-    DevboxSSHKey.objects.create(team=team, name=name, public_key=public_key, created_by=request.user)
+    # A membership can change after middleware resolved request.team.
+    with membership_change(request.user, team):
+        if not TeamMembership.objects.filter(user=request.user, team=team).exists():
+            messages.error(request, "You are no longer a member of this team.")
+            return redirect("profile")
+        with serialized_resource("ssh-key", blob):
+            # A key may belong to only one team: sshd matches a key to the first line,
+            # so a shared key would let another team inherit this team's gateway
+            # forward and log in to its devbox VMs (docs/security-assessment.md).
+            if any(_key_blob(k) == blob for k in DevboxSSHKey.objects.exclude(team=team).values_list("public_key", flat=True)):
+                messages.error(request, "That public key is already registered — by another team, or already by yours. Use a different key.")
+                return redirect("index")
+            if any(_key_blob(k) == blob for k in DevboxSSHKey.objects.filter(team=team).values_list("public_key", flat=True)):
+                messages.info(request, "Your team already has that key.")
+                return redirect("index")
+            if DevboxSSHKey.objects.filter(team=team).count() >= 64:
+                messages.error(request, "Your team already has 64 SSH keys; remove an unused key first.")
+                return redirect("index")
+            DevboxSSHKey.objects.create(team=team, name=name, public_key=public_key, created_by=request.user)
     _reconfigure_devbox(request, team, "added")
     return redirect("index")
 
@@ -221,10 +235,8 @@ def _valid_ssh_key(value: str) -> bool:
         return False
     parts = value.split(" ")
     # type + base64 blob, then at most a one-token comment (no spaces).
-    if len(parts) < 2 or len(parts) > 3 or parts[0] not in _SSH_TYPES:
+    if len(parts) < 2 or len(parts) > 3 or parts[0] not in _SSH_TYPES or len(parts[1]) < 20:
         return False
-    import base64
-
     try:
         base64.b64decode(parts[1], validate=True)
     except Exception:

@@ -9,6 +9,7 @@ the round agent rebuilds the devbox from the host job.
 import hmac
 from functools import wraps
 
+from core.locking import serialized_resource
 from core.models.devbox import Devbox
 from core.models.rounds import HostJob
 from core.models.team import Team
@@ -65,7 +66,7 @@ def devbox_reset(request: HttpRequest, team_uuid):
         # Serialise resets of this team and never pile up rebuilds: if one is
         # already queued or running, report it instead of enqueuing another and
         # bumping the version again (docs/security-assessment.md, D2).
-        Team.objects.select_for_update().get(pk=team.pk)
+        team = Team.objects.select_for_update().get(pk=team.pk)
         existing = HostJob.objects.filter(
             kind=HostJob.Kind.DEVBOX_REBUILD,
             state__in=[HostJob.State.QUEUED, HostJob.State.RUNNING],
@@ -123,18 +124,32 @@ def devbox_reconfigure(request: HttpRequest, team_uuid):
     if team is None:
         return JsonResponse({"error": "no such team"}, status=404)
 
-    with transaction.atomic():
-        Team.objects.select_for_update().get(pk=team.pk)
-        pending = HostJob.objects.filter(
-            kind=HostJob.Kind.DEVBOX_RECONFIGURE,
-            state__in=[HostJob.State.QUEUED, HostJob.State.RUNNING],
-        ).first()
-        if pending is not None:
-            return JsonResponse({"job": str(pending.uuid), "reconfigure_enqueued": False, "detail": "a reconfigure is already queued"})
+    # The gateway is rewritten for the entire competition. Serialize callers
+    # from different teams as well as the agent's queued->running transition.
+    with serialized_resource("devbox-reconfigure", "queue"):
         teams = provisioned_team_specs(team.competition)
         if not teams:
-            # No devbox provisioned yet: keys will be installed at provisioning.
             return JsonResponse({"job": None, "reconfigure_enqueued": False, "detail": "no devbox provisioned yet"})
+        competition_teams = list(Team.objects.filter(competition=team.competition).values_list("uuid", flat=True))
+        queued = HostJob.objects.select_for_update().filter(
+            kind=HostJob.Kind.DEVBOX_RECONFIGURE,
+            state=HostJob.State.QUEUED,
+            params__team_uuid__in=[str(uuid) for uuid in competition_teams],
+        ).order_by("id").first()
+        if queued is not None:
+            # The agent locks this row when claiming it: never change a
+            # snapshot it has already claimed and may currently be applying.
+            queued.params = {"team_uuid": str(team.uuid), "teams": teams}
+            queued.save(update_fields=["params"])
+            return JsonResponse({"job": str(queued.uuid), "reconfigure_enqueued": False,
+                                 "detail": "queued reconfigure updated with the latest keys"})
+        running = HostJob.objects.filter(
+            kind=HostJob.Kind.DEVBOX_RECONFIGURE, state=HostJob.State.RUNNING,
+            params__team_uuid__in=[str(uuid) for uuid in competition_teams],
+        ).order_by("-id").first()
+        if running is not None and running.params.get("teams") == teams:
+            return JsonResponse({"job": str(running.uuid), "reconfigure_enqueued": False,
+                                 "detail": "the current keys are already being applied"})
         job = HostJob.objects.create(
             kind=HostJob.Kind.DEVBOX_RECONFIGURE,
             params={"team_uuid": str(team.uuid), "teams": teams},

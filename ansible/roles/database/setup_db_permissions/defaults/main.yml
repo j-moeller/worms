@@ -77,6 +77,9 @@ postgresql_table_privileges:
       tables: [round_runs, game_plan_steps, virtual_machines]
     - privs: INSERT
       tables: [host_jobs, run_events]
+    # Refresh a queued SSH-key snapshot while retaining the existing job.
+    - privs: UPDATE (params)
+      tables: [host_jobs]
     # Processing of the sandbox APIs' attempts into captures / logs.
     - privs: UPDATE (processed, processed_at)
       tables: [flag_capture_attempts, logging_attempts]

@@ -208,3 +208,12 @@ GROUP BY competition_id, lower(name) HAVING count(*) > 1;
 
 Any collisions must be resolved by the operator first. The migration does not
 merge or delete accounts or teams automatically.
+
+`test_dashboard_races.py` additionally exercises identical uploads from two
+teams, missing/corrupt media recovery, disk-write interruption, simultaneous
+SSH-key registration, membership removal during registration, canonical key
+identity, and the agent's key-count/encoding limits. Orchestrator API tests
+check that queued reconfiguration jobs receive current keys and that changes
+during a running job get a follow-up. Deployment must apply the database
+permission role too: the orchestrator now needs column-scoped `UPDATE (params)`
+on `host_jobs` to refresh an unclaimed job; it still cannot change job state.

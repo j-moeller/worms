@@ -158,7 +158,14 @@ def devbox_team(value):
 def _key_blob(key: str) -> str:
     # The key without its comment: type + base64 blob. This is the identity an
     # sshd uses to match an authorized_keys line, so it must map to one team.
-    return " ".join(key.split()[:2])
+    import base64
+
+    key_type, encoded = key.split()[:2]
+    try:
+        canonical = base64.b64encode(base64.b64decode(encoded, validate=True)).decode("ascii")
+    except (ValueError, TypeError) as exc:
+        raise Invalid("invalid SSH public key encoding") from exc
+    return f"{key_type} {canonical}"
 
 
 def devbox_teams(value):

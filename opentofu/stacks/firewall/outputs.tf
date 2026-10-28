@@ -12,6 +12,7 @@ output "security_groups" {
     dns                = proxmox_virtual_environment_cluster_firewall_security_group.dns.name
     private_internet   = proxmox_virtual_environment_cluster_firewall_security_group.private_internet.name
     services_client    = proxmox_virtual_environment_cluster_firewall_security_group.services_client.name
+    llm_access         = proxmox_virtual_environment_cluster_firewall_security_group.llm_access.name
     pi_apt_client      = proxmox_virtual_environment_cluster_firewall_security_group.pi_apt_client.name
     sandbox            = proxmox_virtual_environment_cluster_firewall_security_group.sandbox.name
     sandbox_gw         = proxmox_virtual_environment_cluster_firewall_security_group.sandbox_gw.name

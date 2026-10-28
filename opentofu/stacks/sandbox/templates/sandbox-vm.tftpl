@@ -3,6 +3,10 @@ ssh_pwauth: false
 # Sandbox VM. Authorised key: the operator key (Ansible), usable only from the
 # host on vmbr4.
 
+# Ansible owns every package install and update; cloud-init never touches apt.
+package_update: false
+package_upgrade: false
+
 ssh_authorized_keys:
 %{ for key in ssh_public_keys ~}
   - ${key}

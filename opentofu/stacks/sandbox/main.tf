@@ -371,6 +371,11 @@ resource "proxmox_virtual_environment_firewall_rules" "vm" {
   }
 
   rule {
+    security_group = local.sg.llm_access
+    comment        = "LLM endpoint egress (443)"
+  }
+
+  rule {
     security_group = local.sg.ssh
     iface          = "net${length(each.value.network_devices)}"
     comment        = "SSH from the Proxmox host on the management NIC"

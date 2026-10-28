@@ -1,0 +1,6 @@
+// Local DNS entries (only for VMs that exist in OpenTofu, see group_vars/dns.yml).
+zone "{{ dns_domain }}" {
+	type master;
+	file "/etc/bind/db.worms.internal";
+	notify no;
+};

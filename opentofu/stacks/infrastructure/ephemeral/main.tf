@@ -52,7 +52,7 @@ module "dns" {
   proxmox_instance            = var.proxmox_instance
   name                        = "dns"
   cpu                         = 1
-  ram                         = 512 # dnsmasq; ballooning floor 256 (docs/resources.md)
+  ram                         = 512 # bind9; ballooning floor 256 (docs/resources.md)
   network_cidr                = "${local.services_ips.dns}/24"
   maintenance_network_cidr    = "${local.management_ips.dns}/24"
   maintenance_network_gateway = local.host_ips.mgmt_exposed

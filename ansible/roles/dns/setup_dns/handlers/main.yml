@@ -1,5 +1,5 @@
 ---
-- name: Restart dnsmasq
+- name: Restart named
   ansible.builtin.systemd:
-    name: dnsmasq
+    name: named
     state: restarted

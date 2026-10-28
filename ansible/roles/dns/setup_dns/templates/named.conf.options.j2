@@ -1,0 +1,38 @@
+options {
+	directory "/var/cache/bind";
+
+	// Listen only on the services-bridge address (never on the management NIC).
+	listen-on port 53 { {{ dns_listen_address }}; 127.0.0.1; };
+	listen-on-v6 { none; };
+
+	// The services bridge reaches this resolver (bounded by listen-on and the
+	// host firewall); no zone transfers to anyone.
+	allow-query { any; };
+	allow-transfer { none; };
+
+{% if internet_enabled | bool %}
+	// Only while internet access is allowed: forward everything that is not a
+	// local name upstream, and do not resolve it ourselves.
+	recursion yes;
+	allow-recursion { any; };
+	forwarders { 1.1.1.1; 1.0.0.1; };
+	forward only;
+{% else %}
+	// No upstream: authoritative for worms.internal only; refuse everything else.
+	recursion no;
+{% endif %}
+
+	// Parity with the previous dnsmasq resolver, which did not validate DNSSEC.
+	dnssec-validation no;
+};
+
+logging {
+	channel query_log {
+		// Bounded so a query flood cannot fill the disk (S8): 4 x 20 MB max.
+		file "/var/log/named/query.log" versions 3 size 20m;
+		print-time yes;
+		print-category yes;
+		severity info;
+	};
+	category queries { query_log; };
+};

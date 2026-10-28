@@ -13,6 +13,10 @@ ssh_authorized_keys:
 
 ssh_pwauth: false
 
+# Ansible owns every package install and update; cloud-init never touches apt.
+package_update: false
+package_upgrade: false
+
 write_files:
   # SSH hardening (worms): key-only, no passwords, root only via the key.
   - path: /etc/ssh/sshd_config.d/10-worms-hardening.conf

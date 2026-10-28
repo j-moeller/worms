@@ -5,6 +5,10 @@ ssh_pwauth: false
 # added here; the team's own keys are installed by Ansible (role devbox) so a
 # reset/rebuild can refresh them from the database.
 
+# Ansible owns every package install and update; cloud-init never touches apt.
+package_update: false
+package_upgrade: false
+
 ssh_authorized_keys:
 %{ for key in ssh_public_keys ~}
   - ${key}

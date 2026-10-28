@@ -538,6 +538,25 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "devbox_s
   }
 }
 
+# Egress to the external LLM endpoint. Attached to every sandbox and devbox VM
+# so a worm may reach the configured LLM API on 443 and nothing else. Egress
+# only; the destination is a single operator-set address (var.llm_access_ip,
+# shared-variables.tf). Routing/NAT for this traffic (the gateways, the host)
+# is a separate concern -- this group only permits the packet to leave the VM.
+resource "proxmox_virtual_environment_cluster_firewall_security_group" "llm_access" {
+  name    = "llm-access"
+  comment = "Sandbox/devbox VMs -> LLM endpoint:443 (egress)"
+
+  rule {
+    type    = "out"
+    action  = "ACCEPT"
+    proto   = "tcp"
+    dport   = "443"
+    dest    = var.llm_access_ip
+    comment = "-> LLM endpoint:443"
+  }
+}
+
 # Central log server (wazuh, siem bridge): syslog from the infrastructure VMs
 # (routed by the host), the dashboard from the host only (SSH tunnel).
 resource "proxmox_virtual_environment_cluster_firewall_security_group" "wazuh" {

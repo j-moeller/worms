@@ -1,0 +1,14 @@
+$TTL 300
+@	IN	SOA	ns.{{ dns_domain }}. hostmaster.{{ dns_domain }}. (
+			1		; serial
+			3600		; refresh
+			600		; retry
+			86400		; expire
+			300 )		; negative cache TTL
+
+@	IN	NS	ns.{{ dns_domain }}.
+ns	IN	A	{{ dns_listen_address }}
+
+{% for entry in dns_entries if entry.group is not defined or groups[entry.group] | default([]) | length > 0 %}
+{{ entry.name }}.	IN	A	{{ entry.ip }}
+{% endfor %}

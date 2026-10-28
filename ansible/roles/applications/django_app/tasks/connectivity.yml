@@ -1,0 +1,33 @@
+---
+- name: Resolve infrastructure service names without DNS
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} WORMS {{ django_app_name }} service names"
+    block: |
+      {% for alias in django_host_aliases %}
+      {{ alias.address }} {{ alias.name }}
+      {% endfor %}
+
+- name: Install the Proxmox cluster CA for the orchestrator
+  when: django_trust_proxmox_ca | bool
+  block:
+    - name: Read the public cluster CA through the Proxmox SSH connection
+      ansible.builtin.slurp:
+        src: "{{ django_proxmox_ca_source }}"
+      delegate_to: "{{ groups['proxmox_host'] | first }}"
+      register: django_proxmox_ca
+
+    - name: Install the Proxmox CA in the system trust store
+      ansible.builtin.copy:
+        content: "{{ django_proxmox_ca.content | b64decode }}"
+        dest: "{{ django_proxmox_ca_dest }}"
+        owner: root
+        group: root
+        mode: "0644"
+      register: django_proxmox_ca_installed
+      notify: Restart Django
+
+    # Apply before starting collectors or daemons, including on first install.
+    - name: Refresh certificate trust for Proxmox clients
+      ansible.builtin.command: update-ca-certificates
+      when: django_proxmox_ca_installed is changed

@@ -9,6 +9,16 @@
     state: restarted
     daemon_reload: true
 
+- name: Restart Django management daemons
+  listen: Restart Django
+  ansible.builtin.systemd:
+    name: "{{ django_app_name }}-{{ item.name }}"
+    state: restarted
+    daemon_reload: true
+  loop: "{{ django_daemons }}"
+  loop_control:
+    label: "{{ item.name }}"
+
 - name: Restart nginx
   ansible.builtin.systemd:
     name: nginx

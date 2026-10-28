@@ -22,9 +22,15 @@ nginx_upload_max_body_size: 101m
 django_media_root: "{{ dashboard_media_root }}"
 # Public facing: no migrator credentials, migrations run on the orchestrator.
 django_run_migrations: false
+django_extra_pip_packages:
+  - requests
+# Infrastructure has no DNS resolver. Use the certificate's name in HTTPS,
+# resolved locally to the orchestrator's management address.
+django_host_aliases:
+  - name: orchestrator.worms.internal
+    address: "{{ infrastructure_ips.orchestrator }}"
 django_extra_env:
-  # No DNS on the infrastructure side: connect by IP, verify the name.
-  ORCHESTRATOR_URL: "https://{{ infrastructure_ips.orchestrator }}"
+  ORCHESTRATOR_URL: https://orchestrator.worms.internal
   ORCHESTRATOR_TLS_NAME: orchestrator.worms.internal
   ORCHESTRATOR_API_TOKEN: "{{ vault_orchestrator_dashboard_token }}"
 # The admin account (is_staff + superuser) and the default competition are

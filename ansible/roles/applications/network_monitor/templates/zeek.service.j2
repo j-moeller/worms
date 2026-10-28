@@ -21,7 +21,9 @@ AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths={{ network_monitor_log_dir }} {{ network_monitor_archive_dir }}
+# One mount for both directories: separate ReadWritePaths bind mounts make
+# rename(2) fail with EXDEV during rotation, even on the same filesystem.
+ReadWritePaths={{ network_monitor_data_dir }}
 ProtectHome=yes
 PrivateTmp=yes
 PrivateDevices=yes

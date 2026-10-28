@@ -21,8 +21,8 @@ if not DEBUG:
     }
 
 # Orchestrator REST API (dashboard -> orchestrator:443, bearer token).
-# Connect by IP (no DNS on the infrastructure side) and verify the certificate
-# for ORCHESTRATOR_TLS_NAME.
+# The deployment resolves the certificate hostname through /etc/hosts because
+# there is no DNS on the infrastructure side. The URL must cover that name.
 ORCHESTRATOR_API = {
     "url": env("ORCHESTRATOR_URL", ""),
     "tls_name": env("ORCHESTRATOR_TLS_NAME", "orchestrator.worms.internal"),

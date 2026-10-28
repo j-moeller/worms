@@ -62,6 +62,17 @@
     - "{{ network_monitor_zeek_user }}"
     - "{{ network_monitor_shipper_user }}"
 
+# Both paths must be inside one writable mount so rotation can rename files.
+- name: Require a shared data directory for Zeek log rotation
+  ansible.builtin.assert:
+    that:
+      - network_monitor_data_dir is match('^/.+')
+      - network_monitor_log_dir.startswith(network_monitor_data_dir + '/')
+      - network_monitor_archive_dir.startswith(network_monitor_data_dir + '/')
+      - "'..' not in network_monitor_log_dir.split('/')"
+      - "'..' not in network_monitor_archive_dir.split('/')"
+    fail_msg: Zeek log and archive directories must be inside network_monitor_data_dir.
+
 # Logs: written by Zeek, read (group) by the shipper only.
 - name: Create the log directories
   ansible.builtin.file:
@@ -71,7 +82,7 @@
     group: "{{ network_monitor_zeek_user }}"
     mode: "0750"
   loop:
-    - "{{ network_monitor_log_dir | dirname }}"
+    - "{{ network_monitor_data_dir }}"
     - "{{ network_monitor_log_dir }}"
     - "{{ network_monitor_archive_dir }}"
 

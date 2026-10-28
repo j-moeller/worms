@@ -22,6 +22,9 @@
   tags:
     - packages
 
+- name: Configure service names and certificate trust
+  ansible.builtin.import_tasks: connectivity.yml
+
 - name: Create Django group
   ansible.builtin.group:
     name: "{{ django_app_group }}"
@@ -281,6 +284,7 @@
     label: "{{ item.name }}"
   notify:
     - Reload systemd
+    - Restart Django
 
 - name: Enable management daemons
   ansible.builtin.systemd:

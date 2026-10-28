@@ -270,3 +270,45 @@ logs, and prove that a case collision fails atomically without deleting data.
 Daemon tests also exercise reconnecting a closed database session. Staff
 configuration and planning race tests protect the single development
 environment, non-overlapping schedule and parameters of already-planned runs.
+
+
+## Deployment regressions from the read-only audit
+
+`tests/test_deployment_connectivity.py` runs only in a disposable privileged
+Linux container. It executes the Django connectivity tasks against fixture
+files, verifies a second run changes nothing, builds a private CA trust store,
+and checks the real dashboard and both Proxmox clients over HTTPS. The fixture
+hostnames are resolved through a private mount of `/etc/hosts`; wrong names and
+untrusted certificates are rejected. No live host, token or API is used.
+
+The Zeek regression reproduces the old rotation failure with separate writable
+bind mounts, then checks repeated atomic moves with the rendered unit's shared
+writable data directory. This tests the Linux mount behavior that caused EXDEV;
+it does not replace a live Zeek capture/rotation rehearsal.
+
+Deployment must run the updated `django_app` and `network_monitor` roles:
+
+- Dashboard installs `requests` and resolves `orchestrator.worms.internal` to
+  its management IP in a managed `/etc/hosts` block. Its HTTPS URL uses that
+  hostname, which the certificate covers.
+- Orchestrator resolves the Proxmox node name locally and receives the public
+  cluster CA via the authenticated Ansible connection to `proxmox_host`.
+  Both topology collection and power control use the system CA bundle by
+  default. Explicit CA environment overrides remain supported. With a custom
+  Proxmox certificate, configure `django_proxmox_ca_source` and the API hostname
+  for the certificate's issuer and SANs rather than disabling verification.
+  Application/env/CA changes restart its management daemons as well as the web
+  service, so the conductor picks up the new hostname and trust configuration.
+- Zeek has one writable `network_monitor_data_dir` containing both current and
+  archived logs, so systemd does not put a mount boundary between them. Both
+  directories must also reside on the same underlying filesystem. Restart Zeek
+  when applying the unit change and confirm stats/capture-loss timestamps keep
+  advancing after rotation.
+
+The audit also found an unconfigured Wikipedia VM and historical `apt-daily`
+OOM failures. These are operational follow-ups: download the configured ZIM
+with `wikipedia-download` before starting `kiwix-serve`, and validate the
+first-boot package policy on a fresh VM. The role deliberately does not start
+Wikipedia before its dataset is available. This branch includes Jonas's
+explicit cloud-init `package_update: false` / `package_upgrade: false` change;
+it does not erase failed-unit history or claim a fresh-VM boot was tested.

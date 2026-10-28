@@ -189,3 +189,96 @@ def test_running_reconfigure_gets_a_follow_up_after_a_key_change(api, team, app_
     next_job = HostJob.objects.get(kind=HostJob.Kind.DEVBOX_RECONFIGURE, state=HostJob.State.QUEUED)
     red = next(t for t in next_job.params["teams"] if t["slug"] == f"t{team.pk}")
     assert red["authorized_keys"] == []
+
+
+@pytest.mark.parametrize('kind', ['devbox_rebuild', 'devbox_provision'])
+def test_key_revocation_must_follow_later_full_stack_jobs(api, team, app_roles, kind):
+    from conftest import as_role
+    from core.models.devbox import DevboxSSHKey
+    from core.models.rounds import HostJob
+    from orchestrator.rounds.devbox import provisioned_team_specs
+
+    with as_role('django_orchestrator'):
+        assert reconfigure(api, team).status_code == 200
+        stale = provisioned_team_specs(team.competition)
+        rebuild = HostJob.objects.create(kind=kind,
+            params={'team_uuid': str(team.uuid), 'teams': stale})
+    DevboxSSHKey.objects.filter(team=team).delete()
+    with as_role('django_orchestrator'):
+        assert reconfigure(api, team).status_code == 200
+    # The last snapshot the agent applies must revoke the key. Updating the
+    # earlier reconfigure alone would let the later rebuild restore it.
+    last = HostJob.objects.order_by('-id').first()
+    assert last.id > rebuild.id
+    assert last.kind == HostJob.Kind.DEVBOX_RECONFIGURE
+    spec = next(t for t in last.params['teams'] if t['team_uuid'] == str(team.uuid))
+    assert spec['authorized_keys'] == []
+
+
+@pytest.mark.parametrize('producer', ['reset', 'provision'])
+def test_full_snapshot_creation_is_ordered_with_key_revocation(api, team, app_roles, django_env, monkeypatch, producer):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    import time
+    from conftest import as_role
+    from core.models.rounds import HostJob
+    from django.db import connection
+    from orchestrator import api as views
+    from orchestrator.rounds import devbox
+
+    entered, release = threading.Event(), threading.Event()
+    module, name = (views, 'provisioned_team_specs') if producer == 'reset' else (devbox, 'team_spec')
+    original = getattr(module, name)
+
+    def pause_snapshot(*args, **kwargs):
+        result = original(*args, **kwargs)
+        if threading.current_thread().name.startswith('full-snapshot') and not entered.is_set():
+            entered.set()
+            assert release.wait(15)
+        return result
+
+    monkeypatch.setattr(module, name, pause_snapshot)
+
+    def full_job():
+        try:
+            if producer == 'reset':
+                assert reset(api, team).status_code == 200
+            else:
+                assert devbox.provision(team.competition)[1] is not None
+        finally:
+            connection.close()
+
+    def revoke():
+        try:
+            assert reconfigure(api, team).status_code == 200
+        finally:
+            connection.close()
+
+    with as_role('django_orchestrator'), ThreadPoolExecutor(max_workers=1, thread_name_prefix='full-snapshot') as full_pool, ThreadPoolExecutor(max_workers=1) as key_pool:
+        pending = full_pool.submit(full_job)
+        try:
+            assert entered.wait(10)
+            admin = django_env.connect()
+            try:
+                with admin.cursor() as cur:
+                    cur.execute('DELETE FROM devbox_ssh_keys WHERE team_id=%s', [team.pk])
+                follow_up = key_pool.submit(revoke)
+                deadline = time.monotonic() + 10
+                while True:
+                    with admin.cursor() as cur:
+                        cur.execute("SELECT count(*) FROM pg_stat_activity WHERE usename='django_orchestrator' AND wait_event='advisory'")
+                        if cur.fetchone()[0]:
+                            break
+                    assert not follow_up.done(), 'key update passed an unfinished full snapshot'
+                    assert time.monotonic() < deadline
+                    time.sleep(0.02)
+            finally:
+                admin.close()
+        finally:
+            release.set()
+        pending.result(timeout=15)
+        follow_up.result(timeout=15)
+    last = HostJob.objects.order_by('-id').first()
+    assert last.kind == HostJob.Kind.DEVBOX_RECONFIGURE
+    spec = next(t for t in last.params['teams'] if t['team_uuid'] == str(team.uuid))
+    assert spec['authorized_keys'] == []

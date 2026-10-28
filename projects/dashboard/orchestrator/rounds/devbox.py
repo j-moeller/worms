@@ -17,6 +17,7 @@ host_jobs.
 
 from __future__ import annotations
 
+from core.locking import serialized_resource
 from core.models.devbox import Devbox, DevboxSSHKey, DevboxVM
 from core.models.rounds import HostJob
 from core.models.team import Team
@@ -76,6 +77,11 @@ def provision(competition, dry_run=False):
 
     Returns (spec, job): job is None on a dry run or when a queued provision
     job already carries exactly this spec (nothing new to build)."""
+    with serialized_resource("devbox-jobs", "queue"):
+        return _provision(competition, dry_run)
+
+
+def _provision(competition, dry_run):
     teams = list(Team.objects.filter(competition=competition).order_by("id"))
     if len(teams) > MAX_TEAMS:
         raise ProvisionError(f"{len(teams)} teams exceeds the devbox maximum of {MAX_TEAMS}")

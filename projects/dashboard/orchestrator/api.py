@@ -14,8 +14,7 @@ from core.models.devbox import Devbox
 from core.models.rounds import HostJob
 from core.models.team import Team
 from django.conf import settings
-from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Max
 from django.http import HttpRequest, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
@@ -62,7 +61,9 @@ def devbox_reset(request: HttpRequest, team_uuid):
     if team is None:
         return JsonResponse({"error": "no such team"}, status=404)
 
-    with transaction.atomic():
+    # Rebuilds also carry every team's keys. Order their snapshots with key
+    # updates so a later rebuild cannot undo a revocation.
+    with serialized_resource("devbox-jobs", "queue"):
         # Serialise resets of this team and never pile up rebuilds: if one is
         # already queued or running, report it instead of enqueuing another and
         # bumping the version again (docs/security-assessment.md, D2).
@@ -118,20 +119,27 @@ def devbox_reconfigure(request: HttpRequest, team_uuid):
     de-duplication); the job itself carries the whole competition's teams,
     because the gateway's authorized_keys is rewritten wholesale.
 
-    Does not bump the version or touch tokens. Coalesced: if a reconfigure is
-    already queued or running, no second one is enqueued."""
+    Does not bump the version or touch tokens. Coalesces only when no later
+    rebuild/provision would overwrite that job's key snapshot."""
     team = Team.objects.filter(uuid=team_uuid).first()
     if team is None:
         return JsonResponse({"error": "no such team"}, status=404)
 
     # The gateway is rewritten for the entire competition. Serialize callers
     # from different teams as well as the agent's queued->running transition.
-    with serialized_resource("devbox-reconfigure", "queue"):
+    with serialized_resource("devbox-jobs", "queue"):
         teams = provisioned_team_specs(team.competition)
         if not teams:
             return JsonResponse({"job": None, "reconfigure_enqueued": False, "detail": "no devbox provisioned yet"})
         competition_teams = list(Team.objects.filter(competition=team.competition).values_list("uuid", flat=True))
+        # Updating an older job in place must not put the latest keys before
+        # a queued full-stack snapshot that would reinstall the removed key.
+        barrier = HostJob.objects.filter(
+            kind__in=[HostJob.Kind.DEVBOX_REBUILD, HostJob.Kind.DEVBOX_PROVISION],
+            state__in=[HostJob.State.QUEUED, HostJob.State.RUNNING],
+        ).aggregate(latest=Max("id"))["latest"] or 0
         queued = HostJob.objects.select_for_update().filter(
+            id__gt=barrier,
             kind=HostJob.Kind.DEVBOX_RECONFIGURE,
             state=HostJob.State.QUEUED,
             params__team_uuid__in=[str(uuid) for uuid in competition_teams],
@@ -144,6 +152,7 @@ def devbox_reconfigure(request: HttpRequest, team_uuid):
             return JsonResponse({"job": str(queued.uuid), "reconfigure_enqueued": False,
                                  "detail": "queued reconfigure updated with the latest keys"})
         running = HostJob.objects.filter(
+            id__gt=barrier,
             kind=HostJob.Kind.DEVBOX_RECONFIGURE, state=HostJob.State.RUNNING,
             params__team_uuid__in=[str(uuid) for uuid in competition_teams],
         ).order_by("-id").first()

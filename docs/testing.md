@@ -218,6 +218,12 @@ during a running job get a follow-up. Deployment must apply the database
 permission role too: the orchestrator now needs column-scoped `UPDATE (params)`
 on `host_jobs` to refresh an unclaimed job; it still cannot change job state.
 
+Key updates must also follow any queued rebuild/provision that carries an older
+key snapshot. The API regressions cover that ordering and concurrent snapshot
+creation: all three producers share a transaction lock, and an older queued
+key update is not reused across a later full-stack job. Otherwise a rebuild
+could reinstall a key that a previous update had just revoked.
+
 ## Linux stack and failure recovery
 
 The container includes PostgreSQL, nginx, Gunicorn, Chromium, Firefox, WebKit,

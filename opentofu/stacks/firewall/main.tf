@@ -557,10 +557,10 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "llm_acce
   }
 }
 
-# Central log server (wazuh, siem bridge): syslog from the infrastructure VMs
-# (routed by the host), the dashboard from the host only (SSH tunnel).
-resource "proxmox_virtual_environment_cluster_firewall_security_group" "wazuh" {
-  name = "wazuh"
+# Central log server (the syslog VM, siem bridge): syslog from the
+# infrastructure VMs (routed by the host). Nothing else.
+resource "proxmox_virtual_environment_cluster_firewall_security_group" "syslog" {
+  name = "syslog"
 
   dynamic "rule" {
     for_each = ["dmz", "core", "ingest", "mgmt_exposed"]
@@ -574,18 +574,9 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "wazuh" {
       comment = "Syslog from ${rule.value}"
     }
   }
-
-  rule {
-    type    = "in"
-    action  = "ACCEPT"
-    proto   = "tcp"
-    dport   = "443"
-    source  = local.host_ips.siem
-    comment = "Dashboard from the Proxmox host (SSH tunnel)"
-  }
 }
 
-# Every infrastructure VM ships its audit log to wazuh. Attach on the
+# Every infrastructure VM ships its audit log to the syslog VM. Attach on the
 # default-route NIC.
 resource "proxmox_virtual_environment_cluster_firewall_security_group" "log_client" {
   name = "log_client"
@@ -595,7 +586,7 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "log_clie
     action  = "ACCEPT"
     proto   = "tcp"
     dport   = "514"
-    dest    = local.infrastructure_ips.wazuh
-    comment = "-> wazuh:514 (syslog)"
+    dest    = local.infrastructure_ips.syslog
+    comment = "-> syslog:514"
   }
 }

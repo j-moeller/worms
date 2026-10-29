@@ -53,7 +53,7 @@ variable "llm_access_ip" {
 #   vmbr20  dmz            10.10.0.0/24    10.10.0.1   dashboard (internet via host DNAT)
 #   vmbr21  core           10.11.0.0/24    10.11.0.1   database, orchestrator
 #   vmbr22  ingest         10.12.0.0/24    10.12.0.1   scoring, logging (DB leg)
-#   vmbr24  siem           10.13.0.0/24    10.13.0.1   wazuh (central log server)
+#   vmbr24  siem           10.13.0.0/24    10.13.0.1   syslog (central rsyslog server)
 #   vmbr23  services       10.2.0.0/24     none        scoring/logging (sandbox leg),
 #                                                      private internet, DNS, sandbox-gw
 #   vmbr1*  sandbox        10.64.0.0/10    none        generated sandbox networks
@@ -65,7 +65,7 @@ variable "llm_access_ip" {
 #
 # The host routes ONLY between dmz/core/ingest (allow-listed in host nftables,
 # ansible role host_network), plus syslog (tcp 514) from every infrastructure VM
-# to wazuh on the siem bridge. It has no address on any bridge a sandbox VM can reach,
+# to the syslog VM on the siem bridge. It has no address on any bridge a sandbox VM can reach,
 # and never forwards traffic arriving on a management bridge (except mgmt-exposed
 # while internet access is allowed (Internet.yml), which is refused while
 # sandbox VMs exist).
@@ -134,7 +134,7 @@ locals {
     scoring      = "10.12.0.14"
     logging      = "10.12.0.15"
     monitor      = "10.12.0.100"
-    wazuh        = "10.13.0.30"
+    syslog       = "10.13.0.30"
   }
 
   # Addresses on the services bridge (what sandbox VMs reach, via sandbox-gw).
@@ -154,7 +154,7 @@ locals {
     logging      = "10.5.0.15"
     dns          = "10.5.0.11"
     monitor      = "10.5.0.100"
-    wazuh        = "10.5.0.30"
+    syslog       = "10.5.0.30"
     sandbox_gw   = "10.4.0.2"
   }
 

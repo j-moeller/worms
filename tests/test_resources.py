@@ -1,5 +1,5 @@
 """Memory-saving changes (docs/resources.md): ballooning on every VM,
-right-sized ceilings, Wazuh off by default, and the per-round sandbox RAM
+right-sized ceilings, a light rsyslog log server, and the per-round sandbox RAM
 ceiling. Static checks over the OpenTofu/Ansible sources plus the generator."""
 
 from __future__ import annotations
@@ -41,16 +41,14 @@ def test_sandbox_vm_ram_floor_is_half_the_ceiling():
     assert "floating = max(256, floor(each.value.ram / 2))" in text
 
 
-def test_wazuh_is_disabled_by_default():
-    # OpenTofu: the wazuh VM is gated and off by default.
+def test_the_log_server_is_a_small_rsyslog_vm():
+    # Wazuh (a JVM indexer) was replaced by plain rsyslog: one small VM, always on.
     persistent = (OTF / "stacks/infrastructure/persistent/main.tf").read_text()
-    assert 'variable "enable_wazuh"' in persistent and "default     = false" in persistent
-    assert 'name != "wazuh" || var.enable_wazuh' in persistent
-    # Ansible: the flag is off, and SetupAudit's roles are gated on it.
-    allvars = yaml.safe_load((ANSIBLE / "group_vars" / "all.yml").read_text())
-    assert allvars["wazuh_enabled"] is False
+    syslog = persistent[persistent.index("    syslog = {"):]
+    assert "ram               = 512" in syslog.split("}")[0]
+    assert "for_each = local.persistent" in persistent
     audit = (ANSIBLE / "SetupAudit.yml").read_text()
-    assert audit.count("when: wazuh_enabled | default(false) | bool") == 2
+    assert "syslog_server" in audit and "when:" not in audit
 
 
 def test_infra_ceilings_were_trimmed():

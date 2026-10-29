@@ -44,6 +44,7 @@ actually uses (idle RSS in brackets):
 | orchestrator | 1024 | 512 | gunicorn + 3 daemons (~350 MB) |
 | scoring / logging | 512 | 256 | Flask (1 worker) + nginx (~150 MB) |
 | dns | 512 | 256 | dnsmasq (~40 MB) |
+| syslog | 512 | 256 | rsyslog (~10 MB) |
 | monitor | 2048 | 1024 | Zeek — kept high (buffers under traffic) |
 | wikipedia | 1024 | 512 | kiwix-serve (mmaps the ZIM) |
 | devbox VM / gateway | 512 | 256 | nftables router / a team's playground |
@@ -58,15 +59,12 @@ round on the dashboard (Staff → Rounds, "RAM per VM"; `sandbox_params.vm_ram`,
 MB** (floor 256), so a default round's 8 VMs cost ~4 GB of ceiling / ~2 GB
 committed. A worm that needs more is a per-round decision.
 
-### Wazuh off by default
+### rsyslog instead of Wazuh
 
 Wazuh (manager + indexer + dashboard — a JVM indexer) was the heaviest
-always-on VM (~1.8 GB real inside a 2 GB box). Central logging is **disabled
-for now**: the VM is gated by `enable_wazuh` in the OpenTofu persistent stack
-(default `false`) and the Ansible side (`wazuh_enabled`, `group_vars/all.yml`,
-default `false`, gates the `wazuh_server`/`auditd` roles in `SetupAudit.yml`).
-Re-enable by flipping **both** (`tofu apply -var enable_wazuh=true` and
-`-e wazuh_enabled=true`).
+always-on VM (~1.8 GB real inside a 2 GB box). It was replaced by a plain
+rsyslog server: the **syslog** VM (512 MB ceiling, 256 MB floor) stores the
+audit logs of every infrastructure VM as files (README, "Central logging").
 
 ## Rough budget after these changes
 
@@ -83,7 +81,6 @@ spare.
   ~50 % of RAM and competes with the VMs. A host-level cap (2–4 GB) reclaims up
   to ~13 GB. The sandbox/devbox disks are ephemeral and do not need a big cache.
   This is the single biggest remaining lever.
-- **Wazuh on demand** rather than always-on, or a lighter log sink.
 - **Merge scoring + logging** (same role/trust) into one VM; **Alpine** for the
   pure-router gateways (~30 MB vs 512). Both trade a little isolation/clarity
   for RAM — deliberate follow-ups, not defaults.

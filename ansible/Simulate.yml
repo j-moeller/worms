@@ -424,7 +424,7 @@
               - {name: "database:5432", host: "{{ infrastructure_ips.database }}", port: 5432}
               - {name: "dashboard:443", host: "{{ infrastructure_ips.dashboard }}", port: 443}
               - {name: "orchestrator:443", host: "{{ infrastructure_ips.orchestrator }}", port: 443}
-              - {name: "wazuh:514", host: "{{ infrastructure_ips.wazuh }}", port: 514}
+              - {name: "syslog:514", host: "{{ infrastructure_ips.syslog }}", port: 514}
               - {name: "monitor:22 (data)", host: "{{ infrastructure_ips.monitor }}", port: 22}
               - {name: "Proxmox API (core gateway)", host: "{{ host_ips.core }}", port: 8006}
               - {name: "Proxmox host on mgmt-sandbox:22", host: "{{ host_ips.mgmt_sandbox }}", port: 22}
@@ -508,7 +508,7 @@
       vars:
         probes:
           - {name: "database:5432", host: "{{ infrastructure_ips.database }}", port: 5432}
-          - {name: "wazuh:514", host: "{{ infrastructure_ips.wazuh }}", port: 514}
+          - {name: "syslog:514", host: "{{ infrastructure_ips.syslog }}", port: 514}
           - {name: "dashboard:443", host: "{{ infrastructure_ips.dashboard }}", port: 443}
           - {name: "orchestrator:443", host: "{{ infrastructure_ips.orchestrator }}", port: 443}
           - {name: "scoring:443 (ingest)", host: "{{ infrastructure_ips.scoring }}", port: 443}
@@ -527,7 +527,7 @@
         loop_var: p
         label: "{{ p.key }}"
       vars:
-        allowed: ["database:5432", "wazuh:514"]
+        allowed: ["database:5432", "syslog:514"]
         check: "monitor {{ 'reaches' if p.key in allowed else 'cannot reach' }} {{ p.key }}"
         ok: "{{ (p.value == 'open') if p.key in allowed else (p.value != 'open') }}"
         detail: "{{ p.value }}"

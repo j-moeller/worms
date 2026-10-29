@@ -48,6 +48,12 @@ variable "disk_size" {
   default     = 5
 }
 
+variable "data_disk_size" {
+  description = "Size in GB of a data disk (virtio1, mounted by the VM's cloud-init snippet); 0 = none."
+  type        = number
+  default     = 0
+}
+
 variable "tag" {
   default = "infrastructure"
 }

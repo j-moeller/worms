@@ -114,7 +114,7 @@ and is contained by the network/firewall, not by in-guest privilege).
 | VM | Functionality | Runs as | |
 |---|---|---|---|
 | **database** | PostgreSQL | `postgres` | ✅ |
-| | auditd / rsyslog (ship to wazuh) | root | ⚠️ system logging daemons (expected) |
+| | auditd / rsyslog (ship to the syslog VM) | root | ⚠️ system logging daemons (expected) |
 | **dashboard** | gunicorn (Django app) | `django` (grp `www-data`) | ✅ `NoNewPrivileges` |
 | | nginx (TLS front end) | root master → `www-data` workers | ✅ standard privileged-port bind |
 | | fail2ban | root | ⚠️ must edit the firewall (system service) |
@@ -128,7 +128,7 @@ and is contained by the network/firewall, not by in-guest privilege).
 | | flow shipper → DB | `zeek-shipper` | ✅ `NoNewPrivileges`, no capabilities |
 | | set capture NIC promiscuous (one-shot) | root | ⚠️ minimal boot one-shot (needs `CAP_NET_ADMIN`) |
 | **dns** | dnsmasq | root → `dnsmasq` | ✅ standard (binds :53, drops) |
-| **wazuh** | Wazuh manager / indexer / dashboard | `wazuh` / `wazuh-indexer` | ⚠️ vendor installer-managed (not hardened by us) |
+| **syslog** | rsyslog (receives the audit logs) | root | ⚠️ system logging daemon (expected; binds :514) |
 
 ### Private-internet VMs (caches; a dead end — ingress only)
 
@@ -160,7 +160,7 @@ and is contained by the network/firewall, not by in-guest privilege).
 
 **Not least-privilege, summarised:** the round agent and the host one-shots run
 as root (unavoidable — they *are* the host tooling); `fail2ban` and the
-auditd/rsyslog daemons are root system services; Wazuh is vendor-managed. The
+auditd/rsyslog daemons are root system services. The
 untrusted sandbox/devbox VMs and their gateways are root/untrusted by design —
 their containment is the network and firewall, not in-guest privilege. Every
 application service we control (Django, the sandbox APIs, Zeek, the caches) runs

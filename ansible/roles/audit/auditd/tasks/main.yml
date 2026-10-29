@@ -1,13 +1,13 @@
 ---
 # auditd records what happens on the VM (/var/log/audit/audit.log); rsyslog
-# ships that file to the central Wazuh server.
+# ships that file to the central log server (the syslog VM).
 - name: Install auditd and rsyslog
   ansible.builtin.apt:
     name:
       - auditd
       - rsyslog
     state: present
-    update_cache: true
+    update_cache: "{{ internet_enabled | bool }}"
     cache_valid_time: 3600
 
 - name: Install audit rules

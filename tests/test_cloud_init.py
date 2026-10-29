@@ -36,7 +36,7 @@ SNIPPETS = {
     "blank": ("vm-blank.yml", "vm", None),
     "postgresql": ("vm-postgresq.yml", "postgresql", None),
     "django": ("vm-django.yml", "django", None),
-    "wazuh": ("vm-wazuh.yml", "wazuh", None),
+    "syslog": ("vm-syslog.yml", "syslog", "/var/log/remote"),
     "dns": ("vm-dns.yml", "dns", None),
     "flask": ("vm-flask.yml", "flask", None),
     "network_monitor": ("vm-network-monitor.yml", "network-monitor", None),
@@ -60,7 +60,7 @@ PACKAGES = {
     "monitor": ["tcpdump", "tshark", "iproute2", "ethtool", "python3", "python3-venv", "ca-certificates",
                 "curl", "gpg"],
     "dns": ["bind9", "ca-certificates", "bind9-dnsutils"],
-    "wazuh": ["curl", "ca-certificates", "gnupg"],
+    "syslog": ["rsyslog"],
     "apt_cache": ["apt-cacher-ng", "ca-certificates"],
     "devpi": ["python3-pip", "python3-venv", "acl", "ca-certificates"],
     "docker_registry": ["docker-registry", "ca-certificates"],
@@ -74,7 +74,7 @@ PACKAGES["logging"] = PACKAGES["scoring"]
 
 # VM group -> its snippet.
 VM_SNIPPET = {
-    "database": "postgresql", "dashboard": "django", "orchestrator": "django", "wazuh": "wazuh",
+    "database": "postgresql", "dashboard": "django", "orchestrator": "django", "syslog": "syslog",
     "dns": "dns", "scoring": "flask", "logging": "flask", "monitor": "network_monitor",
     **{pi: pi for pi in ("apt_cache", "devpi", "docker_registry", "manpages", "ntp", "cve_search", "wikipedia")},
 }  # fmt: skip

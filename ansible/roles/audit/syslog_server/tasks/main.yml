@@ -1,0 +1,52 @@
+---
+- name: Install rsyslog
+  ansible.builtin.apt:
+    name: rsyslog
+    state: present
+    update_cache: "{{ internet_enabled | bool }}"
+    cache_valid_time: 3600
+
+- name: Create the log directory
+  ansible.builtin.file:
+    path: "{{ syslog_server_dir }}"
+    state: directory
+    owner: root
+    group: adm
+    mode: "0750"
+
+# The DNS and private-internet VMs send from their mgmt-exposed address via
+# the host. This VM has a NIC on mgmt-exposed too, so its replies would leave
+# there directly with the siem address, and Proxmox drops them (ipfilter).
+# Route everything from the siem address back via the siem gateway.
+- name: Install the reply route
+  ansible.builtin.template:
+    src: worms-reply-route.service.j2
+    dest: /etc/systemd/system/worms-reply-route.service
+    mode: "0644"
+  notify: Restart the reply route
+
+- name: Enable the reply route
+  ansible.builtin.systemd:
+    name: worms-reply-route
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Receive the audit logs of the infrastructure VMs
+  ansible.builtin.template:
+    src: 10-remote.conf.j2
+    dest: /etc/rsyslog.d/10-remote.conf
+    mode: "0644"
+  notify: Restart rsyslog
+
+- name: Rotate the received logs
+  ansible.builtin.template:
+    src: logrotate-remote.j2
+    dest: /etc/logrotate.d/worms-remote
+    mode: "0644"
+
+- name: Enable rsyslog
+  ansible.builtin.service:
+    name: rsyslog
+    enabled: true
+    state: started

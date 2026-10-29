@@ -97,9 +97,12 @@ path was read end to end; nothing was run against a live Proxmox host.
   disabled. Proxmox-host setting; disable KSM on the host if this is in scope.
 - **S10 (not fixed):** Zeek keeps raw-packet capabilities with no seccomp
   filter. Blast radius is bounded by `IPAddressDeny` + the INSERT-only role.
-- **S11 (not fixed):** syslog to the syslog VM is plain TCP by source CIDR; a
-  compromised exposed VM could flood entries or write forged lines into its
-  own file (not another VM's: files are keyed by the connection's address).
+- **S11 (partly fixed):** syslog to the syslog VM is plain TCP by source CIDR; a
+  compromised exposed VM can write forged lines into its own file (not another
+  VM's: files are keyed by the connection's address). Flooding is bounded: the
+  host allows each sending VM at most 4 connections and 1 MB/s to the syslog VM
+  (`host_syslog_limits`, `worms.nft.j2`), and the logs live on their own data
+  disk, so filling it cannot take down the syslog VM's system.
 - **S12 (not fixed):** the sandbox groups apply per-VM rather than per-NIC (the
   devbox module already scopes per-NIC); rules are source/dest-scoped regardless.
 - **S13 (partly moot):** apt-cacher-ng report page, all-ports-open, cve-search

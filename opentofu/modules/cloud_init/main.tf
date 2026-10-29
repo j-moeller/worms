@@ -22,8 +22,10 @@ locals {
     wikipedia       = { file = "vm-wikipedia.yml", hostname = "wikipedia" }
   }
 
-  # Private-internet services with a data disk: where it is mounted.
+  # VMs with a data disk (private-internet services, the syslog VM): where it
+  # is mounted.
   data_mounts = {
+    syslog          = "/var/log/remote"
     apt_cache       = "/var/cache/apt-cacher-ng"
     devpi           = "/var/lib/devpi"
     docker_registry = "/var/lib/docker-registry"

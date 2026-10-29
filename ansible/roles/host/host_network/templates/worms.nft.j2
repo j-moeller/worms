@@ -47,6 +47,20 @@ table inet worms {
     elements = { "{{ b.dmz }}", "{{ b.core }}", "{{ b.ingest }}", "{{ b.siem }}", "{{ b.mgmt_exposed }}" }
   }
 
+  # Per-sender limits towards the syslog VM (host_syslog_limits).
+  set syslog_connections {
+    type ipv4_addr
+    size 65535
+    flags dynamic
+  }
+
+  set syslog_rate {
+    type ipv4_addr
+    size 65535
+    flags dynamic,timeout
+    timeout 1m
+  }
+
   # The gate: empty = internet denied. Internet.yml adds the WAN
   # interface while allowed and flushes it again.
   set internet_wan {
@@ -73,6 +87,14 @@ table inet worms {
   chain forward {
     type filter hook forward priority filter - 5; policy drop;
     ct state invalid drop
+
+    # The syslog VM, per sender: a compromised VM cannot flood it for all the
+    # others. Before the established accept, so the rate also covers open
+    # connections (dropped packets make TCP slow down).
+{% set ls = host_syslog_limits %}
+    ip daddr {{ infrastructure_ips.syslog }} tcp dport 514 ct state new add @syslog_connections { ip saddr ct count over {{ ls.connections }} } counter reject with tcp reset comment "syslog: too many connections from one VM"
+    ip daddr {{ infrastructure_ips.syslog }} tcp dport 514 update @syslog_rate { ip saddr limit rate over {{ ls.kbytes_per_second }} kbytes/second burst {{ ls.burst_kbytes }} kbytes } counter drop comment "syslog: rate per VM"
+
     ct state established,related accept
 
     # Bridged traffic that stays on its bridge (only visible here with

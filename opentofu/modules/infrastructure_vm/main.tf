@@ -111,4 +111,15 @@ resource "proxmox_virtual_environment_vm" "infrastructure" {
     discard      = "on"
     size         = var.disk_size
   }
+
+  dynamic "disk" {
+    for_each = var.data_disk_size > 0 ? [1] : []
+    content {
+      datastore_id = "local-zfs"
+      interface    = "virtio1"
+      iothread     = true
+      discard      = "on"
+      size         = var.data_disk_size
+    }
+  }
 }

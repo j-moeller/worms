@@ -228,14 +228,17 @@ stack are migrated by handled automatically by `worms build platform` / `worms b
 
 `SetupAudit.yml` (part of `worms build provision`):
 
-- **syslog** VM (persistent stack, siem bridge, 1 vCPU / 512 MB / 20 GB):
+- **syslog** VM (persistent stack, siem bridge, 1 vCPU / 512 MB, 5 GB system
+  disk + 20 GB data disk for `/var/log/remote`):
   rsyslog (role `syslog_server`) listens on tcp 514 and writes one file per
   sending VM, `/var/log/remote/<VM address>/audit.log` (the address of the TCP
   connection, not a hostname from the message, which a compromised VM could
   forge). Rotated daily, compressed, kept 30 days. The DNS and private-internet VMs
   send from their mgmt-exposed address; the syslog VM routes its replies back
   via the siem gateway (`worms-reply-route.service`), not over its own
-  mgmt-exposed NIC.
+  mgmt-exposed NIC. Against floods from a compromised VM, the host allows each
+  sending VM at most 4 connections and 1 MB/s to it (`host_syslog_limits` in
+  role `host_network`); a full data disk loses logs but leaves the system up.
 - **every infrastructure VM** (`audit_hosts`: database, dashboard,
   orchestrator, scoring, logging, monitor, DNS, private internet and the syslog
   VM itself; not the sandbox or devbox VMs):

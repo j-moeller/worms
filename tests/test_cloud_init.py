@@ -36,7 +36,7 @@ SNIPPETS = {
     "blank": ("vm-blank.yml", "vm", None),
     "postgresql": ("vm-postgresq.yml", "postgresql", None),
     "django": ("vm-django.yml", "django", None),
-    "syslog": ("vm-syslog.yml", "syslog", None),
+    "syslog": ("vm-syslog.yml", "syslog", "/var/log/remote"),
     "dns": ("vm-dns.yml", "dns", None),
     "flask": ("vm-flask.yml", "flask", None),
     "network_monitor": ("vm-network-monitor.yml", "network-monitor", None),

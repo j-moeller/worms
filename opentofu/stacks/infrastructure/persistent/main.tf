@@ -94,12 +94,13 @@ locals {
 
     # Central log server: rsyslog receives the audit logs of every
     # infrastructure VM (role syslog_server) and stores them per VM. Management
-    # on mgmt-exposed: it parses logs of VMs that may be compromised.
+    # on mgmt-exposed: it parses logs of VMs that may be compromised. The logs
+    # get their own disk: a flood that fills it cannot take down the system.
     syslog = {
       user_data_file_id = local.platform.cloud_init.syslog.file_id
       cpu               = 1
       ram               = 512
-      disk_size         = 20
+      data_disk_size    = 20 # /var/log/remote
       nics = [
         { bridge = local.nw.siem.name, cidr = "${local.infrastructure_ips.syslog}/24", gateway = local.host_ips.siem },
         { bridge = local.nw.mgmt_exposed.name, cidr = "${local.management_ips.syslog}/24" },
@@ -126,6 +127,7 @@ module "infrastructure_vms" {
   cpu                = try(each.value.cpu, 2)
   ram                = try(each.value.ram, 2048)
   disk_size          = try(each.value.disk_size, 5)
+  data_disk_size     = try(each.value.data_disk_size, 0)
   disk_file_id       = local.platform.os_images.debian.file_id
   hookscript_file_id = local.platform.hookscript_file_id
   tag                = "persistent"

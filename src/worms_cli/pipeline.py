@@ -35,6 +35,7 @@ INIT_STACKS = [
 CONFIGURE_PLAYBOOKS = [
     "WaitForVMs.yml",
     "SetupDNS.yml",
+    "UpdateVMs.yml",
     "CreateCA.yml",
     "DistributeCA.yml",
     "ConfigureNginx.yml",

@@ -275,7 +275,7 @@ def test_django_nginx_forwards_the_host_with_its_port(render):
 
 # Roles every host gets from the configure sequence, and the sequence itself.
 CONFIGURE = [
-    "WaitForVMs.yml", "SetupDNS.yml", "CreateCA.yml", "DistributeCA.yml", "ConfigureNginx.yml",
+    "WaitForVMs.yml", "SetupDNS.yml", "UpdateVMs.yml", "CreateCA.yml", "DistributeCA.yml", "ConfigureNginx.yml",
     "ConfigureNginxDjango.yml", "SetupDbAndDashboard.yml", "SetupSandboxApi.yml", "SetupNetworkMonitor.yml",
     "SetupPrivateInternet.yml", "SetupAudit.yml", "SetupRoundAgent.yml",
 ]  # fmt: skip
@@ -294,6 +294,9 @@ ROLES = {
     **{pi: ["apt_client", pi, "auditd"] for pi in ("apt_cache", "devpi", "docker_registry", "manpages", "ntp",
                                                    "cve_search", "wikipedia")},
 }  # fmt: skip
+# Every VM first gets apt_updates (UpdateVMs.yml).
+for _vm in set(ROLES) - {"proxmox_host", "localhost"}:
+    ROLES[_vm] = ["apt_updates", *ROLES[_vm]]
 # Plays that wait for cloud-init on each of their VMs before their roles.
 CLOUD_INIT_WAITS = {
     ("WaitForVMs.yml", "all:!proxmox_host:!sandbox:!sandbox_gw"), ("SetupDNS.yml", "dns_hosts"),

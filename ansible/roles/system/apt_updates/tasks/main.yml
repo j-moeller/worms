@@ -1,0 +1,41 @@
+---
+# Ansible owns every package install and update (cloud-init does not touch apt
+# either). Debian's own automatic runs would otherwise start at boot, hold the
+# dpkg lock for minutes and stall the roles' apt tasks, or try the internet
+# while access is denied.
+- name: Stop and mask the automatic apt runs
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+    masked: true
+  loop:
+    - apt-daily.timer
+    - apt-daily-upgrade.timer
+    - apt-daily.service
+    - apt-daily-upgrade.service
+
+- name: Remove unattended-upgrades
+  ansible.builtin.apt:
+    name: unattended-upgrades
+    state: absent
+    purge: true
+    lock_timeout: "{{ apt_updates_lock_timeout }}"
+
+# Only while internet access is allowed. The private-internet VMs get their
+# packages through the apt cache (apt_client) and are updated by their roles.
+- name: Update all packages
+  when:
+    - internet_enabled | bool
+    - "'private_internet' not in group_names"
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 3600
+    upgrade: safe
+    lock_timeout: "{{ apt_updates_lock_timeout }}"
+  # A mirror hiccup during the download fails the whole upgrade; apt resumes
+  # from the packages already downloaded.
+  register: apt_updates_upgrade
+  retries: 2
+  delay: 10
+  until: apt_updates_upgrade is succeeded

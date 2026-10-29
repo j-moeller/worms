@@ -15,7 +15,7 @@ options {
 	// local name upstream, and do not resolve it ourselves.
 	recursion yes;
 	allow-recursion { any; };
-	forwarders { 1.1.1.1; 1.0.0.1; };
+	forwarders { {% for forwarder in dns_forwarders %}{{ forwarder }}; {% endfor %}};
 	forward only;
 {% else %}
 	// No upstream: authoritative for worms.internal only; refuse everything else.
@@ -24,6 +24,10 @@ options {
 
 	// Parity with the previous dnsmasq resolver, which did not validate DNSSEC.
 	dnssec-validation no;
+
+	// BIND's default cache may grow to 90% of RAM; this VM has 512 MB (floor
+	// 256 MB with ballooning) and also runs apt while provisioning.
+	max-cache-size 32m;
 };
 
 logging {

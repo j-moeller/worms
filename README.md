@@ -232,9 +232,13 @@ stack are migrated by handled automatically by `worms build platform` / `worms b
   rsyslog (role `syslog_server`) listens on tcp 514 and writes one file per
   sending VM, `/var/log/remote/<VM address>/audit.log` (the address of the TCP
   connection, not a hostname from the message, which a compromised VM could
-  forge). Rotated daily, compressed, kept 30 days.
+  forge). Rotated daily, compressed, kept 30 days. The DNS and private-internet VMs
+  send from their mgmt-exposed address; the syslog VM routes its replies back
+  via the siem gateway (`worms-reply-route.service`), not over its own
+  mgmt-exposed NIC.
 - **every infrastructure VM** (`audit_hosts`: database, dashboard,
-  orchestrator, scoring, logging, monitor, DNS, private internet; not the sandbox):
+  orchestrator, scoring, logging, monitor, DNS, private internet and the syslog
+  VM itself; not the sandbox or devbox VMs):
   `auditd` records executed commands and changes to accounts, sudo, SSH,
   systemd units, cron and kernel modules (`roles/audit/auditd/templates/worms.rules.j2`);
   `rsyslog` ships `/var/log/audit/audit.log` to the syslog VM over TCP and

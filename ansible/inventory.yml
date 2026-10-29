@@ -108,6 +108,7 @@ all:
         monitor:
         dns:
         private_internet:
+        syslog:
 
     # Django application hosts (role django_app).
     django_hosts:

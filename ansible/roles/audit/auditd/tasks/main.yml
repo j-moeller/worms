@@ -7,7 +7,7 @@
       - auditd
       - rsyslog
     state: present
-    update_cache: true
+    update_cache: "{{ internet_enabled | bool }}"
     cache_valid_time: 3600
 
 - name: Install audit rules

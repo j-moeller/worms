@@ -5,6 +5,8 @@
 # The firewall (security group syslog, host nftables) decides who may send.
 syslog_server_address: "{{ infrastructure_ips.syslog }}"
 syslog_server_port: 514
+# The siem bridge's host address: replies to the senders go back this way.
+syslog_server_gateway: "{{ host_ips.siem }}"
 syslog_server_dir: /var/log/remote
 
 # Rotation: daily, compressed, kept this many days.

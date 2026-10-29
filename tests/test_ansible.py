@@ -290,7 +290,7 @@ ROLES = {
     "logging": [*TLS_WEB, "sandbox_api", "auditd"],
     "monitor": ["ca_distribute", "network_monitor", "auditd"],
     "dns": ["setup_dns", "auditd"],
-    "syslog": ["syslog_server"],
+    "syslog": ["syslog_server", "auditd"],
     **{pi: ["apt_client", pi, "auditd"] for pi in ("apt_cache", "devpi", "docker_registry", "manpages", "ntp",
                                                    "cve_search", "wikipedia")},
 }  # fmt: skip

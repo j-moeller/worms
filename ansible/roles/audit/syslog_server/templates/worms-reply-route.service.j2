@@ -1,0 +1,19 @@
+# Managed by Ansible (role syslog_server). DO NOT EDIT.
+# Replies from the siem address leave via the siem gateway, also to senders on
+# mgmt-exposed (a bridge this VM has a NIC on).
+[Unit]
+Description=Route replies from the siem address via the siem gateway
+Wants=network-online.target
+After=network-online.target
+Before=rsyslog.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/ip route replace default via {{ syslog_server_gateway }} table 100
+ExecStart=/usr/sbin/ip rule replace from {{ syslog_server_address }} table 100 priority 100
+ExecStop=-/usr/sbin/ip rule del from {{ syslog_server_address }} table 100 priority 100
+ExecStop=-/usr/sbin/ip route flush table 100
+
+[Install]
+WantedBy=multi-user.target

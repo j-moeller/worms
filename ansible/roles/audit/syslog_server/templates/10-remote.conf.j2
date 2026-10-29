@@ -1,0 +1,24 @@
+# Managed by Ansible (role syslog_server). DO NOT EDIT.
+# Receives the audit logs of the infrastructure VMs (role auditd) and writes
+# one file per VM. The directory is the sender's address (from the TCP
+# connection, pinned by the Proxmox ipfilter), never a name taken from the
+# message, which a compromised VM could forge.
+module(load="imtcp")
+
+template(name="remote_audit_file" type="string"
+         string="{{ syslog_server_dir }}/%fromhost-ip%/audit.log")
+
+ruleset(name="remote") {
+  action(type="omfile"
+         dynaFile="remote_audit_file"
+         dirCreateMode="0750"
+         fileCreateMode="0640"
+         fileGroup="adm"
+         dirGroup="adm")
+  stop
+}
+
+input(type="imtcp"
+      address="{{ syslog_server_address }}"
+      port="{{ syslog_server_port }}"
+      ruleset="remote")

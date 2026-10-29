@@ -1,24 +1,18 @@
 ---
-# Central logging: Wazuh on the wazuh VM (role wazuh_server), auditd on every
-# infrastructure VM, shipping its audit log to Wazuh via rsyslog (role auditd).
-# Wazuh first, so the VMs' forwarders connect right away (they queue the events
-# while it is unreachable). Needs internet access (make provision).
-#
-# Disabled for now to save RAM (wazuh_enabled, group_vars/all.yml, default
-# false; the wazuh VM itself is gated by enable_wazuh in the OpenTofu
-# persistent stack). Flip both back together to re-enable. docs/resources.md.
+# Central logging: an rsyslog server on the syslog VM (role syslog_server),
+# auditd on every infrastructure VM, shipping its audit log there via rsyslog
+# (role auditd). The server first, so the VMs' forwarders connect right away
+# (they queue the events while it is unreachable).
 - name: Set up the central log server
-  hosts: wazuh_hosts
+  hosts: syslog_hosts
   any_errors_fatal: true
   become: true
   roles:
-    - role: wazuh_server
-      when: wazuh_enabled | default(false) | bool
+    - syslog_server
 
 - name: Set up auditd and log forwarding
   hosts: audit_hosts
   any_errors_fatal: true
   become: true
   roles:
-    - role: auditd
-      when: wazuh_enabled | default(false) | bool
+    - auditd

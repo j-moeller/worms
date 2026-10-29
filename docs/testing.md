@@ -92,10 +92,10 @@ What it checks:
    request in `network_events`; the shipper and Zeek heartbeats younger than
    3/5 minutes.
 5. **Containment:**
-   - sandbox VM: cannot reach the database, dashboard, orchestrator, wazuh,
+   - sandbox VM: cannot reach the database, dashboard, orchestrator, syslog,
      the monitor, the Proxmox API/host, sandbox-gw's management address,
      non-API ports of the services, the internet;
-   - monitor: reaches only the database and wazuh;
+   - monitor: reaches only the database and syslog;
    - scoring/logging: reach only the database;
    - the database roles, tested **from their own VMs with their own
      credentials over verified TLS**: monitor INSERT-only, cannot read or
@@ -123,7 +123,7 @@ FAIL ("sandbox deployed"); the other checks still run.
   (the simulation checks capture scoring with an injected finished run, not a
   sandbox the conductor built; the lifecycle itself is covered offline in
   `test_rounds.py`/`test_round_agent.py`).
-- Wazuh: whether the audit logs arrive (only that auditd/rsyslog run).
+- syslog: whether the audit logs arrive (only that auditd/rsyslog run).
 - Load: flood behaviour of the APIs and the monitor (the limits are
   unit-tested, not stress-tested).
 - The private-internet services.

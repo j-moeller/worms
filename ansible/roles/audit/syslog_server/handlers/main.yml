@@ -1,0 +1,11 @@
+---
+- name: Restart rsyslog
+  ansible.builtin.service:
+    name: rsyslog
+    state: restarted
+
+- name: Restart the reply route
+  ansible.builtin.systemd:
+    name: worms-reply-route
+    state: restarted
+    daemon_reload: true

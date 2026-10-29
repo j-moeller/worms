@@ -53,6 +53,14 @@ host_sandbox_limits:
   udp_pps: 5000                    # UDP packets
   udp_burst: 10000
 
+# Per sending VM, towards the syslog VM (tcp 514, routed by the host): a
+# compromised infrastructure VM cannot flood it for all the others. Normal
+# audit traffic is a few KB/s.
+host_syslog_limits:
+  connections: 4                   # open connections at once
+  kbytes_per_second: 1024
+  burst_kbytes: 4096
+
 # Watchdog: if the Proxmox firewall is not enforcing, hard-stop all sandbox VMs.
 host_fw_watchdog_interval: 15s
 host_fw_guest_table: "bridge proxmox-firewall-guests"

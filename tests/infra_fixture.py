@@ -27,7 +27,7 @@ BRIDGES = [
     ("vmbr21", "10.11.0.1/24", "Core: database and orchestrator."),
     ("vmbr22", "10.12.0.1/24", "Ingest: database leg of scoring/logging (routed to database:5432 only)."),
     ("vmbr23", "", "Sandbox services: scoring/logging (sandbox leg), private internet, DNS, sandbox-gw. No host IP, no uplink."),
-    ("vmbr24", "10.13.0.1/24", "SIEM: wazuh (receives syslog from every infrastructure VM, routed tcp 514 only)."),
+    ("vmbr24", "10.13.0.1/24", "SIEM: syslog, the central rsyslog server (receives the audit logs of every infrastructure VM, routed tcp 514 only)."),
     ("vmbr1000", "", "Sandbox network dmz (no host IP)"),
     ("vmbr1001", "", "Sandbox network core (no host IP)"),
     ("vmbr9000", "", "Devbox network t1 A-B (no host IP)"),
@@ -79,7 +79,7 @@ GROUPS = {
     "ssh": [_in("22", "10.3.0.1,10.5.0.1,10.4.0.1,10.6.0.1", comment="SSH from the Proxmox host")],
     "provisioning": [_out("3142", "10.11.0.1")],
     "log_client": [_out("514", "10.13.0.30")],
-    "wazuh": [_in("514", "10.0.0.0/8")],
+    "syslog": [_in("514", "10.0.0.0/8")],
 }
 
 
@@ -122,8 +122,8 @@ def snapshot() -> dict:
                [("sandbox_api", "net0"), ("devbox_api", "net0"), ("db_client", "net1"), ("ssh", "net2")], pool="ephemeral"),
         _guest(106, "monitor", [("vmbr22", "10.12.0.100/24"), ("vmbr5", "10.5.0.100/24"), ("vmbr3", "")],
                [("db_client", "net0"), ("ssh", "net1")], pool="ephemeral"),
-        _guest(107, "wazuh", [("vmbr24", "10.13.0.30/24"), ("vmbr5", "10.5.0.30/24")],
-               [("wazuh", "net0"), ("ssh", "net1")]),
+        _guest(107, "syslog", [("vmbr24", "10.13.0.30/24"), ("vmbr5", "10.5.0.30/24")],
+               [("syslog", "net0"), ("ssh", "net1")]),
         _guest(110, "dns", [("vmbr23", "10.2.0.11/24"), ("vmbr5", "10.5.0.11/24")],
                [("dns", "net0"), ("ssh", "net1")], pool="private_internet", tags="private_internet"),
         _guest(120, "apt-cache", [("vmbr23", "10.2.0.20/24"), ("vmbr5", "10.5.0.20/24")],

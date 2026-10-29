@@ -2,3 +2,6 @@
 dns_domain: worms.internal
 dns_entries: [] # Set in group_vars/dns.yml
 dns_listen_address: "{{ services_ips.dns }}"
+# Upstream resolvers while internet access is allowed: TU Berlin's. The
+# network blocks public resolvers such as 1.1.1.1 (queries time out).
+dns_forwarders: [130.149.7.7]

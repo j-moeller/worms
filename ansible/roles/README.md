@@ -12,6 +12,7 @@ stay unique across folders.
 | `database/`         | `setup_db_base`, `setup_db_permissions`                       | SetupDbAndDashboard.yml        | `database_hosts`                |
 | `applications/`     | `django_app` (dashboard, orchestrator), `sandbox_api`, `network_monitor` (Zeek + zeek-shipper) | SetupDbAndDashboard.yml, SetupSandboxApi.yml, SetupNetworkMonitor.yml | `django_hosts`, `sandbox_api_hosts`, `network_monitor_hosts` |
 | `dns/`              | `setup_dns`                                                   | SetupDNS.yml                   | `dns_hosts`                     |
+| `system/`           | `apt_updates` (no automatic apt runs; package updates while online) | UpdateVMs.yml | every infrastructure VM |
 | `audit/`            | `wazuh_server` (Wazuh all-in-one), `auditd` (auditd + rsyslog forwarding to Wazuh) | SetupAudit.yml | `wazuh_hosts`, `audit_hosts` |
 | `private_internet/` | `apt_client`, `apt_cache`, `cve_search`, `devpi`, `docker_registry`, `manpages`, `ntp`, `wikipedia` | SetupPrivateInternet.yml | `private_internet` |
 

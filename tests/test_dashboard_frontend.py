@@ -257,15 +257,19 @@ def test_devbox_ssh_key_add_remove_and_reconfigure(site, team_upload, monkeypatc
     assert DevboxSSHKey.objects.filter(team=team).count() == 1 and calls == []
     assert "not allowed" in _flash(site) or "not a single-line" in _flash(site)
 
-    # Another team's key cannot be registered (would hijack confinement).
-    other = Team.objects.create(name="blue", competition=team.competition)
+    # Another team's key cannot be registered (would hijack confinement). The
+    # other team holds a different blob; this team tries to add that same blob.
+    import base64
+
     from core.models.user import User
 
-    DevboxSSHKey.objects.create(team=other, name="k", public_key=f"ssh-ed25519 {_BLOB} blue", created_by=User.objects.create(username="b"))
+    other = Team.objects.create(name="blue", competition=team.competition)
+    other_blob = base64.b64encode(b"y" * 40).decode()
+    DevboxSSHKey.objects.create(team=other, name="k", public_key=f"ssh-ed25519 {other_blob} blue", created_by=User.objects.create(username="b"))
     calls.clear()
-    _post(site, "/devbox/ssh-keys/add/", {"name": "dup", "public_key": f"ssh-ed25519 {_BLOB} mine"})
+    _post(site, "/devbox/ssh-keys/add/", {"name": "dup", "public_key": f"ssh-ed25519 {other_blob} mine"})
     assert DevboxSSHKey.objects.filter(team=team).count() == 1 and calls == []
-    assert "already registered" in _flash(site)
+    assert "already registered by another team" in _flash(site)
 
     # Remove the key -> gone, and a reconfigure is requested.
     calls.clear()
@@ -299,3 +303,36 @@ def test_leaving_a_team_removes_the_members_keys(site, team_upload, monkeypatch)
     assert _post(site, f"/leave_team/{team.uuid}", {}).status_code == 302
     assert DevboxSSHKey.objects.filter(team=team, created_by=admin).count() == 0
     assert calls == [f"/devbox/{team.uuid}/reconfigure/"]
+
+
+def test_devbox_key_fingerprint_is_unique_across_teams(db_clean):
+    """The DB itself refuses the same key under two teams (the race-proof guard
+    behind the dashboard's own check; docs/security-assessment.md D7). The
+    fingerprint ignores the free-text comment."""
+    import base64
+
+    from core.models.competition import Competition
+    from core.models.devbox import DevboxSSHKey
+    from core.models.team import Team
+    from django.db import IntegrityError, transaction
+
+    comp = Competition.objects.create(name="C")
+    a = Team.objects.create(name="a", competition=comp)
+    b = Team.objects.create(name="b", competition=comp)
+    blob = base64.b64encode(b"x" * 40).decode()
+    DevboxSSHKey.objects.create(team=a, public_key=f"ssh-ed25519 {blob} alice@laptop")
+
+    # Same key material, different comment, different team -> rejected by the DB.
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            DevboxSSHKey.objects.create(team=b, public_key=f"ssh-ed25519 {blob} bob@other")
+    # Same team, exact duplicate -> also rejected.
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            DevboxSSHKey.objects.create(team=a, public_key=f"ssh-ed25519 {blob} alice@laptop")
+
+    assert DevboxSSHKey.fingerprint(f"ssh-ed25519 {blob} x") == DevboxSSHKey.fingerprint(f"ssh-ed25519 {blob} y")
+    # A different key is fine, and its fingerprint is stored.
+    other = base64.b64encode(b"z" * 40).decode()
+    key = DevboxSSHKey.objects.create(team=b, public_key=f"ssh-ed25519 {other} b")
+    assert key.key_fingerprint == DevboxSSHKey.fingerprint(f"ssh-ed25519 {other}")

@@ -23,7 +23,7 @@ from dashboard.views.util import render_with_base_info
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import F
 from django.http import HttpRequest
 from django.shortcuts import redirect
@@ -133,11 +133,6 @@ def devbox_reset(request: HttpRequest, team: Team):
     return redirect("index")
 
 
-def _key_blob(public_key: str) -> str:
-    # type + base64 blob, without the comment: the identity sshd matches on.
-    return " ".join(public_key.split(" ")[:2])
-
-
 def _reconfigure_devbox(request: HttpRequest, team: Team, changed: str):
     """Ask the orchestrator to re-push the team's keys to the devbox and the
     gateway (no VM rebuild). Reports honestly whether it took effect."""
@@ -170,17 +165,28 @@ def devbox_add_ssh_key(request: HttpRequest, team: Team):
     if not _valid_ssh_key(public_key):
         messages.error(request, "That is not a single-line OpenSSH public key (ssh-ed25519, ssh-rsa, ecdsa, sk-…), or it contains characters that are not allowed.")
         return redirect("index")
-    blob = _key_blob(public_key)
-    # A key may belong to only one team: sshd matches a key to the first line,
-    # so a shared key would let another team inherit this team's gateway
-    # forward and log in to its devbox VMs (docs/security-assessment.md).
-    if any(_key_blob(k) == blob for k in DevboxSSHKey.objects.exclude(team=team).values_list("public_key", flat=True)):
-        messages.error(request, "That public key is already registered — by another team, or already by yours. Use a different key.")
+    # A key may belong to only one team: sshd matches a key to the first
+    # authorized_keys line, so a shared key would let another team inherit this
+    # team's gateway forward and log in to its devbox VMs
+    # (docs/security-assessment.md, D7). The DB UNIQUE constraint on the
+    # fingerprint is the race-proof guard; this check is for a clear message
+    # and to tell "another team's" from "already yours".
+    fingerprint = DevboxSSHKey.fingerprint(public_key)
+    existing = DevboxSSHKey.objects.filter(key_fingerprint=fingerprint).first()
+    if existing is not None:
+        if existing.team_id == team.id:
+            messages.info(request, "Your team already has that key.")
+        else:
+            messages.error(request, "That public key is already registered by another team. Use a different key.")
         return redirect("index")
-    if any(_key_blob(k) == blob for k in DevboxSSHKey.objects.filter(team=team).values_list("public_key", flat=True)):
-        messages.info(request, "Your team already has that key.")
+    try:
+        with transaction.atomic():
+            DevboxSSHKey.objects.create(team=team, name=name, public_key=public_key, created_by=request.user)
+    except IntegrityError:
+        # Lost a race against a simultaneous add of the same key (another team,
+        # or a double submit): the UNIQUE constraint held.
+        messages.error(request, "That public key is already registered. Use a different key.")
         return redirect("index")
-    DevboxSSHKey.objects.create(team=team, name=name, public_key=public_key, created_by=request.user)
     _reconfigure_devbox(request, team, "added")
     return redirect("index")
 

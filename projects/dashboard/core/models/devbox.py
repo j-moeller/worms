@@ -21,6 +21,7 @@ Design points reflected here:
   separately, by the current-team file). See docs/devbox.md.
 """
 
+import hashlib
 import uuid
 
 from core import clock
@@ -114,12 +115,32 @@ class DevboxSSHKey(models.Model):
     team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="devbox_ssh_keys")
     name = models.TextField(blank=True, default="")
     public_key = models.TextField()
+    # SHA-256 of the key's identity (type + base64 blob, ignoring the comment),
+    # UNIQUE across every team: the same public key may belong to only one team.
+    # sshd matches a key to the first authorized_keys line, so a key shared by
+    # two teams would let one inherit the other's gateway confinement and log in
+    # to its VMs (docs/security-assessment.md, D7). A digest keeps the unique
+    # index small whatever the key size. Set from public_key on save().
+    key_fingerprint = models.CharField(max_length=64, default="", editable=False)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="devbox_ssh_keys")
     created_at = models.DateTimeField(default=clock.now)
 
     class Meta:
         db_table = "devbox_ssh_keys"
         indexes = [models.Index(fields=["team"])]
+        constraints = [
+            models.UniqueConstraint(fields=["key_fingerprint"], name="unique_devbox_ssh_key_fingerprint"),
+        ]
+
+    @staticmethod
+    def fingerprint(public_key: str) -> str:
+        """The key's identity: SHA-256 of `type base64blob` (the comment, which
+        the team controls freely, is not part of it)."""
+        return hashlib.sha256(" ".join((public_key or "").split()[:2]).encode()).hexdigest()
+
+    def save(self, *args, **kwargs):
+        self.key_fingerprint = self.fingerprint(self.public_key)
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"DevboxSSHKey({self.team.name}, {self.name})"

@@ -36,8 +36,26 @@
     group: root
     mode: '0644'
 
+- name: Create the apache2 systemd drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/apache2.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install the apache2 hardening drop-in
+  ansible.builtin.template:
+    src: hardening.conf.j2
+    dest: /etc/systemd/system/apache2.service.d/hardening.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart apache2
+
 - name: Enable and start apache2
   ansible.builtin.systemd:
     name: apache2
     enabled: true
     state: started
+    daemon_reload: true

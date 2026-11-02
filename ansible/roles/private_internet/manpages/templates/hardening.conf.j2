@@ -1,0 +1,43 @@
+# Managed by Ansible (role manpages). Hardening drop-in for the packaged apache2
+# unit, modeled on the application roles' pattern but ADJUSTED for Apache, which
+# binds the privileged port 80 and forks CGI workers (man2html) after dropping
+# to www-data -- so it keeps exactly the capabilities that needs and nothing
+# else. Optional paths are prefixed with "-" so a missing one does not fail the
+# unit.
+#
+# UNTESTED on a real VM: the manpages service is not currently deployed
+# (opentofu/stacks/private_internet keeps it commented). Verify
+# `systemctl status apache2` and that man pages render after enabling it.
+[Service]
+NoNewPrivileges=yes
+ProtectSystem=strict
+# Apache's logs, runtime (pid/socket/scoreboard), module state and lock dir;
+# /var/www and the config stay read-only. Optional ones ("-") do not fail the
+# unit if absent on this release.
+ReadWritePaths=/var/log/apache2
+ReadWritePaths=/var/lib/apache2
+ReadWritePaths=-/run/apache2
+ReadWritePaths=-/var/lock/apache2
+ReadWritePaths=-/run/lock
+ProtectHome=tmpfs
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# The root master binds port 80 (CAP_NET_BIND_SERVICE) and drops its workers to
+# www-data (CAP_SETUID/CAP_SETGID); CAP_KILL lets it signal them. Everything
+# else is dropped.
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID CAP_KILL
+# AF_NETLINK: getifaddrs at startup (see kiwix); AF_INET6: the host has IPv6.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK

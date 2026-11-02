@@ -25,3 +25,13 @@ output "security_groups" {
     devbox_ssh_target  = proxmox_virtual_environment_cluster_firewall_security_group.devbox_ssh_target.name
   }
 }
+
+# Per-service private-internet groups, keyed by service. The private_internet
+# stack attaches each VM only its own, so a service accepts just its own port
+# (instead of the broad `private_internet` group in security_groups above).
+output "private_internet_service_groups" {
+  value = {
+    for k, g in proxmox_virtual_environment_cluster_firewall_security_group.private_internet_service :
+    k => g.name
+  }
+}

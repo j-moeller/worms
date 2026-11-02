@@ -172,7 +172,7 @@ Enforced in depth, by construction:
 
 | Layer | Why they cannot meet |
 |---|---|
-| Networks | devbox `10.128.0.0/10` and sandbox `10.64.0.0/10` are disjoint; VMs on different, dedicated bridges (`vmbr9*` vs `vmbr1*`). |
+| Networks | devbox `10.128.0.0/19` and sandbox `10.64.0.0/10` are disjoint; VMs on different, dedicated bridges (`vmbr9*` vs `vmbr1*`). |
 | Host routing | the host has no address on either family and never routes `vmbr9*`↔`vmbr1*`; the FORWARD policy is drop and only *same-bridge* traffic is accepted. |
 | Services bridge (shared) | both environments reach scoring/logging/PI here, but the host drops **gateway↔gateway**, and each gateway's Proxmox firewall accepts no inbound service connections — so neither can reach the other's SNAT address. |
 | Per-VM firewall | the `devbox`/`sandbox` security groups scope traffic to their own network; a devbox VM cannot even address a sandbox VM. |

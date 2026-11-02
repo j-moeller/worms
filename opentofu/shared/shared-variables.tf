@@ -103,7 +103,7 @@ locals {
     services     = "10.2.0.0/24"
     siem         = "10.13.0.0/24"
     sandbox_vms  = "10.64.0.0/10"
-    devbox_vms   = "10.128.0.0/10" # 10.128-10.191; disjoint from sandbox 10.64/10
+    devbox_vms   = "10.128.0.0/19" # 10.128.0-10.128.31; 32 /24 blocks = 16 teams (2 link subnets each), disjoint from sandbox 10.64/10
     mgmt_trusted = "10.3.0.0/24"
     mgmt_exposed = "10.5.0.0/24"
     mgmt_sandbox = "10.4.0.0/16"

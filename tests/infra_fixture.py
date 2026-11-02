@@ -14,7 +14,7 @@ import copy
 
 SERVICES_NET = "10.2.0.0/24"
 SANDBOX_NET = "10.64.0.0/10"
-DEVBOX_NET = "10.128.0.0/10"
+DEVBOX_NET = "10.128.0.0/19"
 
 BRIDGES = [
     ("vmbr2", "10.3.0.1/24", "Management (SSH host -> VM) for database and orchestrator. Ports isolated."),

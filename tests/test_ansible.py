@@ -275,9 +275,9 @@ def test_django_nginx_forwards_the_host_with_its_port(render):
 
 # Roles every host gets from the configure sequence, and the sequence itself.
 CONFIGURE = [
-    "WaitForVMs.yml", "SetupDNS.yml", "UpdateVMs.yml", "CreateCA.yml", "DistributeCA.yml", "ConfigureNginx.yml",
-    "ConfigureNginxDjango.yml", "SetupDbAndDashboard.yml", "SetupSandboxApi.yml", "SetupNetworkMonitor.yml",
-    "SetupPrivateInternet.yml", "SetupAudit.yml", "SetupRoundAgent.yml",
+    "WaitForVMs.yml", "SetupDNS.yml", "UpdateVMs.yml", "HardenSSH.yml", "CreateCA.yml", "DistributeCA.yml",
+    "ConfigureNginx.yml", "ConfigureNginxDjango.yml", "SetupDbAndDashboard.yml", "SetupSandboxApi.yml",
+    "SetupNetworkMonitor.yml", "SetupPrivateInternet.yml", "SetupAudit.yml", "SetupRoundAgent.yml",
 ]  # fmt: skip
 TLS_WEB = ["ca_distribute", "nginx_tls"]
 ROLES = {

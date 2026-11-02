@@ -86,13 +86,16 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "dashboar
   name = "dashboard"
 
   # Internet clients arrive via host DNAT (host_publish_dashboard, role host_network);
-  # nothing else can route into the DMZ.
+  # nothing else can route into the DMZ. Pinned to the dashboard's own DMZ
+  # address so HTTPS is accepted only there -- the dashboard cannot be reached
+  # on any of its other addresses (e.g. the management NIC).
   rule {
     type    = "in"
     action  = "ACCEPT"
     proto   = "tcp"
     dport   = "443"
-    comment = "HTTPS (public, via host DNAT)"
+    dest    = local.infrastructure_ips.dashboard
+    comment = "HTTPS (public, via host DNAT) -- dashboard DMZ address only"
   }
 
   rule {

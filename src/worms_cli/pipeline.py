@@ -36,6 +36,7 @@ CONFIGURE_PLAYBOOKS = [
     "WaitForVMs.yml",
     "SetupDNS.yml",
     "UpdateVMs.yml",
+    "HardenSSH.yml",
     "CreateCA.yml",
     "DistributeCA.yml",
     "ConfigureNginx.yml",

@@ -28,6 +28,18 @@ provider "proxmox" {
 
 resource "proxmox_virtual_environment_cluster_firewall" "main" {
   enabled = true
+
+  # Datacenter default-deny for inbound: anything not matched by a security
+  # group or host rule is dropped. This pins Proxmox's default (which is already
+  # DROP when the firewall is enabled) so it cannot silently drift to ACCEPT.
+  #
+  # Output stays ACCEPT on purpose: the datacenter output policy also governs
+  # the Proxmox HOST's own outbound, which Ansible uses to SSH into every VM, so
+  # a blanket output-drop would break provisioning unless every host-initiated
+  # connection were enumerated here. Each VM still sets its own input AND output
+  # DROP via its firewall options, so guest egress is already default-deny.
+  input_policy  = "DROP"
+  output_policy = "ACCEPT"
 }
 
 resource "proxmox_node_firewall" "worms_pve" {

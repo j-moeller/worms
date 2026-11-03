@@ -21,6 +21,20 @@
   gather_facts: false
 
   tasks:
+    # Let sshd bind its management address even if that NIC is configured after
+    # ssh.service starts. The private-internet VMs reach Ansible on their second
+    # NIC (net1); with a specific ListenAddress, sshd can otherwise fail to bind
+    # on boot ("Cannot assign requested address") and the VM is unreachable over
+    # SSH. ip_nonlocal_bind lets the bind succeed and take effect once the
+    # address appears, so a reboot can never strand the daemon.
+    - name: Allow binding a management address that is not up yet
+      ansible.posix.sysctl:
+        name: net.ipv4.ip_nonlocal_bind
+        value: "1"
+        sysctl_set: true
+        state: present
+        reload: true
+
     - name: Pin sshd ListenAddress to the management IP
       ansible.builtin.copy:
         dest: /etc/ssh/sshd_config.d/15-worms-listen.conf

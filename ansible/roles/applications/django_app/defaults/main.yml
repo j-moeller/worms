@@ -50,6 +50,9 @@ django_timers: []
 # Long-running management commands (systemd services): [{name, command, description}].
 django_daemons: []
 django_run_migrations: false
+# Per-connection lock_timeout for `migrate` and the post-migrate commands, so a
+# contended DDL lock fails fast instead of hanging the deploy indefinitely.
+django_migrate_lock_timeout: "30s"
 
 required_packages:
   - python3

@@ -210,6 +210,16 @@ def test_a_team_key_can_jump_through_the_ssh_gateway_but_run_nothing(render):
     assert account["shell"] == "/usr/sbin/nologin"
 
 
+def test_a_code_deploy_can_skip_everything_that_needs_the_internet():
+    """With devboxes up the internet window stays closed, and pip then hangs for minutes
+    (docs/management.md). `--skip-tags packages` must leave out every package step."""
+    tasks = yaml.safe_load((ANSIBLE / "roles/applications/django_app/tasks/main.yml").read_text())
+    installers = [t for t in tasks if "ansible.builtin.pip" in t or "ansible.builtin.apt" in t]
+    assert len(installers) == 3
+    for task in installers:
+        assert "packages" in task["tags"], task["name"]
+
+
 def test_the_orchestrator_is_told_where_teams_reach_the_ssh_gateway():
     """Without it, a team's dev view says "still being built" forever and never
     shows the `ssh -J` command. Found by the live end-to-end run."""

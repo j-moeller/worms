@@ -33,7 +33,7 @@ def _playwright_available() -> bool:
 
 def _page(site, team, addresses=True) -> str:  # noqa: F811
     """The dev view of a team whose devbox has index 1, as the reconciler leaves it."""
-    from core.models.devbox import Devbox, DevboxVM
+    from core.models.devbox import Devbox, DevboxSSHKey, DevboxVM
 
     devbox = Devbox.objects.create(team=team, index=1, ssh_gateway_host="worms.example", ssh_gateway_port=2222, ssh_gateway_user="team")
     links = {"a": ["10.128.2.11"], "b": ["10.128.2.12", "10.128.3.12"], "c": ["10.128.3.13"]}
@@ -42,6 +42,8 @@ def _page(site, team, addresses=True) -> str:  # noqa: F811
             devbox=devbox, vm_identifier=f"devbox-t1-{role}", role=role, ssh_fabric_ip=f"10.7.1.{11 + n}",
             vm_maintenance_ip=f"10.6.1.{11 + n}", addresses=on_links if addresses else [],
         )  # fmt: skip
+    # With a key: its table is wider than a phone, and that must stay inside the table's own scroll area.
+    DevboxSSHKey.objects.create(team=team, name="laptop", public_key="ssh-ed25519 " + "A" * 68 + " someone@laptop")
     page = site.get("/", **proxied(HOST)).content.decode()
     token = page.split('name="csrfmiddlewaretoken" value="', 1)[1].split('"', 1)[0]
     switched = site.post("/environment/", {"csrfmiddlewaretoken": token, "environment": "dev"}, HTTP_ORIGIN=f"https://{HOST}", **proxied(HOST))

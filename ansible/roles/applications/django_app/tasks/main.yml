@@ -100,11 +100,15 @@
     name: pip
     state: latest
     virtualenv: "{{ django_venv_dir }}"
+  tags:
+    - packages
 
 - name: Install Python packages
   ansible.builtin.pip:
     virtualenv: "{{ django_venv_dir }}"
     name: "{{ pip_packages + django_extra_pip_packages }}"
+  tags:
+    - packages
 
 - name: Create secret directory
   ansible.builtin.file:

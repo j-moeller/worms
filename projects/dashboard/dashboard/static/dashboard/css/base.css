@@ -297,7 +297,7 @@ textarea.input { resize: vertical; min-height: 64px; }
 .field--grow { flex: 1; min-width: 240px; }
 
 /* ---- tables ------------------------------------------------------------- */
-.table-wrap { overflow-x: auto; }
+.table-wrap { position: relative; overflow-x: auto; } /* relative: holds a visually hidden header inside the scroll area */
 .table { width: 100%; border-collapse: collapse; font-size: .9rem; }
 .table th, .table td { padding: 11px 14px; text-align: left; border-bottom: var(--border-w) solid var(--border); vertical-align: top; }
 .table thead th { font-size: .72rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 700; background: var(--surface-2); }

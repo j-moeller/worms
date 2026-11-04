@@ -69,6 +69,15 @@ worms admin reset-password    # the last line is a one-time password, shown once
 
 **These builds need the internet window, which is refused while any devbox or sandbox VM exists**, because neither may have internet access. Remove those VMs first ([Stop and remove things](#stop-and-remove-things)). The window closes again by itself, even if the build fails.
 
+**To redeploy only the Django code while devboxes exist,** use this. It opens no internet window and skips the package steps, so it cannot add a Python dependency. It takes about 3 minutes and restarts the dashboard and orchestrator services:
+
+```sh
+cd /root/app/ansible
+ssh-agent sh -c 'ssh-add -q /etc/worms/ssh/worms && WORMS_SSH_AUTH_SOCK="$SSH_AUTH_SOCK" exec ansible-playbook -e @group_vars/vault.yml SetupDbAndDashboard.yml --limit orchestrator,dashboard --skip-tags packages'
+```
+
+Do not leave out `--skip-tags packages`: without internet, `pip` hangs for minutes.
+
 Afterwards, check with:
 
 ```sh

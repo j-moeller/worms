@@ -150,7 +150,7 @@ Every man page returns `503`, because the systemd hardening blocks Apache's CGI 
 | A failed devbox reset looks like a success | The team loses its score, the VMs stay as they were, and the page keeps saying "being rebuilt" | E2E protocol, F25 |
 | Untrusted VMs run without a firewall while being built | Up to 28 minutes measured. The host's own rules still apply | E2E protocol, F4 |
 | Nothing checks that infrastructure VMs have a firewall | The watchdog watches only sandbox and devbox VMs. This is how the SSH gateway ran unprotected for 2 hours | E2E protocol, F26 |
-| With devboxes up, there is no supported way to deploy | `make` and `worms build provision` refuse, and no command removes only the devboxes. Fixes in this run had to be copied by hand | E2E protocol, F6 |
+| With devboxes up, there is no `worms` command to deploy | `make` and `worms build provision` refuse, and no command removes only the devboxes. For Django code alone, `docs/management.md` now gives an Ansible command that needs no internet window; anything else still has to be copied by hand | E2E protocol, F6 |
 | The agent throws away Ansible's output | A failed job usually says only `exited 2`. Each failure in this run had to be reproduced by hand. Keeping the output needs care, as it may hold secrets | E2E protocol, F9 |
 | `agent-sync` does not restart the agent | New playbooks take effect, but new agent code does not until `systemctl restart worms-round-agent`. Restarting during a job would kill it | E2E protocol, Stage 2 |
 | An interrupted build leaves things behind | A VM outside OpenTofu's state, or an `apt` on a VM holding its lock. There is also no command to cancel a job | E2E protocol, F2 |

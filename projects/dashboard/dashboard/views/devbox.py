@@ -56,6 +56,27 @@ def _hops(vms) -> list[dict]:
     return hops
 
 
+def _chain(vms) -> list[dict]:
+    """The VMs in order for the page's picture, each with the interface it is reached on and the
+    one that leads on. A VM's interfaces come in a fixed order: one per link, then the SSH
+    fabric (opentofu/stacks/devbox/main.tf)."""
+    by_role = {vm.role: vm for vm in vms}
+    chain = []
+    for role in ("a", "b", "c"):
+        vm = by_role.get(role)
+        if vm is None:
+            continue
+        links = [{"iface": f"eth{n}", "ip": ip} for n, ip in enumerate(vm.addresses)]
+        if role == "a":
+            entry = {"iface": f"eth{len(links)}" if links else "", "ip": vm.ssh_fabric_ip} if vm.ssh_fabric_ip else None
+            onward = links[0] if links else None
+        else:
+            entry = links[0] if links else None
+            onward = links[1] if len(links) > 1 else None
+        chain.append({"vm": vm, "letter": role.upper(), "entry": entry, "onward": onward})
+    return chain
+
+
 @login_required
 @user_in_team_required
 def devbox_home(request: HttpRequest, team: Team):
@@ -94,6 +115,7 @@ def devbox_home(request: HttpRequest, team: Team):
         "main_vm": main_vm,
         "ssh_command": ssh_command,
         "hops": _hops(vms),
+        "chain": _chain(vms),
         "score": len(captured_vm_ids),
         "total_tokens": len(vms),
         "logs": logs,

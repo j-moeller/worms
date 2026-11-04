@@ -22,10 +22,26 @@ function measure() {
             clipped: code.scrollWidth > code.clientWidth + 1 || pre.scrollWidth > pre.clientWidth + 1,
         };
     });
+    const nodes = [...document.querySelectorAll(".vm-node")].map((node) => {
+        const box = node.getBoundingClientRect();
+        const ports = [...node.querySelectorAll(".vm-port")].map((port) => port.getBoundingClientRect());
+        const inner = [...node.querySelectorAll(".vm-node__head, .vm-port__ip, .vm-node__state")].map((e) => e.getBoundingClientRect());
+        const style = getComputedStyle(node);
+        return {
+            text: node.innerText.replace(/\s+/g, " ").trim(),
+            left: Math.round(box.left), top: Math.round(box.top), middle: box.top + box.height / 2,
+            portsMiddle: ports.length ? (Math.min(...ports.map((p) => p.top)) + Math.max(...ports.map((p) => p.bottom))) / 2 : null,
+            portsOverlap: ports.length === 2 && overlap(ports[0], ports[1]),
+            spills: inner.some((r) => r.left < box.left || r.right > box.right || r.top < box.top || r.bottom > box.bottom),
+            ipClipped: [...node.querySelectorAll(".vm-port__ip")].some((ip) => ip.scrollWidth > ip.clientWidth + 1),
+            border: style.borderTopColor, background: style.backgroundColor,
+        };
+    });
     const pips = document.querySelector(".pips").getBoundingClientRect();
     const reset = document.querySelector(".confirm summary").getBoundingClientRect();
     return {
         blocks,
+        nodes,
         resetGap: reset.top - pips.bottom,
         pageScrolls: document.documentElement.scrollWidth > document.documentElement.clientWidth,
     };
@@ -52,7 +68,7 @@ function measure() {
 
     const out = { errors, widths: {} };
     await page.goto(`${ORIGIN}/page`);
-    for (const width of [1280, 900, 390]) {
+    for (const width of [1280, 1101, 1100, 900, 390]) {
         await page.setViewportSize({ width, height: 1000 });
         out.widths[width] = await page.evaluate(measure);
         if (shots) await page.screenshot({ path: path.join(shots, `devbox-${width}.png`), fullPage: true });

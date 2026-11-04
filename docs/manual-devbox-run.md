@@ -284,7 +284,7 @@ A key's comment may not contain spaces, or the dashboard refuses the key.
 - `SSH key added. Your devbox and the SSH gateway are being updated now.`
 - `1 registered` on the panel.
 - The panel **Connect** shows `ssh -A -J team@worms-dev.mlsec.tu-berlin.de:2222 root@10.7.0.11`, then the commands from A to B and from B to C. Use these from outside. On the node, use the gateway's address, as in step 10.
-- The panel **VMs** lists each VM's addresses.
+- The panel **VMs** draws the gateway and each VM, with every interface's name and address.
 
 **Part 3. Who:** root on the node. Wait for the key to arrive, about 3 minutes:
 
@@ -463,7 +463,7 @@ This is where each action should leave a trace:
 | Creating a file | No | No | No | Only on the VM |
 | `apt` | No | No | No | apt cache's log, and the devbox's `/var/log/apt/history.log` |
 | `pip` | No | No | No | devpi's journal |
-| `curl` to scoring | Token `found` | `flag_capture_attempts`, `devbox_captures` | No | |
+| `curl` to scoring | VM `Captured` | `flag_capture_attempts`, `devbox_captures` | No | |
 | `curl` to logging | Log entry | `logging_attempts`, `devbox_logs` | No | |
 | Other network traffic | No | No: devbox bridges are not mirrored, by design | No | |
 | Adding a key, build, reset | Key list, version | `devbox_ssh_keys`, `host_jobs`, `teams.devbox_version` | Yes, on scoring and logging: see 12c | Round agent's journal |
@@ -474,7 +474,7 @@ This is where each action should leave a trace:
 
 **Expect:**
 - **Tokens found:** `3/3` at `version 1`, or `1/3` if you ran 11f only on A.
-- **VMs:** `found` on each VM that submitted.
+- **VMs:** `Captured` on each VM that submitted.
 - **Logs:** one entry per VM. Open an entry to see `marker: manual-run` and the VM's name.
 - Only scoring and logging appear here. SSH, the file, apt and pip do not, as intended.
 
@@ -646,7 +646,7 @@ python3 -c 'import tabulate' 2>/dev/null && echo present || echo absent
 
 **Who:** Anna, in the browser. Reload `/` in the **Dev** view.
 
-**Expect:** `version 2`, `0/3`, every VM `not found`, `No devbox logs at this version.`, the key still listed, and the same SSH command.
+**Expect:** `version 2`, `0/3`, every VM `Not captured`, `No devbox logs at this version.`, the key still listed, and the same SSH command.
 
 ### 14d. The database
 

@@ -138,13 +138,14 @@ The SSH tty is the only thing that flows.
 
 A team member logs in to A, then goes on from there. A and C share no network, so
 the way to C is through B. The dashboard's **Connect** panel prints each command
-with the team's real addresses, and its **VMs** panel lists every address:
+with the team's real addresses, and its **VMs** panel draws the gateway and the VMs,
+joined interface to interface, and marks each captured VM:
 
 ```sh
-eval "$(ssh-agent -s)" && ssh-add ~/.ssh/id_ed25519   # on the laptop
-ssh -A -J team@<proxmox-wan>:2222 root@<A>            # on the laptop
-ssh -A root@<B on the A-B link>                       # on A
-ssh root@<C on the B-C link>                          # on B
+ssh-add -L                                 # on the laptop: must include a registered key
+ssh -A -J team@<proxmox-wan>:2222 root@<A> # on the laptop
+ssh -A root@<B on the A-B link>            # on A
+ssh root@<C on the B-C link>               # on B
 ```
 
 The VMs hold the team's public keys but no private key, so these hops use the
@@ -152,6 +153,10 @@ forwarded agent (`-A`). The gateway's `restrict` does not get in the way: agent
 forwarding runs inside the session with A, and the gateway only carries its TCP
 connection. While someone is connected, root on these VMs can use their agent,
 which is why the panel says to use a key only for this devbox.
+
+`ssh-add -L` matters because SSH can log in to A by reading a key file directly,
+even with an empty agent. The hop to B then fails with `Permission denied
+(publickey)`, because the agent is all it has.
 
 Every devbox job (`devbox_provision`, `devbox_rebuild`, `devbox_reconfigure`)
 reports the addresses, from `scripts/generate_devbox.py`, and the orchestrator

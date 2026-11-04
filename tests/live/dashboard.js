@@ -90,7 +90,7 @@ class Session {
       ssh_command: (await command.count()) ? squash(await command.first().innerText()) : null,
       hops: (await hops.allInnerTexts()).map(squash),
       keys: squash(await page.innerText("section[aria-labelledby=keys-title] .panel__meta")),
-      vms: await page.$$eval("section[aria-labelledby=vms-title] tbody tr", (rows) => rows.map((row) => [...row.children].map((cell) => cell.innerText.trim()))),
+      vms: await page.$$eval("section[aria-labelledby=vms-title] [data-vm]", (nodes) => nodes.map((node) => squash(node.innerText))),
     };
   }
 

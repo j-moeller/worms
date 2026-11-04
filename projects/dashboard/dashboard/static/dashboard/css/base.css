@@ -357,8 +357,9 @@ pre.code[data-copy] code { flex: 1; min-width: 0; overflow-x: auto; }
 .code__copy { flex: none; margin: -5px -7px -5px 0; opacity: .55; }
 .code__copy:hover { opacity: 1; }
 .code-label { margin: 0 0 6px; font-size: .82rem; font-weight: 600; }
+p + p { margin-top: 10px; }
+.panel__body p code { white-space: nowrap; }
 p + .code-label { margin-top: 14px; }
-.address { display: block; }
 
 /* ---- disclosures / confirm --------------------------------------------- */
 .disclosure, .confirm { margin: 0; }
@@ -449,6 +450,43 @@ p + .code-label { margin-top: 14px; }
 .checklist { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .checklist li { display: flex; gap: 10px; align-items: baseline; }
 .secret { font-family: var(--font-mono); user-select: all; }
+
+/* The devbox as a picture: the gateway, then A, B and C, joined interface to interface. The
+   rows above and below the ports are equal, so the ports and wires sit on the same line. */
+.vm-chain { --wire: 40px; --dot: 9px; display: flex; gap: var(--wire); margin: 0; padding: 4px 0; list-style: none; }
+.vm-node { position: relative; flex: 1 1 0; min-width: 0; display: grid; grid-template-rows: 1fr auto 1fr; gap: 12px; padding: 14px 16px; background: var(--surface-2); border: var(--border-w) solid var(--border-strong); border-radius: var(--radius); }
+.vm-node:not(:last-child)::after { content: ""; position: absolute; top: 50%; left: 100%; width: calc(var(--wire) + 2px); height: 2px; margin-top: -1px; background: var(--border-strong); }
+.vm-node--gateway { flex: 0 0 190px; background: transparent; border-style: dashed; }
+.vm-node.is-captured { border-color: color-mix(in srgb, var(--ok) 65%, var(--border)); background: color-mix(in srgb, var(--ok) 7%, var(--surface-2)); }
+.vm-node__head { display: flex; align-items: center; gap: 10px; min-width: 0; align-self: start; }
+.vm-node__title { font-weight: 600; font-size: .9rem; }
+.vm-node__letter { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--radius-sm); background: var(--border-strong); font-weight: 700; font-size: .9rem; }
+.is-captured .vm-node__letter { background: var(--ok); color: var(--bg); }
+.vm-node__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: .78rem; color: var(--muted); }
+.vm-node__ports { display: flex; justify-content: space-between; gap: 12px; }
+.vm-node__state { margin: 0; align-self: end; }
+.vm-port { display: flex; flex-direction: column; gap: 1px; min-width: 0; font-family: var(--font-mono); }
+.vm-port--onward { margin-left: auto; text-align: right; }
+.vm-port__iface { font-size: .7rem; color: var(--muted); }
+.vm-port__ip { font-size: .82rem; overflow-wrap: anywhere; }
+.vm-node--gateway .vm-port__ip { font-size: .74rem; color: var(--muted); }
+.vm-port::before { content: ""; position: absolute; z-index: 1; top: 50%; width: var(--dot); height: var(--dot); margin-top: calc(var(--dot) / -2); box-sizing: border-box; border: 2px solid var(--muted); border-radius: 50%; background: var(--surface); }
+.vm-port--entry::before { left: calc(var(--dot) / -2 - 1px); }
+.vm-port--onward::before { right: calc(var(--dot) / -2 - 1px); }
+.is-captured .vm-port::before { border-color: var(--ok); }
+/* Too narrow for a row: the chain runs downwards, in on top and on at the bottom of each VM. */
+@media (max-width: 1100px) {
+    .vm-chain { --wire: 26px; flex-direction: column; }
+    .vm-node, .vm-node--gateway { flex: none; grid-template-rows: none; gap: 10px; }
+    .vm-node__ports { display: contents; }
+    .vm-node__head { order: 1; }
+    .vm-node__state { order: 2; }
+    .vm-port { order: 0; flex-direction: row; align-items: baseline; gap: 8px; padding-left: 14px; }
+    .vm-port--onward { order: 3; margin-left: 0; text-align: left; }
+    .vm-node:not(:last-child)::after { top: 100%; left: calc(16px + var(--dot) / 2 - 1px); width: 2px; height: calc(var(--wire) + 2px); margin-top: 0; }
+    .vm-port--entry::before { top: calc(var(--dot) / -2 - 1px); left: 16px; margin-top: 0; }
+    .vm-port--onward::before { top: auto; right: auto; bottom: calc(var(--dot) / -2 - 1px); left: 16px; margin-top: 0; }
+}
 
 @media (max-width: 860px) {
     .grid--2 { grid-template-columns: 1fr; }

@@ -196,7 +196,7 @@ def populate(request: HttpRequest):
     for hours, (role, ip, fabric, found) in zip((20, 3, 0), [
         ("a", "10.128.3.10", "10.7.3.10", True),
         ("b", "10.128.3.11", "10.7.3.11", True),
-        ("c", "10.128.3.12", "10.7.3.12", False),
+        ("c", "10.128.4.12", "10.7.3.12", False),
     ]):
         devbox_vm, _ = DevboxVM.objects.get_or_create(
             devbox=devbox,
@@ -206,7 +206,7 @@ def populate(request: HttpRequest):
                 "vm_maintenance_ip": ip,
                 "ssh_fabric_ip": fabric,
                 "proxmox_vm_id": 9000 + ord(role),
-                "addresses": [ip],
+                "addresses": [ip, "10.128.4.11"] if role == "b" else [ip],
                 "networks": [],
                 "ctf_flag_hash": hashlib.sha256(f"devbox-{role}".encode()).hexdigest(),
             },

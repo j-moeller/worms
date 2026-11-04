@@ -57,6 +57,7 @@ than `playwright install-deps`, which also adds an X server and fonts.
 `tests/live/test_devbox_journey.py` does on the real system what
 `docs/e2e-run-2026-11-04/protocol.md` records by hand. It takes about an hour and a half, more if a build
 hits the `zfs create` timeout. Without `--live` all of it is skipped, and with `--live` nothing else runs.
+To run the same journey by hand, follow `docs/manual-devbox-run.md`.
 
 ```sh
 export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"    # Node.js with Playwright, see above

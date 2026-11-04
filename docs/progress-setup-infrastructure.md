@@ -11,6 +11,8 @@ Times are host time (CET); the VMs log in UTC (CET - 1h).
 
 **The suite's first run, 16:37-16:59, stopped at the user's request, so it has still not run from start to finish.** Steps 00 to 04 passed: base state, admin sign-in, competition and teams, users, and the devbox build. **The build finished on its first attempt, in 17 minutes**, the first build since the TRIM; 4 of the 7 before it hit the disk timeout. One build is encouraging, but it does not prove F5 is gone. It stopped during step 05, with `alpha`'s 3 keys added and none for `bravo` or `charlie`. SSH, file, apt, pip, traces and reset did not run.
 
+**By hand:** `docs/manual-devbox-run.md` describes the whole journey as commands and form inputs, for the user to run. It was written without running anything.
+
 To stop it I stopped the round agent for a few seconds, which ended job `ff353e5a` as failed (exit -15). So the SSH gateway may not hold all of `alpha`'s keys. The agent is running again, idle, with nothing queued. A new run starts with a teardown.
 
 **Why steps hang, the newest part:** the disk. A ZFS write cycle took up to 110 seconds, and the disk had never been trimmed. A TRIM at 16:28 cut the slowest synchronous write on a quiet system from 1.6 s to 11 ms (`docs/check-with-user.md`, 3d). The next build is the real test.

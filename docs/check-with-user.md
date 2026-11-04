@@ -98,6 +98,14 @@ The drive looks healthy: no reallocated sectors, no logged errors, and it does n
 Devbox traffic is not recorded, by design (`docs/requirements.md`, Monitor), so `network_flows` has no devbox rows. The setting `host_mirror_extra_bridges` exists but is not tested for
 devboxes. Its rule for gateways names only `sandbox-gw`, so devbox gateways would probably produce duplicate records until that is changed too.
 
+### 3f. Should root create teams and users, and should auditd cover devboxes?
+
+- [ ] Say yes or no to each. Writing `docs/manual-devbox-run.md` showed that neither exists today.
+
+**Teams and users from the console:** `worms` can create only the admin and staff. No command creates a team, and `manage.py create_users` ignores the team column, so both have to go through the dashboard. Adding this would be a small new `worms` command.
+
+**auditd on devboxes:** devbox VMs, their gateways and the SSH gateway have no auditd, so nothing done on a devbox appears in it. A devbox cannot reach the syslog VM, by design. So auditd on a devbox VM could only log locally, and a reset would erase it. The SSH gateway is trusted, so it could join the central log, which would record each login centrally and keep those records through a teardown. I recommend that part.
+
 ### 4. Public certificate for the dashboard
 
 - [ ] Choose one.

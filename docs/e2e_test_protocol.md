@@ -243,7 +243,7 @@ gateway and the devbox VMs.
 which is of the form:
 
 ```sh
-ssh -J team@GATEWAY_WAN root@<your A VM's fabric IP>
+ssh -A -J team@GATEWAY_WAN root@<your A VM's fabric IP>
 ```
 
 **Expected post state & how to check:** you land on **your team's VM A** as

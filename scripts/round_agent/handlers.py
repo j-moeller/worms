@@ -17,6 +17,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from generate_devbox import team_addressing
 from round_agent import validation
 
 FLAG_PATH = "/etc/worms/flag"
@@ -287,6 +288,18 @@ def _devbox_vms(ex):
     return vms
 
 
+def _devbox_addresses(teams):
+    """{VM name: its addresses on the team's own devbox networks}, for the dashboard to show.
+    Each VM's first address is on its link towards A. They come from what generated the stack,
+    and leave out the SSH fabric and maintenance addresses, which a team cannot use from a VM."""
+    addresses = {}
+    for team in teams:
+        plan = team_addressing(team["slug"], team["index"])
+        for role, cidrs in (("a", ["a_cidr"]), ("b", ["b_ab_cidr", "b_bc_cidr"]), ("c", ["c_cidr"])):
+            addresses[f"devbox-{team['slug']}-{role}"] = [plan[cidr].split("/")[0] for cidr in cidrs]
+    return addresses
+
+
 def _write_devbox_token(ex, maintenance_ip):
     """Generate a token, write it into a devbox VM, return its SHA-256."""
     secret = f"FLAG{{{secrets.token_hex(16)}}}"
@@ -347,7 +360,7 @@ def devbox_provision(ex, cfg, params):
     _configure_devbox(ex, teams)
     report, sources = _devbox_report(ex, teams)
     _write_devbox_map(ex, cfg, teams)
-    return {"vms": report, "services_sources": sources}
+    return {"vms": report, "services_sources": sources, "addresses": _devbox_addresses(teams)}
 
 
 def _devbox_replace_args(slug):
@@ -379,7 +392,12 @@ def devbox_rebuild(ex, cfg, params):
         if info["team"] == slug:
             rebuilt.append({"name": name, "flag_hash": _write_devbox_token(ex, info["maintenance_ip"])})
     _write_devbox_map(ex, cfg, teams)
-    return {"team_uuid": params["team_uuid"], "devbox_version": params["devbox_version"], "vms": rebuilt}
+    return {
+        "team_uuid": params["team_uuid"],
+        "devbox_version": params["devbox_version"],
+        "vms": rebuilt,
+        "addresses": _devbox_addresses(teams),
+    }
 
 
 class _Unsafe(str):
@@ -410,7 +428,7 @@ def devbox_reconfigure(ex, cfg, params):
     teams = params["teams"]
     _configure_devbox(ex, teams)
     _write_devbox_map(ex, cfg, teams)
-    return {"reconfigured": [t["slug"] for t in teams]}
+    return {"reconfigured": [t["slug"] for t in teams], "addresses": _devbox_addresses(teams)}
 
 
 def _configure_devbox(ex, teams):

@@ -185,6 +185,49 @@ def test_apply_devbox_jobs_registers_vms(database):
     sql(database, "DELETE FROM competitions WHERE id=%s", [comp], role=MIGRATOR, fetch=False)
 
 
+def test_addresses_reach_the_database_from_any_devbox_job(database):
+    """VMs built before jobs reported addresses get them from the next key change, with
+    their tokens untouched, and a later job that reports none does not clear them."""
+    import json
+
+    team_uuid = str(uuid.uuid4())
+    comp = sql(database, "INSERT INTO competitions (name, created_at, is_dev_competition) "
+               "VALUES ('devbox-addresses', now(), false) RETURNING id", role=MIGRATOR)[0][0]
+    team_id = sql(database, "INSERT INTO teams (uuid, name, competition_id, max_members, created_at, devbox_version) "
+                  "VALUES (%s, 'addresses-team', %s, 2, now(), 1) RETURNING id", [team_uuid, comp], role=MIGRATOR)[0][0]
+    name = f"devbox-t{team_id}-b"
+    fh = hash_of("FLAG{addresses}")
+
+    def job(kind, result):
+        sql(database, "INSERT INTO host_jobs (uuid, kind, params, state, requested_at, result, error) "
+            "VALUES (gen_random_uuid(), %s, '{}'::jsonb, 'done', now(), %s::jsonb, '')",
+            [kind, json.dumps(result)], role=MIGRATOR, fetch=False)
+
+    def stored():
+        return sql(database, "SELECT addresses, ctf_flag_hash FROM devbox_vms WHERE vm_identifier = %s", [name])[0]
+
+    job("devbox_provision", {"vms": [{"team_uuid": team_uuid, "team_slug": f"t{team_id}", "name": name,
+                                      "maintenance_ip": "10.6.5.12", "ssh_ip": "10.7.5.12", "vmid": 9002, "flag_hash": fh}],
+                             "services_sources": {}})
+    process_attempts(database)
+    assert stored() == ([], fh)
+
+    addresses = ["10.128.10.12", "10.128.11.12"]
+    job("devbox_reconfigure", {"reconfigured": [f"t{team_id}"], "addresses": {name: addresses}})
+    process_attempts(database)
+    assert stored() == (addresses, fh)
+
+    job("devbox_reconfigure", {"skipped": True})
+    process_attempts(database)
+    assert stored() == (addresses, fh)
+
+    for stmt in ["DELETE FROM devbox_vms WHERE devbox_id IN (SELECT id FROM devboxes WHERE team_id=%s)",
+                 "DELETE FROM devboxes WHERE team_id=%s", "DELETE FROM teams WHERE id=%s"]:
+        sql(database, stmt, [team_id], role=MIGRATOR, fetch=False)
+    sql(database, "DELETE FROM host_jobs WHERE kind IN ('devbox_provision', 'devbox_reconfigure')", role=MIGRATOR, fetch=False)
+    sql(database, "DELETE FROM competitions WHERE id=%s", [comp], role=MIGRATOR, fetch=False)
+
+
 def test_orchestrator_role_may_write_devbox_tables(database, devbox_team):
     """The least-privilege orchestrator role (not the owner) must be able to
     insert devbox captures/logs and bump the version -- the processor runs as

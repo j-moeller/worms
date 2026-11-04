@@ -101,7 +101,7 @@
             const value = $("[data-copy-value]", row);
             if (value) button.addEventListener("click", () => copy(value.textContent, button));
         });
-        // Code blocks marked data-copy get a corner button.
+        // Code blocks marked data-copy get a button beside the code.
         $$("pre.code[data-copy]", root).forEach((pre) => {
             if ($("[data-copy-button]", pre)) return;
             const button = document.createElement("button");
@@ -110,7 +110,6 @@
             button.setAttribute("data-copy-button", "");
             button.textContent = "Copy";
             button.addEventListener("click", () => copy(pre.querySelector("code").textContent, button));
-            pre.style.position = "relative";
             pre.appendChild(button);
         });
     }

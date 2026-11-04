@@ -46,9 +46,9 @@ def parse_key_values(text: str) -> dict[str, str]:
 
 
 def split_ssh_command(command: str) -> tuple[str, str, str]:
-    """`ssh -J team@host:port root@target` as the dashboard prints it: (gateway user, public
+    """`ssh -A -J team@host:port root@target` as the dashboard prints it: (gateway user, public
     host:port, target address)."""
-    match = re.fullmatch(r"ssh -J (\w+)@(\S+) root@(\S+)", command or "")
+    match = re.fullmatch(r"ssh -A -J (\w+)@(\S+) root@(\S+)", command or "")
     if not match:
         raise ValueError(f"not the expected SSH command: {command!r}")
     return match.group(1), match.group(2), match.group(3)

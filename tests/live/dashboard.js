@@ -81,12 +81,14 @@ class Session {
 
   async devState() {
     const page = this.page;
-    const command = page.locator("section[aria-labelledby=connect-title] pre code");
+    const command = page.locator("section[aria-labelledby=connect-title] [data-ssh-login] code");
+    const hops = page.locator("section[aria-labelledby=connect-title] [data-ssh-hop] code");
     return {
       version: squash(await page.innerText("section[aria-labelledby=score-title] .panel__meta")),
       score: squash(await page.innerText("section[aria-labelledby=score-title] .stat__value")),
       logs: await page.$$eval("details.log-entry", (nodes) => nodes.map((n) => n.textContent)),
       ssh_command: (await command.count()) ? squash(await command.first().innerText()) : null,
+      hops: (await hops.allInnerTexts()).map(squash),
       keys: squash(await page.innerText("section[aria-labelledby=keys-title] .panel__meta")),
       vms: await page.$$eval("section[aria-labelledby=vms-title] tbody tr", (rows) => rows.map((row) => [...row.children].map((cell) => cell.innerText.trim()))),
     };

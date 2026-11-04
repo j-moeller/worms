@@ -44,6 +44,18 @@ def home(request: HttpRequest):
     return leaderboard(request)
 
 
+def _hops(vms) -> list[dict]:
+    """How to go on from A: to B, then from B to C. A VM's first address is on its link towards
+    A. -A passes the team's agent on to B for the next hop; C is the last, so it needs none."""
+    by_role = {vm.role: vm for vm in vms}
+    hops = []
+    for here, role, options in (("A", "b", "-A "), ("B", "c", "")):
+        vm = by_role.get(role)
+        if vm is not None and vm.addresses:
+            hops.append({"where": f"On {here}, go on to {role.upper()}", "command": f"ssh {options}root@{vm.addresses[0]}"})
+    return hops
+
+
 @login_required
 @user_in_team_required
 def devbox_home(request: HttpRequest, team: Team):
@@ -63,7 +75,7 @@ def devbox_home(request: HttpRequest, team: Team):
     ssh_command = None
     if devbox and main_vm and devbox.ssh_gateway_host and main_vm.ssh_fabric_ip:
         ssh_command = (
-            f"ssh -J {devbox.ssh_gateway_user}@{devbox.ssh_gateway_host}"
+            f"ssh -A -J {devbox.ssh_gateway_user}@{devbox.ssh_gateway_host}"
             f":{devbox.ssh_gateway_port} root@{main_vm.ssh_fabric_ip}"
         )
 
@@ -81,6 +93,7 @@ def devbox_home(request: HttpRequest, team: Team):
         "vms": vms,
         "main_vm": main_vm,
         "ssh_command": ssh_command,
+        "hops": _hops(vms),
         "score": len(captured_vm_ids),
         "total_tokens": len(vms),
         "logs": logs,

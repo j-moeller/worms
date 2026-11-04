@@ -154,7 +154,6 @@ Every man page returns `503`, because the systemd hardening blocks Apache's CGI 
 | The agent throws away Ansible's output | A failed job usually says only `exited 2`. Each failure in this run had to be reproduced by hand. Keeping the output needs care, as it may hold secrets | E2E protocol, F9 |
 | `agent-sync` does not restart the agent | New playbooks take effect, but new agent code does not until `systemctl restart worms-round-agent`. Restarting during a job would kill it | E2E protocol, Stage 2 |
 | An interrupted build leaves things behind | A VM outside OpenTofu's state, or an `apt` on a VM holding its lock. There is also no command to cancel a job | E2E protocol, F2 |
-| The dashboard shows no VM addresses, and Copy covers the end of the SSH command | Users must find B and C from inside A | E2E protocol, F18 |
 | The API's documented limits differ | `GET` gets 403 rather than 405, and logging accepts more than 4 KiB | E2E protocol, F23 |
 | A user for a full or unknown team still gets an account | It has no team, and there is no delete button | E2E protocol, F1 |
 | Live header says "ROUND IN PROGRESS (DEV)" with 0 rounds | `WORMS 2026` has no registration dates, which the code treats as a dev round. Setting a registration window in the staff pages clears it; the logic could also be fixed | `dashboard/middleware.py` |

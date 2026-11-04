@@ -68,6 +68,8 @@ The dashboard is `https://worms-dev.mlsec.tu-berlin.de/` here, and `https://worm
 
 If a team has another index `n`: A is `10.7.n.11`, B is `10.128.(2n).12`, C is `10.128.(2n+1).13`, and the services see `10.2.0.(32+n)`.
 
+**This table and the commands below assume you create `alpha` first, then `bravo`, then `charlie`.** Numbers follow creation order: VMs are named after the team's database ID (`devbox-t<id>-a`), and the index goes up in the same order. In another order, take the addresses from the panels **Connect** and **VMs** on the team's dev view, and the name from `hostname`. With a wrong address, the gateway answers `stdio forwarding failed`.
+
 The SSH gateway for teams is `10.7.0.2`.
 
 | Service VM | Address for `vm` |
@@ -281,7 +283,8 @@ A key's comment may not contain spaces, or the dashboard refuses the key.
 **Expect:**
 - `SSH key added. Your devbox and the SSH gateway are being updated now.`
 - `1 registered` on the panel.
-- The panel **Connect** shows `ssh -J team@worms-dev.mlsec.tu-berlin.de:2222 root@10.7.0.11`. Use this from outside. On the node, use the gateway's address, as in step 10.
+- The panel **Connect** shows `ssh -A -J team@worms-dev.mlsec.tu-berlin.de:2222 root@10.7.0.11`, then the commands from A to B and from B to C. Use these from outside. On the node, use the gateway's address, as in step 10.
+- The panel **VMs** lists each VM's addresses.
 
 **Part 3. Who:** root on the node. Wait for the key to arrive, about 3 minutes:
 

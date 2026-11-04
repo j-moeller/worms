@@ -332,7 +332,7 @@ the devbox⇔sandbox isolation and the SSH gateway: **`docs/devbox.md`**.
 ```
 worms build devbox                 # build + configure devboxes and the SSH gateway
 worms devbox provision             # after creating teams on the dashboard: their devboxes
-ssh -J team@<proxmox-wan>:2222 root@<devbox VM>
+ssh -A -J team@<proxmox-wan>:2222 root@<team's VM A>
 ```
 
 # Accounts and the management CLI

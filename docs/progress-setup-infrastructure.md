@@ -5,11 +5,13 @@ Times are host time (CET); the VMs log in UTC (CET - 1h).
 
 ## Status
 
-**Last updated:** 2026-11-04, 17:05, after stopping the suite's first run at the user's request.
+**Last updated:** 2026-11-04, after fixing how teams find and reach their devbox VMs.
 
 **Re-run from a clean base state, 2026-11-04:** passed from start to finish, with a retried build (`docs/e2e-run-2026-11-04/protocol.md`). The automated suite is in `tests/live`.
 
 **The suite's first run, 16:37-16:59, stopped at the user's request, so it has still not run from start to finish.** Steps 00 to 04 passed: base state, admin sign-in, competition and teams, users, and the devbox build. **The build finished on its first attempt, in 17 minutes**, the first build since the TRIM; 4 of the 7 before it hit the disk timeout. One build is encouraging, but it does not prove F5 is gone. It stopped during step 05, with `alpha`'s 3 keys added and none for `bravo` or `charlie`. SSH, file, apt, pip, traces and reset did not run.
+
+**The devbox page, 2026-11-04 night:** the page showed `—` for every VM address (open since F18): `devbox_vms.addresses` was never filled. Every devbox job now reports the addresses and the orchestrator stores them, so a key change fills them in without rebuilding anything or changing a token. The login command now has `-A`, because without it the hop from A to B cannot log in: the VMs hold no private key. Panel **Connect** gives one command per hop. Copy no longer covers the command, and Reset has room above it.
 
 **Job logs and port 2222, 2026-11-04 evening:** each host job now writes its full output to `/var/log/worms/jobs/`, and the SSH gateway is published on port 2222 with `host_publish_ssh_gateway`, the same switch as the dashboard's `:443`. No new OpenTofu rule was needed: `devbox_ssh_gateway` already accepts port 22, from the host's address only. Both are deployed. Applying the port added only the 3 intended rules: all 28 VMs kept running, with 0 watchdog stops, and only ports 443 and 2222 are forwarded. The node cannot test the port from inside, so that test is the user's (`docs/check-with-user.md`, 3). The log has been tried on the real path, but no real job has written to it yet. The second build since the TRIM also succeeded on its first attempt, in 17 minutes.
 

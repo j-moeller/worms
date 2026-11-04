@@ -350,11 +350,19 @@ textarea.input { resize: vertical; min-height: 64px; }
 .code code { white-space: pre; }
 .copy-row { display: flex; gap: 8px; align-items: stretch; }
 .copy-row__value { flex: 1; min-width: 0; overflow-x: auto; padding: 12px 14px; background: var(--bg); border: var(--border-w) solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: var(--radius-sm); color: var(--accent); font-family: var(--font-mono); font-size: .82rem; white-space: nowrap; }
-.code__copy { position: absolute; top: 7px; right: 7px; opacity: .55; }
+/* The button sits beside the code, so a long line never runs under it. */
+pre.code[data-copy] { display: flex; align-items: flex-start; gap: 12px; }
+pre.code[data-copy] code { flex: 1; min-width: 0; overflow-x: auto; }
+.code--wrap code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.code__copy { flex: none; margin: -5px -7px -5px 0; opacity: .55; }
 .code__copy:hover { opacity: 1; }
+.code-label { margin: 0 0 6px; font-size: .82rem; font-weight: 600; }
+p + .code-label { margin-top: 14px; }
+.address { display: block; }
 
 /* ---- disclosures / confirm --------------------------------------------- */
 .disclosure, .confirm { margin: 0; }
+.pips + .confirm, .stat + .confirm { margin-top: 18px; }
 .confirm summary, .disclosure summary { display: inline-flex; list-style: none; }
 .confirm summary::-webkit-details-marker, .disclosure summary::-webkit-details-marker { display: none; }
 .confirm[open] > summary { opacity: .6; }

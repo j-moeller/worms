@@ -79,8 +79,8 @@ def test_key_values():
 
 
 def test_the_ssh_command_of_the_page():
-    assert livelib.split_ssh_command("ssh -J team@worms.example:2222 root@10.7.0.11") == ("team", "worms.example:2222", "10.7.0.11")
-    for bad in ("", None, "ssh root@10.7.0.11", "ssh -J team@h:1 root@10.7.0.11; rm -rf /"):
+    assert livelib.split_ssh_command("ssh -A -J team@worms.example:2222 root@10.7.0.11") == ("team", "worms.example:2222", "10.7.0.11")
+    for bad in ("", None, "ssh root@10.7.0.11", "ssh -J team@h:1 root@10.7.0.11", "ssh -A -J team@h:1 root@10.7.0.11; rm -rf /"):
         with pytest.raises(ValueError):
             livelib.split_ssh_command(bad)
 

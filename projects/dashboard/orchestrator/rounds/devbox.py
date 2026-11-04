@@ -172,4 +172,20 @@ def apply_devbox_jobs() -> int:
                 ctf_flag_hash=vm.get("flag_hash")
             )
             touched += updated
+
+    # Where each VM is, for the team's page. Every kind of devbox job reports the
+    # addresses of all VMs, so the newest one is enough, and a key change also
+    # corrects VMs built before jobs reported them.
+    newest = (
+        HostJob.objects.filter(
+            kind__in=[HostJob.Kind.DEVBOX_PROVISION, HostJob.Kind.DEVBOX_REBUILD, HostJob.Kind.DEVBOX_RECONFIGURE],
+            state=HostJob.State.DONE,
+            result__has_key="addresses",
+        )
+        .order_by("-id")
+        .first()
+    )
+    if newest is not None:
+        for name, addresses in newest.result["addresses"].items():
+            touched += DevboxVM.objects.filter(vm_identifier=name).exclude(addresses=addresses).update(addresses=addresses)
     return touched

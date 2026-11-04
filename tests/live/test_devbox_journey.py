@@ -26,7 +26,6 @@ import pytest
 from livelib import REPO, Member, NotBaseState, Platform, Report, check_wipe_allowed, parse_key_values, split_ssh_command, wait_for
 
 sys.path.insert(0, str(REPO / "scripts"))
-from generate_devbox import team_addressing  # noqa: E402
 
 TEAMS = ["alpha", "bravo", "charlie"]
 MEMBERS = {
@@ -83,13 +82,9 @@ class Journey:
         return [member for member in self.members if member.team == name]
 
     def chains(self, team: str, database: dict) -> dict[str, list[str]]:
-        """How to reach each VM of a team from the node: A directly, B through A, C through B.
-        The database does not hold the addresses on the devbox's own links (F18), so they come
-        from what generated them."""
-        t = database["teams"][team]
-        addressing = team_addressing(team, t["index"])
-        entry = next(vm for vm in t["vms"] if vm["role"] == "a")["ssh_fabric_ip"]
-        to_b, to_c = addressing["b_ab_cidr"].split("/")[0], addressing["c_cidr"].split("/")[0]
+        """How to reach each VM of a team from the node: A directly, B through A, C through B."""
+        vms = {vm["role"]: vm for vm in database["teams"][team]["vms"]}
+        entry, to_b, to_c = vms["a"]["ssh_fabric_ip"], vms["b"]["addresses"][0], vms["c"]["addresses"][0]
         return {"a": [entry], "b": [entry, to_b], "c": [entry, to_b, to_c]}
 
     def state(self, team: str, database: dict) -> dict[str, dict]:

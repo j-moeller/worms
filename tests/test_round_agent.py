@@ -412,6 +412,42 @@ def test_devbox_gateway_permitopen_is_only_the_entry_vm():
     assert extra["devbox_team_keys"]["t1"] == teams[0]["authorized_keys"]
 
 
+@pytest.mark.parametrize("job", ["devbox_provision", "devbox_rebuild", "devbox_reconfigure"])
+def test_every_devbox_job_reports_where_the_vms_are(job, tmp_path):
+    """The team's page shows these. Only the addresses on the team's own links: from a VM, the
+    SSH fabric and the maintenance network lead nowhere."""
+
+    class Ex:
+        repo_root = tmp_path
+
+        def tofu_output(self, stack):
+            return {}
+
+        def generate_devbox(self, teams, output_file):
+            pass
+
+        def tofu(self, stack, *args, timeout=3600):
+            pass
+
+        def worms(self, component, timeout=3600, args=None):
+            pass
+
+        def ssh(self, host, argv, input=None, **_):
+            pass
+
+    params = {
+        "team_uuid": "11111111-1111-1111-1111-111111111111",
+        "devbox_version": 2,
+        "teams": [{"slug": "t2", "index": 1, "team_uuid": "11111111-1111-1111-1111-111111111111", "authorized_keys": []}],
+    }
+    result = handlers.HANDLERS[job](Ex(), {"scoring_host": "scoring", "logging_host": "logging"}, params)
+    assert result["addresses"] == {
+        "devbox-t2-a": ["10.128.2.11"],
+        "devbox-t2-b": ["10.128.2.12", "10.128.3.12"],
+        "devbox-t2-c": ["10.128.3.13"],
+    }
+
+
 def test_devbox_key_varfile_tags_keys_unsafe():
     """The keys are written with the YAML `!unsafe` tag so Ansible never
     templates attacker-controlled key text (template injection defence in

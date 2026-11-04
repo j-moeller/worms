@@ -169,7 +169,7 @@ tail -F /var/log/worms/jobs/latest.log
 | Action | Where | Then |
 |---|---|---|
 | Add an SSH key | Panel **SSH keys**, **Add key** | A `devbox_reconfigure` job installs it, in about 3 minutes |
-| Connect | The command in panel **Connect**: `ssh -J team@<public name>:2222 root@<team's A>` | That works from outside. On the node itself, use the gateway's address: `ssh -J team@10.7.0.2 root@<team's A>` |
+| Connect | The commands in panel **Connect**: `ssh -A -J team@<public name>:2222 root@<team's A>`, then one each for the hops to B and C | That works from outside, with the key in an SSH agent. On the node itself, use the gateway's address: `ssh -A -J team@10.7.0.2 root@<team's A>` |
 | Reset | **Reset devbox**, then **Yes, rebuild my devbox** | A `devbox_rebuild` job replaces that team's 3 VMs, in about 20 minutes. Other teams are not touched |
 
 ## Run a round

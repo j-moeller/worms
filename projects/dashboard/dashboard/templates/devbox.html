@@ -31,8 +31,16 @@
         <header class="panel__head"><h2 class="panel__title" id="connect-title">Connect</h2>{% if main_vm %}<p class="panel__meta">entry VM {{ main_vm.vm_identifier }}</p>{% endif %}</header>
         <div class="panel__body">
             {% if ssh_command %}
-            <p>SSH into your entry VM through the gateway with a key you registered below. Reach B and C from there, as your worm would.</p>
-            <pre class="code" data-copy><code>{{ ssh_command }}</code></pre>
+            <p>Log in to VM A through the gateway, then go on from there. Your key stays on your laptop: <code>-A</code> forwards your SSH agent, so A and B can use it for the next hop.</p>
+            <p class="code-label">On your laptop, put the key you registered below in an agent</p>
+            <pre class="code code--wrap" data-copy><code>eval "$(ssh-agent -s)" &amp;&amp; ssh-add ~/.ssh/id_ed25519</code></pre>
+            <p class="code-label">Log in to A</p>
+            <pre class="code code--wrap" data-copy data-ssh-login><code>{{ ssh_command }}</code></pre>
+            {% for hop in hops %}
+            <p class="code-label">{{ hop.where }}</p>
+            <pre class="code code--wrap" data-copy data-ssh-hop><code>{{ hop.command }}</code></pre>
+            {% endfor %}
+            <p class="muted">While you are connected, root on these VMs can use your agent, so use a key that is only for this devbox.</p>
             {% elif not devbox %}
             <p class="muted">Your devbox has not been built yet. It is created with your team; add an SSH key below so you can connect once it is up.</p>
             {% else %}
@@ -52,7 +60,7 @@
                 {% for vm in vms %}
                 <tr>
                     <th scope="row" class="mono">{{ vm.vm_identifier }}</th>
-                    <td class="mono">{% for a in vm.addresses %}{{ a }} {% empty %}—{% endfor %}</td>
+                    <td class="mono">{% if vm.role == "a" and vm.ssh_fabric_ip %}<span class="address">{{ vm.ssh_fabric_ip }} <span class="muted">through the gateway</span></span>{% endif %}{% for a in vm.addresses %}<span class="address">{{ a }}</span>{% empty %}—{% endfor %}</td>
                     <td>{% if vm.found %}<span class="badge badge--ok">found</span>{% else %}<span class="badge">not found</span>{% endif %}</td>
                 </tr>
                 {% endfor %}

@@ -349,7 +349,7 @@ worms secrets issue proxmox-token   # create or rotate a Proxmox token, and stor
 worms secrets set ssh-key < key     # store a secret by hand
 worms node trust                    # once, for VMs that predate the WORMS key
 worms build internet-deny           # close the internet window by hand, if a build reports it still open
-worms debug <host>                  # Ansible connection diagnostics
+worms debug dashboard               # Ansible connection diagnostics, for one host or group
 worms test                          # the offline test suite
 worms simulate                      # the live simulation (docs/testing.md)
 ```

@@ -24,7 +24,7 @@ The automated suite is written and its helpers work on this system, but it has n
 
 | # | Severity | Finding | Status |
 |---|---|---|---|
-| F5 | **High**, raised | `zfs create` times out under disk load. It hit 4 of 7 builds, and the disk looks like the main reason steps hang | **Open**, try a TRIM (`docs/check-with-user.md`, 3d) |
+| F5 | **High**, raised | `zfs create` times out under disk load. It hit 4 of 7 builds, and the disk looks like the main reason steps hang | **Open**. A TRIM after this run cut the slowest write a lot on a quiet system; the next build is the real test (`docs/check-with-user.md`, 3d) |
 | G5 | High | Zeek stops recording all traffic at its first log rotation, while showing `active`. Sandbox rounds would lose it too | Fixed, confirmed live |
 | G1 | High | A plain `pip install` fails before it contacts devpi. The previous protocol hid this by using a flag it did not mention | Fixed, confirmed live |
 | G2 | High | devpi is empty | Fixed, confirmed live, with a minimal seed |

@@ -5,24 +5,26 @@ Times are host time (CET); the VMs log in UTC (CET - 1h).
 
 ## Status
 
-**Last updated:** 2026-11-04, after the end-to-end run (`docs/e2e-run-2026-11-03/protocol.md`).
+**Last updated:** 2026-11-04, 16:36, after the teardown and the TRIM.
 
-**Re-run from a clean base state, 2026-11-04:** passed from start to finish, with a retried build (`docs/e2e-run-2026-11-04/protocol.md`). The automated suite is in `tests/live`, not yet run from start to finish, because that needs the user's teardown.
+**Re-run from a clean base state, 2026-11-04:** passed from start to finish, with a retried build (`docs/e2e-run-2026-11-04/protocol.md`). The automated suite is in `tests/live`. Its first full run comes next.
 
-**Why steps hang, the newest part:** the disk. A ZFS write cycle took up to 110 seconds, and `zpool status -t` shows `(untrimmed)`. See `docs/check-with-user.md`, 3d.
+**Why steps hang, the newest part:** the disk. A ZFS write cycle took up to 110 seconds, and the disk had never been trimmed. A TRIM at 16:28 cut the slowest synchronous write on a quiet system from 1.6 s to 11 ms (`docs/check-with-user.md`, 3d). The next build is the real test.
+
+**Teardown at 16:16-16:21:** exit 0, 108 resources. The 13 devbox VMs are gone, the other 15 are unchanged and running, and no volume was left behind. It was the first real teardown with `-parallelism=1`, the fix for G7.
 
 | | |
 |---|---|
-| Ground state | **Reached on the existing VMs.** The last 4 full `make` runs exited 0. Not yet run from scratch, as you asked. `make` cannot run now, because the internet window is refused while devbox VMs exist |
-| VMs | 28 of 28 running: 15 infrastructure, none rebuilt, and 13 devbox VMs for the test's 3 teams |
+| Ground state | **Reached on the existing VMs.** The last 4 full `make` runs exited 0. Not yet run from scratch, as you asked |
+| VMs | 15 of 15 running, none rebuilt. No devbox VMs since the teardown; the suite builds new ones |
 | Internet window | Closed, tested with real connections from every VM |
 | Dashboard | HTTPS only, as `worms-dev.mlsec.tu-berlin.de`. You confirmed outside access by IP before the rename; the name is not yet tested from outside |
 | Tokens | All 3 issued and verified with `worms secrets check` |
 | Provisioning token | **Tested live:** it built the devbox stack with no permission errors. The old token stays until you retire it (`docs/check-with-user.md`) |
-| Commits | None. All changes are uncommitted |
+| Commits | On `main`, pushed to `github` and `https` |
 
-Your uncommitted changes (`proxmox_instance = worms-dev`, `cve_search` RAM 1024 MB)
-are untouched and in use.
+Your local changes (node name `worms-dev`, `cve_search` RAM 1024 MB) are still in use and
+stay uncommitted. They reached `main` once by my mistake (`docs/check-with-user.md`, 8).
 
 ## Why steps hang
 

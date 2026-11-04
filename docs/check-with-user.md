@@ -19,19 +19,6 @@ disable that user.
 
 **Until then:** the old token and grant stay as a fallback.
 
-### 1b. Run the teardown once more, so the suite can run from start to finish
-
-- [ ] Run this, or add a permission rule for it:
-
-```sh
-/usr/local/sbin/worms-node-run opentofu/stacks/devbox 'tofu destroy -auto-approve -parallelism=1'
-```
-
-The automated suite (`tests/live`) starts only from the base state, and the safety check refuses this command when I try it. It removes only the 13 devbox VMs.
-The added `-parallelism=1` stops it leaving volumes behind, as last time (`docs/e2e-run-2026-11-04/protocol.md`, G7).
-
-**What happens next:** I run the suite with `--live-wipe-database`, which deletes the test users and teams and takes about an hour and a half. That also puts the G7 fix through its first teardown. Until then the suite's account steps and its Reset button have only been tried by the manual scripts it came from.
-
 ### 2. Delete the old credential copies
 
 - [ ] Run this from the repo root:
@@ -81,18 +68,28 @@ needed, plus the seed list (`apt_cache_seed_packages`). `apt install cowsay` fai
 | Mirror a large part of Debian | Teams can install nearly anything, but it takes a lot of disk and download time |
 | Keep it minimal | Nothing to do, but tell teams to vendor what they need (`docs/worm-contract.md` already suggests this) |
 
-### 3d. Try a TRIM of the disk
+### 3d. Keep the disk trimmed
 
-- [ ] Say yes or no, or run it yourself.
+- [ ] Say yes or no. I recommend yes.
 
 ```sh
-zpool trim rpool        # then watch it with: zpool status -t rpool
+zfs set org.debian:periodic-trim=enable rpool
 ```
 
-The disk looks like the main reason builds fail and steps seem to hang. A ZFS write cycle took up to 110 seconds, and Proxmox allows `zfs create` only 10 seconds, so 4 of 7 devbox builds failed on it in the 2026-11-04 run (`docs/e2e-run-2026-11-04/protocol.md`, F5).
-`zpool status -t` shows the disk as `(untrimmed)`, so this may help, but I have not proven it. It is safe for ZFS, but some older Samsung SATA drives have a history of TRIM bugs, so take a look at your backups and the drive's firmware first. It also slows the disk while it runs, so not during a build.
+The monthly TRIM job installed with ZFS only trims NVMe pools unless told otherwise, so this SATA disk had never been trimmed. This setting turns the job on for it. It runs on the first Sunday of the month, at 00:24, so avoid builds around then.
 
-**If it does not help:** the options are a faster disk for the VMs, or having the agent retry on this error, which it does not do yet.
+The one-off `zpool trim rpool` ran on 2026-11-04 and took 3 minutes. On an otherwise quiet system (no devbox VMs), measuring twice before and twice after:
+
+| | Before | After |
+|---|---|---|
+| Synchronous 16 KiB write, median | 3.6 and 3.9 ms | 2.0 and 2.0 ms |
+| Same, slowest 1 in 10 | 363 and 424 ms | 5.7 and 5.6 ms |
+| Same, slowest | 1575 and 1243 ms | 10 and 11 ms |
+| `zfs create`, slowest of 20 (Proxmox allows 10 s) | 4.6 and 0.6 s | 0.09 and 0.11 s |
+| ZFS write cycle, slowest listed | 18 s | 0.11 s |
+
+This is not yet proof for F5, because these samples are small and no build was running. The next build is the real test: 4 of the last 7 failed on the time limit.
+The drive looks healthy: no reallocated sectors, no logged errors, and it does not use queued TRIM, the type behind the known Samsung bugs. A scrub straight after the TRIM repaired nothing and found 0 errors, so ZFS's checksums show no data was harmed.
 
 ### 3e. Record devbox traffic?
 
@@ -162,12 +159,13 @@ Every man page returns `503`, because the systemd hardening blocks Apache's CGI 
 | A user for a full or unknown team still gets an account | It has no team, and there is no delete button | E2E protocol, F1 |
 | Live header says "ROUND IN PROGRESS (DEV)" with 0 rounds | `WORMS 2026` has no registration dates, which the code treats as a dev round. Setting a registration window in the staff pages clears it; the logic could also be fixed | `dashboard/middleware.py` |
 
-### 8. Commit the changes
+### 8. Commits
 
-- [ ] Tell me when to commit, and how you want it split.
+Work is committed on `main` and pushed to `github` and `https`, as you asked on 2026-11-04.
+`github` (`j-moeller/worms`) is **public**, so the protocols and open findings can be read by anyone. Tell me if some of it should go to `https` only.
 
-Nothing is committed. **Your `proxmox_instance = worms-dev` line should stay out of any commit**:
-the repo's default should remain `worms-pve`.
+These stay uncommitted on purpose: the node name default (`worms-dev` here, `worms-pve` in the repo), `cve_search`'s RAM (1024 MB here, 4096 MB in the repo), and your `docs/IMPORTANT`.
+Both settings reached `main` once by my mistake, in `52fc7a1`, and `e6e5b33` put the repo's values back. They are still in the history, and neither is a secret. Removing them from the history would take a force-push, which I will only do if you ask.
 
 ## On hold, until you say otherwise
 

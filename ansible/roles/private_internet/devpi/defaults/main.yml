@@ -4,3 +4,11 @@ devpi_host: 0.0.0.0
 devpi_server_dir: /var/lib/devpi
 devpi_venv: /opt/devpi
 devpi_user: devpi
+devpi_root_password: "{{ vault_devpi_root_password }}"
+# Fetched through the mirror whenever the internet is open (tasks/seed.yml). With it
+# closed, devpi serves only what it already holds, so anything else fails to install.
+# tabulate: small, no dependencies and not on a devbox by default, so `pip install
+# tabulate` shows the path works and a reset removes it (tests/live). What else
+# belongs here: docs/check-with-user.md, 5.
+devpi_seed_packages:
+  - tabulate

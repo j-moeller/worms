@@ -113,6 +113,20 @@ resource "proxmox_virtual_environment_vm" "vm" {
 resource "proxmox_pool_membership" "vm" {
   pool_id = var.pool_id
   vm_id   = proxmox_virtual_environment_vm.vm.vm_id
+
+  # Last: the firewall watchdog stops every running VM of this pool when one of
+  # them has no rules, so a VM must have its firewall before it joins.
+  depends_on = [
+    proxmox_virtual_environment_firewall_options.vm,
+    proxmox_virtual_environment_firewall_ipset.ipfilter,
+    proxmox_virtual_environment_firewall_rules.vm,
+  ]
+
+  # Out of the watched pool before the VM is replaced, and back in after its
+  # firewall: until then the watchdog would stop every VM of the pool.
+  lifecycle {
+    replace_triggered_by = [proxmox_virtual_environment_vm.vm.id]
+  }
 }
 
 resource "proxmox_virtual_environment_firewall_options" "vm" {
@@ -123,6 +137,12 @@ resource "proxmox_virtual_environment_firewall_options" "vm" {
   output_policy = "DROP"
   ipfilter      = true
   macfilter     = true
+
+  # Proxmox deletes a VM's firewall settings with the VM. Without this, a new VM
+  # that gets the same ID keeps its firewall off, and OpenTofu sees nothing to do.
+  lifecycle {
+    replace_triggered_by = [proxmox_virtual_environment_vm.vm.id]
+  }
 }
 
 # Pin every NIC to its own address (no spoofing another VM or a gateway).

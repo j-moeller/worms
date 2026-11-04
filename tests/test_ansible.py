@@ -113,6 +113,141 @@ def test_host_firewall_ruleset(render, tmp_path):
     assert 'meta ibrname "vmbr3" counter drop' in text
 
 
+def test_host_firewall_publishes_the_dashboard(render, tmp_path):
+    """<WAN>:443 reaches the dashboard's :443, and nothing else of it."""
+    require("nft")
+    inventory = yaml.safe_load((ANSIBLE / "inventory.yml").read_text())
+    assert inventory["all"]["children"]["proxmox_host"]["hosts"]["proxmox.local"]["host_publish_dashboard"] is True
+    text = render("ansible/roles/host/host_network", "worms.nft.j2", host_publish_dashboard=True)
+    assert 'iifname "vmbr0" fib daddr type local tcp dport 443 dnat ip to 10.10.0.18:443' in text
+    assert 'iifname "vmbr0" oifname "vmbr20" ip daddr 10.10.0.18 tcp dport 443' in text
+    path = tmp_path / "worms.nft"
+    path.write_text(text)
+    proc = subprocess.run(["nft", "-c", "-f", str(path)], capture_output=True, text=True)
+    if proc.returncode != 0:
+        errors = [line for line in proc.stderr.splitlines() if "Error:" in line]
+        if errors and all("Operation not supported" in e or "Permission denied" in e for e in errors):
+            pytest.skip("this kernel cannot check the bridge family (nft -c): " + errors[0])
+    assert proc.returncode == 0, proc.stderr
+
+
+def _dashboard_vars(tmp_path, node):
+    """tls_dns_name and django_allowed_hosts of group_vars/dashboard.yml on a node."""
+    out = tmp_path / "out.yml"
+    playbook = [{
+        "hosts": "localhost",
+        "connection": "local",
+        "gather_facts": False,
+        "vars": {"proxmox": {"node": node}, "infrastructure_ips": {"dashboard": "10.10.0.18"}},
+        "tasks": [
+            {"ansible.builtin.include_vars": {"file": str(ANSIBLE / "group_vars" / "all.yml")}},
+            {"ansible.builtin.include_vars": {"file": str(ANSIBLE / "group_vars" / "dashboard.yml")}},
+            {"ansible.builtin.copy": {
+                "content": "{{ {'name': tls_dns_name, 'hosts': django_allowed_hosts} | to_yaml }}",
+                "dest": str(out),
+            }},
+        ],
+    }]  # fmt: skip
+    (tmp_path / "play.yml").write_text(yaml.safe_dump(playbook))
+    proc = subprocess.run(["ansible-playbook", "play.yml"], cwd=tmp_path, capture_output=True, text=True)
+    return proc, out
+
+
+@pytest.mark.parametrize(
+    "node, public_name",
+    [("worms-dev", "worms-dev.mlsec.tu-berlin.de"), ("worms-pve", "worms.mlsec.tu-berlin.de")],
+)
+def test_dashboard_has_one_public_name_per_node(tmp_path, node, public_name):
+    """The name on the certificate and the only name it answers to. Live, it is
+    not the node's own: worms-pve serves worms.mlsec.tu-berlin.de."""
+    require("ansible-playbook")
+    proc, out = _dashboard_vars(tmp_path, node)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert yaml.safe_load(out.read_text()) == {"name": public_name, "hosts": public_name}
+
+
+def test_dashboard_on_an_unknown_node_fails_loudly(tmp_path):
+    require("ansible-playbook")
+    proc, _ = _dashboard_vars(tmp_path, "some-other-node")
+    assert proc.returncode != 0
+
+
+def test_a_lost_handler_cannot_leave_the_ca_untrusted():
+    """In the live run the play that copied the CA was interrupted, so its handler
+    never ran. Later runs found the file unchanged, and TLS to scoring kept failing."""
+    tasks = yaml.safe_load((ANSIBLE / "roles/pki/ca_distribute/tasks/main.yml").read_text())
+    check = next(t for t in tasks if t["name"] == "Check the trust store holds the CA")
+    assert check["ansible.builtin.stat"]["path"] == "/etc/ssl/certs/worms-internal-ca.pem"
+    assert check["notify"] == "Update CA trust" and "not " in check["changed_when"]
+    assert any(t.get("ansible.builtin.meta") == "flush_handlers" for t in tasks)
+
+
+def test_a_devbox_vm_installing_nothing_is_not_silent():
+    """One uncached package aborts the whole install. `failed_when: false` hid that
+    in the live run: nothing was installed and the job still reported success."""
+    tasks = yaml.safe_load((ANSIBLE / "roles/applications/devbox/tasks/main.yml").read_text())
+    install = next(t for t in tasks if t["name"] == "Install expected packages")
+    assert "failed_when" not in install
+    assert install["ansible.builtin.apt"]["install_recommends"] is False
+
+
+def test_per_team_service_names_resolve():
+    entries = yaml.safe_load((ANSIBLE / "group_vars" / "dns.yml").read_text())["dns_entries"]
+    names = {entry["name"] for entry in entries}
+    assert {"*.scoring.worms.internal", "*.logging.worms.internal"} <= names
+
+
+def test_a_team_key_can_jump_through_the_ssh_gateway_but_run_nothing(render):
+    """`restrict` does not stop commands. In the live run a team login got a shell
+    on the gateway, reaching every team's VMs and syslog, and scp and sftp worked."""
+    keys = [{"public_key": "ssh-ed25519 AAAA me", "comment": "team=t4", "permitopen": ["10.7.0.11:22"]}]
+    text = render("ansible/roles/applications/ssh_gateway", "authorized_keys.j2", ssh_gateway_authorized_keys=keys)
+    line = next(row for row in text.splitlines() if "ssh-ed25519" in row)
+    options = line.split(" ssh-ed25519")[0]
+    assert options == 'restrict,port-forwarding,command="/usr/sbin/nologin",permitopen="10.7.0.11:22"'
+    tasks = yaml.safe_load((ANSIBLE / "roles/applications/ssh_gateway/tasks/main.yml").read_text())
+    account = next(t for t in tasks if "ansible.builtin.user" in t)["ansible.builtin.user"]
+    assert account["shell"] == "/usr/sbin/nologin"
+
+
+def test_the_orchestrator_is_told_where_teams_reach_the_ssh_gateway():
+    """Without it, a team's dev view says "still being built" forever and never
+    shows the `ssh -J` command. Found by the live end-to-end run."""
+    env = yaml.safe_load((ANSIBLE / "group_vars" / "orchestrator.yml").read_text())["django_extra_env"]
+    assert env["DEVBOX_SSH_GATEWAY_HOST"] == "{{ dashboard_public_names[proxmox.node] }}"
+
+
+def test_django_nginx_serves_https_only(render):
+    """Nothing answers on port 80: no redirect, no listener."""
+    conf = render(NGINX_DJANGO, "worms-tls.conf.j2", tls_dns_name="worms-dev.mlsec.tu-berlin.de")
+    assert "listen 443 ssl;" in conf
+    assert "listen 80" not in conf and "[::]:80" not in conf
+
+
+def test_host_publishes_https_only(render):
+    text = render("ansible/roles/host/host_network", "worms.nft.j2", host_publish_dashboard=True)
+    published = [line for line in text.splitlines() if "10.10.0.18" in line and 'iifname "vmbr0"' in line]
+    assert len(published) == 2 and all("tcp dport 443" in line for line in published)
+
+
+def test_registry_is_read_only_once_the_internet_window_closes(render):
+    role = "ansible/roles/private_internet/docker_registry"
+    online = yaml.safe_load(render(role, "config.yml.j2", internet_enabled=True))
+    offline = yaml.safe_load(render(role, "config.yml.j2", internet_enabled=False))
+    assert "maintenance" not in online["storage"]  # still being filled
+    assert offline["storage"]["maintenance"]["readonly"]["enabled"] is True
+
+
+def test_devpi_only_lets_root_modify_and_root_has_a_generated_password(render):
+    for internet in (True, False):
+        unit = render("ansible/roles/private_internet/devpi", "devpi.service.j2", internet_enabled=internet)
+        assert "--restrict-modify root" in unit
+    tasks = (ANSIBLE / "roles" / "private_internet" / "devpi" / "tasks" / "main.yml").read_text()
+    assert "devpi_root_password" in tasks
+    defaults = yaml.safe_load((ANSIBLE / "roles" / "private_internet" / "devpi" / "defaults" / "main.yml").read_text())
+    assert "vault_devpi_root_password" in defaults["devpi_root_password"]
+
+
 def test_host_firewall_publishes_the_devbox_ssh_gateway(render, tmp_path):
     """With the devbox SSH gateway published, the host DNATs teams to it and
     SNATs that same connection to its own fabric address, so the gateway sees
@@ -171,6 +306,18 @@ def test_zeek_unit_is_contained(render):
     assert "User=zeek" in unit and "IPAddressDeny=any" in unit
     assert "CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN" in unit
     assert "-i ens20" in unit
+
+
+def test_zeek_can_rotate_its_logs(render):
+    """Each ReadWritePaths entry is its own bind mount, and Zeek rotates by rename().
+    With the log and archive directories listed apart, the first rotation failed with
+    EXDEV and ended every log writer, while the service stayed active."""
+    unit = render(MONITOR, "zeek.service.j2", **MONITOR_VARS)
+    defaults = yaml.safe_load((ANSIBLE / "roles/applications/network_monitor/defaults/main.yml").read_text())
+    log_dir, archive_dir = Path(defaults["network_monitor_log_dir"]), Path(defaults["network_monitor_archive_dir"])
+    assert log_dir.parent == archive_dir.parent
+    lines = [line.removeprefix("ReadWritePaths=") for line in unit.splitlines() if line.startswith("ReadWritePaths=")]
+    assert lines == [str(log_dir.parent)]
 
 
 def test_shipper_unit_reaches_only_the_database(render):
@@ -339,6 +486,93 @@ def test_plays_still_wait_for_cloud_init():
     assert configure_playbooks()[0] == "WaitForVMs.yml"
 
 
+@pytest.mark.parametrize("playbook", ["SetupSSHGateway.yml", "SetupDevbox.yml", "SetupSandbox.yml"])
+def test_a_vm_just_built_gets_time_to_boot(playbook):
+    """These run right after `tofu apply`, outside WaitForVMs.yml. Gathering facts
+    needs SSH, so a VM still in its first boot would fail the play as unreachable
+    before the wait for cloud-init. First boot took 3 minutes in a live build."""
+    wait, *configure = yaml.safe_load((ANSIBLE / playbook).read_text()) or []
+    assert wait["gather_facts"] is False
+    assert "ansible.builtin.wait_for_connection" in wait["tasks"][0]
+    for play in configure:
+        assert play["hosts"] in wait["hosts"].split(":")
+        assert play["any_errors_fatal"] == wait["any_errors_fatal"]
+
+
+@pytest.mark.parametrize(
+    "playbook, gateways, vms",
+    [("SetupDevbox.yml", "devbox_gw", "devbox"), ("SetupSandbox.yml", "sandbox_gw", "sandbox")],
+)
+def test_untrusted_gateways_get_their_rules_before_their_vms_need_them(playbook, gateways, vms):
+    """The cloud image has no nftables, so without this a gateway has no NAT and
+    no filter: its VMs reach nothing, not even DNS, and apt hangs on them."""
+    plays = [p for p in yaml.safe_load((ANSIBLE / playbook).read_text()) if p.get("roles")]
+    assert [p["hosts"] for p in plays] == [gateways, vms]
+    gateway_roles, vm_roles = ([r["role"] for r in p["roles"]] for p in plays)
+    assert gateway_roles == ["apt_client", "untrusted_gateway"]
+    assert "apt_client" in vm_roles
+
+
+def test_untrusted_vms_use_the_private_internet_for_packages():
+    inventory = yaml.safe_load((ANSIBLE / "inventory.yml").read_text())
+    untrusted = inventory["all"]["children"]["untrusted"]["children"]
+    assert set(untrusted) == {"sandbox", "sandbox_gw", "devbox", "devbox_gw"}
+    settings = yaml.safe_load((ANSIBLE / "group_vars" / "untrusted.yml").read_text())
+    # Not left to `groups['apt_cache']`: the round agent's inventory lacks that group.
+    assert settings["apt_client_use_cache"] is True and settings["apt_client_refresh_offline"] is True
+    # The cache does not hold the backports index: fatal for Ansible's apt module.
+    assert "backports" not in settings["apt_client_suites"]
+
+
+def test_the_cache_is_filled_with_what_untrusted_vms_install():
+    """With the internet closed the cache serves only what it already holds."""
+    roles = ANSIBLE / "roles"
+    seed = yaml.safe_load((roles / "private_internet/apt_cache/defaults/main.yml").read_text())["apt_cache_seed_packages"]
+    wanted = yaml.safe_load((roles / "applications/devbox/defaults/main.yml").read_text())["devbox_packages"]
+    assert {"nftables", *wanted} <= set(seed)
+    plays = yaml.safe_load((ANSIBLE / "SetupPrivateInternet.yml").read_text())
+    seeding = [t for p in plays for t in p.get("tasks", []) if t.get("ansible.builtin.include_role", {}).get("tasks_from") == "seed"]
+    assert [t["when"] for t in seeding] == ["internet_enabled | bool"]
+
+
+def test_a_new_gateway_gets_as_far_as_installing_nftables():
+    """The image has no nftables. A runcmd using it left cloud-init in `error`, which stopped
+    SetupDevbox.yml before the role that installs it, on every freshly built gateway."""
+    stacks = ANSIBLE.parent / "opentofu" / "stacks"
+    for template in (stacks / "devbox/templates/devbox-gw.tftpl", stacks / "sandbox/templates/sandbox-gw.tftpl"):
+        text = template.read_text()
+        assert "path: /etc/nftables.conf" in text, template
+        commands = text.split("\nruncmd:\n")[1]
+        assert "nft" not in commands, template
+    for playbook in ("SetupDevbox.yml", "SetupSandbox.yml"):
+        gateway_play = next(p for p in yaml.safe_load((ANSIBLE / playbook).read_text()) if "untrusted_gateway" in str(p.get("roles")))
+        # A real cloud-init failure must still stop the play.
+        assert "[0, 2]" in str(gateway_play["pre_tasks"])
+
+
+def test_the_pip_mirror_is_filled_while_the_internet_is_open():
+    """devpi was empty after `make`, so every `pip install` on a devbox failed."""
+    role = ANSIBLE / "roles/private_internet/devpi"
+    assert yaml.safe_load((role / "defaults/main.yml").read_text())["devpi_seed_packages"]
+    tasks = yaml.safe_load((role / "tasks/main.yml").read_text())
+    seeding = [t for t in tasks if t.get("ansible.builtin.include_tasks") == "seed.yml"]
+    assert [t["when"] for t in seeding] == ["internet_enabled | bool"]
+    # After the wait for devpi and the password step: it needs the server running.
+    assert tasks[-1] is seeding[0]
+    # Without it, devpi tries to fetch PyPI's whole project list within a 5-second
+    # timeout, and answers "does not exist" for every project.
+    patch = next(t for t in tasks if t.get("ansible.builtin.uri", {}).get("method") == "PATCH" and t["ansible.builtin.uri"]["url"].endswith("/root/pypi"))
+    assert patch["ansible.builtin.uri"]["body"] == ["mirror_no_project_list=True"]
+    assert tasks.index(patch) < tasks.index(seeding[0])
+
+
+def test_a_plain_pip_install_works_on_a_devbox():
+    """Debian's pip refuses to install anything without this, before it asks the index."""
+    tasks = yaml.safe_load((ANSIBLE / "roles/applications/devbox/tasks/main.yml").read_text())
+    pip_conf = next(t for t in tasks if t.get("ansible.builtin.copy", {}).get("dest") == "/etc/pip.conf")
+    assert "break-system-packages = true" in pip_conf["ansible.builtin.copy"]["content"]
+
+
 # --- speed (ansible.cfg, apt) --------------------------------------------------
 
 
@@ -385,3 +619,63 @@ def test_apt_refreshes_its_index_at_most_hourly():
             apt = task.get("ansible.builtin.apt") or task.get("apt")
             if isinstance(apt, dict) and apt.get("update_cache") not in (None, False):
                 assert "cache_valid_time" in apt, f"{path.relative_to(ANSIBLE)}: {task.get('name')}"
+
+
+def test_apt_does_not_refresh_its_index_offline():
+    """In the apt module cache_valid_time turns update_cache on, whatever
+    update_cache says. A task that refreshes only while internet access is
+    allowed must make cache_valid_time conditional too, or it tries the internet
+    offline, and fails, once its index is an hour old."""
+    for path in (ANSIBLE / "roles").rglob("*.yml"):
+        for task in yaml.safe_load(path.read_text()) or []:
+            if not isinstance(task, dict):
+                continue
+            apt = task.get("ansible.builtin.apt") or task.get("apt")
+            if isinstance(apt, dict) and "internet_enabled" in str(apt.get("update_cache")):
+                assert "internet_enabled" in str(apt.get("cache_valid_time")), f"{path.relative_to(ANSIBLE)}: {task.get('name')}"
+
+
+def test_orchestrator_verifies_the_proxmox_api_with_both_tokens():
+    """PVE's certificate names the node, not its address on the core bridge, and
+    is issued by PVE's own CA. So the orchestrator connects by the node's name
+    with that CA, for the power token as well as the read-only one."""
+    import sys
+
+    pytest.importorskip("django")
+    env = dict(
+        os.environ,
+        PRODUCTION="1",
+        DJANGO_SETTINGS_MODULE="config.settings.orchestrator",
+        DJANGO_SECRET_KEY="test",
+        DJANGO_ALLOWED_HOSTS="localhost",
+        DB_MIGRATOR_USER="x", DB_MIGRATOR_PASSWORD="x", DB_USER="x", DB_PASSWORD="x",
+        DB_HOST="x", DB_NAME="x",
+        PROXMOX_HOST="x", PROXMOX_USER="x", PROXMOX_TOKEN_NAME="x", PROXMOX_TOKEN_VALUE="x",
+        PROXMOX_CA_BUNDLE="/some/ca.pem",
+        PYTHONPATH=str(REPO / "projects" / "dashboard"),
+    )  # fmt: skip
+    proc = subprocess.run(
+        [sys.executable, "-c",
+         "import config.settings.orchestrator as s; print(s.PROXMOX['verify_ssl'], s.PROXMOX_READONLY['verify_ssl'])"],
+        env=env, capture_output=True, text=True,
+    )  # fmt: skip
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.split()[-2:] == ["/some/ca.pem", "/some/ca.pem"]
+    orchestrator = yaml.safe_load((ANSIBLE / "group_vars" / "orchestrator.yml").read_text())
+    assert orchestrator["django_extra_env"]["PROXMOX_HOST"] == "{{ proxmox.node }}"
+    assert "PROXMOX_CA_BUNDLE" in orchestrator["django_extra_env"]
+
+
+def test_the_agents_workspace_does_not_look_for_a_vault_key():
+    """The workspace holds no vault, by design, but the synced ansible.cfg names
+    its key, and a missing key fails every playbook there (live, on the first
+    devbox build)."""
+    tasks = yaml.safe_load((ANSIBLE / "roles" / "host" / "round_agent" / "tasks" / "workspace.yml").read_text())
+    names = [t.get("name") for t in tasks]
+    sync = names.index("Sync the code")
+    fixes = [
+        i for i, t in enumerate(tasks)
+        if (t.get("ansible.builtin.lineinfile") or {}).get("regexp", "").startswith("^vault_password_file")
+        and t["ansible.builtin.lineinfile"].get("state") == "absent"
+    ]  # fmt: skip
+    assert fixes and fixes[0] > sync

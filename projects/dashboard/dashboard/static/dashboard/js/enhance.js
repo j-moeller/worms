@@ -3,10 +3,9 @@
  *
  * Every feature here only improves a page that already works without
  * JavaScript: forms submit and redirect on the server, times and countdowns
- * are rendered server-side, the theme and the environment are set by form
- * posts. This file makes those nicer (live ticking, local time, instant theme
- * switch, an animated environment switch that swaps the page in place, copy
- * buttons, drag-and-drop upload, a self-refreshing leaderboard, a staff menu
+ * are rendered server-side, the environment is set by a form post. This file
+ * makes those nicer (live ticking, local time, an animated environment switch
+ * that swaps the page in place, copy buttons, drag-and-drop upload, a self-refreshing leaderboard, a staff menu
  * that closes on outside-click). If any of it throws or is unsupported, the
  * server behaviour remains.
  *
@@ -113,31 +112,6 @@
             button.addEventListener("click", () => copy(pre.querySelector("code").textContent, button));
             pre.style.position = "relative";
             pre.appendChild(button);
-        });
-    }
-
-    // ---- instant theme switch -------------------------------------------
-    // Clicking a design swaps the stylesheet at once, then persists the choice
-    // in the background (the form would otherwise reload the page).
-    function themePicker() {
-        const form = $("[data-theme-picker]");
-        if (!form || !once(form)) return;
-        const link = $("link[data-theme-stylesheet]");
-        form.addEventListener("click", (event) => {
-            const button = event.target.closest(".theme-picker__option");
-            if (!button || !link) return;
-            event.preventDefault();
-            const href = button.getAttribute("data-stylesheet");
-            if (href) link.setAttribute("href", href);
-            document.documentElement.setAttribute("data-theme", button.value);
-            $$(".theme-picker__option", form).forEach((o) =>
-                o.setAttribute("aria-pressed", o === button ? "true" : "false"));
-            const body = new FormData(form);
-            body.set("theme", button.value);
-            fetch(form.action, {
-                method: "POST", body: body, credentials: "same-origin",
-                headers: { "X-Requested-With": "fetch" },
-            }).catch(() => { /* the visual switch already happened */ });
         });
     }
 
@@ -298,7 +272,7 @@
 
     function init() {
         [
-            () => localTimes(), startCountdowns, () => copyButtons(), themePicker,
+            () => localTimes(), startCountdowns, () => copyButtons(),
             envToggle, () => staffMenu(), () => uploadForm(), autoRefresh,
         ].forEach((fn) => {
             try { fn(); } catch (e) { /* one broken enhancement must not stop the others */ }

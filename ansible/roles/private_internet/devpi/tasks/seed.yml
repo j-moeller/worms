@@ -1,0 +1,25 @@
+---
+# Fetch what teams install, through the mirror, while the internet is open. With the
+# internet closed devpi serves only what it already holds.
+- name: Create a scratch directory
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: devpi-seed.
+  register: devpi_seed_dir
+
+# The long timeout: the first request makes devpi fetch PyPI's whole project list.
+- name: Fetch the packages and everything they depend on
+  ansible.builtin.command:
+    argv: >-
+      {{ [devpi_venv ~ '/bin/pip', 'download', '--quiet', '--no-cache-dir',
+          '--timeout', '300', '--retries', '5',
+          '--dest', devpi_seed_dir.path,
+          '--trusted-host', '127.0.0.1',
+          '--index-url', 'http://127.0.0.1:' ~ (devpi_port | string) ~ '/root/pypi/+simple/']
+         + devpi_seed_packages }}
+  changed_when: false
+
+- name: Remove the scratch directory
+  ansible.builtin.file:
+    path: "{{ devpi_seed_dir.path }}"
+    state: absent

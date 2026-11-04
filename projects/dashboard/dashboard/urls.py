@@ -9,7 +9,7 @@ from dashboard.views.devbox import (
     devbox_delete_ssh_key,
     devbox_reset,
 )
-from dashboard.views.navigation import set_environment, set_theme
+from dashboard.views.navigation import set_environment
 from dashboard.views.profile import profile
 from dashboard.views.teams import join_team, leave_team, team_registration
 from dashboard.views.uploads import upload
@@ -47,7 +47,6 @@ urlpatterns = [
     path("logout/", logout_view, name="logout"),
     path("change-password/", change_password, name="change_password"),
     # Page-wide settings (plain form posts; enhance.js only speeds them up).
-    path("theme/", set_theme, name="set_theme"),
     path("environment/", set_environment, name="set_environment"),
     #
     path("teams/", team_registration, name="team_registration"),

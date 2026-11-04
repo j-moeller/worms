@@ -1,30 +1,30 @@
     .topo {
-        --bg: #f4f6f8;
-        --panel: #ffffff;
-        --ink: #17202a;
-        --muted: #5d6b7b;
-        --line: #d6dce3;
-        --edge: #a3adba;
-        --accent: #2a6fd6;
-        --ok: #1f8f5f;
-        --off: #8a96a5;
-        --warn: #b7791f;
-        --bad: #c83a3a;
-        --c-db: #2a6fd6;
-        --c-service: #0f8fa6;
-        --c-lan: #d9622b;
-        --c-devbox: #7a5fd3;
-        --c-pi: #1f8f5f;
-        --c-scoring: #c98a12;
-        --c-logging: #3a7bd5;
-        --c-flag: #d6336c;
-        --c-state: #6b5bd6;
-        --c-other: #8a96a5;
-        --group-sandbox: rgba(217, 98, 43, .06);
-        --group-devbox: rgba(122, 95, 211, .06);
-        --group-pi: rgba(31, 143, 95, .06);
-        --halo: #f4f6f8;
-        --shadow: 0 8px 24px rgba(15, 23, 42, .16);
+        --bg: #11161c;
+        --panel: #19212a;
+        --ink: #e5ebf1;
+        --muted: #94a2b3;
+        --line: #2c3743;
+        --edge: #556273;
+        --accent: #5d9cf0;
+        --ok: #3cc58a;
+        --off: #6b7888;
+        --warn: #e2a644;
+        --bad: #f06464;
+        --c-db: #5d9cf0;
+        --c-service: #2bb5ca;
+        --c-lan: #ec8442;
+        --c-devbox: #a08ae8;
+        --c-pi: #3cc58a;
+        --c-scoring: #e8b33c;
+        --c-logging: #6aa2f2;
+        --c-flag: #f0628f;
+        --c-state: #9a8cf0;
+        --c-other: #7c8a9b;
+        --group-sandbox: rgba(236, 132, 66, .07);
+        --group-devbox: rgba(160, 138, 232, .07);
+        --group-pi: rgba(60, 197, 138, .07);
+        --halo: #11161c;
+        --shadow: 0 8px 24px rgba(0, 0, 0, .45);
         font-family: "Space Grotesk", system-ui, sans-serif;
         color: var(--ink);
         background: var(--bg);
@@ -32,38 +32,8 @@
         border-radius: 8px;
         padding: 12px;
     }
-    @media (prefers-color-scheme: dark) {
-        .topo {
-            --bg: #11161c;
-            --panel: #19212a;
-            --ink: #e5ebf1;
-            --muted: #94a2b3;
-            --line: #2c3743;
-            --edge: #556273;
-            --accent: #5d9cf0;
-            --ok: #3cc58a;
-            --off: #6b7888;
-            --warn: #e2a644;
-            --bad: #f06464;
-            --c-db: #5d9cf0;
-            --c-service: #2bb5ca;
-            --c-lan: #ec8442;
-            --c-devbox: #a08ae8;
-            --c-pi: #3cc58a;
-            --c-scoring: #e8b33c;
-            --c-logging: #6aa2f2;
-            --c-flag: #f0628f;
-            --c-state: #9a8cf0;
-            --c-other: #7c8a9b;
-            --group-sandbox: rgba(236, 132, 66, .07);
-            --group-devbox: rgba(160, 138, 232, .07);
-            --group-pi: rgba(60, 197, 138, .07);
-            --halo: #11161c;
-            --shadow: 0 8px 24px rgba(0, 0, 0, .45);
-        }
-    }
     .topo[hidden] { display: none; }
-    /* The Dev environment's accent (the themes pin the player's palette). */
+    /* The Dev environment's accent (theme.css pins the player's palette). */
     html[data-env="dev"] .topo { --accent: var(--accent-dev, #15803d); }
     .topo * { box-sizing: border-box; }
     .topo button, .topo select {

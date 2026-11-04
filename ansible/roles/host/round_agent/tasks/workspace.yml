@@ -55,6 +55,14 @@
     use_ssh_args: true
     rsync_opts: "{{ round_agent_sync_rsync_opts }}"
 
+# The workspace holds no vault, by design, so it must not name the vault's key:
+# with the key missing, every playbook here would fail before it starts.
+- name: Drop the vault key from the workspace's ansible.cfg
+  ansible.builtin.lineinfile:
+    path: "{{ round_agent_repo_root }}/ansible/ansible.cfg"
+    regexp: '^vault_password_file'
+    state: absent
+
 - name: Find the workspace's sandbox and devbox definitions
   ansible.builtin.find:
     paths: "{{ round_agent_repo_root }}/opentofu/stacks/{{ item }}"

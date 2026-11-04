@@ -109,9 +109,40 @@ def test_devbox_reconfigure_enqueues_a_reconfigure_job(api, team):
 
     assert validation.validate("devbox_reconfigure", job.params)["teams"]
 
-    # Coalesced: a second reconfigure while one is queued does not pile up.
+    # Coalesced: the same keys again, while they are queued, does not pile up.
     assert reconfigure(api, team).json()["reconfigure_enqueued"] is False
     assert HostJob.objects.filter(kind=HostJob.Kind.DEVBOX_RECONFIGURE).count() == 1
+
+
+def test_devbox_reconfigure_never_loses_a_key_added_behind_a_job(api, team):
+    """A job carries the keys as they were when it was created. Coalescing with
+    it regardless told nine users their key was being installed, while the only
+    job held two of them. Found by the live end-to-end run."""
+    from core.models.devbox import DevboxSSHKey
+    from core.models.rounds import HostJob
+    from core.models.user import User
+
+    user = User.objects.create(username="keys@example.org", email="keys@example.org")
+
+    def add_key(blob):
+        DevboxSSHKey.objects.create(team=team, name=blob, public_key=f"ssh-ed25519 {blob}", created_by=user)
+
+    def keys_of(job):
+        return [key for spec in job.params["teams"] for key in spec["authorized_keys"]]
+
+    add_key("AAAAfirst")
+    assert reconfigure(api, team).json()["reconfigure_enqueued"] is True
+    add_key("AAAAsecond")  # the first job is still queued, and does not have this key
+    assert reconfigure(api, team).json()["reconfigure_enqueued"] is True
+
+    first = HostJob.objects.filter(kind=HostJob.Kind.DEVBOX_RECONFIGURE).order_by("id").first()
+    first.state = HostJob.State.RUNNING
+    first.save(update_fields=["state"])
+    add_key("AAAAthird")  # a running job does not have it either
+    assert reconfigure(api, team).json()["reconfigure_enqueued"] is True
+
+    newest = HostJob.objects.filter(kind=HostJob.Kind.DEVBOX_RECONFIGURE).order_by("-id").first()
+    assert {f"ssh-ed25519 AAAA{name}" for name in ("first", "second", "third")} <= set(keys_of(newest))
 
 
 def test_devbox_reconfigure_needs_the_token(api, team):

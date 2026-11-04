@@ -2843,13 +2843,6 @@
             root.classList.remove("dragging");
             openFile(ev.dataTransfer.files[0]);
         });
-        if (window.matchMedia) {
-            window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-                readColors();
-                drawDensity();
-                drawFrame();
-            });
-        }
         if (TEAM) {
             await loadRounds();
             renderTabs();

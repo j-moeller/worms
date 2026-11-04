@@ -123,3 +123,66 @@ def test_monitor_ips_are_in_their_zones(infrastructure):
     assert ipaddress.ip_address(infrastructure["infrastructure_ips"]["monitor"]) in nets["ingest"]
     assert ipaddress.ip_address(infrastructure["management_ips"]["monitor"]) in nets["mgmt_exposed"]
     assert infrastructure["bridges"]["mirror"] not in (infrastructure["bridges"]["sandbox_glob"],)
+
+
+def _block(text: str, header: str) -> str:
+    start = text.index(header)
+    end = text.find("\n}\n", start)
+    return text[start:end]
+
+
+@pytest.mark.parametrize(
+    "path, membership",
+    [
+        ("opentofu/modules/devbox_vm/main.tf", 'resource "proxmox_pool_membership" "vm"'),
+        ("opentofu/stacks/sandbox/main.tf", 'resource "proxmox_pool_membership" "gw"'),
+        ("opentofu/stacks/sandbox/main.tf", 'resource "proxmox_pool_membership" "pool_membership"'),
+    ],
+)
+def test_an_untrusted_vm_joins_its_pool_only_after_its_firewall(path, membership):
+    """The firewall watchdog hard-stops every running VM of these pools when one
+    of them has no rules. Joining first made a build stop its own VMs (live, on
+    the first devbox build)."""
+    block = _block((REPO / path).read_text(), membership)
+    assert "depends_on" in block, membership
+    for resource in ("firewall_options", "firewall_rules"):
+        assert resource in block, f"{membership} must wait for {resource}"
+
+
+@pytest.mark.parametrize(
+    "path, resource, vm",
+    [
+        ("opentofu/modules/devbox_vm/main.tf", 'proxmox_virtual_environment_firewall_options" "vm"', "vm.id"),
+        ("opentofu/modules/devbox_vm/main.tf", 'proxmox_pool_membership" "vm"', "vm.id"),
+        ("opentofu/modules/infrastructure_vm/main.tf", 'proxmox_virtual_environment_firewall_options" "infrastructure"', "infrastructure.id"),
+        ("opentofu/modules/private_internet_vm/main.tf", 'proxmox_virtual_environment_firewall_options" "service_vm"', "service_vm.id"),
+        ("opentofu/modules/network_monitor_vm/main.tf", 'proxmox_virtual_environment_firewall_options" "monitor"', "monitor.id"),
+        ("opentofu/stacks/devbox/main.tf", 'proxmox_virtual_environment_firewall_options" "ssh_gateway"', "ssh_gateway.id"),
+        ("opentofu/stacks/sandbox/main.tf", 'proxmox_virtual_environment_firewall_options" "gw"', "gw.id"),
+        ("opentofu/stacks/sandbox/main.tf", 'proxmox_virtual_environment_firewall_options" "vm"', "vm[each.key].id"),
+        ("opentofu/stacks/sandbox/main.tf", 'proxmox_pool_membership" "gw"', "gw.id"),
+        ("opentofu/stacks/sandbox/main.tf", 'proxmox_pool_membership" "pool_membership"', "vm[each.key].id"),
+    ],
+)
+def test_a_replaced_vm_gets_its_firewall_back(path, resource, vm):
+    """Proxmox deletes a VM's firewall settings with the VM. A replacement that got
+    the same ID kept its firewall off, with no drift for OpenTofu to see: live, the
+    trusted SSH gateway ran that way for two hours, and a devbox reset made the
+    watchdog stop every team's VMs. Only `.id` changes on a replacement alone: a
+    whole-resource reference would also fire on every in-place update."""
+    text = (REPO / path).read_text()
+    start = text.index(f'resource "{resource}')
+    block = text[start : text.index("\n}\n", start)]
+    assert f"replace_triggered_by = [proxmox_virtual_environment_vm.{vm}]" in block
+
+
+def test_the_ssh_gateway_lets_only_the_node_administer_it():
+    """Ansible configures the gateway as debian. `AllowUsers team` alone locked
+    it out before the team keys could be installed (live, on the first devbox
+    build); debian may log in from the node's management address, and only there."""
+    template = (REPO / "opentofu" / "stacks" / "devbox" / "templates" / "ssh-gateway.tftpl").read_text()
+    line = next(l.strip() for l in template.splitlines() if l.strip().startswith("AllowUsers"))
+    assert line == "AllowUsers ${gateway_user} debian@${mgmt_host_ip}"
+    stack = (REPO / "opentofu" / "stacks" / "devbox" / "main.tf").read_text()
+    block = stack[stack.index('"${path.module}/templates/ssh-gateway.tftpl"'):]
+    assert "mgmt_host_ip    = local.host_ips.mgmt_exposed" in block[: block.index("file_name")]

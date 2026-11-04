@@ -6,7 +6,7 @@
     name: [apache2, man2html, man-db, manpages, manpages-dev, manpages-posix, manpages-posix-dev, ca-certificates]
     state: present
     update_cache: "{{ internet_enabled | bool }}"  # offline re-runs: no index refresh
-    cache_valid_time: 3600
+    cache_valid_time: "{{ 3600 if internet_enabled | bool else omit }}"
 
 - name: Enable CGI module
   ansible.builtin.command: a2enmod cgi

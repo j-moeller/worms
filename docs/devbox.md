@@ -99,9 +99,9 @@ Why this can't be forged or crossed:
 
 ### `<team>.scoring.worms.internal`
 
-dnsmasq's `address=/scoring.worms.internal/<ip>` already answers every
-subdomain, so `<team>.scoring.worms.internal` resolves to the scoring server
-with no per-team DNS records. The scoring/logging certificates carry a wildcard
+The DNS server has wildcard records (`group_vars/dns.yml`), so
+`<team>.scoring.worms.internal` resolves to the scoring server with no per-team
+records. The scoring/logging certificates carry a wildcard
 SAN (`*.scoring.worms.internal`, `*.logging.worms.internal`), so a devbox
 reaches its per-team name over **verified** HTTPS. The hostname is per-team for
 clarity and TLS; the enforced attribution is the ipfilter-pinned SNAT source
@@ -122,15 +122,17 @@ real confinement is **per key**: the `ssh_gateway` Ansible role writes the
 team account's `authorized_keys` with, for every registered key,
 
 ```
-restrict,port-forwarding,permitopen="<the team's ENTRY VM (A)>:22" <key>
+restrict,port-forwarding,command="/usr/sbin/nologin",permitopen="<the team's ENTRY VM (A)>:22" <key>
 ```
 
-`restrict` disables every feature; `port-forwarding` re-enables only TCP
+`restrict` disables most features; `port-forwarding` re-enables only TCP
 forwarding, and `permitopen` limits it to **that team's entry VM (A)** on the
-devbox SSH fabric — a single host. So a key can `ProxyJump` into its own team's
-**A** and nothing else; the worm reaches **B** and **C** by pivoting inside the
-devbox network, exactly as it would in the sandbox. The SSH tty is the only
-thing that flows.
+devbox SSH fabric — a single host. `restrict` does not stop commands, so
+`command=` and the account's `nologin` shell do: no commands, shell, `scp` or
+`sftp` on the gateway. A jump opens no session, so it still works. So a key can
+`ProxyJump` into its own team's **A** and nothing else; the worm reaches **B** and
+**C** by pivoting inside the devbox network, exactly as it would in the sandbox.
+The SSH tty is the only thing that flows.
 
 The gateway protects itself in depth (docs/security-assessment.md):
 
@@ -247,8 +249,9 @@ provisioning trigger (`tests/test_manage_cli.py`), and the host nftables render.
 The OpenTofu (firewall + devbox stack + module) passes `tofu validate` with
 bpg/proxmox 0.118.0.
 
-**Not yet run on a live Proxmox host** (none here) — the same caveat the
-sandbox and round orchestration carry (`docs/testing.md`): VM creation, the
-`-replace` rebuild, the Ansible key plumbing end to end, and the SSH gateway's
-`permitopen` confinement in practice. The remaining security items are tracked
-in `docs/security-assessment.md`.
+**Run live on 2026-11-04** (`docs/e2e-run-2026-11-03/protocol.md`): VM creation,
+keys, the gateway's confinement, scoring and logging, apt and pip through the
+private internet, containment and a reset all work. Still not run live: the
+public port forward (port 2222 is not published), a build on a cache filled by
+the seed list, and the sandbox and round orchestration (`docs/testing.md`). The
+remaining security items are tracked in `docs/security-assessment.md`.

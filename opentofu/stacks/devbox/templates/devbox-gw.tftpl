@@ -82,8 +82,9 @@ write_files:
         }
       }
 
+# No nftables commands here: the image does not have it. A failing command leaves
+# cloud-init in `error`, which the playbook treats as fatal, before the role that
+# installs nftables and loads the file above (untrusted_gateway) can run.
 runcmd:
   - systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
   - sysctl --system
-  - systemctl enable --now nftables
-  - nft -f /etc/nftables.conf

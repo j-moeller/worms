@@ -12,9 +12,18 @@ django_run_migrations: true
 django_extra_pip_packages:
   - proxmoxer
   - requests
+# A copy of PVE's CA certificate (SetupDbAndDashboard.yml). Not secret, and the
+# application user must be able to read it.
+proxmox_ca_bundle: /etc/ssl/pve-root-ca.pem
 # Proxmox credentials delivered securely into the env file (0600 root).
+# The host is the node's name, not proxmox.host: PVE's certificate names the node
+# but not its address on the core bridge. /etc/hosts maps the one to the other.
 django_extra_env:
-  PROXMOX_HOST: "{{ proxmox.host }}"
+  # The dashboard's dev view builds its `ssh -J` command from this: without it
+  # teams never see how to connect. See host_publish_ssh_gateway for the port.
+  DEVBOX_SSH_GATEWAY_HOST: "{{ dashboard_public_names[proxmox.node] }}"
+  PROXMOX_HOST: "{{ proxmox.node }}"
+  PROXMOX_CA_BUNDLE: "{{ proxmox_ca_bundle }}"
   PROXMOX_PORT: "{{ proxmox.api_port }}"
   PROXMOX_NODE: "{{ proxmox.node }}"
   PROXMOX_USER: "{{ proxmox_api_user }}"

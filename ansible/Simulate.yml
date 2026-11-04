@@ -613,7 +613,7 @@
       vars:
         expected: {connect: ok, ssl: true}
         check: "{{ kind }} DB role: {{ p.key }}"
-        ok: "{{ (p.value == expected[p.key]) if p.key in expected else (p.value == ('ok' if p.key.startswith('SELECT access_token_hash') else 'denied')) }}"
+        ok: "{{ (p.value == expected[p.key]) if p.key in expected else (p.value == 'denied') }}"
         detail: "{{ p.value }}"
 
     - name: Reachability from {{ kind }}

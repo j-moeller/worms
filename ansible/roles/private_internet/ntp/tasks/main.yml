@@ -4,7 +4,7 @@
     name: [chrony, ca-certificates]
     state: present
     update_cache: "{{ internet_enabled | bool }}"
-    cache_valid_time: 3600
+    cache_valid_time: "{{ 3600 if internet_enabled | bool else omit }}"
 
 - name: Deploy chrony config
   ansible.builtin.template:

@@ -4,7 +4,7 @@
     name: [kiwix-tools, aria2, curl, ca-certificates]
     state: present
     update_cache: "{{ internet_enabled | bool }}"
-    cache_valid_time: 3600
+    cache_valid_time: "{{ 3600 if internet_enabled | bool else omit }}"
 
 - name: Create kiwix user
   ansible.builtin.user:

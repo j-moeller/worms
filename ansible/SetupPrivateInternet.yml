@@ -29,6 +29,16 @@
   roles:
     - apt_client
 
+- hosts: apt_cache_hosts
+  any_errors_fatal: true
+  become: true
+  tasks:
+    - name: Fill the cache while the internet is open
+      ansible.builtin.include_role:
+        name: apt_cache
+        tasks_from: seed
+      when: internet_enabled | bool
+
 - hosts: devpi_hosts
   any_errors_fatal: true
   become: true

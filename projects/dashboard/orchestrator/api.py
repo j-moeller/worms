@@ -117,24 +117,25 @@ def devbox_reconfigure(request: HttpRequest, team_uuid):
     de-duplication); the job itself carries the whole competition's teams,
     because the gateway's authorized_keys is rewritten wholesale.
 
-    Does not bump the version or touch tokens. Coalesced: if a reconfigure is
-    already queued or running, no second one is enqueued."""
+    Does not bump the version or touch tokens. A job carries the keys as they
+    were when it was created, so a new one is skipped only if a queued job already
+    carries exactly these keys: any other job would leave this change out. The
+    agent skips a job when a newer one is queued, so a burst of changes does not
+    run once per key."""
     team = Team.objects.filter(uuid=team_uuid).first()
     if team is None:
         return JsonResponse({"error": "no such team"}, status=404)
 
     with transaction.atomic():
         Team.objects.select_for_update().get(pk=team.pk)
-        pending = HostJob.objects.filter(
-            kind=HostJob.Kind.DEVBOX_RECONFIGURE,
-            state__in=[HostJob.State.QUEUED, HostJob.State.RUNNING],
-        ).first()
-        if pending is not None:
-            return JsonResponse({"job": str(pending.uuid), "reconfigure_enqueued": False, "detail": "a reconfigure is already queued"})
         teams = provisioned_team_specs(team.competition)
         if not teams:
             # No devbox provisioned yet: keys will be installed at provisioning.
             return JsonResponse({"job": None, "reconfigure_enqueued": False, "detail": "no devbox provisioned yet"})
+        queued = HostJob.objects.filter(kind=HostJob.Kind.DEVBOX_RECONFIGURE, state=HostJob.State.QUEUED)
+        pending = next((job for job in queued if job.params.get("teams") == teams), None)
+        if pending is not None:
+            return JsonResponse({"job": str(pending.uuid), "reconfigure_enqueued": False, "detail": "a reconfigure is already queued"})
         job = HostJob.objects.create(
             kind=HostJob.Kind.DEVBOX_RECONFIGURE,
             params={"team_uuid": str(team.uuid), "teams": teams},

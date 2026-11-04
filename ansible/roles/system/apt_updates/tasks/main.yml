@@ -14,6 +14,10 @@
     - apt-daily-upgrade.timer
     - apt-daily.service
     - apt-daily-upgrade.service
+    # Hourly until it succeeds once: downloads the changelog of every package,
+    # on all VMs at the same moment, and keeps retrying with the internet denied.
+    - apt-listchanges.timer
+    - apt-listchanges.service
 
 - name: Remove unattended-upgrades
   ansible.builtin.apt:

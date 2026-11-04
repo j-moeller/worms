@@ -31,7 +31,7 @@ Names used below (substitute your deployment's real values):
 
 | Placeholder | What it is | Where to find it |
 |---|---|---|
-| `DASHBOARD` | the dashboard URL | `https://dashboard.worms.internal` (or the published WAN name in `group_vars/dashboard.yml`) |
+| `DASHBOARD` | the dashboard URL | `https://worms-dev.mlsec.tu-berlin.de` (dev) or `https://worms.mlsec.tu-berlin.de` (live): `group_vars/dashboard.yml` |
 | `NODE` | the Proxmox node, SSH as root | your `WORMS_SSH` |
 | `ORCH` | the orchestrator VM | `10.3.0.19` by default (`docs/rounds.md`) |
 | `GATEWAY_WAN` | the devbox SSH gateway's public address:port | host DNAT `:2222` (`docs/devbox.md`); the dashboard dev view prints the full `ssh -J …` command |

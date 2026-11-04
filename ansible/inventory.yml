@@ -15,11 +15,12 @@ all:
   children:
 
     # The Proxmox node itself. How Ansible reaches it (local on the node, SSH
-    # from a laptop) is in inventory.generated.yml. See SetupHostNetwork.yml;
-    # set host_publish_dashboard: true here to expose the dashboard on <WAN>:443.
+    # from a laptop) is in inventory.generated.yml. See SetupHostNetwork.yml.
+    # host_publish_dashboard: <WAN>:443 reaches the dashboard's :443.
     proxmox_host:
       hosts:
         proxmox.local:
+          host_publish_dashboard: true
 
     # ---- VM groups (filled by inventory.generated.yml) ----------------------
     database:
@@ -46,6 +47,13 @@ all:
     ssh_gateway:
 
     # ---- Role groups --------------------------------------------------------
+    untrusted:
+      children:
+        sandbox:
+        sandbox_gw:
+        devbox:
+        devbox_gw:
+
     database_hosts:
       children:
         database:

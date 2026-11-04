@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import subprocess
 import sys
 
 import pytest
@@ -357,7 +358,9 @@ def test_deploy_rejects_tampered_artifact():
 def test_teardown():
     ex = FakeExecutor()
     assert handlers.teardown(ex, CFG, {})["destroyed"] is True
-    assert any(c[:2] == ("tofu", "sandbox") and "destroy" in c for c in ex.calls)
+    destroy = next(c for c in ex.calls if c[:2] == ("tofu", "sandbox") and "destroy" in c)
+    # In parallel, VMs fight over the storage lock and leave volumes that block later VMs.
+    assert "-parallelism=1" in destroy
 
 
 def test_devbox_gateway_permitopen_is_only_the_entry_vm():
@@ -470,6 +473,37 @@ def test_loop_claims_each_job_once(agent_db):
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM host_jobs WHERE state = 'done'")
         assert cur.fetchone()[0] == 2
+
+
+def test_a_devbox_rebuild_gives_opentofu_addresses_it_accepts(tmp_path):
+    """No reset could ever work: the handler escaped the quotes for a shell, no
+    shell runs it, and OpenTofu rejected the address. Found by the live run."""
+    require("tofu")
+    (tmp_path / "main.tf").write_text("")
+
+    def refused(*args):
+        proc = subprocess.run(["tofu", f"-chdir={tmp_path}", "plan", "-input=false", *args], capture_output=True, text=True)
+        return "Invalid force-replace address" in proc.stdout + proc.stderr
+
+    assert refused('-replace=module.devbox_vm[\\"devbox-t4-a\\"].proxmox_virtual_environment_vm.vm')  # the old form
+    replaces = handlers._devbox_replace_args("t4")
+    assert len(replaces) == 3 and not refused(*replaces)
+    assert [r.split('"')[1] for r in replaces] == ["devbox-t4-a", "devbox-t4-b", "devbox-t4-c"]
+
+
+def test_a_reconfigure_with_a_newer_one_behind_it_is_skipped(agent_db):
+    """Each carries every team's keys, so a burst of key changes runs once, with
+    the newest keys."""
+    agent, ex, conn = agent_db
+    params = {"team_uuid": "6a1f2c3d-0000-4000-8000-000000000001", "teams": []}
+    _queue(conn, "devbox_reconfigure", params)
+    _queue(conn, "devbox_reconfigure", params)
+    assert agent.tick() and agent.tick()
+    with conn.cursor() as cur:
+        cur.execute("SELECT state, result FROM host_jobs ORDER BY id")
+        first, second = cur.fetchall()
+    assert first == ("done", {"superseded": True})
+    assert second[0] != "queued" and second[1] != {"superseded": True}
 
 
 def test_loop_is_safe_against_a_second_worker(agent_db, database):

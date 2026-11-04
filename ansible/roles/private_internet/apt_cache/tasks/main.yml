@@ -1,12 +1,39 @@
 ---
 # Runs before apt_client points this VM's own apt at the cache
 # (SetupPrivateInternet.yml).
+
+# The package starts the service as soon as it is configured, and the service
+# exits if it cannot write its cache dir, which fails the install. The data disk
+# is mounted there root-owned, so the dir has to change owner before the install,
+# and the user has to exist before that (the package accepts an existing one).
+- name: Create the apt-cacher-ng group
+  ansible.builtin.group:
+    name: apt-cacher-ng
+    system: true
+
+- name: Create the apt-cacher-ng user
+  ansible.builtin.user:
+    name: apt-cacher-ng
+    group: apt-cacher-ng
+    system: true
+    home: "{{ apt_cache_cache_dir }}"
+    create_home: false
+    shell: /usr/sbin/nologin
+
+- name: Ensure apt-cacher-ng owns its cache dir (data disk is mounted root-owned)
+  ansible.builtin.file:
+    path: "{{ apt_cache_cache_dir }}"
+    state: directory
+    owner: apt-cacher-ng
+    group: apt-cacher-ng
+  notify: Restart apt-cacher-ng
+
 - name: Install apt-cacher-ng
   ansible.builtin.apt:
     name: [apt-cacher-ng, ca-certificates]
     state: present
     update_cache: "{{ internet_enabled | bool }}"
-    cache_valid_time: 3600
+    cache_valid_time: "{{ 3600 if internet_enabled | bool else omit }}"
 
 - name: Configure apt-cacher-ng port
   ansible.builtin.lineinfile:
@@ -27,14 +54,6 @@
     path: /etc/apt-cacher-ng/acng.conf
     regexp: '^Offlinemode:'
     line: "Offlinemode: {{ 0 if (internet_enabled | bool) else 1 }}"
-  notify: Restart apt-cacher-ng
-
-- name: Ensure apt-cacher-ng owns its cache dir (data disk is mounted root-owned)
-  ansible.builtin.file:
-    path: "{{ apt_cache_cache_dir }}"
-    state: directory
-    owner: apt-cacher-ng
-    group: apt-cacher-ng
   notify: Restart apt-cacher-ng
 
 - name: Create the apt-cacher-ng systemd drop-in directory

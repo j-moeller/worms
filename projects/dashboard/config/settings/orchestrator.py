@@ -31,10 +31,10 @@ PROXMOX = {
     "user": env("PROXMOX_USER", required=not DEBUG),
     "token_name": env("PROXMOX_TOKEN_NAME", required=not DEBUG),
     "token_value": env("PROXMOX_TOKEN_VALUE", required=not DEBUG),
-    # Verify the Proxmox API certificate against the system trust store (the
-    # internal CA is installed on the VM). Set PROXMOX_VERIFY_SSL=0 only for
-    # local experimentation.
-    "verify_ssl": env("PROXMOX_VERIFY_SSL", "1") == "1",
+    # Verify the Proxmox API certificate. PROXMOX_CA_BUNDLE is a copy of PVE's
+    # CA certificate (group_vars/orchestrator.yml) and takes precedence. Set
+    # PROXMOX_VERIFY_SSL=0 only for local experimentation.
+    "verify_ssl": env("PROXMOX_CA_BUNDLE") or env("PROXMOX_VERIFY_SSL", "1") == "1",
 }
 
 # Separate, READ-ONLY Proxmox API token used only to collect the topology (VMs,
@@ -42,10 +42,6 @@ PROXMOX = {
 # collect_topology`). It needs the PVEAuditor role on `/` and nothing else, so
 # a leak exposes configuration but cannot change it. Kept apart from the token
 # above (which needs VM.PowerMgmt) on purpose.
-#
-# PROXMOX_CA_BUNDLE optionally points at the CA that signed the Proxmox API
-# certificate (e.g. a copy of /etc/pve/pve-root-ca.pem); it takes precedence
-# over PROXMOX_VERIFY_SSL.
 PROXMOX_READONLY = {
     "host": PROXMOX["host"],
     "port": PROXMOX["port"],
@@ -53,7 +49,7 @@ PROXMOX_READONLY = {
     "user": env("PROXMOX_READONLY_USER", ""),
     "token_name": env("PROXMOX_READONLY_TOKEN_NAME", ""),
     "token_value": env("PROXMOX_READONLY_TOKEN_VALUE", ""),
-    "verify_ssl": env("PROXMOX_CA_BUNDLE") or PROXMOX["verify_ssl"],
+    "verify_ssl": PROXMOX["verify_ssl"],
     "timeout": int(env("PROXMOX_TIMEOUT", "10")),
 }
 

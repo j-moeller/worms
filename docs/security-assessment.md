@@ -78,11 +78,11 @@ path was read end to end; nothing was run against a live Proxmox host.
   to one shared database with no retention. Mitigated by the 100 GB disk; a
   retention/partition policy for `network_flows`/`network_events` remains
   advisable (see `docs/monitoring.md`, Limitations).
-- **S2 (High, latent):** devpi (empty root password, writable) and the Docker
-  registry (no auth) would accept anonymous writes that persist across rounds —
-  a poisoning and a cross-environment channel. **Not yet fixed**; these services
-  are currently disabled in `opentofu/stacks/private_internet` (only Wikipedia
-  is deployed). Lock them to read-only/authenticated before re-enabling.
+- **S2 (fixed):** devpi (empty root password, writable) and the Docker registry (no
+  auth) accepted anonymous writes that persist across rounds: a poisoning and a
+  cross-environment channel. devpi now runs with `--restrict-modify root`, and root's
+  password is generated and stays in the vault. The registry is read-only whenever
+  internet access is denied, so it is writable only while the caches are filled.
 - **S3 (fixed):** the shared `team` gateway account could rewrite its own
   `authorized_keys`. Now root-owned.
 - **S4 (fixed):** port isolation was commented out everywhere and the watchdog
@@ -105,9 +105,24 @@ path was read end to end; nothing was run against a live Proxmox host.
   disk, so filling it cannot take down the syslog VM's system.
 - **S12 (not fixed):** the sandbox groups apply per-VM rather than per-NIC (the
   devbox module already scopes per-NIC); rules are source/dest-scoped regardless.
-- **S13 (partly moot):** apt-cacher-ng report page, all-ports-open, cve-search
-  web UI — only relevant once those PI services are re-enabled (see S2).
+- **S13 (not fixed):** the apt-cacher-ng report page and the cve-search web UI answer
+  without a login on the services bridge. These PI services are enabled.
 - **S14 (moot):** Wazuh, and with it the install bundle, was removed.
+- **S15 (fixed, found live):** replacing a VM could leave it running with its
+  firewall off. Proxmox deletes a VM's firewall settings with the VM, and if the
+  replacement got the same ID, OpenTofu saw nothing to write back and no drift
+  afterwards. The trusted SSH gateway ran this way for over 2 hours in the
+  end-to-end run. The watchdog caught a devbox VM in this state, but it does not
+  watch the gateway or the other infrastructure VMs. Now `replace_triggered_by`
+  rewrites the options of every VM type. **Still open:** nothing checks that those
+  VMs have a firewall (`docs/e2e-run-2026-11-03/protocol.md`, F26).
+- **S16 (fixed, found live):** a team login could run commands on the SSH gateway,
+  which reaches every team's fabric address. `restrict` does not stop commands. Now
+  `command=` on each key and a `nologin` shell (same protocol, F19).
+- **S17 (open, found live):** an untrusted VM runs without its firewall while it is
+  being built, for up to 28 minutes in that run, and outside the pool the watchdog
+  does not look at it. The host's own rules still apply. Creating VMs stopped and
+  starting them after their firewall would close this (same protocol, F4).
 
 ### Threat model 2 — dashboard user
 

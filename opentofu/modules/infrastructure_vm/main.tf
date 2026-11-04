@@ -14,6 +14,12 @@ resource "proxmox_virtual_environment_firewall_options" "infrastructure" {
   output_policy = "DROP"
   ipfilter      = true
   macfilter     = true
+
+  # Proxmox deletes a VM's firewall settings with the VM. Without this, a new VM
+  # that gets the same ID keeps its firewall off, and OpenTofu sees nothing to do.
+  lifecycle {
+    replace_triggered_by = [proxmox_virtual_environment_vm.infrastructure.id]
+  }
 }
 
 resource "proxmox_virtual_environment_firewall_ipset" "ipfilter" {

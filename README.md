@@ -1,14 +1,14 @@
 # Quick start
 
 From your laptop (the controller: it runs OpenTofu and Ansible), with root SSH
-access to the Proxmox node and the three Proxmox API tokens created
-(`docs/accounts.md` §1.1 has the `pveum` commands):
+access to the Proxmox node (`docs/accounts.md` §1.1 explains the three Proxmox API
+tokens):
 
 ```
 echo 'WORMS_SSH=root@<node>' >> ~/.worms/config
-worms secrets set proxmox-token        # root@pam!worms=<secret>   (OpenTofu)
-worms secrets set orchestrator-token   # orchestrator@pam!orchestrator-prov
-worms secrets set topology-token       # topology@pve!readonly (optional)
+worms secrets issue proxmox-token      # OpenTofu
+worms secrets issue orchestrator-token # the orchestrator: sandbox VM power
+worms secrets issue topology-token     # the topology view and `worms status`
 make                                   # = worms build: idempotent, end to end
 ```
 
@@ -39,8 +39,9 @@ controller, encrypted with ansible-vault (key `ansible/.vault_pass`, both
 git-ignored; `src/worms_cli/secrets.py`). `worms secrets` shows what is set
 (never a value).
 
-- **You enter** only the **Proxmox API tokens**, once (`worms secrets set
-  <name>`, prompted without echo): they must equal what Proxmox issued.
+- **Issued** from their definitions in `src/worms_cli/tokens.py`: the **Proxmox API
+  tokens**. `worms secrets issue <name>` creates or rotates one and stores it, and
+  `worms secrets check` verifies them against Proxmox.
 - **Generated** the first time they are missing, never rotated: every
   PostgreSQL role password, the Django `SECRET_KEY`s, the internal CA
   passphrase, the orchestrator API token and the **WORMS SSH key**, the one key
@@ -171,7 +172,8 @@ Allowed flows (everything else is dropped twice: by the per-VM Proxmox firewall,
 input and output policy DROP with `ipfilter`, and for routed traffic by the
 host nftables FORWARD chain):
 
-- internet → dashboard:443 (host DNAT, `host_publish_dashboard: true` on `proxmox_host`)
+- internet → dashboard:443 (host DNAT, `host_publish_dashboard: true` on `proxmox_host`;
+  HTTPS only, under the name in `group_vars/dashboard.yml`)
 - dashboard → database:5432, orchestrator:443
 - scoring/logging → database:5432 (INSERT into one table each)
 - monitor → database:5432 (INSERT into network_flows / network_events)

@@ -7,7 +7,10 @@ it also shows live status from the one source of truth -- the database VM and
 the Proxmox API. Run it on your laptop with WORMS_SSH=root@<node> (OpenTofu and
 Ansible run there, with the secrets of the vault), or on the Proxmox node.
 
-    worms secrets [set <name>]        # the vault: enter the Proxmox tokens once
+    worms secrets                     # the vault: what is set (never a value)
+    worms secrets issue <name>        # create or rotate a Proxmox token, store it
+    worms secrets check               # do the stored tokens work, with exactly their rights?
+    worms secrets set <name>          # store a secret by hand
     worms node trust                  # once: the WORMS key on VMs that predate it
     worms build                       # full idempotent end-to-end setup (= make)
     worms build <component>           # one step (see `worms build --list`)
@@ -343,13 +346,33 @@ def cmd_leaderboard(config, args) -> int:
 
 def cmd_secrets(config, args) -> int:
     """`worms secrets`: what the vault holds (never a value); `worms secrets
-    set <name>`: enter one, prompted without echo or read from stdin."""
+    set <name>`: enter one, prompted without echo or read from stdin; `worms
+    secrets issue <name>`: create or rotate a Proxmox token and store it; `worms
+    secrets check`: ask Proxmox whether the stored tokens are right."""
     import getpass
 
     from worms_cli.secrets import EXTERNAL, Vault, VaultError
+    from worms_cli.session import SessionError, for_config
+    from worms_cli.tokens import TOKENS, TokenError, check, issue
 
     vault = Vault(config.repo_root)
     try:
+        if args.secrets_action == "issue":
+            spec = TOKENS[args.name]
+            vault.set(args.name, issue(spec, for_config(config).node_run))
+            print(f"{args.name}: issued {spec.full_id} ({spec.role} on {spec.path}), stored in {vault.file}")
+            print(output.color("Deliver it to its users with `worms build provision`.", "dim"))
+            return 0
+        if args.secrets_action == "check":
+            vault.ensure()
+            permissions = for_config(config).token_permissions()
+            rows, bad = [], 0
+            for name, spec in TOKENS.items():
+                state = check(spec, vault.get(name), lambda secret, path, s=spec: permissions(s, secret, path))
+                bad += not state.startswith("ok")
+                rows.append([name, spec.full_id, spec.purpose, output.status_cell("ok" if state.startswith("ok") else "warn", state)])
+            print(output.table(rows, headers=["secret", "token", "used by", "state"]))
+            return 1 if bad else 0
         if args.secrets_action == "set":
             if sys.stdin.isatty():
                 if args.name == "ssh-key":
@@ -364,7 +387,7 @@ def cmd_secrets(config, args) -> int:
         vault.ensure()
         rows = [[name, what, output.status_cell("ok" if state == "set" else ("warn" if "MISSING" in state else "stopped"),
                                                 state)] for name, what, state in vault.status()]  # fmt: skip
-    except (VaultError, KeyError) as exc:
+    except (VaultError, KeyError, TokenError, SessionError) as exc:
         output.error(str(exc))
         return 1
     print(output.table(rows, headers=["secret", "what", "state"]))
@@ -543,8 +566,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_staff.add_argument("--first-name", default="")
     p_staff.add_argument("--last-name", default="")
 
-    p_secrets = sub.add_parser("secrets", help="the vault: what is set (never values); set the Proxmox tokens")
+    p_secrets = sub.add_parser("secrets", help="the vault: what is set (never values); issue and check the Proxmox tokens")
     secrets_sub = p_secrets.add_subparsers(dest="secrets_action")
+    p_issue = secrets_sub.add_parser("issue", help="create or rotate a Proxmox token and store it")
+    p_issue.add_argument("name", choices=["proxmox-token", "orchestrator-token", "topology-token"])
+    secrets_sub.add_parser("check", help="ask Proxmox whether the stored tokens work, with exactly their rights")
     p_set = secrets_sub.add_parser("set", help="enter a secret (prompted, or from stdin)")
     p_set.add_argument("name", choices=["proxmox-token", "orchestrator-token", "topology-token", "ssh-key"])
 

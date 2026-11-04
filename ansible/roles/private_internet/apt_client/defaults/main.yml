@@ -6,6 +6,9 @@ apt_client_cache_port: 3142
 # mirrors (only while internet access is allowed) when no apt_cache VM exists
 # (it is commented out in opentofu/stacks/private_internet/main.tf).
 apt_client_use_cache: "{{ groups['apt_cache'] | default([]) | length > 0 }}"
+# Refresh the index from the cache after changing the sources even with the
+# internet closed: for VMs that have no index yet (group_vars/untrusted.yml).
+apt_client_refresh_offline: false
 apt_client_mirror: "{{ ('http://' ~ apt_client_cache_host ~ ':' ~ apt_client_cache_port ~ '/') if apt_client_use_cache | bool else 'http://' }}deb.debian.org"
 # Debian release layout.
 apt_client_suites: "trixie trixie-updates trixie-backports"

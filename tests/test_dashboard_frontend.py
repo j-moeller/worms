@@ -47,10 +47,7 @@ def test_referenced_static_files_exist():
     refs = set()
     for path in _templates():
         refs.update(STATIC_REF.findall(path.read_text()))
-    # The theme stylesheets are referenced dynamically (per request.theme).
-    for key in ("lab", "lab-dark"):
-        refs.add(f"dashboard/css/themes/{key}.css")
-    assert "dashboard/css/base.css" in refs and "dashboard/js/enhance.js" in refs
+    assert {"dashboard/css/base.css", "dashboard/css/theme.css", "dashboard/js/enhance.js"} <= refs
     for ref in refs:
         assert (STATIC / ref).exists(), f"missing static file: {ref}"
 
@@ -58,7 +55,6 @@ def test_referenced_static_files_exist():
 def test_state_changing_endpoints_are_post_only(site):  # noqa: F811
     # A GET (a link, a crawler, an <img>) must not log out or change settings.
     assert site.get("/logout/", **proxied(HOST)).status_code == 405
-    assert site.get("/theme/", **proxied(HOST)).status_code == 405
 
 
 def _csrf(client, path):
@@ -66,21 +62,19 @@ def _csrf(client, path):
     return re.search(rb'name="csrfmiddlewaretoken" value="([^"]+)"', page.content).group(1).decode()
 
 
-def test_theme_is_set_by_a_form_post_cookie(site):  # noqa: F811
-    token = _csrf(site, "/login/")
-    origin = {"HTTP_ORIGIN": f"https://{HOST}"}
-    response = site.post(
-        "/theme/", {"csrfmiddlewaretoken": token, "theme": "lab-dark", "next": "/login/"},
-        **proxied(HOST), **origin,
-    )  # fmt: skip
-    assert response.status_code == 302
-    assert response.cookies["worms_theme"].value == "lab-dark"
-    # An unknown design is ignored (no cookie set).
-    bad = site.post(
-        "/theme/", {"csrfmiddlewaretoken": token, "theme": "nope", "next": "/login/"},
-        **proxied(HOST), **origin,
-    )  # fmt: skip
-    assert "worms_theme" not in bad.cookies
+def test_the_dark_theme_is_the_only_one(site):  # noqa: F811
+    html = site.get("/login/", **proxied(HOST)).content.decode()
+    assert "dashboard/css/theme.css" in html
+    assert "theme-picker" not in html and "data-theme" not in html
+    assert site.get("/theme/", **proxied(HOST)).status_code == 404
+    assert not (STATIC / "dashboard" / "css" / "themes").exists()
+
+
+def test_nothing_follows_the_visitors_os_colour_scheme():
+    """Dark for everyone: a light-mode OS must not change any colour."""
+    for path in (STATIC / "dashboard").rglob("*"):
+        if path.suffix in (".css", ".js"):
+            assert "prefers-color-scheme" not in path.read_text(), path.name
 
 
 def _zip_bytes():

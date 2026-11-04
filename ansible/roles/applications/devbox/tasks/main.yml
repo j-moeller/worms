@@ -2,13 +2,31 @@
 # Configure one devbox VM. The internal CA is installed separately
 # (ca_distribute, SetupDevbox.yml). Idempotent and safe to re-run on a rebuild.
 
+- name: Name the VM after itself
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+
+# break-system-packages: without it Debian's pip refuses every plain `pip install`
+# before contacting the index. The VM is the team's own and a reset rebuilds it, so
+# there is no system to protect from them.
+- name: Point pip at the private internet
+  ansible.builtin.copy:
+    dest: /etc/pip.conf
+    content: |
+      [global]
+      index-url = {{ devbox_pip_index_url }}
+      trusted-host = {{ devbox_pip_index_host }}
+      break-system-packages = true
+    owner: root
+    mode: "0644"
+
 - name: Install expected packages
   ansible.builtin.apt:
     name: "{{ devbox_packages }}"
     state: present
     update_cache: true
     cache_valid_time: 3600
-  failed_when: false # best-effort: the VM may be offline internet-wise
+    install_recommends: false # 83 packages instead of 3, compilers and all
 
 - name: Ensure the login user's .ssh directory
   ansible.builtin.file:

@@ -2,12 +2,12 @@
  * WORMS dashboard — structure and components.
  *
  * All colour, texture, typography and shape come from CSS custom properties
- * (the "token contract" below), which the three theme stylesheets set. This
- * file never hard-codes a colour, so a theme is only a set of tokens plus a
- * few optional flourishes. Nothing here depends on JavaScript.
+ * (the "token contract" below), which theme.css sets. This file never hard-codes
+ * a colour, so the theme is only a set of tokens plus a few optional flourishes.
+ * Nothing here depends on JavaScript.
  */
 
-/* ---- token contract (defaults; themes override on :root) ---------------- */
+/* ---- token contract (defaults; theme.css overrides on :root) ------------ */
 :root {
     --maxw: 1180px;
     --gap: 22px;
@@ -39,8 +39,8 @@
     --bad: #ef5a5a;
     --hot: #ff7a45;
     --focus: var(--accent);
-    /* The Dev environment recolours the whole site to this accent (themes
-       override it). Live keeps the theme's own --accent. */
+    /* The Dev environment recolours the whole site to this accent (theme.css
+       overrides it). Live keeps the theme's own --accent. */
     --accent-dev: #15803d;
     --accent-ink-dev: #ffffff;
 
@@ -409,16 +409,10 @@ textarea.input { resize: vertical; min-height: 64px; }
 .pager { display: flex; align-items: center; justify-content: center; gap: 16px; }
 .pager__at { color: var(--muted); font-size: .82rem; font-family: var(--font-mono); }
 
-/* ---- footer / theme picker --------------------------------------------- */
+/* ---- footer ------------------------------------------------------------- */
 .site-footer { border-top: var(--border-w) solid var(--border); background: var(--header-bg); }
 .site-footer { max-width: none; }
-.site-footer__line { max-width: var(--maxw); margin: 0 auto; padding: 16px 20px 2px; color: var(--faint); font-size: .8rem; }
-.theme-picker { max-width: var(--maxw); margin: 0 auto; padding: 4px 20px 18px; display: flex; align-items: center; gap: 12px; }
-.theme-picker__label { color: var(--faint); font-size: .76rem; text-transform: uppercase; letter-spacing: .1em; }
-.theme-picker__options { display: inline-flex; gap: 4px; border: var(--border-w) solid var(--border); border-radius: 100px; padding: 3px; }
-.theme-picker__option { border: none; background: transparent; color: var(--muted); font: inherit; font-size: .8rem; font-weight: 600; padding: 5px 13px; border-radius: 100px; cursor: pointer; }
-.theme-picker__option:hover { color: var(--text); }
-.theme-picker__option[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.site-footer__line { max-width: var(--maxw); margin: 0 auto; padding: 16px 20px; color: var(--faint); font-size: .8rem; }
 
 /* ---- auth / centred panels --------------------------------------------- */
 .auth { max-width: 460px; margin: 6vh auto 0; }

@@ -5,6 +5,37 @@
 # verification (no bundled CA, no --insecure). The sandbox VMs are assumed
 # compromised; trusting the internal CA only lets them *verify* the services,
 # it grants no access the firewall does not already allow.
+
+# A VM that was just built refuses SSH until it has booted, and gathering facts
+# would then fail before the wait for cloud-init below can run.
+- name: Wait for the sandbox VMs and their gateway to boot
+  hosts: sandbox_gw:sandbox
+  any_errors_fatal: true
+  gather_facts: false
+  tasks:
+    - name: Wait for SSH
+      ansible.builtin.wait_for_connection:
+        timeout: 600
+
+# The gateway first: a sandbox VM reaches every service through it.
+- name: Configure the sandbox gateway
+  hosts: sandbox_gw
+  any_errors_fatal: true
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Wait for cloud-init completion
+      ansible.builtin.command:
+        cmd: cloud-init status --wait
+      register: cloud_init_status
+      changed_when: false
+      failed_when: cloud_init_status.rc not in [0, 2]
+
+  roles:
+    - role: apt_client
+    - role: untrusted_gateway
+
 - name: Configure the sandbox VMs
   hosts: sandbox
   any_errors_fatal: true
@@ -21,3 +52,4 @@
 
   roles:
     - role: ca_distribute
+    - role: apt_client

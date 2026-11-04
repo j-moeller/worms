@@ -19,6 +19,12 @@
 # (the output then contains passwords: do not paste it anywhere).
 hide_secrets: true
 
+# The public name of each node: teams reach the dashboard (HTTPS) and the devbox
+# SSH gateway under it.
+dashboard_public_names:
+  worms-dev: worms-dev.mlsec.tu-berlin.de
+  worms-pve: worms.mlsec.tu-berlin.de
+
 # --- PostgreSQL -------------------------------------------------------------
 postgres_db: mydb
 postgres_host: "{{ infrastructure_ips.database }}"

@@ -59,12 +59,12 @@ class Pipeline:
         # and drop them again whenever tofu may have rebuilt VMs.
         self._facts_fresh = False
 
-    def _ansible(self, playbook: str, *args: str, vault: bool = True):
+    def _ansible(self, playbook: str, *args: str, vault: bool = True, user_args: bool = True):
         if not self._facts_fresh:
             self.runner.sh("rm -rf .facts", cwd="ansible", quiet=True)
             self._facts_fresh = True
         extra = list(args)
-        if self.ansible_args:
+        if self.ansible_args and user_args:
             extra.append(self.ansible_args)
         self.runner.ansible(playbook, *extra, vault=vault)
 
@@ -99,7 +99,10 @@ class Pipeline:
 
     def _destroy(self, stack: str):
         self._facts_fresh = False
-        self.runner.tofu(stack, "destroy", "-auto-approve")
+        # One at a time, like _apply: VMs destroyed in parallel fight over the storage
+        # lock, and Proxmox gives up on their disks with only a warning. The volume
+        # left behind then blocks whichever new VM gets that ID.
+        self.runner.tofu(stack, "destroy", "-auto-approve", "-parallelism=1")
 
     def platform(self):
         self.firewall_migrate()
@@ -140,11 +143,14 @@ class Pipeline:
         self._ansible("SetupDNS.yml")
         self._ansible("SetupPrivateInternet.yml")
 
+    # Without the user's Ansible arguments: Internet.yml runs on the node, so a
+    # `--limit <vm>` would silently skip it, and the window would neither open
+    # nor close.
     def internet_allow(self):
-        self._ansible("Internet.yml", "-e", "internet=allowed")
+        self._ansible("Internet.yml", "-e", "internet=allowed", user_args=False)
 
     def internet_deny(self):
-        self._ansible("Internet.yml", "-e", "internet=denied")
+        self._ansible("Internet.yml", "-e", "internet=denied", user_args=False)
 
     def online(self, step):
         """Run `step` with internet access allowed, then deny it again whatever

@@ -1,0 +1,31 @@
+---
+# Fetch what untrusted VMs install, through the cache, while the internet is open.
+# With the internet closed the cache serves only what it already holds, and those
+# VMs can get packages nowhere else.
+- name: Create a scratch directory
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: apt-cache-seed.
+  register: apt_cache_seed_dir
+
+- name: Create the download directory and an empty package status
+  ansible.builtin.shell: |
+    mkdir "{{ apt_cache_seed_dir.path }}/archives" "{{ apt_cache_seed_dir.path }}/archives/partial"
+    : > "{{ apt_cache_seed_dir.path }}/status"
+  changed_when: false
+
+# The empty status makes apt treat nothing as installed, so it fetches every
+# dependency, not only those this VM happens to lack.
+- name: Fetch the packages and everything they depend on
+  ansible.builtin.command:
+    argv: >-
+      {{ ['apt-get', 'install', '--download-only', '--yes', '--no-install-recommends',
+          '-o', 'Dir::State::status=' ~ apt_cache_seed_dir.path ~ '/status',
+          '-o', 'Dir::Cache::archives=' ~ apt_cache_seed_dir.path ~ '/archives/']
+         + apt_cache_seed_packages }}
+  changed_when: false
+
+- name: Remove the scratch directory
+  ansible.builtin.file:
+    path: "{{ apt_cache_seed_dir.path }}"
+    state: absent

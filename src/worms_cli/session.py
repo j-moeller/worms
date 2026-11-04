@@ -174,6 +174,10 @@ class Session:
         host = ssh_host(self.config.ssh) if self.laptop else "127.0.0.1"
         return f"https://{host}:8006/"
 
+    def stray_tofu_credentials(self) -> list[Path]:
+        root = Path(self.config.repo_root) / "opentofu"
+        return sorted(p for p in root.rglob("*.auto.tfvars") if ".terraform" not in p.parts)
+
     def tofu_env(self) -> dict:
         """OpenTofu's inputs from the vault, in the process environment only.
         On the node without a vault (the round agent) its environment file
@@ -181,6 +185,10 @@ class Session:
         env = self.env()
         if not self.has_vault():
             return env
+        stray = self.stray_tofu_credentials()
+        if stray:
+            # OpenTofu prefers *.auto.tfvars to TF_VAR_*: the vault would silently lose.
+            raise SessionError(f"{stray[0]} overrides the vault's token for OpenTofu: remove it ({len(stray)} file(s))")
         # The provider logs in to root@<node> with the agent's keys only; say
         # so here rather than let it fail with "unable to authenticate".
         self.check_node()
@@ -267,6 +275,41 @@ class Session:
                 raise SessionError(f"cannot read the node's PVE CA: {proc.stderr.strip()[:120]}")
             path.write_text(proc.stdout)
         return str(path)
+
+    def node_run(self, argv: list) -> tuple:
+        """A command on the Proxmox node: (returncode, stdout, stderr), all captured."""
+        if self.laptop:
+            self.check_node()
+            argv = self.ssh_argv(shlex.join(argv))
+        proc = subprocess.run(argv, env=self.env(), capture_output=True, text=True)
+        return proc.returncode, proc.stdout, proc.stderr
+
+    def token_permissions(self):
+        """(secret-free factory) permissions(token, secret, path): GET
+        /access/permissions as that token, TLS verified against PVE's CA."""
+        import ssl
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+
+        from worms_cli.tokens import ApiError
+
+        port = self.tunnel("127.0.0.1", 8006) if self.laptop else 8006
+        context = ssl.create_default_context(cafile=self.pve_ca())
+
+        def permissions(spec, secret: str, path: str) -> dict:
+            query = urllib.parse.urlencode({"path": path})
+            request = urllib.request.Request(
+                f"https://127.0.0.1:{port}/api2/json/access/permissions?{query}",
+                headers={"Authorization": f"PVEAPIToken={spec.full_id}={secret}"},
+            )
+            try:
+                with urllib.request.urlopen(request, context=context, timeout=15) as response:  # noqa: S310
+                    return json.load(response).get("data") or {}
+            except urllib.error.HTTPError as exc:
+                raise ApiError(exc.code) from None
+
+        return permissions
 
     def internet_allowed(self) -> bool:
         if not self.laptop:

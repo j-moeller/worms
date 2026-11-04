@@ -14,7 +14,9 @@ node's own part (the round agent's sandbox and devbox stacks) runs on the node
 alias worms='python3 /path/to/worms/src/manage.py'
 
 worms secrets                     # the vault: what is set (never values)
-worms secrets set proxmox-token   # enter a Proxmox token (prompted; or from stdin)
+worms build provision -- --limit dashboard  # redeploy one VM (about 4 minutes)
+worms secrets issue proxmox-token # create or rotate a Proxmox token and store it
+worms secrets check               # do the stored tokens work, with exactly their rights?
 worms node trust                  # once, for VMs that predate the WORMS key (or without an agent)
 worms status                      # components, internet, competition, rounds
 worms teams                       # teams + members' login status

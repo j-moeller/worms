@@ -107,7 +107,20 @@ class Agent:
 
     # -- running one job ------------------------------------------------------
 
+    def superseded(self, job_id, kind):
+        """A reconfigure job carries every team's keys, so a newer one queued
+        behind it covers everything it would do."""
+        if kind != "devbox_reconfigure":
+            return False
+        with self.conn().cursor() as cur:
+            cur.execute("SELECT 1 FROM host_jobs WHERE kind = %s AND state = 'queued' AND id > %s LIMIT 1", (kind, job_id))
+            return cur.fetchone() is not None
+
     def run_job(self, job_id, uuid, kind, params):
+        if self.superseded(job_id, kind):
+            self.finish(job_id, "done", {"superseded": True})
+            log.info("job %s (%s) skipped: a newer one is queued", uuid, kind)
+            return
         log.info("job %s (%s) starting", uuid, kind)
         stop = threading.Event()
         beat = threading.Thread(target=self._heartbeat_loop, args=(job_id, stop), daemon=True)

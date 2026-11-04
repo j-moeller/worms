@@ -4,7 +4,7 @@
     name: [docker-registry, ca-certificates]
     state: present
     update_cache: "{{ internet_enabled | bool }}"
-    cache_valid_time: 3600
+    cache_valid_time: "{{ 3600 if internet_enabled | bool else omit }}"
 
 - name: Ensure the registry owns its data directory (mounted data disk is root-owned)
   ansible.builtin.file:

@@ -153,7 +153,7 @@ def _reconfigure_devbox(request: HttpRequest, team: Team, changed: str):
                 "next reset or provision; retry or contact an organiser if it persists.",
             )
         return
-    messages.success(request, f"SSH key {changed}. It is being installed on your devbox and the SSH gateway now.")
+    messages.success(request, f"SSH key {changed}. Your devbox and the SSH gateway are being updated now.")
 
 
 @login_required
@@ -175,7 +175,9 @@ def devbox_add_ssh_key(request: HttpRequest, team: Team):
     existing = DevboxSSHKey.objects.filter(key_fingerprint=fingerprint).first()
     if existing is not None:
         if existing.team_id == team.id:
+            # Not a no-op: a failed install tells the user to retry, which lands here.
             messages.info(request, "Your team already has that key.")
+            _reconfigure_devbox(request, team, "pushed again")
         else:
             messages.error(request, "That public key is already registered by another team. Use a different key.")
         return redirect("index")

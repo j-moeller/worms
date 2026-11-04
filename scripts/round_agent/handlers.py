@@ -239,7 +239,9 @@ def release_secrets(ex, cfg, params):
 
 def teardown(ex, cfg, params):
     _clear_current_team(ex, cfg)
-    ex.tofu("sandbox", "destroy", "-auto-approve", "-input=false", timeout=cfg.get("apply_timeout", 5400))
+    # One at a time: VMs destroyed in parallel fight over the storage lock, and a volume
+    # Proxmox gives up on then blocks whichever new VM gets that ID.
+    ex.tofu("sandbox", "destroy", "-auto-approve", "-input=false", "-parallelism=1", timeout=cfg.get("apply_timeout", 5400))
     ex.worms("inventory", timeout=300)
     return {"destroyed": True}
 
@@ -348,6 +350,12 @@ def devbox_provision(ex, cfg, params):
     return {"vms": report, "services_sources": sources}
 
 
+def _devbox_replace_args(slug):
+    """`-replace` for a team's three VMs. No shell runs these, so the quotes must
+    reach OpenTofu as they are: escaped ones are an invalid address."""
+    return [f'-replace=module.devbox_vm["devbox-{slug}-{role}"].proxmox_virtual_environment_vm.vm' for role in ("a", "b", "c")]
+
+
 def devbox_rebuild(ex, cfg, params):
     """Rebuild one team's devbox VMs (fresh disks) and rewrite their tokens,
     without touching other teams. The team's version has already been bumped by
@@ -360,11 +368,7 @@ def devbox_rebuild(ex, cfg, params):
 
     ex.generate_devbox(teams, ex.repo_root / DEVBOX_GENERATED)
     # Replace just this team's three VMs (fresh disks); the rest is a no-op.
-    replaces = " ".join(
-        f'-replace=module.devbox_vm[\\"devbox-{slug}-{role}\\"].proxmox_virtual_environment_vm.vm'
-        for role in ("a", "b", "c")
-    )
-    ex.tofu("devbox", "apply", "-auto-approve", "-input=false", "-parallelism=1", *replaces.split(), timeout=cfg.get("apply_timeout", 5400))
+    ex.tofu("devbox", "apply", "-auto-approve", "-input=false", "-parallelism=1", *_devbox_replace_args(slug), timeout=cfg.get("apply_timeout", 5400))
     ex.worms("inventory", timeout=300)
     _configure_devbox(ex, teams)
 

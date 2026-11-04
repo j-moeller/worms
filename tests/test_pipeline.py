@@ -119,6 +119,23 @@ def test_failed_step_still_closes_the_window(monkeypatch):
         Recorder.fail_on = None
 
 
+def test_a_limit_never_skips_the_internet_window(monkeypatch):
+    """Internet.yml runs on the node, so `--limit <vm>` would silently skip it:
+    the window would not open, and an open one would not close."""
+    seen = {}
+
+    class Args(Recorder):
+        def ansible(self, playbook, *args, **kwargs):
+            seen.setdefault(playbook, []).append(args)
+            return super().ansible(playbook, *args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "Runner", Args)
+    pipeline.Pipeline(config=None, ansible_args="--limit dashboard").provision()
+    assert len(seen["Internet.yml"]) == 2
+    assert not any("--limit dashboard" in args for args in seen["Internet.yml"])
+    assert "--limit dashboard" in seen["SetupDbAndDashboard.yml"][0]
+
+
 def test_facts_are_dropped_whenever_vms_may_have_changed(monkeypatch):
     """Ansible caches facts for a run (ansible.cfg); the cache is emptied
     before the run's first playbook and after every tofu apply or destroy, so
@@ -134,3 +151,18 @@ def test_facts_are_dropped_whenever_vms_may_have_changed(monkeypatch):
             following = next((c for c in calls[i + 1:] if c[0] in ("ansible", "flush facts")), None)
             assert following in (None, ("flush facts",)), (call, following)
     assert calls.count(("flush facts",)) == 2  # the start of the run, after the applies
+
+
+def test_stacks_are_destroyed_one_vm_at_a_time(monkeypatch):
+    """In parallel, Proxmox's storage lock timed out on 8 of 13 VMs, with only a warning. A
+    volume left behind made every later attempt to create a VM with that ID fail."""
+    seen = []
+
+    class Runner(Recorder):
+        def tofu(self, stack, *args, **kwargs):
+            seen.append((stack, args))
+            return 0
+
+    monkeypatch.setattr(pipeline, "Runner", Runner)
+    pipeline.Pipeline(config=None).devbox_destroy()
+    assert seen == [("devbox", ("destroy", "-auto-approve", "-parallelism=1"))]

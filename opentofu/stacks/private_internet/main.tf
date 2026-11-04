@@ -112,7 +112,7 @@ locals {
     cve_search = {
       cpu               = 2
       cpu_type          = "host"
-      ram               = 1024
+      ram               = 4096
       disk_size         = 10
       data_disk_size    = 10
       user_data_file_id = local.platform.cloud_init.cve_search.file_id

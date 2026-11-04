@@ -21,6 +21,28 @@ REPO = Path(__file__).resolve().parent.parent
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
+def pytest_addoption(parser):
+    group = parser.getgroup("live", "the live journey on a deployed platform (tests/live, docs/testing.md)")
+    group.addoption("--live", action="store_true", help="run only the live journey; it creates accounts and VMs on this node")
+    group.addoption("--live-out", metavar="DIR", help="where the protocol and screenshots go (default: a new directory in /var/tmp)")
+    group.addoption("--live-wipe-database", metavar="NODE", help="wipe the database first; you must name this node")
+
+
+def pytest_collection_modifyitems(config, items):
+    """The live journey and the offline suite never share a run: the offline fixtures point
+    Django at a throwaway database, and the journey changes the real system."""
+    live = [item for item in items if item.path.parent.name == "live"]
+    if config.getoption("--live"):
+        others = [item for item in items if item not in live]
+        if others:
+            config.hook.pytest_deselected(items=others)
+        items[:] = live
+    else:
+        skip = pytest.mark.skip(reason="the live journey needs --live and a deployed platform (docs/testing.md)")
+        for item in live:
+            item.add_marker(skip)
+
+
 def require(*tools: str) -> None:
     """Skip the calling test unless every tool is on PATH."""
     missing = [tool for tool in tools if shutil.which(tool) is None]

@@ -246,7 +246,7 @@ worms build provision
 # shows the runs and host jobs; to watch the services themselves:
 ssh debian@10.3.0.19 'journalctl -u orchestrator-conduct-rounds -f'    # conductor
 ssh debian@10.3.0.19 'journalctl -u orchestrator-process-attempts -f'  # captures/logs
-ssh root@<proxmox>  'journalctl -u worms-round-agent -f'              # host agent
+ssh root@<proxmox>  'tail -F /var/log/worms/jobs/latest.log'          # host jobs, full output
 
 # Inspect state:
 SELECT team_id, state, position FROM round_runs ORDER BY round_id, position;

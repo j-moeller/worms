@@ -251,7 +251,8 @@ bpg/proxmox 0.118.0.
 
 **Run live on 2026-11-04** (`docs/e2e-run-2026-11-03/protocol.md`): VM creation,
 keys, the gateway's confinement, scoring and logging, apt and pip through the
-private internet, containment and a reset all work. Still not run live: the
-public port forward (port 2222 is not published), a build on a cache filled by
-the seed list, and the sandbox and round orchestration (`docs/testing.md`). The
-remaining security items are tracked in `docs/security-assessment.md`.
+private internet, containment and a reset all work. Port 2222 is published
+(`host_publish_ssh_gateway`), but no test has connected through it from outside,
+because the node cannot reach its own port forward. Still not run live: the
+sandbox and round orchestration (`docs/testing.md`). The remaining security items
+are tracked in `docs/security-assessment.md`.

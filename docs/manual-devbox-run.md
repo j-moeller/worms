@@ -14,7 +14,7 @@ Four things work differently from what you might expect:
 |---|---|---|
 | Root creates the users, teams and admin | `worms` creates only the admin and staff accounts. No command creates a team, and `manage.py create_users` ignores the team column | Root creates the admin (step 2). The admin creates teams and users on the dashboard (steps 5 and 6) |
 | auditd shows what happens on a devbox | auditd is not installed on devbox VMs, their gateways or the SSH gateway (`audit_hosts` in `ansible/inventory.yml`), and a devbox cannot reach the syslog VM, by design | Nothing typed on a devbox appears in auditd. Step 12c shows what auditd does hold, and step 12d where the devbox actions are recorded instead |
-| The dashboard's SSH command works | Port 2222 is not published (`docs/check-with-user.md`, 3b) | SSH runs from the node, with the gateway's address in place of the public name (step 10) |
+| The dashboard's SSH command works everywhere | It works from outside, but not on the node itself, because the port forward only matches outside traffic | SSH runs from the node, with the gateway's address in place of the public name. Step 10 also gives the command for your laptop |
 | The database wipe comes first | A wipe leaves the VMs running. Building over leftover VMs after a wipe has never been tried, and 13 devbox VMs exist from the stopped suite run | The VMs go first (step 0), then the wipe (step 1) |
 
 ## Prepare your shell
@@ -231,7 +231,7 @@ worms devbox provision
 **Expect:** `enqueued devbox_provision host job <uuid>`. The round agent then builds the VMs. Watch it with any of these:
 
 ```sh
-journalctl -u worms-round-agent -f       # Ctrl-C to leave
+tail -F /var/log/worms/jobs/latest.log   # the job's full output; Ctrl-C to leave
 sql "SELECT left(uuid::text, 8) AS job, kind, state, started_at, finished_at, left(error, 100) AS error FROM host_jobs ORDER BY requested_at"
 qm list | grep -c devbox
 ```
@@ -281,7 +281,7 @@ A key's comment may not contain spaces, or the dashboard refuses the key.
 **Expect:**
 - `SSH key added. Your devbox and the SSH gateway are being updated now.`
 - `1 registered` on the panel.
-- The panel **Connect** shows `ssh -J team@worms-dev.mlsec.tu-berlin.de:2222 root@10.7.0.11`. It cannot work yet, because port 2222 is not published.
+- The panel **Connect** shows `ssh -J team@worms-dev.mlsec.tu-berlin.de:2222 root@10.7.0.11`. Use this from outside. On the node, use the gateway's address, as in step 10.
 
 **Part 3. Who:** root on the node. Wait for the key to arrive, about 3 minutes:
 
@@ -326,6 +326,15 @@ Answer `yes` to the two host key questions, one for the gateway and one for A.
 ssh -A root@10.128.0.12      # now on devbox-t1-b
 ssh root@10.128.1.13         # now on devbox-t1-c
 ```
+
+**From your laptop instead,** generate the key there and add it in step 9, because a key belongs to one team and the node's copy stays on the node. Then run the command the dashboard shows:
+
+```sh
+ssh-add ~/.ssh/worms-anna
+ssh -A -J team@worms-dev.mlsec.tu-berlin.de:2222 root@10.7.0.11
+```
+
+**Not tried yet:** port 2222 was opened after the earlier runs, and the node cannot test it from inside. If the connection times out rather than being refused, the network in front of the node may be blocking the port.
 
 **Optional: what the gateway refuses.** Run these from the node:
 
@@ -584,6 +593,7 @@ tail -n 8 /var/log/apt/history.log
 **Who:** root on the node. Wait for the rebuild, about 20 minutes:
 
 ```sh
+tail -F /var/log/worms/jobs/latest.log   # the job's full output; Ctrl-C to leave
 sql "SELECT left(uuid::text, 8) AS job, kind, state, started_at, finished_at, left(error, 100) AS error FROM host_jobs WHERE kind = 'devbox_rebuild'"
 qm list | grep devbox-t1
 ```
@@ -695,6 +705,7 @@ To run it all again, start at step 0. Until you do, the VMs, the test accounts a
 |---|---|---|
 | Build job fails with `got timeout` | Disk timeout, F5 | `worms devbox provision` again |
 | Build job fails with `dataset already exists` | A volume left by an earlier VM | Step 0, the volume check |
+| A job failed, and its `error` does not say why | Ansible reports failed tasks on stdout | Read the job's log: the `error` names the file, and `/var/log/worms/jobs/latest.log` is the most recent |
 | `Permission denied (publickey)` | The key has not arrived, or SSH offered another key | Check the `devbox_reconfigure` job, and that you used `-F ~/.ssh/worms-anna.cfg` |
 | `stdio forwarding failed` | The gateway allows only your team's A | Check the address against the table above |
 | `REMOTE HOST IDENTIFICATION HAS CHANGED` | The VM was rebuilt | `ssh-keygen -R <address>` |

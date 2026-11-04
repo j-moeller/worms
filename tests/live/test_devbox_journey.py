@@ -289,7 +289,7 @@ def test_06_each_user_reaches_their_own_devbox(journey):
     p, check = journey.platform, journey.check
     journey.report.stage(
         "Stage 4: SSH through the gateway",
-        f"keys pushed. From the node, with the gateway's address {p.gateway_ip} in place of the public name on port 2222, which is not published",
+        f"keys pushed. From the node, with the gateway's address {p.gateway_ip} in place of the public name, because the port forward only matches outside traffic",
     )
     db = p.database()
     for member in journey.members:

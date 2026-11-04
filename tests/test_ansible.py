@@ -254,8 +254,14 @@ def test_host_firewall_publishes_the_devbox_ssh_gateway(render, tmp_path):
     only the host as the SSH source -- a devbox VM on vmbr7 cannot pose as a
     team to it (docs/security-assessment.md, devbox isolation)."""
     require("nft")
+    inventory = yaml.safe_load((ANSIBLE / "inventory.yml").read_text())
+    assert inventory["all"]["children"]["proxmox_host"]["hosts"]["proxmox.local"]["host_publish_ssh_gateway"] is True
     path = tmp_path / "worms.nft"
     text = render("ansible/roles/host/host_network", "worms.nft.j2", host_publish_ssh_gateway=True)
+    # From the WAN, only 2222 is forwarded, and only to the gateway's SSH port.
+    assert 'iifname "vmbr0" fib daddr type local tcp dport 2222 dnat ip to 10.7.0.2:22' in text
+    from_wan = [line for line in text.splitlines() if "10.7.0.2" in line and 'iifname "vmbr0"' in line]
+    assert len(from_wan) == 2 and 'oifname "vmbr7" ip daddr 10.7.0.2 tcp dport 22 ct status dnat accept' in from_wan[0]
     path.write_text(text)
     # Assert the rendered rules first (runs on every kernel): teams are DNATed
     # in, then that same connection is SNATed (masqueraded) to the host.

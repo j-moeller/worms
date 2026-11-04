@@ -33,27 +33,19 @@ vault now holds the tokens that are in use. `.env` also holds the password of
 `terraform-prov@pve`, which nothing here uses. If you might want that password later, save it
 first.
 
-### 3. Test the dashboard from outside by name
+### 3. Test the dashboard and the SSH gateway from outside by name
 
-- [ ] Run this from your laptop and expect a `200`:
+- [ ] Run these from your laptop. Expect a `200` from the first, and `Permission denied (publickey)` from the second if you use no registered key:
 
 ```sh
 curl -vk https://worms-dev.mlsec.tu-berlin.de/
+ssh -p 2222 team@worms-dev.mlsec.tu-berlin.de
 ```
 
 You confirmed access by IP earlier. The IP now gets `400`, because the name is the only one
-accepted. The host cannot test this itself.
+accepted. The host cannot test either of these itself: the port forward only matches outside traffic. If the `ssh` times out, the network in front of the node may be blocking port 2222.
 
 ## Decide these
-
-### 3b. Publish the devbox SSH gateway
-
-- [ ] Say yes or no.
-
-Teams cannot reach their devboxes from outside: port 2222 is not published (`host_publish_ssh_gateway: false`). The
-dashboard now shows `ssh -J team@worms-dev.mlsec.tu-berlin.de:2222 root@...`, but that command only works once the port is open. I
-tested SSH from the node, which covers everything except the public port forward. I did not open a public port without
-asking.
 
 ### 3c. What the apt cache should hold
 

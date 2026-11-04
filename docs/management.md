@@ -156,11 +156,10 @@ worms devbox provision    # enqueues a host job; the round agent on the node doe
 | **Builds** | 3 VMs and a gateway per team, plus one shared SSH gateway: 13 VMs for 3 teams |
 | **If the job fails with `got timeout`** | Run the same command again. It is the disk timeout F5 (`docs/check-with-user.md`, 3d) |
 
-Watch it with:
+Follow it in the job's log, which holds the full OpenTofu and Ansible output ([Job logs](#job-logs)):
 
 ```sh
-journalctl -u worms-round-agent -f
-qm list | grep -c devbox
+tail -F /var/log/worms/jobs/latest.log
 ```
 
 **Run it again after adding a team, but not while teams are working.** It writes new tokens on every team's VMs, not only the new team's (`_devbox_report` in `scripts/round_agent/handlers.py`). This comes from reading the code: no test has added a team to running devboxes.
@@ -170,7 +169,7 @@ qm list | grep -c devbox
 | Action | Where | Then |
 |---|---|---|
 | Add an SSH key | Panel **SSH keys**, **Add key** | A `devbox_reconfigure` job installs it, in about 3 minutes |
-| Connect | The command in panel **Connect** | Port 2222 is not published yet (`docs/check-with-user.md`, 3b). Until then, from the node: `ssh -J team@10.7.0.2 root@<team's A>` |
+| Connect | The command in panel **Connect**: `ssh -J team@<public name>:2222 root@<team's A>` | That works from outside. On the node itself, use the gateway's address: `ssh -J team@10.7.0.2 root@<team's A>` |
 | Reset | **Reset devbox**, then **Yes, rebuild my devbox** | A `devbox_rebuild` job replaces that team's 3 VMs, in about 20 minutes. Other teams are not touched |
 
 ## Run a round
@@ -249,7 +248,7 @@ It can also end as `skipped`, or as `failed`, where the sandbox is torn down and
 To follow the services themselves, from the node:
 
 ```sh
-journalctl -u worms-round-agent -f                                                                 # host agent
+tail -F /var/log/worms/jobs/latest.log                                                             # host jobs
 ssh -i /etc/worms/ssh/worms debian@10.3.0.19 'sudo journalctl -u orchestrator-conduct-rounds -f'   # conductor
 ssh -i /etc/worms/ssh/worms debian@10.3.0.19 'sudo journalctl -u orchestrator-process-attempts -f' # captures and logs
 ```
@@ -305,7 +304,8 @@ The infrastructure part comes live from the Proxmox API and the node. The compet
 | Can Ansible reach each VM? | `worms build ping` |
 | Which secrets are set, never their values | `worms secrets` |
 | Do the Proxmox tokens work? | `worms secrets check` |
-| What the round agent is doing | `journalctl -u worms-round-agent -f` |
+| What the round agent is doing | `tail -F /var/log/worms/jobs/latest.log` |
+| Which jobs the agent ran, and each one's log file | `journalctl -u worms-round-agent` |
 | VMs stopped by the firewall watchdog | `journalctl -u worms-firewall-watchdog --since today` |
 
 To query the database directly, use the read-only `sql` helper from `docs/manual-devbox-run.md`:
@@ -314,6 +314,19 @@ To query the database directly, use the read-only `sql` helper from `docs/manual
 sql "SELECT left(uuid::text, 8) AS job, kind, state, started_at, finished_at, left(error, 100) AS error FROM host_jobs ORDER BY requested_at DESC LIMIT 10"
 sql "SELECT round_id, position, team_id, state, left(error, 100) AS error FROM round_runs ORDER BY round_id, position"
 ```
+
+### Job logs
+
+Every host job (a devbox build, key push or reset, and each step of a round) writes to its own file on the node, as it runs:
+
+```sh
+tail -F /var/log/worms/jobs/latest.log       # the current job, moving on to the next by itself
+ls -lt /var/log/worms/jobs/                  # earlier jobs, as <job id>.log
+```
+
+- **What it holds:** every command the job ran, with its exit code and duration, and the full output of OpenTofu and Ansible. For other commands, such as `ssh` to a VM, it holds only the command line: tokens written to a VM and `tofu output` values stay out.
+- **After a failure,** this is the place to look. The job's `error` holds only the start of stderr and the log's path, while Ansible reports failed tasks on stdout.
+- **Access:** root only, because this output can be sensitive. It stays on the node, and files older than 30 days are deleted.
 
 ## Stop and remove things
 

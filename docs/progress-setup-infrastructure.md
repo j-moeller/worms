@@ -11,6 +11,8 @@ Times are host time (CET); the VMs log in UTC (CET - 1h).
 
 **The suite's first run, 16:37-16:59, stopped at the user's request, so it has still not run from start to finish.** Steps 00 to 04 passed: base state, admin sign-in, competition and teams, users, and the devbox build. **The build finished on its first attempt, in 17 minutes**, the first build since the TRIM; 4 of the 7 before it hit the disk timeout. One build is encouraging, but it does not prove F5 is gone. It stopped during step 05, with `alpha`'s 3 keys added and none for `bravo` or `charlie`. SSH, file, apt, pip, traces and reset did not run.
 
+**Job logs and port 2222, 2026-11-04 evening:** each host job now writes its full output to `/var/log/worms/jobs/`, and the SSH gateway is published on port 2222 with `host_publish_ssh_gateway`, the same switch as the dashboard's `:443`. No new OpenTofu rule was needed: `devbox_ssh_gateway` already accepts port 22, from the host's address only. The node cannot test the port from inside, so that test is the user's (`docs/check-with-user.md`, 3). The second build since the TRIM also succeeded on its first attempt, in 17 minutes.
+
 **By hand:** `docs/manual-devbox-run.md` describes the whole journey as commands and form inputs, for the user to run. It was written without running anything.
 
 To stop it I stopped the round agent for a few seconds, which ended job `ff353e5a` as failed (exit -15). So the SSH gateway may not hold all of `alpha`'s keys. The agent is running again, idle, with nothing queued. A new run starts with a teardown.

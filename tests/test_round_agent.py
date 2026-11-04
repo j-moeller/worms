@@ -10,8 +10,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -209,6 +211,13 @@ class FakeExecutor:
         self.installed_hcl = None
         self.systemctl = {}
         self.qm = {}
+
+    def job_log(self, job_uuid, kind):
+        from contextlib import nullcontext
+
+        from round_agent.executor import JobLog
+
+        return nullcontext(JobLog())
 
     def worms(self, component, timeout=3600, args=None):
         self.calls.append(("worms", component))
@@ -603,6 +612,200 @@ def _zip(entries):
         for name, data in entries.items():
             archive.writestr(name, data)
     return buffer.getvalue()
+
+
+# --- the job's output log -----------------------------------------------------
+
+
+JOB_UUID = "11111111-2222-3333-4444-555555555555"
+
+
+@pytest.fixture
+def logged(tmp_path):
+    """A real Executor inside a job, writing to a log under tmp_path."""
+    from round_agent.executor import Executor
+
+    ex = Executor(tmp_path, log_dir=tmp_path / "jobs")
+    with ex.job_log(JOB_UUID, "devbox_provision") as job_log:
+        yield ex, job_log
+    assert job_log._handle is None
+
+
+def _log_text(job_log):
+    return job_log.path.read_text()
+
+
+def test_a_build_goes_to_a_root_only_log_and_stdout_stays_the_callers(logged, tmp_path):
+    ex, job_log = logged
+    out = ex.run(["sh", "-c", "echo to-stdout; echo to-stderr >&2"], stream=True)
+    assert out == "to-stdout\n"  # handlers parse this: stderr must not get mixed in
+    text = _log_text(job_log)
+    assert f"job {JOB_UUID} (devbox_provision)" in text
+    assert "$ sh -c 'echo to-stdout; echo to-stderr >&2'" in text
+    assert "to-stdout\n" in text and "to-stderr\n" in text
+    assert "exit 0 after" in text
+    assert (job_log.path.stat().st_mode & 0o777) == 0o600
+    assert ((tmp_path / "jobs").stat().st_mode & 0o777) == 0o700
+    assert (tmp_path / "jobs" / "latest.log").resolve() == job_log.path.resolve()
+
+
+def test_the_log_can_be_followed_while_the_command_runs(logged, tmp_path):
+    """The command waits for a file that appears only once its first line is in the log."""
+    import threading
+    import time
+
+    ex, job_log = logged
+    seen = tmp_path / "seen"
+
+    def watch():
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            if "first line" in _log_text(job_log):
+                seen.touch()
+                return
+            time.sleep(0.05)
+
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
+    script = f'echo "first line"; i=0; until [ -e {seen} ] || [ $i -ge 200 ]; do sleep 0.1; i=$((i+1)); done; [ -e {seen} ]'
+    ex.run(["sh", "-c", script], stream=True, timeout=30)
+    watcher.join()
+    assert seen.exists()
+
+
+def test_values_the_caller_reads_stay_out_of_the_log(logged, tmp_path, monkeypatch):
+    """A secret written to a VM goes through stdin, and `tofu output` can hold sensitive
+    values: neither may reach the log. `tofu apply` is the build's progress, so it does."""
+    ex, job_log = logged
+    assert ex.run(["cat"], input="FLAG{from-stdin}") == "FLAG{from-stdin}"
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_tofu = bin_dir / "tofu"
+    fake_tofu.write_text(
+        '#!/bin/sh\ncase "$2" in\n'
+        '  output) echo \'{"token": {"value": "sensitive-output"}}\' ;;\n'
+        "  *) echo apply-progress ;;\n"
+        "esac\n"
+    )
+    fake_tofu.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    assert ex.tofu_output("devbox") == {"token": "sensitive-output"}
+    ex.tofu("devbox", "apply", "-auto-approve")
+
+    text = _log_text(job_log)
+    assert "$ cat" in text and "FLAG{from-stdin}" not in text
+    assert "output -json" in text and "sensitive-output" not in text
+    assert "apply-progress" in text
+
+
+def test_a_failed_build_keeps_its_real_reason_in_the_log(logged):
+    """Ansible reports a failed task on stdout. The job's `error` keeps only stderr, so
+    it has to say where the rest is."""
+    from round_agent.executor import CommandError
+
+    ex, job_log = logged
+    with pytest.raises(CommandError) as failure:
+        ex.run(["sh", "-c", "echo 'fatal: [vm]: FAILED! => the real reason'; echo warning >&2; exit 3"], stream=True)
+    assert "exited 3: warning" in str(failure.value)
+    assert str(job_log.path) in str(failure.value)
+    text = _log_text(job_log)
+    assert "the real reason" in text and "exit 3 after" in text
+
+
+def test_a_timed_out_build_is_killed_and_noted(logged):
+    ex, job_log = logged
+    with pytest.raises(subprocess.TimeoutExpired):
+        ex.run(["sleep", "30"], stream=True, timeout=0.3)
+    assert "timed out after 0.3 s" in _log_text(job_log)
+
+
+def test_a_background_child_holding_the_pipe_does_not_hold_up_the_job(logged, monkeypatch):
+    import time
+
+    from round_agent import executor
+
+    monkeypatch.setattr(executor, "PIPE_GRACE", 0.3)
+    ex, job_log = logged
+    started = time.monotonic()
+    assert ex.run(["sh", "-c", "sleep 5 & echo done"], stream=True) == "done\n"
+    assert time.monotonic() - started < 3
+
+
+def test_a_log_that_cannot_be_opened_does_not_fail_the_job(tmp_path):
+    from round_agent.executor import Executor
+
+    blocker = tmp_path / "a-file"
+    blocker.write_text("")
+    ex = Executor(tmp_path, log_dir=blocker / "jobs")
+    with ex.job_log(JOB_UUID, "check") as job_log:
+        assert job_log.path is None
+        assert ex.run(["echo", "still runs"], stream=True) == "still runs\n"
+
+
+def test_a_log_that_stops_working_does_not_fail_the_job(logged):
+    ex, job_log = logged
+    job_log._handle.close()  # as good as a full disk: every further write raises
+    assert ex.run(["echo", "still runs"], stream=True) == "still runs\n"
+
+
+def test_outside_a_job_nothing_is_logged(tmp_path):
+    from round_agent.executor import Executor
+
+    ex = Executor(tmp_path, log_dir=tmp_path / "jobs")
+    assert ex.run(["echo", "hello"], stream=True) == "hello\n"
+    assert not (tmp_path / "jobs").exists()
+
+
+def test_old_logs_go_and_new_ones_stay(tmp_path):
+    from round_agent.executor import JOB_LOG_KEEP_DAYS, Executor
+
+    jobs = tmp_path / "jobs"
+    jobs.mkdir()
+    old, recent = jobs / "old.log", jobs / "recent.log"
+    old.write_text("old")
+    recent.write_text("recent")
+    long_ago = time.time() - (JOB_LOG_KEEP_DAYS + 1) * 86400
+    os.utime(old, (long_ago, long_ago))
+    ex = Executor(tmp_path, log_dir=jobs)
+    for _ in range(2):  # the second time, latest.log already exists
+        with ex.job_log(JOB_UUID, "check"):
+            pass
+    assert not old.exists() and recent.exists()
+    assert (jobs / "latest.log").is_symlink() and (jobs / f"{JOB_UUID}.log").exists()
+
+
+def test_a_job_logs_its_commands_and_how_it_ended(agent_db, tmp_path, monkeypatch):
+    from round_agent.executor import CommandError, Executor
+
+    agent, _fake, conn = agent_db
+    agent.executor = Executor(tmp_path, log_dir=tmp_path / "jobs")
+
+    def build(ex, cfg, params):
+        ex.run(["sh", "-c", "echo building"], stream=True)
+        return {"built": True}
+
+    def broken(ex, cfg, params):
+        ex.run(["sh", "-c", "echo 'fatal: the reason'; echo warning >&2; exit 1"], stream=True)
+
+    monkeypatch.setitem(handlers.HANDLERS, "check", build)
+    _queue(conn, "check", {})
+    assert agent.tick() is True
+    text = (tmp_path / "jobs" / "latest.log").read_text()
+    assert "building" in text and "job done" in text
+
+    monkeypatch.setitem(handlers.HANDLERS, "check", broken)
+    job_id = _queue(conn, "check", {})
+    assert agent.tick() is True
+    latest = tmp_path / "jobs" / "latest.log"
+    text = latest.read_text()
+    assert "fatal: the reason" in text and "job failed: CommandError" in text
+    with conn.cursor() as cur:
+        cur.execute("SELECT state, error, uuid FROM host_jobs WHERE id = %s", (job_id,))
+        state, error, uuid = cur.fetchone()
+    # The job's error points to the log, and its stdout stays out of the database.
+    assert state == "failed" and f"{uuid}.log" in error and "fatal: the reason" not in error
+    assert isinstance(CommandError(["x"], 1, ""), RuntimeError)
 
 
 def test_ssh_sends_one_line_the_remote_shell_splits_back_into_argv(monkeypatch):

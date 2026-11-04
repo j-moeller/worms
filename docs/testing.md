@@ -1,13 +1,13 @@
 # Testing
 
-Two layers:
+Three layers:
 
-| | `worms test` | `worms simulate` |
-|---|---|---|
-| Runs | anywhere (laptop, CI, the Proxmox host) | on the Proxmox host, against the deployed platform |
-| Needs | Python 3; optionally PostgreSQL server binaries, `tofu` (+ provider), `ip`/`tc`/`tcpdump` and root, `nft`, `systemd-analyze` | a provisioned platform; a deployed sandbox for the traffic part |
-| Covers | configuration, code, privileges, mirror logic | the running system end to end: features, configuration, containment |
-| Changes things | nothing outside temp dirs and private network namespaces | creates a test team/token, removes it afterwards |
+| | `worms test` | `worms simulate` | `worms test tests/live --live` |
+|---|---|---|---|
+| Runs | anywhere (laptop, CI, the Proxmox host) | on the Proxmox host, against the deployed platform | on the Proxmox host, against the deployed platform |
+| Needs | Python 3; optionally PostgreSQL server binaries, `tofu` (+ provider), `ip`/`tc`/`tcpdump` and root, `nft`, `systemd-analyze` | a provisioned platform; a deployed sandbox for the traffic part | a provisioned platform in its base state, Node.js with Playwright |
+| Covers | configuration, code, privileges, mirror logic | the running system end to end: features, configuration, containment | the devbox journey of an administrator and a team, nothing faked |
+| Changes things | nothing outside temp dirs and private network namespaces | creates a test team/token, removes it afterwards | creates users, teams and devbox VMs, and leaves them |
 
 ## `worms test`: offline suite
 
@@ -39,6 +39,56 @@ tests/fixtures/platform-outputs.json`.
 `tofu validate` needs the `bpg/proxmox` provider. Without registry access,
 set `TF_CLI_CONFIG_FILE` to a config with a `filesystem_mirror` that holds
 the provider binary.
+
+The browser tests (`test_topology_page.py`) need Node and its Playwright package, and are
+skipped without them. To run them, with Node on `PATH`:
+
+```sh
+cd ..                                # outside the repo: nothing to commit or sync
+npm install --no-save --no-package-lock playwright
+npx playwright install chromium
+```
+
+On a server, install only the libraries Chromium reports missing (`ldd` on its binary), rather
+than `playwright install-deps`, which also adds an X server and fonts.
+
+## The live devbox journey
+
+`tests/live/test_devbox_journey.py` does on the real system what
+`docs/e2e-run-2026-11-04/protocol.md` records by hand. It takes about an hour and a half, more if a build
+hits the `zfs create` timeout. Without `--live` all of it is skipped, and with `--live` nothing else runs.
+
+```sh
+export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"    # Node.js with Playwright, see above
+.venv-test/bin/pytest tests/live --live -s --live-out=/var/tmp/worms-live-run
+```
+
+| Stage | Tests | What it does and checks |
+|---|---|---|
+| 0 | `test_00` | The base state: no devbox VMs, no volumes left by earlier VMs, only `admin`, no teams or rounds, internet denied, no jobs running |
+| 1 | `test_01`-`test_03` | The administrator signs in (one-time password, forced change), creates the dev competition, 3 teams and 9 users, by the form and the CSV import |
+| 2 | `test_04` | `worms devbox provision`, retried on the known `zfs create` timeout. 13 VMs, firewalls on, no watchdog stops |
+| 3 | `test_05` | Each user signs in and adds an SSH key. The key push jobs finish, and the old one-time password is refused |
+| 4 | `test_06`, `test_07` | Each user reaches their own VM A through the SSH gateway. Other teams' VMs, a shell on the gateway and an unregistered key are refused |
+| 5 | `test_08` | On all 3 VMs of each team: a file, `apt install`, `pip install`, `curl` to scoring and logging, the real internet closed |
+| 6 | `test_09`, `test_10` | The team's page shows scoring and logging, and no other team's. The database holds them, the keys and the jobs, and no `network_flows` on devbox addresses, by design. Zeek's heartbeat is current |
+| 7 | `test_11` | A user resets the devbox from the page |
+| 8 | `test_12`-`test_14` | The same keys sign in again. The file and both packages are gone on all 3 VMs, each with a new boot, host key and token. Firewalls on, score 0/3, earlier records kept, other teams untouched. The new tokens score again |
+
+The steps build on each other, so one whose prerequisite failed is skipped and says so. Within a step, a failed check does
+not stop the rest. Each run writes `report.md` with a row per check, and the screenshots, to `--live-out`. No password reaches them.
+
+**It does not get back to the base state by itself.** It leaves the teams and devboxes in place to look at, and refuses to start unless the base state holds. To run it again:
+
+```sh
+/usr/local/sbin/worms-node-run opentofu/stacks/devbox 'tofu destroy -auto-approve -parallelism=1'
+.venv-test/bin/pytest tests/live --live -s --live-wipe-database=<this node's name>
+```
+
+`--live-wipe-database` runs `worms reset-database --yes`, which **deletes every user, team and result**. It needs this node's name typed out, so a command copied from another machine does nothing.
+The apt cache and devpi keep what `make` put there, so `make` is not needed between runs. After changing what they hold, or any code, run `make` while no devbox VMs exist.
+
+`tests/test_live_suite.py` is the offline part: nothing of the journey runs without the option, its scripts parse, no password reaches a screenshot or a command line.
 
 ## `worms simulate`: end-to-end simulation
 
@@ -99,8 +149,8 @@ What it checks:
    - scoring/logging: reach only the database;
    - the database roles, tested **from their own VMs with their own
      credentials over verified TLS**: monitor INSERT-only, cannot read or
-     modify anything; scoring/logging only read token hashes, cannot read or
-     modify attempts or other tables;
+     modify anything; scoring/logging cannot read access tokens, and cannot read
+     or modify attempts or other tables;
    - frames the monitor sends on its capture NIC are dropped by the host
      (tc drop counter).
 6. **Cleanup:** the test team, token and everything submitted with it are

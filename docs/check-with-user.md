@@ -182,8 +182,7 @@ Both settings reached `main` once by my mistake, in `52fc7a1`, and `e6e5b33` put
       should probably run before the rename and `make` after it. This order is not tested.
 - [ ] Confirm the `cve_search` RAM setting. Your uncommitted 1024 MB has not been tested with
       `cve-search-populate` running.
-- [ ] Set your own admin password. The end-to-end run set a random one, kept in
-      `/tmp/claude-0/-root-app/c3c46757-27f6-4301-a530-4ad1743ed0bd/scratchpad/e2e2/creds.json`, which will not last forever. The CLI needs the packages in `.venv-test`:
+- [ ] Set your own admin password. The suite wiped the database and set a random one that it does not keep, so nobody knows the current one. The passwords in the earlier test's `creds.json` no longer work. The CLI needs the packages in `.venv-test`:
 
 ```sh
 .venv-test/bin/python src/manage.py admin reset-password

@@ -5,9 +5,13 @@ Times are host time (CET); the VMs log in UTC (CET - 1h).
 
 ## Status
 
-**Last updated:** 2026-11-04, 16:36, after the teardown and the TRIM.
+**Last updated:** 2026-11-04, 17:05, after stopping the suite's first run at the user's request.
 
-**Re-run from a clean base state, 2026-11-04:** passed from start to finish, with a retried build (`docs/e2e-run-2026-11-04/protocol.md`). The automated suite is in `tests/live`. Its first full run comes next.
+**Re-run from a clean base state, 2026-11-04:** passed from start to finish, with a retried build (`docs/e2e-run-2026-11-04/protocol.md`). The automated suite is in `tests/live`.
+
+**The suite's first run, 16:37-16:59, stopped at the user's request, so it has still not run from start to finish.** Steps 00 to 04 passed: base state, admin sign-in, competition and teams, users, and the devbox build. **The build finished on its first attempt, in 17 minutes**, the first build since the TRIM; 4 of the 7 before it hit the disk timeout. One build is encouraging, but it does not prove F5 is gone. It stopped during step 05, with `alpha`'s 3 keys added and none for `bravo` or `charlie`. SSH, file, apt, pip, traces and reset did not run.
+
+To stop it I stopped the round agent for a few seconds, which ended job `ff353e5a` as failed (exit -15). So the SSH gateway may not hold all of `alpha`'s keys. The agent is running again, idle, with nothing queued. A new run starts with a teardown.
 
 **Why steps hang, the newest part:** the disk. A ZFS write cycle took up to 110 seconds, and the disk had never been trimmed. A TRIM at 16:28 cut the slowest synchronous write on a quiet system from 1.6 s to 11 ms (`docs/check-with-user.md`, 3d). The next build is the real test.
 
@@ -16,7 +20,7 @@ Times are host time (CET); the VMs log in UTC (CET - 1h).
 | | |
 |---|---|
 | Ground state | **Reached on the existing VMs.** The last 4 full `make` runs exited 0. Not yet run from scratch, as you asked |
-| VMs | 15 of 15 running, none rebuilt. No devbox VMs since the teardown; the suite builds new ones |
+| VMs | 28 of 28 running: 15 infrastructure, none rebuilt, and the 13 devbox VMs the stopped suite run built |
 | Internet window | Closed, tested with real connections from every VM |
 | Dashboard | HTTPS only, as `worms-dev.mlsec.tu-berlin.de`. You confirmed outside access by IP before the rename; the name is not yet tested from outside |
 | Tokens | All 3 issued and verified with `worms secrets check` |

@@ -129,6 +129,12 @@ and the Progression page shows what it did.
 You can also work on the VMs by hand over SSH. Setup, keys and how to connect:
 `docs/devbox.md` and the dashboard's Dev view.
 
+## The CPU of your VMs
+
+Sandbox and devbox VMs have the same CPU, `x86-64-v3`, which includes AVX2 and AES. It
+offers no hardware virtualisation, so there is no `/dev/kvm` and you cannot run VMs inside
+your VMs.
+
 ## Reaching the LLM endpoint
 
 Your VMs can reach one server outside this system: `teachllm.mlsec.tu-berlin.de`,

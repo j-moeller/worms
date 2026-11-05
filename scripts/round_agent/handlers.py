@@ -40,6 +40,17 @@ UNPACK = (
 CURRENT_TEAM_FILE = "/etc/sandbox-api/current-team"
 DEVBOX_TEAMS_FILE = "/etc/sandbox-api/devbox-teams"
 DEVBOX_GENERATED = "opentofu/stacks/devbox/generated_devboxes.tf"
+# Team code is assumed hostile and root on its VM. This CPU offers it no hardware virtualisation,
+# so no /dev/kvm and no way to drive the node's nested-KVM code (docs/security-assessment.md). The
+# sandbox and devbox stacks set it. These checks refuse anything else, such as a VM changed by hand.
+TEAM_VM_CPU = "x86-64-v3"
+
+
+def _has_team_vm_cpu(ex, vmid):
+    """Read from the node, because what a hostile VM says about itself proves nothing. Anything
+    but exactly this CPU fails, including added flags and a config that could not be read."""
+    config = ex.run(["qm", "config", str(vmid)], check=False, timeout=60)
+    return any(line.strip() == f"cpu: {TEAM_VM_CPU}" for line in config.splitlines())
 
 
 def _sandbox_vms(ex):
@@ -158,6 +169,7 @@ def check(ex, cfg, params):
     for name, info in sorted(vms.items()):
         status = ex.run(["qm", "status", str(info["vmid"])], check=False, timeout=60).strip()
         record(f"vm:{name}:running", status.endswith("running"), status)
+        record(f"vm:{name}:no-kvm", _has_team_vm_cpu(ex, info["vmid"]), f"its CPU must be {TEAM_VM_CPU}")
 
     failures = [r["check"] for r in results if not r["ok"]]
     return {"ok": not failures, "failures": failures, "checks": results}
@@ -377,6 +389,8 @@ def devbox_deploy(ex, cfg, params):
     vm = _devbox_vms(ex).get(start)
     if vm is None or vm["team"] != params["team_slug"]:
         raise validation.Invalid(f"{start} is not a VM of team {params['team_slug']}")
+    if not _has_team_vm_cpu(ex, vm["vmid"]):
+        raise validation.Invalid(f"{start} does not have the CPU a team's VM must have: {TEAM_VM_CPU}")
     _place_worm(ex, cfg, vm["maintenance_ip"], params["artifact"])
     delay = params["worm_delay"]
     armed_at = _arm_worm(ex, vm["maintenance_ip"], delay, f"--property=RuntimeMaxSec={params['run_duration']}")

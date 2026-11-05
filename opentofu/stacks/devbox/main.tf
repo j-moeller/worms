@@ -179,10 +179,12 @@ module "devbox_vm" {
   limits            = local.limits
   dns_server        = local.services_ips.dns
 
-  # As the operator set them on the running VMs on 2026-11-05. Written down here so
-  # a reset, which rebuilds the VMs from this file, keeps them.
-  cpu_type = "host"
-  ram_min  = 512
+  # Team code is assumed hostile and root on these VMs. This CPU offers no hardware
+  # virtualisation, so they get no /dev/kvm and cannot drive the node's nested-KVM code
+  # (docs/security-assessment.md). Never "host" or "max". The same as a sandbox VM.
+  cpu_type = "x86-64-v3"
+  # As the operator set it on the running VMs on 2026-11-05.
+  ram_min = 512
 
   # Experiment NICs (one per devbox segment this VM is on), then the SSH-fabric
   # NIC (vmbr7) and the maintenance NIC (vmbr6). Only the first segment carries

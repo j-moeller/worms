@@ -102,22 +102,39 @@ Checked on 2026-11-05 on the devbox, acting as root on `devbox-t1-a` and on `dev
 
 **Not seen yet:** a real sandbox. No round has run since this change, so the sandbox gateway's rules are only checked by tests (`test_every_layer_on_the_way_to_the_llm_endpoint_allows_only_it`).
 
-## `cpu: host` and nested virtualisation (open)
+## No `/dev/kvm` on team VMs
 
-Measured on 2026-11-05. The 9 devbox VMs run `cpu: host`, set by hand by the operator and written into the devbox stack the same day, so a reset keeps it. This node has nesting on (`/sys/module/kvm_intel/parameters/nested` is `Y`). So:
+Sandbox and devbox VMs are assumed hostile and rooted, so they must never get `/dev/kvm`. With it, root on the VM can make the node's kernel run its nested-virtualisation code, a large and complex part of KVM with a history of serious bugs. CVE-2021-29657, on AMD, was turned into a full escape from guest to host. A bug like that here would give a team root on the node, which holds every secret and could forge any result.
 
-| VM | CPU type | `vmx` visible | `/dev/kvm` |
+**How it happened:** the devbox VMs were set to `cpu: host` by hand on 2026-11-05, and that passes the node's nesting on to them. The same day the setting was written into the devbox stack, without anyone checking what it exposed. It was live on all 9 devbox VMs for about 9 hours, with no round running.
+
+**The fix:** sandbox and devbox VMs use `x86-64-v3`, which offers no hardware virtualisation. It has AVX2 and AES, and it is the same CPU on any node.
+
+| Layer | What it does | Where | State |
 |---|---|---|---|
-| `devbox-t1-a`, `devbox-t2-a` | `host` | Yes | Yes. As root on `devbox-t1-a`, `KVM_CREATE_VM` succeeded |
-| `devbox-t1-gw` | `qemu64` | No | No |
+| CPU type | Both stacks set `x86-64-v3` | `stacks/sandbox/main.tf`, `stacks/devbox/main.tf` | Live on all 9 devbox VMs. A sandbox gets it when built |
+| The stack refuses | `host` and `max` fail validation on a devbox VM | `modules/devbox_vm/variables.tf` | Done |
+| Tests | No team VM may ask for `host`, `max`, `+vmx` or `+svm`, and both stacks must match the agent's value | `tests/test_tofu.py` | Done |
+| The agent refuses | A round's check job fails, and a dev upload is not placed, unless the node's own config says exactly `cpu: x86-64-v3`. It does not ask the VM, whose answer proves nothing | `round_agent/handlers.py`, `TEAM_VM_CPU` | Done |
+| Nesting off on the node | No VM can get it, whatever its config says | `/etc/modprobe.d/worms-no-nesting.conf` | **Written, not active.** It needs a restart (`docs/check-with-user.md`, 3h) |
 
-A worm runs as `debian`, which has passwordless `sudo`, and a team logs in as root, so both can use it. Sandbox VMs stay on `qemu64` until this is decided (`docs/check-with-user.md`, 3h).
+Measured on 2026-11-05, as root on the VM. The right column holds for all 9 devbox VMs, the left for the one VM probed in full before its restart (`devbox-t1-b`). A sweep afterwards found no `/dev/kvm` on the 9 VMs or their 3 gateways:
 
-**The risk:** root on the VM can make the node's kernel run its nested-virtualisation code, a large and complex part of KVM with a history of serious bugs. CVE-2021-29657, on AMD, was turned into a full escape from guest to host. A bug like that here would give a team root on the node, which holds every secret and could forge any result. This is added attack surface, not a known hole in this kernel.
+| | `cpu: host` | `cpu: x86-64-v3` |
+|---|---|---|
+| Raw `CPUID`, VMX bit (not `/proc/cpuinfo`, which the guest kernel filters) | 1 | 0 |
+| `modprobe kvm_intel` | Loads | `Operation not supported` |
+| `/dev/kvm` | Exists | Absent |
+| Own device node `10:232`, made with `mknod` and opened | Opens | `ENODEV` |
+| AVX2, AES | Yes | Yes |
 
-**What it does not change:** the network. A nested guest's traffic leaves through the VM's own NIC, so every firewall layer still applies, and the VM keeps its limit of 1 core and 512 MB.
+**Not measured:**
+- **A real sandbox.** None exists. The plan shows `x86-64-v3` on every sandbox VM, and the check job stops a round that has anything else.
+- **`vmxon` itself.** A guest whose CPU does not list VMX should not be able to turn it on, because KVM refuses `CR4.VMXE` for it. Testing that needs a kernel module on the VM. Nesting off on the node removes the question.
 
-`cpu: host` without nesting is much milder: the VM learns the exact CPU model and can use all of its features, but gets no new way into the node.
+**What it never changed:** the network. A nested guest's traffic leaves through the VM's own NIC, so every firewall layer applied throughout.
+
+**Still on `cpu: host`:** `cve-search`, because MongoDB needs AVX. It runs no team code, but team VMs can reach it over the network, and it still has `/dev/kvm` until nesting is off on the node.
 
 ### Hyperthreading (open)
 

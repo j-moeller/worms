@@ -111,13 +111,37 @@ def test_the_llm_endpoint_is_the_only_external_destination_of_untrusted_vms():
     assert re.search(r"devbox\s+= local\.sg\.devbox\n.*?llm_access\s+= local\.sg\.llm_access", devbox, re.S)
 
 
-def test_a_devbox_reset_keeps_the_operators_vm_settings():
-    """Set by hand on the running VMs. A reset rebuilds them from the stack, so they have to be there."""
+def test_a_devbox_reset_keeps_the_operators_memory_floor():
+    """Set by hand on the running VMs. A reset rebuilds them from the stack, so it has to be there."""
     devbox = (OPENTOFU / "stacks" / "devbox" / "main.tf").read_text()
     vms = devbox.split('module "devbox_vm" {', 1)[1].split('module "devbox_gw"', 1)[0]
-    assert re.search(r'cpu_type = "host"\n\s+ram_min\s+= 512', vms)
+    assert re.search(r"ram_min\s+= 512", vms)
     gateways = devbox.split('module "devbox_gw" {', 1)[1]
-    assert "cpu_type" not in gateways.split("\n}\n", 1)[0] and "ram_min" not in gateways.split("\n}\n", 1)[0]
+    assert "ram_min" not in gateways.split("\n}\n", 1)[0]
+
+
+def test_no_team_vm_is_offered_hardware_virtualisation():
+    """Sandbox and devbox VMs are assumed hostile and rooted. `host` and `max` pass VMX on to them,
+    which gives root /dev/kvm and a way into the node's nested-KVM code. Measured on 2026-11-05: with
+    `host`, /dev/kvm opened; with x86-64-v3, kvm_intel refuses to load (docs/security-assessment.md)."""
+    agent = (REPO / "scripts" / "round_agent" / "handlers.py").read_text()
+    expected = re.search(r'^TEAM_VM_CPU = "(.+)"$', agent, re.M).group(1)
+    assert expected not in {"host", "max"}
+
+    devbox = (OPENTOFU / "stacks" / "devbox" / "main.tf").read_text()
+    sandbox = (OPENTOFU / "stacks" / "sandbox" / "main.tf").read_text()
+    vms = devbox.split('module "devbox_vm" {', 1)[1].split('module "devbox_gw"', 1)[0]
+    assert re.findall(r'^\s*cpu_type\s*=\s*"(.+)"', vms, re.M) == [expected], "a devbox VM"
+    _, sandbox_vms = sandbox.split('resource "proxmox_virtual_environment_vm" "vm" {', 1)
+    assert re.findall(r'^\s*type\s*=\s*"(.+)"', sandbox_vms.split("cpu {", 1)[1].split("}", 1)[0], re.M) == [expected], "a sandbox VM"
+
+    # The gateways run no team code, and nothing else in the two stacks may ask for it either.
+    module = (OPENTOFU / "modules" / "devbox_vm" / "variables.tf").read_text()
+    assert 'contains(["host", "max"], var.cpu_type)' in module, "the module refuses them"
+    for name, text in {"devbox": devbox, "sandbox": sandbox}.items():
+        code = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+        assert not re.search(r'(cpu_type|\btype)\s*=\s*"(host|max)"', code), name
+        assert "+vmx" not in code and "+svm" not in code, name
 
 
 def test_every_layer_on_the_way_to_the_llm_endpoint_allows_only_it():

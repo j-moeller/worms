@@ -19,7 +19,9 @@ Times are host time (CET); the VMs log in UTC (CET - 1h).
 
 **LLM endpoint, 2026-11-05:** `teachllm` is reachable from the sandbox and devbox VMs, as the one exception to "no internet". All 9 devbox VMs connect with TLS verified, and attempts to get anywhere else from a VM or a gateway, or to bypass the gateway, are blocked (`docs/security-assessment.md`, "LLM endpoint"). The three devbox gateways were rebuilt for it; the VMs were not. Not yet seen on a real sandbox.
 
-**VM settings, 2026-11-05:** the operator set the devbox VMs to `cpu: host` and `balloon: 512` by hand. The devbox stack now says so too, because a reset rebuilds the VMs from it. Sandbox VMs now have the same memory floor, but stay on `qemu64`: `cpu: host` lets root on a VM use KVM on this node, so the CPU type waits for a decision (`docs/check-with-user.md`, 3h). Gateways are unchanged.
+**No `/dev/kvm` on team VMs, 2026-11-05:** `cpu: host` gave root on the devbox VMs `/dev/kvm`, which must not happen because they are assumed hostile and rooted. All 9 now run `x86-64-v3`, and sandbox VMs will too. Measured as root on each VM: `kvm_intel` refuses to load and `/dev/kvm` is gone. The agent refuses any other CPU before a round or a dev upload. Nesting off on the node is written but needs a restart (`docs/security-assessment.md`; `docs/check-with-user.md`, 3h).
+
+**VM settings, 2026-11-05:** the operator set the devbox VMs to `balloon: 512` by hand, and the devbox stack keeps it. Sandbox VMs now have the same memory floor. Gateways are unchanged.
 
 **`teachllm` in the private DNS, 2026-11-05:** the name now resolves on the VMs, so `curl https://teachllm.mlsec.tu-berlin.de/` works from all 9 devbox VMs with TLS verified. Every other outside name is still refused, and `scoring.worms.internal` still resolves. Not yet seen from a real sandbox.
 

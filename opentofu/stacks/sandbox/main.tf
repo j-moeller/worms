@@ -437,10 +437,15 @@ resource "proxmox_virtual_environment_vm" "vm" {
   name      = each.key
   node_name = var.proxmox_instance
 
+  # Team code is assumed hostile and root on these VMs. This CPU offers no hardware
+  # virtualisation, so they get no /dev/kvm and cannot drive the node's nested-KVM code
+  # (docs/security-assessment.md). Never "host" or "max". The same as a devbox VM, and the
+  # round's check job refuses any other (round_agent/handlers.py).
   cpu {
     cores = each.value.cpu
     limit = each.value.cpu
     units = local.limits.cpu_units
+    type  = "x86-64-v3"
   }
 
   memory {

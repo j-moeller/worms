@@ -211,6 +211,7 @@ class FakeExecutor:
         self.installed_hcl = None
         self.systemctl = {}
         self.qm = {}
+        self.qm_config = {}
 
     def job_log(self, job_uuid, kind):
         from contextlib import nullcontext
@@ -255,6 +256,8 @@ class FakeExecutor:
         self.calls.append(("run", *[str(a) for a in argv]))
         if argv[0] == "systemctl":
             return self.systemctl.get(argv[2], "active")
+        if argv[:2] == ["qm", "config"]:
+            return self.qm_config.get(argv[2], "cores: 1\ncpu: x86-64-v3\nname: a-vm\n")
         if argv[0] == "qm":
             return self.qm.get(argv[2], "status: running")
         if argv[0] == "/usr/local/sbin/worms-mirror":
@@ -304,6 +307,19 @@ def test_check_flags_a_down_vm_and_dead_service():
     assert result["ok"] is False
     assert "host:worms-mirror" in result["failures"]
     assert "vm:sandbox-a:running" in result["failures"]
+
+
+@pytest.mark.parametrize(
+    "config",
+    ["cpu: host", "cpu: max", "cpu: x86-64-v3,flags=+vmx", "cpu: qemu64", "name: no-cpu-line", ""],
+)
+def test_check_refuses_a_sandbox_vm_without_the_cpu_that_hides_kvm(config):
+    """Hostile root on a VM must not get /dev/kvm. Asked of the node, and anything unknown fails."""
+    ex = FakeExecutor()
+    ex.qm_config["901"] = config
+    result = handlers.check(ex, CFG, {})
+    assert result["ok"] is False
+    assert result["failures"] == ["vm:sandbox-b:no-kvm"]
 
 
 def test_release_secrets_writes_flag_and_returns_hash():
@@ -387,7 +403,16 @@ def test_devbox_deploy_puts_the_worm_on_the_teams_vm_a_and_arms_it():
     ]  # fmt: skip
     # Scoring and logging know a devbox by its gateway's address: a round's team file stays out of it.
     assert not [c for c in ex.ssh_calls if "/etc/sandbox-api/current-team" in c["argv"]]
-    assert ex.calls == [], "it does not touch OpenTofu or any other VM"
+    assert ex.calls == [("run", "qm", "config", "100")], "it only reads this VM's config, and does not touch OpenTofu"
+
+
+@pytest.mark.parametrize("config", ["cpu: host", "cpu: max", "cpu: x86-64-v3,flags=+vmx", ""])
+def test_devbox_deploy_puts_no_worm_on_a_vm_that_could_use_kvm(config):
+    ex = DevboxExecutor()
+    ex.qm_config["100"] = config
+    with pytest.raises(validation.Invalid, match="CPU"):
+        handlers.devbox_deploy(ex, CFG, _devbox_deploy(ex))
+    assert ex.ssh_calls == [], "nothing was copied and nothing was armed"
 
 
 def test_devbox_deploy_rejects_tampered_artifact():

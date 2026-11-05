@@ -8,6 +8,19 @@
     reload: true
   loop: "{{ host_sysctls | dict2items }}"
 
+# Sandbox and devbox VMs are assumed hostile and rooted. Their CPU type already hides hardware
+# virtualisation from them. This is the second lock: with nesting off, no VM can get it from this
+# node, whatever its config says (docs/security-assessment.md). It applies when the module next
+# loads, so after a node restart, or with every VM stopped and kvm_intel reloaded.
+- name: Turn off nested virtualisation
+  ansible.builtin.copy:
+    dest: /etc/modprobe.d/worms-no-nesting.conf
+    content: |
+      options kvm_intel nested=0
+      options kvm_amd nested=0
+    mode: "0644"
+  tags: [kvm-nesting]
+
 - name: Create configuration directory
   ansible.builtin.file:
     path: "{{ host_nft_file | dirname }}"

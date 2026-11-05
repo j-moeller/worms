@@ -67,12 +67,6 @@ Stopping and starting VMs in a round does not go through the agent, so that is n
 
 Whichever is chosen should apply to dev uploads too. If a Reset waits, the version bump has to wait with it, otherwise the score is cleared hours before the VMs change. A second worker for devbox jobs would remove the conflict, but that is the parallel work that is on hold.
 
-## Which CPU type for the team VMs?
-
-- [ ] **Decide:** `docs/check-with-user.md`, 3h.
-
-`cpu: host` lets root on a devbox VM use KVM (`docs/security-assessment.md`). Sandbox VMs stay on `qemu64` until this is decided, so a worm that depends on the CPU can still work on the devbox and fail in a round. They do have the devbox VMs' memory floor now.
-
 ## Should the profile list only a user's own SSH keys?
 
 - [ ] **Decide:** whole team, or only your own?
@@ -83,7 +77,7 @@ The profile lists the whole team's keys, and any member can remove any of them. 
 
 - [ ] **`bash main.sh` on a real sandbox.** No round has run since the change. It has run on a real devbox, through a dev upload (`docs/devbox.md`), and the agent's commands are the same. Upload `worm.sh`, renamed to `main.sh`, and run a real round.
 - [ ] **The LLM endpoint from a real sandbox.** It works from all 9 devbox VMs. The sandbox gateway's rules are only checked by tests.
-- [ ] **The 512 MB floor on a real sandbox.** No sandbox has been built since the change.
+- [ ] **The 512 MB floor and no `/dev/kvm` on a real sandbox.** No sandbox has been built since the change. The plan shows both, and the round's check job stops a round on any other CPU. When one runs, as root on a VM: `ls /dev/kvm` and `modprobe kvm_intel` must both fail.
 - [ ] **Live view of the profile's Team panel with real rounds.** The system has no rounds, so it says `No round has started yet`. Its numbers and layout have only been checked with test data.
 - [ ] **Port 2222 from outside.** Run `ssh -p 2222 team@worms-dev.mlsec.tu-berlin.de` from a laptop. Expect `Permission denied (publickey)`. A timeout may mean the network in front of the node blocks it. The node cannot test its own port forward.
 - [ ] **`Permission denied (publickey)` from A to B on alpha.** Seen by the user, not resolved. The hop worked on charlie's VMs with a key in the agent. Check `ssh-add -L` on the laptop, and if it lists the key, look at `ssh -v root@10.128.2.12`.

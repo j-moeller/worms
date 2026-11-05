@@ -32,6 +32,11 @@ variable "cpu_type" {
   description = "QEMU CPU type. Provider's default for the gateways; see stacks/devbox/main.tf for the VMs."
   type        = string
   default     = "qemu64"
+
+  validation {
+    condition     = !contains(["host", "max"], var.cpu_type)
+    error_message = "A team's VM must not get hardware virtualisation: no /dev/kvm (docs/security-assessment.md)."
+  }
 }
 
 variable "is_gateway" {

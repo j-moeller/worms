@@ -108,20 +108,13 @@ On 2026-11-05 that warning appeared for the database, dashboard and orchestrator
 
 The risk is low while the traffic stays on local bridges, and rebuilds change the keys on purpose. Recommended before going live: turn checking on, with each build recording the new VMs' keys.
 
-### 3h. Which CPU type for the team VMs?
+### 3h. Turn nesting off on the node
 
-- [ ] **Decide:** see the table.
+- [ ] **Decide:** when to restart, because it stops every VM.
 
-`cpu: host` plus nesting on this node lets root on a team's VM use KVM (`docs/security-assessment.md`). It is live on all 9 devbox VMs. Sandbox VMs stay on `qemu64` until this is decided.
+Team VMs no longer get `/dev/kvm` (`docs/security-assessment.md`). This is the second lock: with nesting off, no VM can get it, whatever its config says. It also covers `cve-search`, which is still on `cpu: host`.
 
-| Option | Closes nesting | Same CPU on `worms-dev` and `worms-pve` | Needs |
-|---|---|---|---|
-| **`x86-64-v3` on sandbox and devbox VMs (recommended)** | Expected, to be measured on one VM first | Yes | One line in each stack and a restart of the VMs. `worms-pve` must have AVX2 |
-| Keep `host`, turn nesting off on the node | Expected, for every VM | No | `options kvm_intel nested=N` and a node restart, which stops all VMs |
-| A custom CPU model: `host` without `vmx` | Expected | No | A Proxmox model file, and a test that the provisioning token may use it |
-| Back to `qemu64` | Yes, measured on the gateways | Yes | A restart of the VMs. Has no AVX or AES, and the operator moved away from it |
-
-Turning nesting off on the node is also worth doing as a second lock when it next restarts. Nothing in this repository uses nesting.
+`/etc/modprobe.d/worms-no-nesting.conf` is written, but `/sys/module/kvm_intel/parameters/nested` stays `Y` until the module reloads. That takes either a node restart, or stopping all VMs and reloading `kvm_intel`, which does not restart the node itself.
 
 ### 4. Public certificate for the dashboard
 
@@ -200,6 +193,8 @@ Both settings reached `main` once by my mistake, in `52fc7a1`, and `e6e5b33` put
 ## Before going live on `worms-pve`
 
 - [ ] Create a DNS record for `worms.mlsec.tu-berlin.de`. It does not resolve yet.
+- [ ] Check that `worms-pve` has AVX2. Sandbox and devbox VMs use `x86-64-v3` and do not start without it.
+- [ ] Check that `/sys/module/kvm_intel/parameters/nested` (or `kvm_amd`) says `N` on `worms-pve`.
 - [ ] Check `grep . /sys/devices/system/cpu/vulnerabilities/*` on `worms-pve`. If it says `SMT vulnerable`, decide about turning hyperthreading off (`docs/security-assessment.md`, "Hyperthreading").
 - [ ] Make sure `proxmox_instance` is `worms-pve`. A node not listed in `dashboard_public_names`
       (`group_vars/all.yml`) fails the run.

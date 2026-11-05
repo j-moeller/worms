@@ -276,6 +276,14 @@ def test_devpi_only_lets_root_modify_and_root_has_a_generated_password(render):
     assert "vault_devpi_root_password" in defaults["devpi_root_password"]
 
 
+def test_the_node_turns_nesting_off_for_every_vm():
+    """The second lock behind the team VMs' CPU type (docs/security-assessment.md)."""
+    tasks = yaml.safe_load((ANSIBLE / "roles/host/host_network/tasks/main.yml").read_text())
+    task = next(t for t in tasks if t["name"] == "Turn off nested virtualisation")
+    content = task["ansible.builtin.copy"]["content"]
+    assert "options kvm_intel nested=0" in content and "options kvm_amd nested=0" in content
+
+
 def test_the_host_routes_only_the_gateways_to_the_llm_endpoint(render, tmp_path, infrastructure):
     """The one forward from an untrusted network to the WAN: the gateways' own addresses, one
     destination, TCP 443. It does not depend on the internet window."""

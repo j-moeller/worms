@@ -102,15 +102,35 @@ def _next_free_index(used):
     raise ProvisionError(f"no free devbox index (at most {MAX_TEAMS} teams)")
 
 
-def provision(competition, dry_run=False):
+def request_reconfigure(competition):
+    """Enqueue a devbox_reconfigure host job: the round agent pushes every team's
+    SSH keys and the source->team map again, from what the database says. Needed
+    after a reset of the service VMs (`worms devbox reconfigure`), which takes the
+    map off scoring and logging. Touches no VM's disk and no token.
+
+    Returns the job, or None when no devbox is provisioned or a queued job
+    already carries exactly this."""
+    with transaction.atomic():
+        teams = provisioned_team_specs(competition)
+        queued = HostJob.objects.filter(kind=HostJob.Kind.DEVBOX_RECONFIGURE, state=HostJob.State.QUEUED)
+        if not teams or any(job.params.get("teams") == teams for job in queued):
+            return None
+        # The agent requires a team_uuid, though only for its log; no team asked for this one.
+        return HostJob.objects.create(
+            kind=HostJob.Kind.DEVBOX_RECONFIGURE,
+            params={"team_uuid": teams[0]["team_uuid"], "teams": teams},
+        )
+
+
+def provision(competition):
     """Ensure every team of `competition` has a Devbox with a stable index and
     services-source address, and enqueue one devbox_provision host job with
     the full team list. The agent's provisioning is idempotent, so this is
     safe whenever teams change (`manage.py provision_devboxes`, run by the
     operator as `worms devbox provision`). Indices are assigned once and kept.
 
-    Returns (spec, job): job is None on a dry run or when a queued provision
-    job already carries exactly this spec (nothing new to build)."""
+    Returns (spec, job): job is None when a queued provision job already
+    carries exactly this spec (nothing new to build)."""
     teams = list(Team.objects.filter(competition=competition).order_by("id"))
     if len(teams) > MAX_TEAMS:
         raise ProvisionError(f"{len(teams)} teams exceeds the devbox maximum of {MAX_TEAMS}")
@@ -123,10 +143,9 @@ def provision(competition, dry_run=False):
                 devbox.index = _next_free_index(used)
                 used.add(devbox.index)
                 devbox.services_source_ip = f"10.2.0.{32 + devbox.index}"
-                if not dry_run:
-                    devbox.save(update_fields=["index", "services_source_ip"])
+                devbox.save(update_fields=["index", "services_source_ip"])
             spec.append(team_spec(team, devbox.index))
-        if dry_run or not spec:
+        if not spec:
             return spec, None
         queued = HostJob.objects.filter(kind=HostJob.Kind.DEVBOX_PROVISION, state=HostJob.State.QUEUED)
         if any(job.params.get("teams") == spec for job in queued):

@@ -10,6 +10,7 @@ venv/
 __pycache__/
 .pytest_cache/
 .venv-test/
+.claude
 
 # Upload storage of older test runs (before MEDIA_ROOT was set; now projects/dashboard/media/ locally)
 /malware-artifacts/

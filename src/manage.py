@@ -108,9 +108,20 @@ def _internet_status(config) -> list[str]:
     return _internet_cell(state, "")
 
 
+def _internet_notice(config) -> None:
+    """Every command starts by saying whether the VMs have internet access. On
+    stderr, because the stdout of some commands is their result (a one-time
+    password), and it never stops a command: the node may be out of reach."""
+    try:
+        row = _internet_status(config)
+    except Exception as exc:  # noqa: BLE001
+        row = _internet_cell("unknown", str(exc))
+    print(": ".join(row), file=sys.stderr)
+
+
 def _internet_cell(state, stderr) -> list[str]:
     if state == "allowed":
-        return ["internet access", output.status_cell("warn", "ALLOWED (deny before deploying a sandbox)")]
+        return ["internet access", output.status_cell("warn", "ALLOWED (close it with `worms build internet-deny`)")]
     if state == "denied":
         return ["internet access", output.status_cell("ok", "denied")]
     return ["internet access", output.status_cell("unknown", stderr.strip()[:60] or "could not probe")]
@@ -216,17 +227,49 @@ def cmd_devbox(config, args) -> int:
     """`worms devbox provision`: give every team of the current competition a
     devbox and enqueue the provision host job; the round agent on the node
     builds them (docs/devbox.md). Teams are created on the dashboard, which
-    builds no infrastructure; run this after adding teams."""
+    builds no infrastructure; run this after adding teams. `worms devbox
+    reconfigure`: push what the service VMs and the gateway must know again."""
+    if args.devbox_action == "reconfigure":
+        return _request_devbox_reconfigure(config)
     _with_db(config)
     from django.core.management import call_command
     from django.core.management.base import CommandError
 
     try:
-        call_command("provision_devboxes", dry_run=args.dry_run)
+        call_command("provision_devboxes")
     except CommandError as exc:
         output.error(str(exc))
         return 1
     return 0
+
+
+def _request_devbox_reconfigure(config) -> int:
+    """Have the round agent push every team's SSH keys and the source->team map
+    again, from the database. Never from the service VMs: one of them may have
+    been changed by a worm, which is what a reset is there to undo."""
+    _with_db(config)
+    from core.models.competition import ApplicationSetting
+    from orchestrator.rounds.devbox import request_reconfigure
+
+    competition = ApplicationSetting.get_current_competition()
+    job = request_reconfigure(competition) if competition else None
+    if job is None:
+        print("nothing to enqueue: no devbox is provisioned, or the same job is queued")
+    else:
+        print(f"enqueued devbox_reconfigure host job {job.uuid}: the round agent does the work")
+    return 0
+
+
+def _restore_devbox_map(config) -> int:
+    """After a reset, whatever goes wrong here must not read as a failed reset."""
+    try:
+        return _request_devbox_reconfigure(config)
+    except (SystemExit, Exception) as exc:  # noqa: BLE001
+        output.error(
+            f"the services are reset, but the devbox map on scoring and logging is empty ({exc}): "
+            "devbox submissions stay unattributed until `worms devbox reconfigure` has run"
+        )
+        return 1
 
 
 def cmd_users(config, args) -> int:
@@ -266,9 +309,6 @@ def cmd_admin(config, args) -> int:
     if args.admin_action == "create-staff":
         from core import accounts
 
-        if args.dry_run:
-            print(output.color(f"(dry run) would create the staff account {args.email!r}", "yellow"))
-            return 0
         created = accounts.create_account(args.email, args.first_name, args.last_name, staff=True)
         if created is None:
             output.error(f"an account {args.email!r} already exists")
@@ -281,9 +321,6 @@ def cmd_admin(config, args) -> int:
     if admin is not None and admin.has_usable_password() and not admin.must_change_password:
         if not build.confirm(f"Replace {args.username!r}'s password and end its sessions?", args.yes):
             return 1
-    if args.dry_run:
-        print(output.color(f"(dry run) would set a one-time password for {args.username!r}", "yellow"))
-        return 0
     try:
         call_command("reset_admin_password", username=args.username)
     except CommandError as exc:
@@ -410,9 +447,6 @@ for ip in $(printf '%s\n' {' '.join(ips)} $known | sort -u); do
 done
 """
     print(output.color(f"$ ssh {config.ssh} ...  (your own SSH login)", "dim"))
-    if args.dry_run:
-        print(output.color("  (dry run: not executed)", "yellow"))
-        return 0
     if subprocess.run(["ssh", config.ssh, script]).returncode != 0:
         output.error(f"could not add the key on {config.ssh}")
         return 1
@@ -439,17 +473,19 @@ def cmd_build(config, args) -> int:
         output.error(f"unknown component {component!r}. Try `worms build --list`.")
         return 1
     method_name, _ = pipeline.COMPONENTS[component]
-    pipe = pipeline.Pipeline(config, dry_run=args.dry_run, ansible_args=" ".join(args.make_args))
+    pipe = pipeline.Pipeline(config, ansible_args=" ".join(args.make_args))
     try:
         getattr(pipe, method_name)()
     except build.BuildError as exc:
         output.error(str(exc))
         return 1
+    if component == "round-reset-services":
+        return _restore_devbox_map(config)
     return 0
 
 
 def cmd_debug(config, args) -> int:
-    pipe = pipeline.Pipeline(config, dry_run=args.dry_run)
+    pipe = pipeline.Pipeline(config)
     try:
         pipe.debug(args.host)
     except build.BuildError as exc:
@@ -459,8 +495,8 @@ def cmd_debug(config, args) -> int:
 
 
 def cmd_test(config, args) -> int:
-    """Run the offline test suite (was `make test`): a .venv-test venv +
-    pytest. Runs on this machine (the repo), not over SSH."""
+    """Run the offline test suite: a .venv-test venv + pytest. Runs on this
+    machine (the repo), not over SSH."""
     import subprocess
 
     repo = str(config.repo_root)
@@ -483,9 +519,6 @@ def cmd_reset_database(config, args) -> int:
     if not build.confirm("Wipe ALL dashboard data (teams, users, captures, logs) and re-init?", args.yes):
         return 1
     _with_db(config)
-    if args.dry_run:
-        print(output.color("(dry run) would run manage.py reset_database --yes", "yellow"))
-        return 0
     from django.core.management import call_command
 
     call_command("reset_database", "--yes")
@@ -496,7 +529,7 @@ def cmd_destroy(config, args, key: str) -> int:
     method_name, help_text = DESTRUCTIVE[key]
     if not build.confirm(f"{help_text}. Proceed?", args.yes):
         return 1
-    pipe = pipeline.Pipeline(config, dry_run=args.dry_run)
+    pipe = pipeline.Pipeline(config)
     try:
         getattr(pipe, method_name)()
     except build.BuildError as exc:
@@ -527,8 +560,8 @@ SECTIONS = (
     Section(
         "set up the system",
         "From an empty node to a running platform. `worms build` is safe to repeat; it opens the internet "
-        "window, which is refused while any devbox or sandbox VM exists. Afterwards: `worms admin "
-        "reset-password` for the first login.",
+        "window, which is refused while any devbox or sandbox VM exists. Its last step snapshots the service "
+        "VMs, as what a reset returns to. Afterwards: `worms admin reset-password` for the first login.",
         commands=(
             ("secrets issue <name>", "create or rotate a Proxmox token and store it"),
             ("secrets set <name>", "store a secret by hand (prompted, or from stdin)"),
@@ -536,7 +569,7 @@ SECTIONS = (
             ("build [<component>]", "everything, end to end (= make), or one component: `worms build --list`"),
         ),
         more_components=("all", "init", "secrets", "platform", "firewall", "host-network", "infrastructure",
-                         "inventory", "configure", "provision", "offline", "internet-allow"),  # fmt: skip
+                         "inventory", "configure", "provision", "offline", "snapshot-services", "internet-allow"),  # fmt: skip
     ),
     Section(
         "manage production",
@@ -544,11 +577,12 @@ SECTIONS = (
         "instead (/staff/), and a round starts by itself.",
         commands=(
             ("devbox provision", "give new teams a devbox: enqueue the build for the round agent"),
+            ("devbox reconfigure", "enqueue a new push of the teams' SSH keys and the devbox map (a reset does this itself)"),
             ("admin reset-password", "one-time password for the dashboard admin, printed once (created if missing)"),
             ("admin create-staff <email>", "a staff (tutor) account; one-time password printed once"),
             ("teams delete <name>", "delete a team with everything it owns (its users stay)"),
         ),
-        components=("round-reset-services", "internet-deny"),
+        components=("round-reset-services", "rebuild-services", "internet-deny"),
     ),
     Section(
         "run by the round agent",
@@ -667,7 +701,7 @@ def _components_overview() -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="worms",
-        usage="worms [-h] [--config FILE] [--dry-run] <command> ...",
+        usage="worms [-h] [--config FILE] <command> ...",
         description=f"{__doc__}\n{_commands_overview()}",
         epilog="Configuration (env or ~/.worms/config, no secrets): src/worms_cli/config.py;\n"
         "secrets: src/worms_cli/secrets.py; docs/accounts.md §4. Run `worms <command>\n"
@@ -675,12 +709,6 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--config", metavar="FILE", help="path to a KEY=value config file (default ~/.worms/config)")
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="print what would run, change nothing. Goes before the command. "
-        "`secrets`, `teams delete` and `test` ignore it and really run",
-    )
     # The sections above replace argparse's flat list of commands. An explicit
     # prog: older Pythons build it from the parser's custom usage otherwise.
     sub = parser.add_subparsers(
@@ -699,6 +727,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_devbox = sub.add_parser("devbox", description=devbox_help)
     devbox_sub = p_devbox.add_subparsers(dest="devbox_action", required=True)
     _add(devbox_sub, "devbox provision")
+    _add(devbox_sub, "devbox reconfigure")
 
     _add(sub, "users")
     _add(sub, "leaderboard")
@@ -756,6 +785,7 @@ def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     config = Config.load(args.config)
+    _internet_notice(config)
 
     if args.command == "status":
         return cmd_status(config, args)
@@ -776,7 +806,7 @@ def main(argv=None) -> int:
     if args.command == "build":
         return cmd_build(config, args)
     if args.command == "simulate":
-        return cmd_build(config, argparse.Namespace(component="simulate", list=False, make_args=[], dry_run=args.dry_run))
+        return cmd_build(config, argparse.Namespace(component="simulate", list=False, make_args=[]))
     if args.command == "test":
         return cmd_test(config, args)
     if args.command == "debug":

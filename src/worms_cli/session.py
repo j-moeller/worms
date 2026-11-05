@@ -35,6 +35,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
+from subprocess import DEVNULL
 
 from worms_cli.secrets import SSH_KEY, SSH_PUBLIC_KEY, Vault, VaultError
 
@@ -205,8 +206,9 @@ class Session:
     # -- the node ----------------------------------------------------------------
 
     def ssh_opts(self) -> list[str]:
-        """To the node: your own SSH setup, never a prompt."""
-        return ["-o", "BatchMode=yes"]
+        """To the node: your own SSH setup, never a prompt, and no long wait: every
+        command starts by asking the node about its internet access."""
+        return ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
 
     def ssh_argv(self, command: str) -> list[str]:
         return ["ssh", *self.ssh_opts(), self.config.ssh, command]
@@ -217,7 +219,8 @@ class Session:
         if not self.laptop or self._node_ok:
             return
         argv = ["ssh", *self.ssh_opts(), "-o", "IdentityFile=none", self.config.ssh, "true"]
-        proc = subprocess.run(argv, env=self.env(), capture_output=True, text=True, timeout=30)
+        # No stdin: ssh would read it, and `worms secrets set ssh-key < key` needs it.
+        proc = subprocess.run(argv, env=self.env(), stdin=DEVNULL, capture_output=True, text=True, timeout=30)
         if proc.returncode != 0:
             agent = "your ssh-agent" if self.operator_agent() else "an ssh-agent (yours: none, or no key in it)"
             raise SessionError(
@@ -317,5 +320,7 @@ class Session:
         if not self.laptop:
             return os.path.exists(INTERNET_FLAG)
         self.check_node()
-        proc = subprocess.run(self.ssh_argv(f"test -e {INTERNET_FLAG}"), env=self.env(), timeout=30)
+        proc = subprocess.run(self.ssh_argv(f"test -e {INTERNET_FLAG}"), env=self.env(), stdin=DEVNULL, capture_output=True, text=True, timeout=30)
+        if proc.returncode not in (0, 1):  # 255: ssh failed, which says nothing about the flag
+            raise SessionError(f"could not ask {self.config.ssh}: {proc.stderr.strip()[:120]}")
         return proc.returncode == 0

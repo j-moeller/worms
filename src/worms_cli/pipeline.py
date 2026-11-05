@@ -15,10 +15,19 @@ OpenTofu gets its Proxmox credentials from the vault, through the Runner
 
 from __future__ import annotations
 
+import shlex
+from datetime import datetime
+
 from worms_cli import output
 from worms_cli.build import BuildError, Runner
 
 INTERNET_FLAG = "/run/worms/internet-allowed"
+
+# The VMs a reset returns to their snapshot: the services a worm can talk to. The
+# persistent VMs hold the records, and the team VMs are the teams' own.
+SERVICE_POOLS = ("ephemeral", "private_internet")
+TEAM_POOLS = ("sandbox", "devbox")
+SERVICE_SNAPSHOT = "clean"
 
 # Stacks that get `tofu init` (order matters only for readability).
 INIT_STACKS = [
@@ -31,7 +40,7 @@ INIT_STACKS = [
     "private_internet",
 ]
 
-# The configure playbook sequence (was `make configure`).
+# The configure playbook sequence.
 CONFIGURE_PLAYBOOKS = [
     "WaitForVMs.yml",
     "SetupDNS.yml",
@@ -51,9 +60,9 @@ CONFIGURE_PLAYBOOKS = [
 
 
 class Pipeline:
-    def __init__(self, config, dry_run: bool = False, ansible_args: str = ""):
-        self.runner = Runner(config, dry_run=dry_run)
-        # Extra args appended to every ansible-playbook call (was make ARGS=...).
+    def __init__(self, config, ansible_args: str = ""):
+        self.runner = Runner(config)
+        # Extra args appended to every ansible-playbook call.
         self.ansible_args = ansible_args
         # Ansible caches facts for the run (ansible.cfg); start without any,
         # and drop them again whenever tofu may have rebuilt VMs.
@@ -139,7 +148,7 @@ class Pipeline:
 
     def offline(self):
         if self.runner.flag_exists(INTERNET_FLAG):
-            raise BuildError(f"internet access is still allowed ({INTERNET_FLAG}): run `worms internet-deny`")
+            raise BuildError(f"internet access is still allowed ({INTERNET_FLAG}): run `worms build internet-deny`")
         self._ansible("SetupDNS.yml")
         self._ansible("SetupPrivateInternet.yml")
 
@@ -163,15 +172,15 @@ class Pipeline:
                 self.internet_deny()
             except BuildError as exc:
                 raise BuildError(
-                    "!!! INTERNET ACCESS IS STILL ALLOWED: run `worms internet-deny` -- " + str(exc)
+                    "!!! INTERNET ACCESS IS STILL ALLOWED: run `worms build internet-deny` -- " + str(exc)
                 )
 
     # -- composite targets ---------------------------------------------------
 
     def build_all(self):
-        """The full pipeline (was `make`): init -> secrets -> platform ->
-        firewall -> host-network -> [internet] infrastructure + configure
-        [/internet] -> offline -> show-config."""
+        """The full pipeline: init -> secrets -> platform -> firewall ->
+        host-network -> [internet] infrastructure + configure [/internet] ->
+        offline -> snapshot of the service VMs -> show-config."""
         self.init()
         self.secrets()
         self.platform()
@@ -179,28 +188,111 @@ class Pipeline:
         self.host_network()
         self.online(lambda: (self.infrastructure(), self.configure()))
         self.offline()
+        self.snapshot_new_services()
         self.show_config()
         print(output.color("== setup complete (internet access denied) ==", "green"))
 
     def provision(self):
-        """Ansible only (was `make provision`): configure under the internet
-        window, then offline."""
+        """Ansible only: configure under the internet window, then offline."""
         self.online(self.configure)
         self.offline()
+        self._warn_of_older_snapshots(self._service_vms())
 
-    # -- rounds / devbox -----------------------------------------------------
+    # -- the service VMs: reset, snapshot, rebuild ------------------------------
+
+    def _service_vms(self) -> list[dict]:
+        return sorted((vm for vm in self.runner.vms() if vm.get("pool") in SERVICE_POOLS), key=lambda vm: vm["vmid"])
+
+    def _refuse_vms_in(self, pools: tuple, why: str) -> None:
+        names = sorted(vm["name"] for vm in self.runner.vms() if vm.get("pool") in pools)
+        if names:
+            raise BuildError(f"{why} ({len(names)} VM(s): {', '.join(names)})")
+
+    def _wait_for(self, vms: list[dict]) -> None:
+        if vms:
+            self._facts_fresh = False
+            # A VM's group in the inventory is its name with underscores.
+            limit = ",".join(vm["name"].replace("-", "_") for vm in vms)
+            self._ansible("WaitForVMs.yml", "--limit", limit, user_args=False)
+
+    def _take_snapshot(self, vm: dict) -> None:
+        # Shut down first: these VMs run no guest agent, so a snapshot of a running
+        # one would hold only what a power cut leaves on the disk.
+        vmid = vm["vmid"]
+        if vm.get("status") == "running":
+            self.runner.node_sh(f"qm shutdown {vmid} --timeout 120 --forceStop 1")
+        self.runner.node_sh(f"qm snapshot {vmid} {SERVICE_SNAPSHOT} --description {shlex.quote(f'worms {self.runner.commit()}')}")
+        self.runner.node_sh(f"qm start {vmid}")
+
+    def _warn_of_older_snapshots(self, vms: list[dict]) -> None:
+        if any(self.runner.snapshot(vm, SERVICE_SNAPSHOT) for vm in vms):
+            output.warn(
+                "a reset returns the service VMs to their older snapshot, without what this build changed on them. "
+                "To keep it: `worms build rebuild-services`"
+            )
+
+    def snapshot_new_services(self):
+        """Snapshot the service VMs that have none, after a build. A snapshot that
+        exists is kept: VMs that have been up since may no longer be clean."""
+        vms = self._service_vms()
+        new = [vm for vm in vms if not self.runner.snapshot(vm, SERVICE_SNAPSHOT)]
+        for vm in new:
+            self._take_snapshot(vm)
+        self._wait_for(new)
+        self._warn_of_older_snapshots([vm for vm in vms if vm not in new])
+
+    def snapshot_services(self):
+        """Make the service VMs' present state the one a reset returns to. Team
+        VMs are assumed malicious and can reach these services, so never with any
+        of them around; earlier exposure is for the operator to rule out."""
+        self._refuse_vms_in(TEAM_POOLS, "Refusing to snapshot: team VMs can reach the services, so they may not be clean")
+        vms = self._service_vms()
+        for vm in vms:
+            if self.runner.snapshot(vm, SERVICE_SNAPSHOT):
+                self.runner.node_sh(f"qm delsnapshot {vm['vmid']} {SERVICE_SNAPSHOT}")
+            self._take_snapshot(vm)
+        self._wait_for(vms)
 
     def round_reset_services(self):
+        """Between rounds: return the service VMs to their snapshot. Nothing is
+        rebuilt and no internet is needed, so devbox VMs can stay. What only lives
+        on these VMs goes with it: the devbox map, which `worms build` then has
+        the round agent write again from the database (src/manage.py)."""
+        self._refuse_vms_in(("sandbox",), "Refusing to reset during a round: sandbox VMs exist")
+        vms = self._service_vms()
+        snapshots = {vm["name"]: self.runner.snapshot(vm, SERVICE_SNAPSHOT) for vm in vms}
+        missing = sorted(name for name, snapshot in snapshots.items() if not snapshot)
+        if missing or not vms:
+            raise BuildError(
+                f"nothing was reset: no snapshot on {', '.join(missing) or 'any service VM'}. "
+                "Make one with `worms build rebuild-services`"
+            )
+        oldest = min(snapshots.values(), key=lambda snapshot: snapshot["snaptime"])
+        taken = datetime.fromtimestamp(oldest["snaptime"]).isoformat(sep=" ", timespec="minutes")
+        print(output.color(f"resetting {len(vms)} VMs to their snapshot of {taken} ({oldest.get('description', '').strip()})", "dim"))
+        for vm in vms:
+            self.runner.node_sh(f"qm rollback {vm['vmid']} {SERVICE_SNAPSHOT} --start 1")
+        self._wait_for(vms)
+
+    def rebuild_services(self):
+        """Rebuild the service VMs from nothing and snapshot them: for when the
+        snapshot no longer fits, such as after changing their configuration. The
+        internet window is refused while team VMs exist, so say so before
+        destroying anything."""
+        self._refuse_vms_in(TEAM_POOLS, "Refusing to destroy the services: rebuilding needs the internet window, refused while team VMs exist")
         self._destroy("infrastructure/ephemeral")
         self._destroy("private_internet")
-        self.online(self._round_reset_apply_and_configure)
+        self.online(self._apply_and_configure_services)
         self.offline()
+        self.snapshot_new_services()
 
-    def _round_reset_apply_and_configure(self):
+    def _apply_and_configure_services(self):
         self._apply("private_internet")
         self._apply("infrastructure/ephemeral")
         self.inventory()
         self.configure()
+
+    # -- rounds / devbox -----------------------------------------------------
 
     def round_configure_sandbox(self):
         self.inventory()
@@ -282,7 +374,15 @@ COMPONENTS: dict[str, tuple[str, str]] = {
     "internet-deny": ("internet_deny", "close the internet window by hand, if a build reports it still open"),
     "round-reset-services": (
         "round_reset_services",
-        "between rounds, with no devbox or sandbox VM left: rebuild the ephemeral + private-internet VMs",
+        "between rounds: return the ephemeral + private-internet VMs to their snapshot (devboxes can stay)",
+    ),
+    "rebuild-services": (
+        "rebuild_services",
+        "rebuild those VMs from nothing, and snapshot them (with no devbox or sandbox VM left)",
+    ),
+    "snapshot-services": (
+        "snapshot_services",
+        "snapshot those VMs as they are, as what a reset returns to (with no devbox or sandbox VM left)",
     ),
     "round-configure-sandbox": ("round_configure_sandbox", "configure freshly built sandbox VMs (CA)"),
     "devbox": ("devbox", "build + configure the team devboxes and SSH gateway"),

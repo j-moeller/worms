@@ -426,3 +426,126 @@ def test_arguments_for_the_tools_go_after_a_double_dash():
 def test_a_command_is_still_required():
     proc = subprocess.run([sys.executable, str(MANAGE)], capture_output=True, text=True)
     assert proc.returncode == 2 and "usage: worms" in proc.stderr and "<command>" in proc.stderr
+
+
+def test_there_is_no_dry_run():
+    """It did not hold for every command: `teams delete` and `secrets issue` really ran."""
+    proc = subprocess.run([sys.executable, str(MANAGE), "--dry-run", "status"], capture_output=True, text=True)
+    assert proc.returncode == 2 and "--dry-run" in proc.stderr
+    assert "dry-run" not in run_cli("--help")
+
+
+# --- the internet notice: every command starts with it ------------------------------
+
+
+def run_on(tmp_path, *args, **env):
+    """The CLI in an empty checkout: it is on no node unless the test says so."""
+    return subprocess.run(
+        [sys.executable, str(MANAGE), *args], capture_output=True, text=True,
+        env={k: v for k, v in os.environ.items() if not k.startswith("WORMS_")}
+        | {"NO_COLOR": "1", "WORMS_REPO_ROOT": str(tmp_path), "HOME": str(tmp_path), **env},
+    )  # fmt: skip
+
+
+def test_every_command_starts_with_the_internet_notice(tmp_path):
+    for args in (["status"], ["build", "--list"], ["secrets"]):
+        proc = run_on(tmp_path, *args)
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stderr.splitlines()[0].startswith("internet access: "), args
+
+
+def test_the_internet_notice_stays_off_stdout(tmp_path):
+    """The stdout of `worms admin reset-password` is the password, and nothing else."""
+    assert "internet access:" not in run_on(tmp_path, "build", "--list").stdout
+
+
+def test_help_is_not_a_command(tmp_path):
+    assert run_on(tmp_path, "--help").stderr == ""
+
+
+def test_the_internet_notice_says_what_it_found(tmp_path, monkeypatch, capsys):
+    cli = _cli_module()
+    from worms_cli.config import Config
+
+    config = Config(env={})
+    monkeypatch.setattr(cli, "PVE_CONFIG_DIR", str(tmp_path))
+    monkeypatch.setattr(cli, "INTERNET_FLAG", str(tmp_path / "internet-allowed"))
+    cli._internet_notice(config)
+    assert "denied" in capsys.readouterr().err
+    (tmp_path / "internet-allowed").touch()
+    cli._internet_notice(config)
+    err = capsys.readouterr().err
+    assert "ALLOWED" in err and "worms build internet-deny" in err
+
+
+def test_the_internet_notice_never_stops_a_command(monkeypatch, capsys):
+    cli = _cli_module()
+
+    def broken(_config):
+        raise RuntimeError("no route to host")
+
+    monkeypatch.setattr(cli, "_internet_status", broken)
+    cli._internet_notice(None)
+    assert "no route to host" in capsys.readouterr().err
+
+
+# --- a reset of the service VMs brings back the devbox map ---------------------------
+
+
+def test_a_reset_asks_the_agent_for_the_devbox_map(monkeypatch):
+    """The snapshot predates the devboxes, so the rollback emptied their map."""
+    cli = _cli_module()
+    from worms_cli import pipeline
+
+    done, asked = [], []
+    monkeypatch.setattr(pipeline, "Pipeline", lambda *_a, **_k: type("P", (), {"round_reset_services": lambda self: done.append(1)})())
+    monkeypatch.setattr(cli, "_request_devbox_reconfigure", lambda config: asked.append(config) or 0)
+    args = argparse.Namespace(list=False, component="round-reset-services", make_args=[])
+    assert cli.cmd_build("config", args) == 0
+    assert done == [1] and asked == ["config"]
+
+
+def test_a_failed_reset_asks_for_nothing(monkeypatch):
+    cli = _cli_module()
+    from worms_cli import build, pipeline
+
+    def fails(self):
+        raise build.BuildError("refused")
+
+    asked = []
+    monkeypatch.setattr(pipeline, "Pipeline", lambda *_a, **_k: type("P", (), {"round_reset_services": fails})())
+    monkeypatch.setattr(cli, "_request_devbox_reconfigure", lambda config: asked.append(config) or 0)
+    args = argparse.Namespace(list=False, component="round-reset-services", make_args=[])
+    assert cli.cmd_build("config", args) == 1 and asked == []
+
+
+@pytest.mark.parametrize("failure", [SystemExit(2), RuntimeError("database down")])
+def test_an_unreachable_database_after_a_reset_says_what_is_left_to_do(monkeypatch, capsys, failure):
+    cli = _cli_module()
+
+    def fails(_config):
+        raise failure
+
+    monkeypatch.setattr(cli, "_request_devbox_reconfigure", fails)
+    assert cli._restore_devbox_map(None) == 1
+    err = capsys.readouterr().err
+    assert "the services are reset" in err and "worms devbox reconfigure" in err
+
+
+def test_devbox_reconfigure_enqueues_a_job_the_agent_accepts(initialised):
+    """The agent validates a job's params; one it refuses restores nothing."""
+    cluster = initialised
+    add_team(cluster, "Mapped")
+    worms(cluster, "devbox", "provision")
+    worms(cluster, "devbox", "reconfigure")
+    (params,), = sql(cluster, "SELECT params FROM host_jobs WHERE kind = 'devbox_reconfigure' AND state = 'queued'")
+    sys.path.insert(0, str(REPO / "scripts"))
+    from round_agent import validation
+
+    assert validation.devbox_reconfigure(params)["teams"]
+    # The same list again: the queued job already covers it.
+    assert "nothing to enqueue" in worms(cluster, "devbox", "reconfigure").stdout
+
+
+def test_devbox_reconfigure_without_devboxes_enqueues_nothing(initialised):
+    assert "nothing to enqueue" in worms(initialised, "devbox", "reconfigure").stdout

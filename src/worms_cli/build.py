@@ -7,6 +7,7 @@ pipeline itself (every former Makefile recipe) lives in worms_cli/pipeline.py.
 
 from __future__ import annotations
 
+import json
 import shlex
 import subprocess
 import sys
@@ -20,9 +21,8 @@ class BuildError(RuntimeError):
 
 
 class Runner:
-    def __init__(self, config, dry_run: bool = False):
+    def __init__(self, config):
         self.config = config
-        self.dry_run = dry_run
         self.repo_root = config.repo_root
         self.session = for_config(config)
         self._node_ready = False
@@ -31,9 +31,6 @@ class Runner:
         if not quiet:
             label = label if len(label) < 100 else label[:97] + "..."
             print(output.color(f"$ {label}  [{where}]", "dim"))
-        if self.dry_run:
-            print(output.color("  (dry run: not executed)", "yellow"))
-            return 0
         try:  # argv and env may be callables: computed only when run
             proc = subprocess.run(argv() if callable(argv) else argv, env=env() if callable(env) else env)
         except SessionError as exc:
@@ -70,7 +67,7 @@ class Runner:
         """Run in the round agent's workspace on the node (over SSH from a
         laptop), after bringing it up to date with this checkout once per run:
         one state for the sandbox and devbox stacks, the agent's."""
-        if not self._node_ready and not self.dry_run:
+        if not self._node_ready:
             # The agent's workspace: code, CA certificate, platform/firewall
             # outputs (ansible role round_agent, tasks/workspace.yml).
             self.ansible("SetupRoundAgent.yml", "--tags", "agent-sync")
@@ -116,7 +113,7 @@ class Runner:
         base = "ansible-playbook"
         if vault and self.session.has_vault():
             base += " -e @group_vars/vault.yml"
-        if self.session.laptop and not self.dry_run:
+        if self.session.laptop:
             self._check_inventory()
             # The node's internet flag (group_vars/all.yml can only test the
             # controller's own filesystem).
@@ -133,9 +130,6 @@ class Runner:
         """Generate the missing generated secrets; report the entered ones
         that are missing (`worms secrets set <name>`)."""
         print(output.color(f"$ (vault) generate missing secrets  [{self.session.vault.file}]", "dim"))
-        if self.dry_run:
-            print(output.color("  (dry run: not executed)", "yellow"))
-            return
         try:
             added = self.session.vault.ensure()
             rows = self.session.vault.status()
@@ -152,11 +146,33 @@ class Runner:
 
     def flag_exists(self, path: str) -> bool:
         """Whether a file exists on the node (for the internet flag check)."""
-        if self.dry_run:
-            return False  # nothing was actually run; don't block the dry run
         if not self.session.laptop:
             return self.sh(f"test -e {shlex.quote(path)}", check=False, quiet=True) == 0
         return self.node_sh(f"test -e {shlex.quote(path)}", check=False, quiet=True) == 0
+
+    def _node_json(self, *argv: str):
+        """A read-only command on the node whose output is JSON."""
+        try:
+            code, out, err = self.session.node_run(list(argv))
+        except SessionError as exc:
+            raise BuildError(str(exc)) from exc
+        if code != 0:
+            raise BuildError(f"{' '.join(argv)} failed: {err.strip()[:200]}")
+        return json.loads(out)
+
+    def vms(self) -> list[dict]:
+        """Every VM on the node, with its vmid, name, pool, status and node."""
+        return self._node_json("pvesh", "get", "/cluster/resources", "--type", "vm", "--output-format", "json")
+
+    def snapshot(self, vm: dict, name: str) -> dict | None:
+        """A VM's snapshot of that name (snaptime, description), if it has one."""
+        path = f"/nodes/{vm['node']}/qemu/{vm['vmid']}/snapshot"
+        return next((s for s in self._node_json("pvesh", "get", path, "--output-format", "json") if s.get("name") == name), None)
+
+    def commit(self) -> str:
+        """The checkout's commit, to record what a snapshot was taken from."""
+        proc = subprocess.run(["git", "-C", str(self.repo_root), "rev-parse", "--short", "HEAD"], capture_output=True, text=True)
+        return proc.stdout.strip() or "unknown"
 
 
 def confirm(prompt: str, assume_yes: bool) -> bool:

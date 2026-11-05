@@ -130,9 +130,64 @@ def test_preflight_logs_in_like_the_provider_and_says_what_to_do(checkout, monke
     session = Session(Config(env={"WORMS_REPO_ROOT": str(checkout), "WORMS_SSH": NODE}))
     with pytest.raises(build.SessionError) as error:
         session.tofu_env()
-    assert calls == [["ssh", "-o", "BatchMode=yes", "-o", "IdentityFile=none", NODE, "true"]]
+    assert calls == [["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "IdentityFile=none", NODE, "true"]]
     message = str(error.value)
     assert "Permission denied (publickey)" in message and "ssh-add" in message and "worms node trust" in message
+
+
+def probing_with(monkeypatch, checkout, returncode):
+    """A laptop's Session whose ssh answers with `returncode`; records what it was given."""
+    import types
+
+    seen = []
+
+    def run(argv, **kwargs):
+        seen.append(kwargs)
+        return subprocess.CompletedProcess(argv, returncode, "", "ssh: connect to host pve.example: timed out")
+
+    monkeypatch.setattr("worms_cli.session.subprocess", types.SimpleNamespace(run=run, SubprocessError=Exception))
+    monkeypatch.setattr(Session, "check_node", lambda self: None)
+    monkeypatch.setattr(Session, "worms_agent", lambda self: {"SSH_AUTH_SOCK": WORMS_AGENT, "SSH_AGENT_PID": "1"})
+    monkeypatch.setattr(Session, "operator_agent", lambda self: True)
+    return Session(Config(env={"WORMS_REPO_ROOT": str(checkout), "WORMS_SSH": NODE})), seen
+
+
+@pytest.mark.parametrize("returncode, allowed", [(0, True), (1, False)])
+def test_the_internet_flag_is_read_over_ssh(checkout, monkeypatch, returncode, allowed):
+    session, _seen = probing_with(monkeypatch, checkout, returncode)
+    assert session.internet_allowed() is allowed
+
+
+def test_a_failed_ssh_does_not_read_as_internet_denied(checkout, monkeypatch):
+    """ssh exits 255 when it cannot connect. "denied" would be a false all-clear,
+    and every command now starts by showing this."""
+    session, _seen = probing_with(monkeypatch, checkout, 255)
+    with pytest.raises(build.SessionError, match="timed out"):
+        session.internet_allowed()
+
+
+def test_the_internet_probe_leaves_stdin_alone(checkout, monkeypatch):
+    """Every command probes first, and ssh reads its stdin: it would swallow the
+    key of `worms secrets set ssh-key < key`, which would store nothing."""
+    session, seen = probing_with(monkeypatch, checkout, 1)
+    session.internet_allowed()
+    assert seen[0]["stdin"] == subprocess.DEVNULL
+
+
+def test_the_preflight_leaves_stdin_alone(checkout, monkeypatch):
+    import types
+
+    seen = []
+
+    def run(argv, **kwargs):
+        seen.append(kwargs)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr("worms_cli.session.subprocess", types.SimpleNamespace(run=run, SubprocessError=Exception))
+    monkeypatch.setattr(Session, "worms_agent", lambda self: {"SSH_AUTH_SOCK": WORMS_AGENT, "SSH_AGENT_PID": "1"})
+    monkeypatch.setattr(Session, "operator_agent", lambda self: True)
+    Session(Config(env={"WORMS_REPO_ROOT": str(checkout), "WORMS_SSH": NODE})).check_node()
+    assert seen[0]["stdin"] == subprocess.DEVNULL
 
 
 def test_the_token_only_reaches_tofu(checkout, recorded):
@@ -151,7 +206,8 @@ def test_laptop_runs_the_nodes_stacks_on_the_node(checkout, recorded):
     # The workspace is brought up to date first, once per run.
     assert "SetupRoundAgent.yml --tags agent-sync" in sync[0][2]
     # Your own SSH setup to the node, as `ssh root@<node>`.
-    assert apply[0] == ["ssh", "-o", "BatchMode=yes", NODE, f"{NODE_RUN} opentofu/stacks/sandbox 'tofu apply -auto-approve'"]
+    assert apply[0] == ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", NODE,
+                        f"{NODE_RUN} opentofu/stacks/sandbox 'tofu apply -auto-approve'"]  # fmt: skip
     assert apply[1]["SSH_AUTH_SOCK"] == OPERATOR_AGENT
     assert "TF_VAR_proxmox_api_token" not in apply[1]  # the node has its own (the agent's env file)
     assert devbox[0][0] == "ssh" and devbox[0][-2] == NODE

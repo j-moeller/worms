@@ -42,7 +42,8 @@ a live Proxmox host (the standing caveat — no node is available here).
   `uploads.py`, the status presentation in `views/util.py`,
   `tests/test_leaderboard.py`).
 - **Round progression**: ✅ a team replays its rounds (Live: its run; Dev: its
-  devbox) on the PROGRESSION page — only the VMs it captured, scoring,
+  devbox) on the PROGRESSION page — Live: only the VMs it captured and the
+  entry VM once the worm has started; Dev: all of its devbox VMs; plus scoring,
   logging and the private internet; never another team's devbox, other
   sandbox VMs, infrastructure, firewall internals or secrets — and downloads
   them (one format: JSON, or a zip with optional log records and traffic;

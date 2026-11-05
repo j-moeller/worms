@@ -41,10 +41,11 @@ the devbox is always on -- so the progression is what the team's devbox
 submitted and logged during the round's window. The monitor does not record
 devbox traffic, so a dev document has no network data (`available: false`).
 
-What a team sees (audience "team") is built, not hidden: only the VMs it
-captured in the round (a sandbox VM whose flag it scored; a devbox VM whose
-token it submitted in the window); never another team's devbox; no
-infrastructure the sandbox cannot reach (database, orchestrator, dashboard,
+What a team sees (audience "team") is built, not hidden. Live: only the sandbox
+VMs whose flag it scored in the round, and the entry VM from the worm's start on.
+Dev: every VM of its own devbox once it is set up, marked captured when its token
+was submitted in the window. Never another team's devbox; no infrastructure the
+sandbox cannot reach (database, orchestrator, dashboard,
 Proxmox host, monitor, gateways); no firewall rules or security groups, no
 Proxmox VMIDs, bridge names or internal ids; no secrets. An event or a flow
 that involves anything else is dropped, not masked; an inferred source VM or
@@ -232,7 +233,8 @@ def _live(team, rnd, now, audience, infra, flow_limit):
         tl.pop("run")
         tl["run"] = _run_info(run, zero)
         if audience == "team":
-            tl = for_team(tl)
+            # By the time, not the state: the conductor's loop sets RUNNING a moment later.
+            tl = for_team(tl, started=run.worm_start_at is not None and now >= run.worm_start_at)
         else:
             tl["run"].update(uuid=str(run.uuid), team_uuid=str(team.uuid), team_slug=f"t{team.id}")
     t_min, t_max = _span(tl, tl["run"]["duration"] if tl["run"] else None)
@@ -272,10 +274,11 @@ def _run_info(run, zero):
     }
 
 
-def for_team(tl):
+def for_team(tl, *, started):
     """The part of a run's timeline (timeline.build) its team may see: the VMs
-    it captured, scoring, logging and the private internet."""
-    visible = {n["id"] for n in tl["nodes"] if n["captured"]}
+    it captured, the entry VM once the worm has `started`, scoring, logging and
+    the private internet."""
+    visible = {n["id"] for n in tl["nodes"] if n["captured"] or (started and n["start_vm"])}
     label = {n["id"]: n["label"] for n in tl["nodes"] if n["id"] in visible}
     see = lambda vm: vm if vm in visible else None  # noqa: E731
 
@@ -299,7 +302,7 @@ def for_team(tl):
             "addresses": list(n["addresses"]),
             "networks": [{"name": net_ids[x["name"]], "cidr": x.get("cidr")} for x in n["networks"]],
             "start_vm": n["start_vm"],
-            "captured": True,
+            "captured": n["captured"],
             "captured_at": n["captured_at"],
         }
         for n in tl["nodes"]
@@ -396,8 +399,8 @@ def _scene_node(node_id, name, role, **extra):
 
 def team_scene(environment, team, infra, devbox_nodes=()):
     """What a team's player draws: scoring, logging, the private internet and
-    one untrusted group (the sandbox, or the team's own devbox with the VMs it
-    captured). No addresses, firewall or Proxmox details."""
+    one untrusted group (the sandbox, or the team's own devbox with its VMs).
+    No addresses, firewall or Proxmox details."""
     pi = _pi_nodes(infra)
     nodes = [_scene_node("role:scoring", "scoring", "scoring"), _scene_node("role:logging", "logging", "logging"), *pi]
     if environment == "dev":
@@ -534,8 +537,8 @@ def _devbox_activity(team, start, end, zero, infra):
         stored = set(DevboxLog.objects.filter(logging_attempt__in=rows).values_list("logging_attempt_id", flat=True))
         logs = [(_sec(a.created_at, zero), a, a.id in stored) for a in rows]
 
-    visible = [vm for vm in vms if str(vm.uuid) in captured_at]
-    label = {str(vm.uuid): vm.vm_identifier for vm in visible}
+    # Every VM is drawn; a submission only names a VM that it captured.
+    label = {str(vm.uuid): vm.vm_identifier for vm in vms if str(vm.uuid) in captured_at}
     unknown_source = {"source_vm": None, "source_label": None, "source_inferred": False}
     events = []
     for vm_id, t in captured_at.items():
@@ -567,10 +570,10 @@ def _devbox_activity(team, start, end, zero, infra):
     nodes = [
         {
             "id": str(vm.uuid), "label": vm.vm_identifier, "group": "devbox", "devbox_role": vm.role or None,
-            "addresses": [], "networks": [], "start_vm": False, "captured": True,
-            "captured_at": captured_at[str(vm.uuid)],
+            "addresses": [], "networks": [], "start_vm": False, "captured": str(vm.uuid) in captured_at,
+            "captured_at": captured_at.get(str(vm.uuid)),
         }  # fmt: skip
-        for vm in visible
+        for vm in vms
     ]
     tl = {
         "run": None,
@@ -580,7 +583,7 @@ def _devbox_activity(team, start, end, zero, infra):
         # The devbox is always on.
         "vm_status": {n["id"]: [[t_min, "running"]] for n in nodes},
         "events": events,
-        "captures": [{"t": captured_at[n["id"]], "vm": n["id"]} for n in nodes],
+        "captures": [{"t": n["captured_at"], "vm": n["id"]} for n in nodes if n["captured"]],
         "truncated": truncated,
     }
     scene_nodes = [

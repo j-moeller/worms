@@ -27,7 +27,7 @@ Authorization: Bearer <token>
 | `GET /api/v1/rounds/` | the team's rounds (id, name, start/end, `main`/`development`), the team's run in each (state, worm start, end) and links to the endpoints below (`scoring`, `logging`, `progression`, `download`) |
 | `GET /api/v1/rounds/<id>/scoring/` | every flag the team's sandbox submitted during its run in that round, oldest first: `submitted_at`, `flag_hash` (as received), `result` (`captured` = scored, `duplicate` = that VM was already captured, `not_counted` = a VM's flag outside the run's live window, `invalid` = no VM of the run has it, `pending` = not processed yet), `vm` (whose flag it is — named only if the team captured that VM in the round; a VM it did not capture is never named). Plus `summary` (`captured`, `vms`). Devbox submissions are not part of a round and never appear here. |
 | `GET /api/v1/rounds/<id>/logging/` | every log attributed to the team in that round, oldest first: `uuid`, `received_at`, `log` (the JSON the worm sent, as stored) |
-| `GET /api/v1/rounds/<id>/progression/` | the round's **progression** (`docs/progression.md`): the clock (round start, end, and now while the round runs), the scene, every event — captures, submissions, logs (by reference), the run's state — of the VMs the team captured. Works for unfinished rounds and for Dev rounds (the devbox). |
+| `GET /api/v1/rounds/<id>/progression/` | the round's **progression** (`docs/progression.md`): the clock (round start, end, and now while the round runs), the scene, every event — captures, submissions, logs (by reference), the run's state — of the VMs the team may see (`docs/progression.md`). Works for unfinished rounds and for Dev rounds (the devbox). |
 | `GET /api/v1/rounds/<id>/progression/flows/` | its network traffic (`{count, truncated, available, reason, flows}`; not recorded for Dev rounds) |
 | `GET /api/v1/rounds/<id>/progression/logs/<ref>/` | one log record of it: `{ref, received_at, data}` (404 for anything not the team's in that round) |
 | `GET /api/v1/rounds/<id>/progression.zip?logs=0\|1&network=0\|1` | all of it as one zip: `progression.json`, `logs/<ref>.json`, `network/flows.jsonl` (both parts default to included; `0` leaves them out). Open it on the PROGRESSION page to replay it. |
@@ -103,8 +103,9 @@ degrade the dashboard for others:
 - Tokens: 256-bit random (`secrets.token_urlsafe(32)`), stored hashed, looked
   up by hash (unique index), revocable on the profile. A token grants read
   access to its own team's round results only — nothing of other teams, no
-  infrastructure data, nothing writable. A progression shows only the VMs the
-  team captured, scoring, logging and the private internet
+  infrastructure data, nothing writable. A progression shows the VMs the team
+  captured and its entry VM once the worm has started (live), or its own devbox
+  VMs (dev), plus scoring, logging and the private internet
   (`docs/progression.md`).
 - The returned log records and submitted hashes are the team's own worm's
   output (attacker-controlled by design); they are returned as JSON data, with

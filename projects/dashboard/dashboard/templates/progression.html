@@ -6,7 +6,7 @@
 <header class="page-head">
     <p class="page-head__kicker">{% if environment == "dev" %}Dev · your devbox{% else %}Live · your runs{% endif %}</p>
     <h1 class="page-head__title">{% if environment == "dev" %}Progression{% else %}Round progression{% endif %}</h1>
-    <p class="page-head__lead">{% if environment == "dev" %}What your worm has done on your devbox so far: the VMs it captured, the tokens it submitted and the logs it sent. A reset starts it over.{% else %}Replay your run in a round like a video: the VMs your worm captured, the flags it submitted, the logs it sent and its traffic. Only the VMs you captured in the round are shown.{% endif %}</p>
+    <p class="page-head__lead">{% if environment == "dev" %}What your worm has done on your devbox so far: the VMs it captured, the tokens it submitted and the logs it sent. A reset starts it over.{% else %}Replay your run in a round like a video: the VMs your worm captured, the flags it submitted, the logs it sent and its traffic. Only the entry VM and the VMs you captured in the round are shown.{% endif %}</p>
 </header>
 
 {% if environment == "live" and not rounds %}

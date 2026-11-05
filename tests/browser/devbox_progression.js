@@ -55,6 +55,13 @@ const out = { errors, requests, checks: {} };
     await page.waitForTimeout(200);
     await page.screenshot({ path: path.join(shots, "progression-devbox.png") });
 
+    // Every VM is on the page; only the ones it captured carry a flag.
+    out.checks.vmClasses = await page.evaluate(() => {
+        const sc = document.getElementById("topo").topoState.scene;
+        return sc.order.filter((n) => n.group && n.group.startsWith("group:devbox")).map((n) => [n.info.name, n.el.getAttribute("class")]);
+    });
+    out.checks.flags = await page.locator("#topo-svg .marker-flag").count();
+
     // A log record: fetched from the devbox's own address, shown as text.
     await page.locator("#topo-feed li", { hasText: "log received" }).first().click();
     await page.waitForFunction(() => { const pre = document.querySelector("#topo-side pre.log-record"); return pre && pre.textContent.length > 0; });

@@ -13,6 +13,8 @@ Times are host time (CET); the VMs log in UTC (CET - 1h).
 
 **View as, 2026-11-05:** the admin can view the dashboard as another user, read only, from `/staff/users/` (`docs/accounts.md`, "View as"). Staff and students cannot.
 
+**Progression VMs and uploads, 2026-11-05:** a team's progression now shows every VM of its own devbox once it is set up (dev), and the VMs it captured plus the entry VM from the worm's start on (live). No round has run since, so the live rule has only been checked with test data. Separately, a check found that an upload does not run on the devbox, and that one made in the dev view would run in the next live round (`docs/todos/dev-rounds.md`).
+
 **LLM endpoint, 2026-11-05:** every sandbox and devbox VM may now send to `141.23.117.34`, TCP 443. The rule is live, but the bridge table, gateways and node still drop the packet, so no connection completes (`docs/security-assessment.md`, "LLM endpoint"; decision 3h in `docs/check-with-user.md`).
 
 **Password resets, 2026-11-05:** staff keep the one-time password button, and each reset now adds a row to the new `password_resets` table in the same transaction. The dashboard's role may add and read rows but not change or remove them (`docs/accounts.md`, "Password resets are recorded"). This is the first migration after `0001_initial`, and it needs the grants applied too (`docs/management.md`).

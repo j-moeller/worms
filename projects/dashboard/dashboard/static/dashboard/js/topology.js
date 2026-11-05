@@ -22,7 +22,7 @@
  * the orchestrator and the dashboard on top, the database in the middle,
  * scoring and logging below it, then the devboxes, the sandbox and (to the
  * right) the private internet. A team sees the scene its progression brings:
- * scoring, logging, the private internet and the VMs it captured (the server
+ * scoring, logging, the private internet and the VMs it may see (the server
  * decides what is in it; this script only draws it). Only operational
  * connections are drawn, never a management network.
  *
@@ -863,7 +863,7 @@
         const LEFT = 40;
 
         // A team's scene: no infrastructure rows, one untrusted group (its
-        // sandbox, or its devbox in Dev), the VMs it captured.
+        // sandbox, or its devbox in Dev), the VMs it may see.
         const team = opts.audience === "team";
         const runNodes = new Map(((tl && tl.nodes) || []).map((n) => [n.id, n]));
 
@@ -1261,7 +1261,7 @@
         if (g.kind === "sandbox" && g.empty) {
             node.appendChild(sv("text", {
                 class: "muted", x: g.x + g.w / 2, y: g.y + g.h / 2 + 4, "text-anchor": "middle",
-                text: S.scene.team ? "No VM captured in this round (yet)." : replaying() ? "No VMs recorded for this run." : "No sandbox right now (no run in progress).",
+                text: S.scene.team ? "No VM to show (yet): the entry VM appears when your worm starts." : replaying() ? "No VMs recorded for this run." : "No sandbox right now (no run in progress).",
             }));
         }
         if (g.kind === "pi") {
@@ -1676,11 +1676,11 @@
         }
         if (g.kind === "devbox") {
             return el("div", null, el("div", { class: "tt" }, g.label),
-                el("div", { class: "ts" }, S.scene.team ? "Your devbox VMs that your worm found a token on in this round."
+                el("div", { class: "ts" }, S.scene.team ? "Your devbox VMs. A VM stays faint until your worm finds its token."
                     : "Three VMs, A–B and B–C; reaches scoring, logging and the private internet only (never the sandbox or another team)."));
         }
         return el("div", null, el("div", { class: "tt" }, "Sandbox"),
-            el("div", { class: "ts" }, S.scene.team ? "The VMs your worm captured in this round (a VM shows up faint until its capture)."
+            el("div", { class: "ts" }, S.scene.team ? "The entry VM and the VMs your worm captured in this round (faint until captured)."
                 : "The running round's VMs; reach each other, scoring, logging and the private internet only."));
     }
 
@@ -1996,7 +1996,9 @@
                     ? ["round", `${d.round.start ? fmtDate(d.round.start) : "—"} – ${d.round.end ? fmtDate(d.round.end) : "—"}`] : null,
                 r.present ? ["worm start", r.worm_start_at ? fmtDate(r.worm_start_at) : "—"] : null,
                 r.present ? ["duration", r.duration !== null ? fmtTime(r.duration) : "—"] : null,
-                ["VMs", d && d.audience === "team" ? `${captured} captured` : `${tl.nodes.length} (${captured} captured)`],
+                ["VMs", d && d.audience === "team"
+                    ? (d.environment === "dev" ? `${captured} of ${tl.nodes.length} captured` : `${captured} captured`)
+                    : `${tl.nodes.length} (${captured} captured)`],
                 ["connections", connectionsText(tl)],
                 ["flags submitted", `${kinds.flag_submitted || 0}${tl.truncated && tl.truncated.flag_submissions ? " (truncated)" : ""}`],
                 ["logs sent", `${kinds.log_received || 0}${tl.truncated && tl.truncated.logs ? " (truncated)" : ""}`],
@@ -2004,8 +2006,8 @@
         ]);
         if (d && d.audience === "team") {
             append(side, [el("p", { class: "hint" }, d.environment === "dev"
-                ? `Your devbox ${d.round ? "during the round" : "so far"}: the VMs your worm found a token on, what it submitted and logged.`
-                : "Your run: only the VMs your worm captured are shown (faint until their capture), with their traffic to each other, scoring, logging and the private internet.")]);
+                ? `Your devbox ${d.round ? "during the round" : "so far"}: its VMs (faint until your worm finds their token), what it submitted and logged.`
+                : "Your run: only the entry VM and the VMs your worm captured are shown (faint until captured), with their traffic to each other, scoring, logging and the private internet.")]);
         }
         const feed = el("ul", { class: "feed", id: "topo-feed" });
         const notable = tl.events.filter((e) => e.kind !== "flag_submitted" || e.data.result !== "invalid").slice(0, 600);

@@ -543,6 +543,16 @@ def test_devbox_progression_says_it_is_the_devbox_so_far(devbox_page):
     assert "round running" not in c["side"]
 
 
+def test_devbox_progression_always_shows_every_vm(devbox_page):
+    c = devbox_page["checks"]
+    classes = dict(c["vmClasses"])
+    assert sorted(classes) == ["devbox-t1-a", "devbox-t1-b", "devbox-t1-c"]
+    assert "captured" in classes["devbox-t1-a"].split() and "captured" in classes["devbox-t1-b"].split()
+    assert "uncaptured" in classes["devbox-t1-c"].split() and "captured" not in classes["devbox-t1-c"].split()
+    assert c["flags"] == 2  # a flag on each captured VM
+    assert "2 of 3 captured" in c["side"] and "faint until your worm finds their token" in c["side"]
+
+
 def test_devbox_progression_fetches_a_log_from_its_own_address(devbox_page):
     c = devbox_page["checks"]
     assert [p for p in devbox_page["requests"] if p.startswith("/progression/devbox/logs/")]
@@ -616,7 +626,7 @@ def test_team_dev_round_shows_the_devbox_without_traffic(team_page):
     c = team_page["checks"]
     dev = c["dev"]
     assert "group:sandbox" not in dev["groups"] and "group:devbox:own" in dev["groups"]
-    assert dev["devboxMembers"] == ["devbox-t1-a", "devbox-t1-b"]
+    assert dev["devboxMembers"] == ["devbox-t1-a", "devbox-t1-b", "devbox-t1-c"]
     assert "lan devbox" in dev["edgeKinds"]
     assert c["devRequests"] == ["/progression/rounds/3/"]  # no flows to fetch
     assert "not recorded" in c["devSummary"] and "Dev" in c["devSummary"]
@@ -626,6 +636,7 @@ def test_team_dev_round_shows_the_devbox_without_traffic(team_page):
     # At 5000 s, A was captured (3600 s), B not yet (9000 s).
     classes = dict(c["devAt5000"])
     assert "uncaptured" not in classes["devbox-t1-a"].split() and "uncaptured" in classes["devbox-t1-b"].split()
+    assert "uncaptured" in classes["devbox-t1-c"].split()  # never captured, still there
 
 
 def test_running_round_refreshes_in_place(team_page):

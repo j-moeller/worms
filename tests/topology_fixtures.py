@@ -271,9 +271,9 @@ def team_progression(round_id) -> dict | None:
              "path": None, "url": "/progression/rounds/1/flows/"},
         )
     if round_id == 3:
-        a, b = "d0d00000-0000-4000-8000-00000000000a", "d0d00000-0000-4000-8000-00000000000b"
-        devbox = [{"id": a, "name": "devbox-t1-a", "role": "devbox", "status": "running", "active": True, "devbox_role": "a", "team": None},
-                  {"id": b, "name": "devbox-t1-b", "role": "devbox", "status": "running", "active": True, "devbox_role": "b", "team": None}]
+        a, b, c = (f"d0d00000-0000-4000-8000-00000000000{x}" for x in "abc")
+        devbox = [{"id": v, "name": f"devbox-t1-{x}", "role": "devbox", "status": "running", "active": True, "devbox_role": x, "team": None}
+                  for v, x in ((a, "a"), (b, "b"), (c, "c"))]
         events = [
             {"t": 3600.0, "kind": "captured", "node": a, "vm": a, "data": {}},
             {"t": 3600.0, "kind": "flag_submitted", "node": "role:scoring", "vm": None,
@@ -289,23 +289,23 @@ def team_progression(round_id) -> dict | None:
         tl = {
             "run": None,
             "nodes": [{"id": n["id"], "label": n["name"], "group": "devbox", "devbox_role": n["devbox_role"], "addresses": [],
-                       "networks": [], "start_vm": False, "captured": True, "captured_at": t}
-                      for n, t in ((devbox[0], 3600.0), (devbox[1], 9000.0))],
+                       "networks": [], "start_vm": False, "captured": t is not None, "captured_at": t}
+                      for n, t in ((devbox[0], 3600.0), (devbox[1], 9000.0), (devbox[2], None))],
             "networks": [], "edges": [],
-            "vm_status": {a: [[0.0, "running"]], b: [[0.0, "running"]]},
+            "vm_status": {a: [[0.0, "running"]], b: [[0.0, "running"]], c: [[0.0, "running"]]},
             "events": events,
             "captures": [{"t": 3600.0, "vm": a}, {"t": 9000.0, "vm": b}],
             "truncated": {"flows": False, "flag_submissions": False, "logs": False},
         }
         group = {"id": "group:devbox:own", "kind": "devbox", "team": None, "team_name": "team-a", "label": "Devbox team-a",
-                 "gateway": None, "members": [a, b]}
-        link = {"id": f"lan:{a}->{b}", "source": a, "target": b, "kind": "lan", "verified": True, "label": None}
+                 "gateway": None, "members": [a, b, c]}
+        links = [{"id": f"lan:{x}->{y}", "source": x, "target": y, "kind": "lan", "verified": True, "label": None} for x, y in ((a, b), (b, c))]
         return _envelope(
             "team", "dev", {"id": 3, "name": "Dev week", "competition": "development", "start": "2026-10-20T00:00:00+00:00",
                             "end": "2026-10-27T00:00:00+00:00"},
             {"t0": "2026-10-20T00:00:00+00:00", "round_start": 0.0, "round_end": 604800.0, "now": 14400.0, "finished": False,
              "t_min": 0.0, "t_max": 14400.0},
-            _scene(group, devbox, [link]), tl, "/progression/rounds/3/logs/{ref}/",
+            _scene(group, devbox, links), tl, "/progression/rounds/3/logs/{ref}/",
             {"available": False, "reason": "The monitor records the sandbox only: devbox traffic is not recorded.", "count": 0,
              "truncated": False, "included": False, "path": None, "url": None},
         )

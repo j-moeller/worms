@@ -284,6 +284,71 @@ def test_team_sees_only_what_it_captured(world):
     assert all(e["verified"] for e in scene["edges"])
 
 
+def _entry_never_captured(world, **run):
+    """The run's entry VM is the hidden one, and a further VM exists that it also never
+    captured, so "the entry VM" and "every uncaptured VM" cannot be confused."""
+    from core.models.rounds import RoundRun
+    from core.models.vm import VirtualMachine
+
+    RoundRun.objects.filter(pk=world["run"].pk).update(sandbox_params={"start_vm": "vm-hidden"}, **run)
+    VirtualMachine.objects.create(
+        vm_identifier="vm-other", vm_maintenance_ip="10.4.0.99", round=world["r1"], run=world["run"], proxmox_vm_id=97799,
+        addresses=["10.64.3.13"], networks=[{"name": "vmbr1003", "cidr": "10.64.3.0/24"}], ctf_flag_hash=sha("flag-vm-other"),
+    )  # fmt: skip
+
+
+def test_the_entry_vm_is_visible_from_the_worms_start_without_a_capture(world):
+    _entry_never_captured(world)
+
+    doc = build(world, audience="team", flows=True)
+
+    tl = doc["timeline"]
+    hidden = str(world["vm"]["vm-hidden"].uuid)
+    entry = next(n for n in tl["nodes"] if n["id"] == hidden)
+    assert entry["start_vm"] is True and entry["captured"] is False and entry["captured_at"] is None
+    assert entry["addresses"] == ["10.64.2.12"] and entry["networks"][0]["cidr"] == "10.64.2.0/24"
+    assert tl["run"]["start_vm"] == "vm-hidden"
+    # Not a capture: the score's list stays the two it captured.
+    assert hidden not in {c["vm"] for c in tl["captures"]} and len(tl["captures"]) == 2
+    assert not [e for e in tl["events"] if e["kind"] == "captured" and e["vm"] == hidden]
+    # Its power state, the worm's start and its own traffic come with it.
+    assert hidden in tl["vm_status"] and [e for e in tl["events"] if e["kind"] == "vm_stopped" and e["vm"] == hidden]
+    assert next(e for e in tl["events"] if e["kind"] == "worm_started")["node"] == hidden
+    assert {"F-to-hidden", "F-hidden-logging"} <= {f["uid"] for f in tl["flows"]}
+    # Every other VM it did not capture stays out.
+    text = "\n".join(walk(doc))
+    for word in ("vm-other", "10.64.3.13", "10.64.3.0/24"):
+        assert word not in text, word
+    assert {n["label"] for n in tl["nodes"]} == {"vm-start", "vm-pivot", "vm-hidden"}
+
+
+@pytest.mark.parametrize("started", ["armed", "preparing"])
+def test_the_entry_vm_stays_hidden_until_the_worm_starts(world, started):
+    from django.utils import timezone
+
+    # Armed: the start time is known but has not come. Preparing: there is none yet.
+    fields = {"state": started, "worm_start_at": world["now"] + timezone.timedelta(minutes=5) if started == "armed" else None}
+    _entry_never_captured(world, **fields)
+
+    doc = build(world, audience="team", flows=True)
+
+    tl = doc["timeline"]
+    assert tl["run"]["start_vm"] is None
+    assert not [n for n in tl["nodes"] if n["start_vm"]]
+    assert not [e for e in tl["events"] if e["kind"] in ("worm_started", "worm_deployed") and e["node"] is not None]
+    text = "\n".join(walk(doc))
+    for word in ("vm-hidden", "10.64.2.12", "10.64.2.0/24", str(world["vm"]["vm-hidden"].uuid)):
+        assert word not in text, word
+
+
+def test_the_entry_vm_is_visible_at_the_moment_the_worm_starts(world):
+    _entry_never_captured(world, state="armed", worm_start_at=world["now"])
+
+    tl = build(world, audience="team")["timeline"]
+
+    assert tl["run"]["start_vm"] == "vm-hidden"
+
+
 def test_staff_see_everything(world):
     doc = build(world, audience="staff", flows=True)
     tl = doc["timeline"]
@@ -312,8 +377,10 @@ def test_dev_round_is_the_devbox_in_the_window(world):
                               "included": False, "path": None, "url": None}
     assert "not recorded" in doc["network"]["reason"]
     assert tl.get("flows", []) == []
-    # Only A: B was found before the round, C is pending, team B's token is not team A's.
-    assert [n["label"] for n in tl["nodes"]] == ["devbox-t1-a"] and tl["nodes"][0]["group"] == "devbox"
+    # Every VM of its own devbox. Only A is captured: B was found before the round, C is
+    # pending, team B's token is not team A's.
+    assert [n["label"] for n in tl["nodes"]] == ["devbox-t1-a", "devbox-t1-b", "devbox-t1-c"]
+    assert [n["captured"] for n in tl["nodes"]] == [True, False, False] and {n["group"] for n in tl["nodes"]} == {"devbox"}
     submissions = [e["data"] for e in tl["events"] if e["kind"] == "flag_submitted"]
     assert [s["result"] for s in submissions] == ["captured", "invalid", "duplicate", "pending"]
     assert submissions[0]["flag_of"] == str(a_vm.uuid) and submissions[3]["flag_of"] is None
@@ -321,11 +388,11 @@ def test_dev_round_is_the_devbox_in_the_window(world):
     assert len(captured) == 1 and captured[0]["vm"] == str(a_vm.uuid)
     logs = [e for e in tl["events"] if e["kind"] == "log_received"]
     assert [e["data"]["log"]["ref"] for e in logs] == [str(world["logs"]["dev_a"].uuid)]
-    # The scene: the team's own devbox (only A), no other team, no addresses.
+    # The scene: the team's own devbox, no other team, no addresses.
     groups = doc["scene"]["groups"]
-    assert len(groups) == 1 and groups[0]["kind"] == "devbox" and groups[0]["members"] == [str(a_vm.uuid)]
+    assert len(groups) == 1 and groups[0]["kind"] == "devbox" and groups[0]["members"] == [n["id"] for n in tl["nodes"]]
     text = "\n".join(walk(doc))
-    for word in ("devbox-t1-b", "devbox-t1-c", "devbox-t2", "team-b", "10.6.", "10.7.", "9888", "10.2.0.3"):
+    for word in ("devbox-t2", "team-b", "10.6.", "10.7.", "9888", "10.2.0.3"):
         assert word not in text, word
 
 
@@ -358,11 +425,11 @@ def test_the_devbox_progression_has_no_round_and_is_never_finished(world):
     tl = doc["timeline"]
     submissions = [e["data"]["result"] for e in tl["events"] if e["kind"] == "flag_submitted"]
     assert submissions == ["captured", "invalid", "duplicate", "pending"]
-    assert [n["label"] for n in tl["nodes"]] == ["devbox-t1-a"]
+    assert [(n["label"], n["captured"]) for n in tl["nodes"]] == [("devbox-t1-a", True), ("devbox-t1-b", False), ("devbox-t1-c", False)]
     assert [e["data"]["log"]["ref"] for e in tl["events"] if e["kind"] == "log_received"] == [str(world["logs"]["dev_a"].uuid)]
     assert doc["network"]["available"] is False and "flows" not in tl
     text = "\n".join(walk(doc))
-    for word in ("devbox-t1-b", "devbox-t1-c", "devbox-t2", "team-b", "10.6.", "10.7.", "9888", "10.2.0.3"):
+    for word in ("devbox-t2", "team-b", "10.6.", "10.7.", "9888", "10.2.0.3"):
         assert word not in text, word
 
 
@@ -381,7 +448,54 @@ def test_the_devbox_progression_starts_over_at_a_reset(world):
     HostJob.objects.create(kind=HostJob.Kind.DEVBOX_REBUILD, params={"team_uuid": str(world["b"].uuid), "devbox_version": 2}, requested_at=world["now"])
     tl = _devbox_doc(world)["timeline"]
     assert [e["data"]["result"] for e in tl["events"] if e["kind"] == "flag_submitted"] == ["pending"]
-    assert tl["nodes"] == [] and not [e for e in tl["events"] if e["kind"] == "log_received"]
+    # The VMs are still there, with nothing captured yet.
+    assert [n["captured"] for n in tl["nodes"]] == [False, False, False] and tl["captures"] == []
+    assert not [e for e in tl["events"] if e["kind"] == "log_received"]
+
+
+def test_the_devbox_vms_are_visible_with_no_activity_at_all(world):
+    from core.models.logging import LoggingAttempt
+    from core.models.scoring import FlagCaptureAttempt
+
+    team = world["b"]
+    FlagCaptureAttempt.objects.filter(team_uuid=str(team.uuid)).delete()
+    LoggingAttempt.objects.filter(team_uuid=str(team.uuid)).delete()
+    _devbox_since(world, "b")
+
+    doc = _devbox_doc(world, "b")
+
+    tl = doc["timeline"]
+    assert tl["events"] == [] and tl["captures"] == []
+    assert [(n["label"], n["captured"], n["captured_at"]) for n in tl["nodes"]] == [
+        ("devbox-t2-a", False, None), ("devbox-t2-b", False, None), ("devbox-t2-c", False, None),
+    ]  # fmt: skip
+    assert all(tl["vm_status"][n["id"]] == [[0.0, "running"]] for n in tl["nodes"])
+    # Drawn as a chain: A-B and B-C.
+    ids = {n["devbox_role"]: n["id"] for n in tl["nodes"]}
+    assert doc["scene"]["groups"][0]["members"] == [ids["a"], ids["b"], ids["c"]]
+    links = {(e["source"], e["target"]) for e in doc["scene"]["edges"] if e["kind"] == "lan"}
+    assert links == {(ids["a"], ids["b"]), (ids["b"], ids["c"])}
+
+
+def test_the_devbox_vms_are_not_shown_before_they_are_set_up(world):
+    from core.models.devbox import DevboxVM
+
+    DevboxVM.objects.filter(devbox__team=world["a"]).delete()
+    _devbox_since(world)
+
+    doc = _devbox_doc(world)
+
+    assert doc["timeline"]["nodes"] == [] and doc["scene"]["groups"][0]["members"] == []
+
+
+def test_the_devbox_summary_lists_only_what_was_captured(world):
+    from dashboard.views.progression import devbox_summary
+
+    _devbox_since(world)
+
+    summary = devbox_summary(_devbox_doc(world))
+
+    assert [c["vm"] for c in summary["captures"]] == ["devbox-t1-a"]
 
 
 def test_a_team_without_a_devbox_has_no_devbox_progression(world):

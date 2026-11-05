@@ -5,6 +5,7 @@ leaderboard's own numbers. The other pages took over what used to be elsewhere.
 
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 
 import pytest
@@ -215,6 +216,12 @@ def test_the_dev_progression_page_needs_no_round(site, team_upload):  # noqa: F8
     assert 'data-progression="/progression/devbox/"' in page and 'data-download="/progression/devbox/download/"' in page
     assert "data-rounds" not in page
     assert "Your devbox so far" in page and "<dt>Logs sent</dt><dd>1</dd>" in page
+    # The VMs are drawn by the player; what the page lists without it is what was captured.
+    assert "Captured VMs (0)" in page
+    doc = json.loads(_get(site, "/progression/devbox/"))
+    assert [(n["label"], n["captured"]) for n in doc["timeline"]["nodes"]] == [
+        ("devbox-t1-a", False), ("devbox-t1-b", False), ("devbox-t1-c", False),
+    ]  # fmt: skip
 
 
 def test_the_progression_pages_have_no_logs_section(site, team_upload):  # noqa: F811

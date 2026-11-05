@@ -412,8 +412,8 @@ file; **Open file…** views either again, offline (read locally, validated,
 never uploaded). Details: `docs/visualization.md`.
 
 Teams get the same player on their **PROGRESSION** page: their own rounds,
-with only the VMs they captured, scoring, logging and the private internet —
-no infrastructure, no firewall — and the round's start, end and now. They can
+with only the VMs they captured and their entry VM (or, in the dev view, their
+own devbox VMs), scoring, logging and the private internet — no infrastructure, no firewall — and the round's start, end and now. They can
 download a round as a zip there or through the team API. Format and rules:
 `docs/progression.md`.
 

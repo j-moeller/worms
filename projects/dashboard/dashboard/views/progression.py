@@ -132,7 +132,9 @@ def devbox_summary(doc: dict) -> dict:
     zero = datetime.fromisoformat(doc["clock"]["t0"])
     kinds = [e["kind"] for e in doc["timeline"]["events"]]
     return {
-        "captures": [{"vm": n["label"], "at": zero + timedelta(seconds=n["captured_at"])} for n in doc["timeline"]["nodes"]],
+        "captures": [
+            {"vm": n["label"], "at": zero + timedelta(seconds=n["captured_at"])} for n in doc["timeline"]["nodes"] if n["captured"]
+        ],
         "submissions": kinds.count("flag_submitted"),
         "logs": kinds.count("log_received"),
     }

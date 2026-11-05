@@ -42,6 +42,28 @@ If they stay, at least correct the text in `templates/staff/competition.html`, b
 
 Fix this together with the decision above. The dev view should say nothing about rounds.
 
+## Should an upload run on the devbox?
+
+- [ ] **Decide:** see below. Checked on 2026-11-05 with a test that uploads through the real page in the dev view.
+
+**It does not today.** The dev view offers the same upload form, and the upload is stored, but nothing delivers it to a devbox. Teams can only copy a worm onto a VM over SSH and start it by hand.
+
+- `Upload` has no field for where it belongs, and an upload creates no host job.
+- `orchestrator/rounds/planner.py` is the only code that picks an upload, and only for rounds of the current competition. `conduct_rounds` never plans a dev round, and `plan_round` finds no teams for one.
+- The agent's `deploy` handler only knows sandbox VMs. There is no devbox job that carries an artifact.
+
+**The risk today:** an upload made in the dev view counts as the team's entry. If it is the latest before a round starts, that is what runs in the **live** round. A team testing something unfinished could lose a round that way, and the dev page does not warn about it.
+
+**What running it on the devbox would need:**
+
+| Part | Change |
+|---|---|
+| `Upload` | A field for dev or live, with a migration, so `planner.py` ignores dev uploads |
+| A new `devbox_deploy` host job | Fetch and hash-check the artifact, copy it to VM A, unpack it, start `bash main.sh`, like `deploy`. No current-team file: the devbox is attributed by its source address |
+| Each new run | Whether to reset the devbox first, as a sandbox is always fresh, and stop the previous worm |
+| When it ends | The devbox has no round end and is not torn down, so it needs a time limit |
+| Progression | Show `worm_deployed` and `worm_started`, and mark A as the entry VM |
+
 ## Should the profile list only a user's own SSH keys?
 
 - [ ] **Decide:** whole team, or only your own?

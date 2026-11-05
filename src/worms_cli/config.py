@@ -125,6 +125,19 @@ class Config:
 
         return bool(self.get("WORMS_DB_HOST")) or for_config(self).has_vault()
 
+    def proxmox_node(self) -> str:
+        """The node's name: WORMS_PROXMOX_NODE, else what OpenTofu deployed to.
+        A name PVE knows but that is not this node (a leftover of a renamed node
+        stays in /etc/pve/nodes) makes it forward the request and fail."""
+        from worms_cli.session import SessionError, for_config
+
+        if self.get("WORMS_PROXMOX_NODE"):
+            return self.get("WORMS_PROXMOX_NODE")
+        try:
+            return for_config(self).infrastructure()["proxmox"]["node"]
+        except (SessionError, KeyError, OSError, ValueError):
+            return "worms-pve"
+
     def proxmox(self) -> dict | None:
         """The read-only (topology) token for `worms status`: explicit
         WORMS_PROXMOX_* settings, else from the vault, to the node's API (from
@@ -136,7 +149,7 @@ class Config:
                 "user": self.get("WORMS_PROXMOX_USER", "root@pam"),
                 "token_name": self.get("WORMS_PROXMOX_TOKEN_NAME", ""),
                 "token_value": self.get("WORMS_PROXMOX_TOKEN_VALUE", ""),
-                "node": self.get("WORMS_PROXMOX_NODE", "worms-pve"),
+                "node": self.proxmox_node(),
                 "verify_ssl": self.get("WORMS_PROXMOX_VERIFY_SSL", "1") == "1",
             }
         from worms_cli.session import for_config, group_var
@@ -150,6 +163,6 @@ class Config:
             "user": group_var(self.repo_root, "proxmox_readonly_api_user", "topology@pve"),
             "token_name": group_var(self.repo_root, "proxmox_readonly_api_token_name", "readonly"),
             "token_value": session.values()["vault_proxmox_readonly_api_token_value"],
-            "node": self.get("WORMS_PROXMOX_NODE", "worms-pve"),
+            "node": self.proxmox_node(),
             "verify_ssl": session.pve_ca(),
         }

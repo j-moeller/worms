@@ -17,3 +17,17 @@
     mode: "0644"
   when: ansible_os_family == "RedHat"
   notify: Update CA trust
+
+# A handler runs at the end of the play, so a run that fails or is interrupted
+# loses it, and the next run finds the file unchanged and never updates the trust
+# store: the CA is on disk, and TLS to the internal services still fails.
+- name: Check the trust store holds the CA
+  ansible.builtin.stat:
+    path: /etc/ssl/certs/worms-internal-ca.pem
+  register: ca_distribute_trusted
+  changed_when: not ca_distribute_trusted.stat.exists
+  when: ansible_os_family == "Debian"
+  notify: Update CA trust
+
+- name: Update the trust store now, for the tasks that follow
+  ansible.builtin.meta: flush_handlers

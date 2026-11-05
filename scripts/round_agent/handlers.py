@@ -17,6 +17,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from generate_devbox import team_addressing
 from round_agent import validation
 
 FLAG_PATH = "/etc/worms/flag"
@@ -239,7 +240,9 @@ def release_secrets(ex, cfg, params):
 
 def teardown(ex, cfg, params):
     _clear_current_team(ex, cfg)
-    ex.tofu("sandbox", "destroy", "-auto-approve", "-input=false", timeout=cfg.get("apply_timeout", 5400))
+    # One at a time: VMs destroyed in parallel fight over the storage lock, and a volume
+    # Proxmox gives up on then blocks whichever new VM gets that ID.
+    ex.tofu("sandbox", "destroy", "-auto-approve", "-input=false", "-parallelism=1", timeout=cfg.get("apply_timeout", 5400))
     ex.worms("inventory", timeout=300)
     return {"destroyed": True}
 
@@ -283,6 +286,18 @@ def _devbox_vms(ex):
             "ssh_ip": hv.get("devbox_ssh_ip"),
         }
     return vms
+
+
+def _devbox_addresses(teams):
+    """{VM name: its addresses on the team's own devbox networks}, for the dashboard to show.
+    Each VM's first address is on its link towards A. They come from what generated the stack,
+    and leave out the SSH fabric and maintenance addresses, which a team cannot use from a VM."""
+    addresses = {}
+    for team in teams:
+        plan = team_addressing(team["slug"], team["index"])
+        for role, cidrs in (("a", ["a_cidr"]), ("b", ["b_ab_cidr", "b_bc_cidr"]), ("c", ["c_cidr"])):
+            addresses[f"devbox-{team['slug']}-{role}"] = [plan[cidr].split("/")[0] for cidr in cidrs]
+    return addresses
 
 
 def _write_devbox_token(ex, maintenance_ip):
@@ -345,7 +360,13 @@ def devbox_provision(ex, cfg, params):
     _configure_devbox(ex, teams)
     report, sources = _devbox_report(ex, teams)
     _write_devbox_map(ex, cfg, teams)
-    return {"vms": report, "services_sources": sources}
+    return {"vms": report, "services_sources": sources, "addresses": _devbox_addresses(teams)}
+
+
+def _devbox_replace_args(slug):
+    """`-replace` for a team's three VMs. No shell runs these, so the quotes must
+    reach OpenTofu as they are: escaped ones are an invalid address."""
+    return [f'-replace=module.devbox_vm["devbox-{slug}-{role}"].proxmox_virtual_environment_vm.vm' for role in ("a", "b", "c")]
 
 
 def devbox_rebuild(ex, cfg, params):
@@ -360,11 +381,7 @@ def devbox_rebuild(ex, cfg, params):
 
     ex.generate_devbox(teams, ex.repo_root / DEVBOX_GENERATED)
     # Replace just this team's three VMs (fresh disks); the rest is a no-op.
-    replaces = " ".join(
-        f'-replace=module.devbox_vm[\\"devbox-{slug}-{role}\\"].proxmox_virtual_environment_vm.vm'
-        for role in ("a", "b", "c")
-    )
-    ex.tofu("devbox", "apply", "-auto-approve", "-input=false", "-parallelism=1", *replaces.split(), timeout=cfg.get("apply_timeout", 5400))
+    ex.tofu("devbox", "apply", "-auto-approve", "-input=false", "-parallelism=1", *_devbox_replace_args(slug), timeout=cfg.get("apply_timeout", 5400))
     ex.worms("inventory", timeout=300)
     _configure_devbox(ex, teams)
 
@@ -375,7 +392,12 @@ def devbox_rebuild(ex, cfg, params):
         if info["team"] == slug:
             rebuilt.append({"name": name, "flag_hash": _write_devbox_token(ex, info["maintenance_ip"])})
     _write_devbox_map(ex, cfg, teams)
-    return {"team_uuid": params["team_uuid"], "devbox_version": params["devbox_version"], "vms": rebuilt}
+    return {
+        "team_uuid": params["team_uuid"],
+        "devbox_version": params["devbox_version"],
+        "vms": rebuilt,
+        "addresses": _devbox_addresses(teams),
+    }
 
 
 class _Unsafe(str):
@@ -406,7 +428,7 @@ def devbox_reconfigure(ex, cfg, params):
     teams = params["teams"]
     _configure_devbox(ex, teams)
     _write_devbox_map(ex, cfg, teams)
-    return {"reconfigured": [t["slug"] for t in teams]}
+    return {"reconfigured": [t["slug"] for t in teams], "addresses": _devbox_addresses(teams)}
 
 
 def _configure_devbox(ex, teams):

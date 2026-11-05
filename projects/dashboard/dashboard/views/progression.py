@@ -31,6 +31,7 @@ from core.models.scoring import FlagCapture, FlagCaptureAttempt
 from core.models.logging import LoggingAttempt
 from core.models.team import Team
 from dashboard.views.decorators import user_in_team_required
+from dashboard.views.devbox import devbox_logs
 from dashboard.views.topology import latest_snapshot, live_address_index, with_team_names
 from dashboard.views.util import render_with_base_info
 from django.contrib.auth.decorators import login_required
@@ -180,6 +181,10 @@ def progression_page(request: HttpRequest, team: Team):
             "selected_state": round_state(selected, now) if selected else None,
             "summary": summary(team, selected, now, environment) if selected else None,
             "environment": environment,
+            "logs": devbox_logs(team) if environment == "dev" else [],
+            "version": team.devbox_version,
+            # The results are fetched with an access token: as on the profile, none before this.
+            "show_api": not team.competition.is_registration_period(),
         },
     )
 

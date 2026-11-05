@@ -103,11 +103,15 @@
     name: pip
     state: latest
     virtualenv: "{{ django_venv_dir }}"
+  tags:
+    - packages
 
 - name: Install Python packages
   ansible.builtin.pip:
     virtualenv: "{{ django_venv_dir }}"
     name: "{{ pip_packages + django_extra_pip_packages }}"
+  tags:
+    - packages
 
 - name: Create secret directory
   ansible.builtin.file:
@@ -157,6 +161,25 @@
       DB_MIGRATOR_USER: "{{ postgres_migrator_name }}"
       DB_MIGRATOR_PASSWORD: "{{ postgres_migrator_password }}"
 
+# Stop this host's long-running Django services before migrating. They hold
+# open database transactions (the orchestrator's conduct_rounds /
+# process_attempts loop continuously), and a migration's DDL needs an ACCESS
+# EXCLUSIVE lock -- left running, the migration queues behind them and
+# `migrate` hangs indefinitely. The "Enable Django service" / "Enable
+# management daemons" tasks below start them again. Only the migrating host
+# (orchestrator) is affected; the public dashboard is a different host and
+# keeps serving. Safe to re-run: conduct_rounds resumes from the database.
+- name: Stop Django services before migrating (avoid DDL lock contention)
+  when: django_run_migrations | bool
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+  loop: "{{ [django_app_name] + (django_daemons | map(attribute='name') | map('regex_replace', '^', django_app_name ~ '-') | list) }}"
+  loop_control:
+    label: "{{ item }}"
+  # Not installed yet on the first deploy: nothing to stop.
+  failed_when: false
+
 # Only the orchestrator migrates; the public-facing dashboard has no migrator
 # credentials at all (they are not in its env file either).
 - name: Run Django migrations
@@ -171,6 +194,10 @@
   environment: "{{ django_migrate_env | combine(django_extra_env) }}"
   vars:
     django_migrate_env:
+      # libpq applies this per connection: a migration whose DDL lock is still
+      # held (by a service we could not stop, e.g. the dashboard) fails fast
+      # with a clear error instead of hanging the whole run forever.
+      PGOPTIONS: "-c lock_timeout={{ django_migrate_lock_timeout }}"
       PRODUCTION: "1"
       DJANGO_SETTINGS_MODULE: "{{ django_settings_module }}"
       DJANGO_SECRET_KEY: "{{ django_secret_key }}"
@@ -200,6 +227,7 @@
   environment: "{{ django_migrate_env | combine(django_extra_env) }}"
   vars:
     django_migrate_env:
+      PGOPTIONS: "-c lock_timeout={{ django_migrate_lock_timeout }}"
       PRODUCTION: "1"
       DJANGO_SETTINGS_MODULE: "{{ django_settings_module }}"
       DJANGO_SECRET_KEY: "{{ django_secret_key }}"

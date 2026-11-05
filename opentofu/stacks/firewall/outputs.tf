@@ -16,7 +16,7 @@ output "security_groups" {
     pi_apt_client      = proxmox_virtual_environment_cluster_firewall_security_group.pi_apt_client.name
     sandbox            = proxmox_virtual_environment_cluster_firewall_security_group.sandbox.name
     sandbox_gw         = proxmox_virtual_environment_cluster_firewall_security_group.sandbox_gw.name
-    wazuh              = proxmox_virtual_environment_cluster_firewall_security_group.wazuh.name
+    syslog             = proxmox_virtual_environment_cluster_firewall_security_group.syslog.name
     log_client         = proxmox_virtual_environment_cluster_firewall_security_group.log_client.name
     devbox             = proxmox_virtual_environment_cluster_firewall_security_group.devbox.name
     devbox_gw          = proxmox_virtual_environment_cluster_firewall_security_group.devbox_gw.name
@@ -27,7 +27,8 @@ output "security_groups" {
 }
 
 # Per-service private-internet groups, keyed by service. The private_internet
-# stack attaches each VM only its own, so a service accepts just its own port.
+# stack attaches each VM only its own, so a service accepts just its own port
+# (instead of the broad `private_internet` group in security_groups above).
 output "private_internet_service_groups" {
   value = {
     for k, g in proxmox_virtual_environment_cluster_firewall_security_group.private_internet_service :

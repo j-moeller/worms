@@ -170,7 +170,8 @@ const requests = [];
     out.checks.afterNext = await S();
     out.checks.hash = await page.evaluate(() => location.hash);
 
-    await page.emulateMedia({ colorScheme: "dark" });
+    // A light-mode OS must not change the dark palette.
+    await page.emulateMedia({ colorScheme: "light" });
     await seekUI(96);
     await page.screenshot({ path: path.join(shots, "topology-round-dark.png") });
 

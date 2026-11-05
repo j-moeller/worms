@@ -154,6 +154,7 @@ resource "proxmox_virtual_environment_file" "ssh_gateway" {
       hostname        = "devbox-ssh-gateway"
       ssh_public_keys = local.ssh_public_keys
       gateway_user    = var.gateway_user
+      mgmt_host_ip    = local.host_ips.mgmt_exposed
     })
     file_name = "devbox-ssh-gateway.yml"
   }
@@ -317,6 +318,12 @@ resource "proxmox_virtual_environment_firewall_options" "ssh_gateway" {
   output_policy = "DROP"
   ipfilter      = true
   macfilter     = true
+
+  # Proxmox deletes a VM's firewall settings with the VM. Without this, a new VM
+  # that gets the same ID keeps its firewall off, and OpenTofu sees nothing to do.
+  lifecycle {
+    replace_triggered_by = [proxmox_virtual_environment_vm.ssh_gateway.id]
+  }
 }
 
 resource "proxmox_virtual_environment_firewall_ipset" "ssh_gateway" {

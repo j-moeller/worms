@@ -21,4 +21,9 @@ devbox_login_user: root
 # like the sandbox image).
 devbox_packages:
   - python3
+  - python3-pip
   - unzip
+
+# pip goes to the private internet's devpi, as apt goes to its cache.
+devbox_pip_index_host: pypi.worms.internal
+devbox_pip_index_url: "http://{{ devbox_pip_index_host }}:3141/root/pypi/+simple/"

@@ -1,26 +1,25 @@
 ## Managed by Ansible (role auditd). DO NOT EDIT.
 ##
-## The keys are the ones Wazuh's audit rules know (lists/audit-keys):
-##   audit-wazuh-c = command, -w = write, -a = attribute change, -x = execute.
+## Search by key, e.g. on the syslog VM: grep 'key="exec"' /var/log/remote/*/audit.log
 
 # Every executed command (also the ones Ansible runs).
--a always,exit -F arch=b64 -S execve -k audit-wazuh-c
--a always,exit -F arch=b32 -S execve -k audit-wazuh-c
+-a always,exit -F arch=b64 -S execve -k exec
+-a always,exit -F arch=b32 -S execve -k exec
 
 # Accounts, privileges, SSH and audit configuration.
--w /etc/passwd -p wa -k audit-wazuh-w
--w /etc/shadow -p wa -k audit-wazuh-w
--w /etc/group -p wa -k audit-wazuh-w
--w /etc/sudoers -p wa -k audit-wazuh-w
--w /etc/sudoers.d/ -p wa -k audit-wazuh-w
--w /etc/ssh/sshd_config -p wa -k audit-wazuh-w
--w /root/.ssh/ -p wa -k audit-wazuh-w
--w /etc/audit/ -p wa -k audit-wazuh-w
+-w /etc/passwd -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/group -p wa -k identity
+-w /etc/sudoers -p wa -k config
+-w /etc/sudoers.d/ -p wa -k config
+-w /etc/ssh/sshd_config -p wa -k config
+-w /root/.ssh/ -p wa -k config
+-w /etc/audit/ -p wa -k config
 
 # Persistence: services, timers and cron jobs.
--w /etc/systemd/system/ -p wa -k audit-wazuh-w
--w /etc/cron.d/ -p wa -k audit-wazuh-w
--w /etc/crontab -p wa -k audit-wazuh-w
+-w /etc/systemd/system/ -p wa -k persistence
+-w /etc/cron.d/ -p wa -k persistence
+-w /etc/crontab -p wa -k persistence
 
 # Kernel modules.
--a always,exit -F arch=b64 -S init_module,finit_module,delete_module -k audit-wazuh-a
+-a always,exit -F arch=b64 -S init_module,finit_module,delete_module -k modules

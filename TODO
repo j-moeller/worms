@@ -15,9 +15,8 @@ The standing caveat and the first live steps are in docs/testing.md.
 ## Security hardening
 Tracked in docs/security-assessment.md ("not done"): a per-account login
 lockout (D3; per-address rate limiting is done), team-join consent (D4),
-current-password on a voluntary change (D5); Proxmox provider TLS
-verification (C1); and locking devpi and the Docker registry to
-read-only/authenticated before re-enabling them (S2).
+current-password on a voluntary change (D5); and Proxmox provider TLS
+verification (C1).
 
 ## Not yet built
 - A dashboard design pass (the worm upload flow and the contract are
@@ -25,6 +24,4 @@ read-only/authenticated before re-enabling them (S2).
 - Heartbeat: define the "vital" services per VM, a collector, and its DB schema.
 - GPU / inference-engine service (jailbreaking scenarios).
 - Richer sandbox topology generation: L2/L3 switches and seeded vulnerabilities.
-- Private-internet services exist as Ansible roles but are disabled in the
-  stack (only Wikipedia is deployed); re-enable apt-cache / devpi / registry /
-  manpages / cve-search once locked down (S2).
+- Private-internet services: see docs/pi-failures.md for what is still open.

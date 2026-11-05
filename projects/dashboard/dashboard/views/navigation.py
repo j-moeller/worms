@@ -1,13 +1,9 @@
-"""Small POST endpoints for page-wide settings, and the safe "back to where you
-were" redirect they (and the login) share.
-
-Both settings are plain form posts, so they work without JavaScript; the
-static enhance.js only makes them faster (the theme switches instantly).
+"""The environment switch, a plain form post that works without JavaScript, and
+the safe "back to where you were" redirect the login uses.
 """
 
 from __future__ import annotations
 
-from dashboard import themes
 from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest
 from django.shortcuts import redirect
@@ -24,20 +20,6 @@ def safe_next(request: HttpRequest, default: str = "index"):
     ):
         return redirect(target)
     return redirect(default)
-
-
-@require_POST
-def set_theme(request: HttpRequest):
-    """Remember the chosen design in a cookie (no session: anonymous visitors
-    can switch too, without a database write)."""
-    response = safe_next(request)
-    key = request.POST.get("theme", "")
-    if key in themes.THEMES:
-        response.set_cookie(
-            themes.COOKIE, key, max_age=themes.COOKIE_MAX_AGE,
-            secure=request.is_secure(), httponly=True, samesite="Lax",
-        )  # fmt: skip
-    return response
 
 
 @login_required

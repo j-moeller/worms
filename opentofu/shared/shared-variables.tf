@@ -53,7 +53,7 @@ variable "llm_access_ip" {
 #   vmbr20  dmz            10.10.0.0/24    10.10.0.1   dashboard (internet via host DNAT)
 #   vmbr21  core           10.11.0.0/24    10.11.0.1   database, orchestrator
 #   vmbr22  ingest         10.12.0.0/24    10.12.0.1   scoring, logging (DB leg)
-#   vmbr24  siem           10.13.0.0/24    10.13.0.1   wazuh (central log server)
+#   vmbr24  siem           10.13.0.0/24    10.13.0.1   syslog (central rsyslog server)
 #   vmbr23  services       10.2.0.0/24     none        scoring/logging (sandbox leg),
 #                                                      private internet, DNS, sandbox-gw
 #   vmbr1*  sandbox        10.64.0.0/10    none        generated sandbox networks
@@ -65,7 +65,7 @@ variable "llm_access_ip" {
 #
 # The host routes ONLY between dmz/core/ingest (allow-listed in host nftables,
 # ansible role host_network), plus syslog (tcp 514) from every infrastructure VM
-# to wazuh on the siem bridge. It has no address on any bridge a sandbox VM can reach,
+# to the syslog VM on the siem bridge. It has no address on any bridge a sandbox VM can reach,
 # and never forwards traffic arriving on a management bridge (except mgmt-exposed
 # while internet access is allowed (Internet.yml), which is refused while
 # sandbox VMs exist).
@@ -103,7 +103,7 @@ locals {
     services     = "10.2.0.0/24"
     siem         = "10.13.0.0/24"
     sandbox_vms  = "10.64.0.0/10"
-    devbox_vms   = "10.128.0.0/10" # 10.128-10.191; disjoint from sandbox 10.64/10
+    devbox_vms   = "10.128.0.0/19" # 10.128.0-10.128.31; 32 /24 blocks = 16 teams (2 link subnets each), disjoint from sandbox 10.64/10
     mgmt_trusted = "10.3.0.0/24"
     mgmt_exposed = "10.5.0.0/24"
     mgmt_sandbox = "10.4.0.0/16"
@@ -134,7 +134,7 @@ locals {
     scoring      = "10.12.0.14"
     logging      = "10.12.0.15"
     monitor      = "10.12.0.100"
-    wazuh        = "10.13.0.30"
+    syslog       = "10.13.0.30"
   }
 
   # Addresses on the services bridge (what sandbox VMs reach, via sandbox-gw).
@@ -154,7 +154,7 @@ locals {
     logging      = "10.5.0.15"
     dns          = "10.5.0.11"
     monitor      = "10.5.0.100"
-    wazuh        = "10.5.0.30"
+    syslog       = "10.5.0.30"
     sandbox_gw   = "10.4.0.2"
   }
 
@@ -172,26 +172,12 @@ locals {
 
   # Ports sandbox VMs may use on the services bridge. Enforced on the sandbox
   # VMs' and sandbox-gw's NICs (the host-side tap firewall). This is the union a
-  # CLIENT may talk to; the per-service groups below are the SERVER side.
+  # CLIENT may talk to; the per-service groups below are the SERVER side, so
+  # each service VM accepts only its own port.
   private_internet_ports = {
     tcp = "53,80,443,3141,3142,5000,8888"
     udp = "53,123"
   }
-
-  # Trusted SSH gateway (docs/devbox.md): teams reach it (host DNAT) and it
-  # jumps them into their own devbox VMs over the port-isolated devbox SSH
-  # fabric. It is hardened infrastructure, NOT part of the untrusted devbox.
-  ssh_gateway_ips = {
-    devbox_ssh  = "10.7.0.2"  # on vmbr7 (reaches every devbox VM; ports isolated)
-    maintenance = "10.5.0.40" # mgmt-exposed (Ansible)
-  }
-  # TCP port teams connect to on the host WAN; DNATed to the gateway:22.
-  ssh_gateway_public_port = 2222
-
-  # Services-bridge addresses reserved for per-team devbox gateways (their SNAT
-  # source, which the scoring/logging servers map to the team). The generated
-  # devbox stack assigns within this block; sandbox-gw (10.2.0.2) is outside it.
-  devbox_services_block = "10.2.0.32/27" # 10.2.0.32 - 10.2.0.63
 
   # The port each private-internet service actually listens on. The firewall
   # stack turns every entry into its own security group, so a service VM accepts
@@ -208,6 +194,21 @@ locals {
     cve_search      = { group = "pi_cve_search", tcp = "5000", udp = null }
     wikipedia       = { group = "pi_wikipedia", tcp = "8888", udp = null }
   }
+
+  # Trusted SSH gateway (docs/devbox.md): teams reach it (host DNAT) and it
+  # jumps them into their own devbox VMs over the port-isolated devbox SSH
+  # fabric. It is hardened infrastructure, NOT part of the untrusted devbox.
+  ssh_gateway_ips = {
+    devbox_ssh  = "10.7.0.2"  # on vmbr7 (reaches every devbox VM; ports isolated)
+    maintenance = "10.5.0.40" # mgmt-exposed (Ansible)
+  }
+  # TCP port teams connect to on the host WAN; DNATed to the gateway:22.
+  ssh_gateway_public_port = 2222
+
+  # Services-bridge addresses reserved for per-team devbox gateways (their SNAT
+  # source, which the scoring/logging servers map to the team). The generated
+  # devbox stack assigns within this block; sandbox-gw (10.2.0.2) is outside it.
+  devbox_services_block = "10.2.0.32/27" # 10.2.0.32 - 10.2.0.63
 
   # Proxmox API, reached by the orchestrator on its core gateway address.
   proxmox_host_ip  = local.host_ips.core

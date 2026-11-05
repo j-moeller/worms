@@ -1,11 +1,40 @@
 ---
-# Before resolv.conf points at the (not yet installed) local resolver.
+# On a re-run this VM resolves through its own BIND (resolv.conf below), which
+# is still in the mode of the last run: after an offline run it refuses every
+# outside name, so apt could not reach the mirrors. Switch it to the current
+# mode first.
+- name: Check whether BIND is configured
+  ansible.builtin.stat:
+    path: /etc/bind/named.conf.options
+  register: dns_bind_configured
+
+- name: Switch BIND to the current internet mode before apt needs DNS
+  when: dns_bind_configured.stat.exists
+  block:
+    - name: Deploy BIND options (before apt)
+      ansible.builtin.template:
+        src: named.conf.options.j2
+        dest: /etc/bind/named.conf.options
+        owner: root
+        group: bind
+        mode: '0644'
+      register: dns_options_early
+
+    - name: Restart named in the new mode
+      ansible.builtin.systemd:
+        name: named
+        state: restarted
+      when: dns_options_early.changed
+
+# Before resolv.conf points at the (not yet installed) local resolver. Runs
+# before UpdateVMs.yml, so an unattended upgrade may still hold the lock.
 - name: Install BIND
   ansible.builtin.apt:
     name: [bind9, bind9-dnsutils, ca-certificates]
     state: present
     update_cache: "{{ internet_enabled | bool }}"
-    cache_valid_time: 3600
+    cache_valid_time: "{{ 3600 if internet_enabled | bool else omit }}"
+    lock_timeout: 900
 
 - name: Disable systemd-resolved
   ansible.builtin.systemd:

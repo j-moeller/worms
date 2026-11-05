@@ -21,7 +21,7 @@ tokens its worm has submitted to scoring at the current devbox version.
 
 ```
             team's laptop
-                 │  ssh -J team@<gateway> root@<team's A>
+                 │  ssh -A -J team@<gateway> root@<team's A>
                  ▼
         devbox SSH gateway (trusted, hardened)      vmbr7 (devbox SSH fabric, port-isolated)
                  │  jump, SSH tty only                         │
@@ -41,10 +41,10 @@ existing `is_dev_environment` session flag; the home page dispatches
 (`dashboard/views/devbox.py`):
 
 - **Production** shows the leaderboard (and the usual CAPTURES/LOGS pages).
-- **Development** shows **no leaderboard**. It shows the team's devbox: the
-  current **score** (tokens found in A/B/C at the current version), the VMs,
-  the devbox **logs**, the team's **SSH keys** (add/remove), how to connect, and
-  a **Reset** button.
+- **Development** shows **no leaderboard**. It shows the team's devbox: the VMs,
+  a **Reset** button, and how to connect. The **score** (tokens found in A/B/C at
+  the current version) and the team's **SSH keys** (add/remove) are on the user's
+  **profile**, and the devbox **logs** are on the **progression** page.
 
 Both views show scoring and logging feedback for their own domain: the
 production view from `flag_captures`/`logging`, the development view from
@@ -99,9 +99,9 @@ Why this can't be forged or crossed:
 
 ### `<team>.scoring.worms.internal`
 
-dnsmasq's `address=/scoring.worms.internal/<ip>` already answers every
-subdomain, so `<team>.scoring.worms.internal` resolves to the scoring server
-with no per-team DNS records. The scoring/logging certificates carry a wildcard
+The DNS server has wildcard records (`group_vars/dns.yml`), so
+`<team>.scoring.worms.internal` resolves to the scoring server with no per-team
+records. The scoring/logging certificates carry a wildcard
 SAN (`*.scoring.worms.internal`, `*.logging.worms.internal`), so a devbox
 reaches its per-team name over **verified** HTTPS. The hostname is per-team for
 clarity and TLS; the enforced attribution is the ipfilter-pinned SNAT source
@@ -113,7 +113,7 @@ Teams never reach a devbox VM directly. A single **trusted, hardened** SSH
 gateway (OpenTofu, published by host DNAT on port `2222`) is the only way in:
 
 ```
-ssh -J team@<proxmox-wan>:2222 root@<team's A VM>
+ssh -A -J team@<proxmox-wan>:2222 root@<team's A VM>
 ```
 
 The gateway is deliberately minimal (`ssh-gateway.tftpl`): agent, X11, stream
@@ -122,15 +122,48 @@ real confinement is **per key**: the `ssh_gateway` Ansible role writes the
 team account's `authorized_keys` with, for every registered key,
 
 ```
-restrict,port-forwarding,permitopen="<the team's ENTRY VM (A)>:22" <key>
+restrict,port-forwarding,command="/usr/sbin/nologin",permitopen="<the team's ENTRY VM (A)>:22" <key>
 ```
 
-`restrict` disables every feature; `port-forwarding` re-enables only TCP
+`restrict` disables most features; `port-forwarding` re-enables only TCP
 forwarding, and `permitopen` limits it to **that team's entry VM (A)** on the
-devbox SSH fabric — a single host. So a key can `ProxyJump` into its own team's
-**A** and nothing else; the worm reaches **B** and **C** by pivoting inside the
-devbox network, exactly as it would in the sandbox. The SSH tty is the only
-thing that flows.
+devbox SSH fabric — a single host. `restrict` does not stop commands, so
+`command=` and the account's `nologin` shell do: no commands, shell, `scp` or
+`sftp` on the gateway. A jump opens no session, so it still works. So a key can
+`ProxyJump` into its own team's **A** and nothing else; the worm reaches **B** and
+**C** by pivoting inside the devbox network, exactly as it would in the sandbox.
+The SSH tty is the only thing that flows.
+
+### From A to B and C
+
+A team member logs in to A, then goes on from there. A and C share no network, so
+the way to C is through B. The dashboard's **Connect** panel prints each command
+with the team's real addresses, and its **VMs** panel draws the gateway and the VMs,
+joined interface to interface, and marks each captured VM:
+
+```sh
+ssh-add -L                                 # on the laptop: must include a registered key
+ssh -A -J team@<proxmox-wan>:2222 root@<A> # on the laptop
+ssh -A root@<B on the A-B link>            # on A
+ssh root@<C on the B-C link>               # on B
+```
+
+The VMs hold the team's public keys but no private key, so these hops use the
+forwarded agent (`-A`). The gateway's `restrict` does not get in the way: agent
+forwarding runs inside the session with A, and the gateway only carries its TCP
+connection. While someone is connected, root on these VMs can use their agent,
+which is why the panel says to use a key only for this devbox.
+
+`ssh-add -L` matters because SSH can log in to A by reading a key file directly,
+even with an empty agent. The hop to B then fails with `Permission denied
+(publickey)`, because the agent is all it has.
+
+Every devbox job (`devbox_provision`, `devbox_rebuild`, `devbox_reconfigure`)
+reports the addresses, from `scripts/generate_devbox.py`, and the orchestrator
+stores those of the newest job in `devbox_vms.addresses`. The page leaves out the
+maintenance addresses, and the SSH fabric addresses of B and C, which a team
+cannot use. VMs built before jobs reported addresses get them at the next key
+change.
 
 The gateway protects itself in depth (docs/security-assessment.md):
 
@@ -146,7 +179,7 @@ The gateway protects itself in depth (docs/security-assessment.md):
   output-DROP policy already forbids it — this is the second layer). The gateway
   is not on any bridge a sandbox VM can reach.
 
-Teams manage their keys on the dashboard dev view (`DevboxSSHKey`); the keys are
+Teams manage their keys on the dashboard profile page (`DevboxSSHKey`); the keys are
 installed both on the gateway (for the jump) and on the devbox VMs (for the
 final auth). Adding or removing a key enqueues a **`devbox_reconfigure`** host
 job (through the orchestrator, like reset) that re-pushes every team's keys to
@@ -172,7 +205,7 @@ Enforced in depth, by construction:
 
 | Layer | Why they cannot meet |
 |---|---|
-| Networks | devbox `10.128.0.0/10` and sandbox `10.64.0.0/10` are disjoint; VMs on different, dedicated bridges (`vmbr9*` vs `vmbr1*`). |
+| Networks | devbox `10.128.0.0/19` and sandbox `10.64.0.0/10` are disjoint; VMs on different, dedicated bridges (`vmbr9*` vs `vmbr1*`). |
 | Host routing | the host has no address on either family and never routes `vmbr9*`↔`vmbr1*`; the FORWARD policy is drop and only *same-bridge* traffic is accepted. |
 | Services bridge (shared) | both environments reach scoring/logging/PI here, but the host drops **gateway↔gateway**, and each gateway's Proxmox firewall accepts no inbound service connections — so neither can reach the other's SNAT address. |
 | Per-VM firewall | the `devbox`/`sandbox` security groups scope traffic to their own network; a devbox VM cannot even address a sandbox VM. |
@@ -181,7 +214,7 @@ Enforced in depth, by construction:
 What a devbox **can** reach: its own team's devbox VMs (the experiment),
 scoring and logging (team-attributed), the private internet, and DNS — all via
 its devbox-gw. What it **cannot** reach: the Proxmox host, the database, the
-dashboard, the orchestrator, the monitor, wazuh, the sandbox, and other teams'
+dashboard, the orchestrator, the monitor, syslog, the sandbox, and other teams'
 devboxes.
 
 ## Resources, limits, maintenance
@@ -234,8 +267,8 @@ worms devbox provision             # teams created on the dashboard get their de
 #   POST https://orchestrator/devbox/<team-uuid>/reset/   (dashboard token)
 ```
 
-A team connects with `ssh -J team@<gateway>:2222 root@<their A VM>` using a
-key they registered on the dashboard.
+A team connects with `ssh -A -J team@<gateway>:2222 root@<their A VM>` using a
+key they registered on the dashboard, then goes on to B and C ("From A to B and C", above).
 
 ## Status / not done here
 
@@ -247,8 +280,10 @@ provisioning trigger (`tests/test_manage_cli.py`), and the host nftables render.
 The OpenTofu (firewall + devbox stack + module) passes `tofu validate` with
 bpg/proxmox 0.118.0.
 
-**Not yet run on a live Proxmox host** (none here) — the same caveat the
-sandbox and round orchestration carry (`docs/testing.md`): VM creation, the
-`-replace` rebuild, the Ansible key plumbing end to end, and the SSH gateway's
-`permitopen` confinement in practice. The remaining security items are tracked
-in `docs/security-assessment.md`.
+**Run live on 2026-11-04** (`docs/e2e-run-2026-11-03/protocol.md`): VM creation,
+keys, the gateway's confinement, scoring and logging, apt and pip through the
+private internet, containment and a reset all work. Port 2222 is published
+(`host_publish_ssh_gateway`), but no test has connected through it from outside,
+because the node cannot reach its own port forward. Still not run live: the
+sandbox and round orchestration (`docs/testing.md`). The remaining security items
+are tracked in `docs/security-assessment.md`.

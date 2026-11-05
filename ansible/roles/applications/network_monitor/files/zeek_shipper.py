@@ -296,7 +296,9 @@ class Follower:
 
     def rewind(self):
         """Back to the last committed position (after a failed insert)."""
-        if self.committed is None:
+        # Nothing committed, or no file existed at that commit (Zeek writes a
+        # log only once it has something to say): from the start of what is there.
+        if self.committed is None or self.committed[0] is None:
             if self.file:
                 self.file.close()
             self.file, self.ident, self.offset = None, None, 0
@@ -494,9 +496,11 @@ class Shipper:
         try:
             self.counts["rejected"] += self.db.insert(flows, events)
         except Exception:
+            # First: a connection left open keeps its aborted transaction, and
+            # that would fail every later insert.
+            self.db.close()
             for follower in self.followers:
                 follower.rewind()
-            self.db.close()
             raise
         for follower in self.followers:
             follower.mark_committed()

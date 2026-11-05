@@ -9,6 +9,9 @@ dns_listen_address: "{{ services_ips.dns }}"
 dns_entries:
   - {name: scoring.worms.internal, ip: "{{ services_ips.scoring }}", group: scoring}
   - {name: logging.worms.internal, ip: "{{ services_ips.logging }}", group: logging}
+  # A devbox's per-team names (docs/devbox.md); the certificates cover them too.
+  - {name: "*.scoring.worms.internal", ip: "{{ services_ips.scoring }}", group: scoring}
+  - {name: "*.logging.worms.internal", ip: "{{ services_ips.logging }}", group: logging}
   - {name: apt-cache.worms.internal, ip: "{{ private_internet_ips.apt_cache.network }}", group: apt_cache}
   - {name: pypi.worms.internal, ip: "{{ private_internet_ips.devpi.network }}", group: devpi}
   - {name: docker-registry.worms.internal, ip: "{{ private_internet_ips.docker_registry.network }}", group: docker_registry}

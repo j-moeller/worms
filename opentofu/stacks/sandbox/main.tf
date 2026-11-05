@@ -254,6 +254,20 @@ resource "proxmox_virtual_environment_vm" "gw" {
 resource "proxmox_pool_membership" "gw" {
   pool_id = local.platform.pools["sandbox"].pool_id
   vm_id   = proxmox_virtual_environment_vm.gw.vm_id
+
+  # Last: the firewall watchdog stops every running VM of this pool when one of
+  # them has no rules, so a VM must have its firewall before it joins.
+  depends_on = [
+    proxmox_virtual_environment_firewall_options.gw,
+    proxmox_virtual_environment_firewall_ipset.gw,
+    proxmox_virtual_environment_firewall_rules.gw,
+  ]
+
+  # Out of the watched pool before the VM is replaced, and back in after its
+  # firewall: until then the watchdog would stop every VM of the pool.
+  lifecycle {
+    replace_triggered_by = [proxmox_virtual_environment_vm.gw.id]
+  }
 }
 
 resource "proxmox_virtual_environment_firewall_options" "gw" {
@@ -265,6 +279,12 @@ resource "proxmox_virtual_environment_firewall_options" "gw" {
   output_policy = "DROP"
   ipfilter      = true
   macfilter     = true
+
+  # Proxmox deletes a VM's firewall settings with the VM. Without this, a new VM
+  # that gets the same ID keeps its firewall off, and OpenTofu sees nothing to do.
+  lifecycle {
+    replace_triggered_by = [proxmox_virtual_environment_vm.gw.id]
+  }
 }
 
 # Sandbox legs forward traffic of every sandbox VM (and replies from the
@@ -323,6 +343,20 @@ resource "proxmox_pool_membership" "pool_membership" {
 
   pool_id = local.platform.pools["sandbox"].pool_id
   vm_id   = proxmox_virtual_environment_vm.vm[each.key].vm_id
+
+  # Last: the firewall watchdog stops every running VM of this pool when one of
+  # them has no rules, so a VM must have its firewall before it joins.
+  depends_on = [
+    proxmox_virtual_environment_firewall_options.vm,
+    proxmox_virtual_environment_firewall_ipset.vm,
+    proxmox_virtual_environment_firewall_rules.vm,
+  ]
+
+  # Out of the watched pool before the VM is replaced, and back in after its
+  # firewall: until then the watchdog would stop every VM of the pool.
+  lifecycle {
+    replace_triggered_by = [proxmox_virtual_environment_vm.vm[each.key].id]
+  }
 }
 
 resource "proxmox_virtual_environment_firewall_options" "vm" {
@@ -336,6 +370,12 @@ resource "proxmox_virtual_environment_firewall_options" "vm" {
   output_policy = "DROP"
   ipfilter      = true
   macfilter     = true
+
+  # Proxmox deletes a VM's firewall settings with the VM. Without this, a new VM
+  # that gets the same ID keeps its firewall off, and OpenTofu sees nothing to do.
+  lifecycle {
+    replace_triggered_by = [proxmox_virtual_environment_vm.vm[each.key].id]
+  }
 }
 
 # Each NIC may only send from its configured address (net0.. = sandbox NICs,

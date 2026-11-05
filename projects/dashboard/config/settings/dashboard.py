@@ -27,15 +27,11 @@ ORCHESTRATOR_API = {
     "url": env("ORCHESTRATOR_URL", ""),
     "tls_name": env("ORCHESTRATOR_TLS_NAME", "orchestrator.worms.internal"),
     "token": env("ORCHESTRATOR_API_TOKEN", ""),
-    # The internal CA is installed in the service host's trust store.
-    # Requests otherwise uses certifi's separate public-CA bundle.
+    # Keep explicit CA overrides supported by earlier deployments; otherwise
+    # the standard-library client verifies against the system trust store.
     "ca_bundle": (env("ORCHESTRATOR_CA_BUNDLE") or env("REQUESTS_CA_BUNDLE")
                   or env("CURL_CA_BUNDLE") or ssl.get_default_verify_paths().cafile),
 }
-
-# The design every visitor sees by default (dashboard/themes.py); a visitor
-# can switch in the footer, which is remembered in a cookie.
-DASHBOARD_THEME = env("DASHBOARD_THEME", "lab")
 
 LOGGING["loggers"]["dashboard"] = {
     "handlers": ["console"],

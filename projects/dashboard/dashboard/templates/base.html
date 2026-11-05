@@ -1,13 +1,13 @@
 {% load static %}<!DOCTYPE html>
 {% with dev=request.session.is_dev_environment page=request.resolver_match.url_name %}
-<html lang="en" data-theme="{{ request.theme|default:'lab' }}" data-env="{% if dev %}dev{% else %}sandbox{% endif %}" data-now="{{ request.time_now|date:'c' }}">
+<html lang="en" data-env="{% if dev %}dev{% else %}sandbox{% endif %}" data-now="{{ request.time_now|date:'c' }}">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}{% endblock %} · WORMS//{% if dev %}DEV{% else %}LIVE{% endif %}</title>
     <link rel="stylesheet" href="{% static 'dashboard/css/base.css' %}">
     {% block head %}{% endblock %}
-    <link rel="stylesheet" href="{% static request.theme_css|default:'dashboard/css/themes/lab.css' %}" data-theme-stylesheet>
+    <link rel="stylesheet" href="{% static 'dashboard/css/theme.css' %}">
     <script src="{% static 'dashboard/js/enhance.js' %}" defer></script>
 </head>
 <body>
@@ -125,16 +125,6 @@
 
     <footer class="site-footer">
         <p class="site-footer__line">WORMS — an arena for autonomous worms</p>
-        <form method="post" action="{% url 'set_theme' %}" class="theme-picker" data-theme-picker>
-            {% csrf_token %}
-            <input type="hidden" name="next" value="{{ request.get_full_path }}">
-            <span class="theme-picker__label" id="theme-picker-label">Theme</span>
-            <span class="theme-picker__options" role="group" aria-labelledby="theme-picker-label">
-                {% for key, name in request.themes %}
-                <button type="submit" name="theme" value="{{ key }}" class="theme-picker__option" aria-pressed="{% if key == request.theme %}true{% else %}false{% endif %}" data-stylesheet="{% static 'dashboard/css/themes/'|add:key|add:'.css' %}">{{ name }}</button>
-                {% endfor %}
-            </span>
-        </form>
     </footer>
 
     {% if request.is_debug_mode %}

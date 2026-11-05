@@ -36,7 +36,6 @@ def deployment(tmp_path_factory):
         '-keyout', str(key), '-out', str(ca))
     groups = {name: yaml.safe_load((REPO / f'ansible/group_vars/{name}.yml').read_text())
               for name in ('dashboard', 'orchestrator')}
-    assert 'requests' in groups['dashboard']['django_extra_pip_packages']
     hosts = root / 'hosts'
     hosts.write_text('127.0.0.1 localhost\n')
     localcerts, certs, hooks, empty = (root / name for name in ('local-certs', 'certs', 'hooks', 'empty'))

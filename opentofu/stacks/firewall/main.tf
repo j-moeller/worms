@@ -28,6 +28,18 @@ provider "proxmox" {
 
 resource "proxmox_virtual_environment_cluster_firewall" "main" {
   enabled = true
+
+  # Datacenter default-deny for inbound: anything not matched by a security
+  # group or host rule is dropped. This pins Proxmox's default (which is already
+  # DROP when the firewall is enabled) so it cannot silently drift to ACCEPT.
+  #
+  # Output stays ACCEPT on purpose: the datacenter output policy also governs
+  # the Proxmox HOST's own outbound, which Ansible uses to SSH into every VM, so
+  # a blanket output-drop would break provisioning unless every host-initiated
+  # connection were enumerated here. Each VM still sets its own input AND output
+  # DROP via its firewall options, so guest egress is already default-deny.
+  input_policy  = "DROP"
+  output_policy = "ACCEPT"
 }
 
 resource "proxmox_node_firewall" "worms_pve" {
@@ -86,13 +98,16 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "dashboar
   name = "dashboard"
 
   # Internet clients arrive via host DNAT (host_publish_dashboard, role host_network);
-  # nothing else can route into the DMZ.
+  # nothing else can route into the DMZ. Pinned to the dashboard's own DMZ
+  # address so HTTPS is accepted only there -- the dashboard cannot be reached
+  # on any of its other addresses (e.g. the management NIC).
   rule {
     type    = "in"
     action  = "ACCEPT"
     proto   = "tcp"
     dport   = "443"
-    comment = "HTTPS (public, via host DNAT)"
+    dest    = local.infrastructure_ips.dashboard
+    comment = "HTTPS (public, via host DNAT) -- dashboard DMZ address only"
   }
 
   rule {
@@ -227,10 +242,10 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "dns" {
 # Private-internet services, reachable from the services bridge only.
 #
 # SUPERSEDED by the per-service groups below, which open only the port each
-# service actually serves. Kept (unattached) for one migration cycle: the
-# firewall stack applies before the VM stacks, so deleting it here while a VM
-# still references it would fail. Drop it once every private-internet VM has
-# been re-applied with its per-service group.
+# service actually serves. Kept (defined but no longer attached to any service
+# VM) for one migration cycle: the firewall stack applies before the VM stacks,
+# so deleting it here while a VM still references it would fail. Drop it once
+# every private-internet VM has been re-applied with its per-service group.
 resource "proxmox_virtual_environment_cluster_firewall_security_group" "private_internet" {
   name = "private_internet"
 
@@ -256,10 +271,9 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "private_
 # Per-service private-internet groups: one per service, opening ONLY the port
 # that service listens on. The service VMs attach these instead of the broad
 # group above, so each VM accepts just its own service (wikipedia stops
-# answering on 3142, apt-cache on 8888, ...). The client direction is unchanged:
-# it is `services_client` / `sandbox` / `sandbox_gw`, which keep using the union
-# in local.private_internet_ports. Ports here come from
-# local.private_internet_service_ports.
+# answering on 3142, apt-cache on 8888, ...). The CLIENT direction is unchanged:
+# sandbox VMs / sandbox-gw keep using the union in local.private_internet_ports.
+# Ports here come from local.private_internet_service_ports.
 resource "proxmox_virtual_environment_cluster_firewall_security_group" "private_internet_service" {
   for_each = local.private_internet_service_ports
 
@@ -603,10 +617,10 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "llm_acce
   }
 }
 
-# Central log server (wazuh, siem bridge): syslog from the infrastructure VMs
-# (routed by the host), the dashboard from the host only (SSH tunnel).
-resource "proxmox_virtual_environment_cluster_firewall_security_group" "wazuh" {
-  name = "wazuh"
+# Central log server (the syslog VM, siem bridge): syslog from the
+# infrastructure VMs (routed by the host). Nothing else.
+resource "proxmox_virtual_environment_cluster_firewall_security_group" "syslog" {
+  name = "syslog"
 
   dynamic "rule" {
     for_each = ["dmz", "core", "ingest", "mgmt_exposed"]
@@ -620,18 +634,9 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "wazuh" {
       comment = "Syslog from ${rule.value}"
     }
   }
-
-  rule {
-    type    = "in"
-    action  = "ACCEPT"
-    proto   = "tcp"
-    dport   = "443"
-    source  = local.host_ips.siem
-    comment = "Dashboard from the Proxmox host (SSH tunnel)"
-  }
 }
 
-# Every infrastructure VM ships its audit log to wazuh. Attach on the
+# Every infrastructure VM ships its audit log to the syslog VM. Attach on the
 # default-route NIC.
 resource "proxmox_virtual_environment_cluster_firewall_security_group" "log_client" {
   name = "log_client"
@@ -641,7 +646,7 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "log_clie
     action  = "ACCEPT"
     proto   = "tcp"
     dport   = "514"
-    dest    = local.infrastructure_ips.wazuh
-    comment = "-> wazuh:514 (syslog)"
+    dest    = local.infrastructure_ips.syslog
+    comment = "-> syslog:514"
   }
 }

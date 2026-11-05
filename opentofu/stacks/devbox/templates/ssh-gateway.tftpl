@@ -42,7 +42,8 @@ write_files:
       MaxStartups 10:30:60
       # Teams log in as this single unprivileged account; their key options
       # (permitopen, restrict) are what actually bound them.
-      AllowUsers ${gateway_user}
+      # Teams, plus Ansible from the node only (it configures this gateway as debian).
+      AllowUsers ${gateway_user} debian@${mgmt_host_ip}
 
 runcmd:
   - id -u ${gateway_user} >/dev/null 2>&1 || useradd -m -s /bin/sh ${gateway_user}

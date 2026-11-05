@@ -1,0 +1,13 @@
+---
+# Package updates of the infrastructure VMs (role apt_updates): switches off
+# Debian's automatic apt runs (apt-daily timers, unattended-upgrades) and, while
+# internet access is allowed, upgrades every package. Runs right after
+# SetupDNS.yml (the DNS VM resolves through its own BIND, which that playbook
+# switches to the current internet mode) and before the other roles install
+# packages.
+- name: Update the infrastructure VMs
+  hosts: all:!proxmox_host:!sandbox:!sandbox_gw
+  any_errors_fatal: true
+  become: true
+  roles:
+    - apt_updates

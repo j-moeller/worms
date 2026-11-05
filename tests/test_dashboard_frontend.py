@@ -47,10 +47,7 @@ def test_referenced_static_files_exist():
     refs = set()
     for path in _templates():
         refs.update(STATIC_REF.findall(path.read_text()))
-    # The theme stylesheets are referenced dynamically (per request.theme).
-    for key in ("lab", "lab-dark"):
-        refs.add(f"dashboard/css/themes/{key}.css")
-    assert "dashboard/css/base.css" in refs and "dashboard/js/enhance.js" in refs
+    assert {"dashboard/css/base.css", "dashboard/css/theme.css", "dashboard/js/enhance.js"} <= refs
     for ref in refs:
         assert (STATIC / ref).exists(), f"missing static file: {ref}"
 
@@ -58,7 +55,6 @@ def test_referenced_static_files_exist():
 def test_state_changing_endpoints_are_post_only(site):  # noqa: F811
     # A GET (a link, a crawler, an <img>) must not log out or change settings.
     assert site.get("/logout/", **proxied(HOST)).status_code == 405
-    assert site.get("/theme/", **proxied(HOST)).status_code == 405
 
 
 def _csrf(client, path):
@@ -66,21 +62,19 @@ def _csrf(client, path):
     return re.search(rb'name="csrfmiddlewaretoken" value="([^"]+)"', page.content).group(1).decode()
 
 
-def test_theme_is_set_by_a_form_post_cookie(site):  # noqa: F811
-    token = _csrf(site, "/login/")
-    origin = {"HTTP_ORIGIN": f"https://{HOST}"}
-    response = site.post(
-        "/theme/", {"csrfmiddlewaretoken": token, "theme": "lab-dark", "next": "/login/"},
-        **proxied(HOST), **origin,
-    )  # fmt: skip
-    assert response.status_code == 302
-    assert response.cookies["worms_theme"].value == "lab-dark"
-    # An unknown design is ignored (no cookie set).
-    bad = site.post(
-        "/theme/", {"csrfmiddlewaretoken": token, "theme": "nope", "next": "/login/"},
-        **proxied(HOST), **origin,
-    )  # fmt: skip
-    assert "worms_theme" not in bad.cookies
+def test_the_dark_theme_is_the_only_one(site):  # noqa: F811
+    html = site.get("/login/", **proxied(HOST)).content.decode()
+    assert "dashboard/css/theme.css" in html
+    assert "theme-picker" not in html and "data-theme" not in html
+    assert site.get("/theme/", **proxied(HOST)).status_code == 404
+    assert not (STATIC / "dashboard" / "css" / "themes").exists()
+
+
+def test_nothing_follows_the_visitors_os_colour_scheme():
+    """Dark for everyone: a light-mode OS must not change any colour."""
+    for path in (STATIC / "dashboard").rglob("*"):
+        if path.suffix in (".css", ".js"):
+            assert "prefers-color-scheme" not in path.read_text(), path.name
 
 
 def _zip_bytes():
@@ -201,7 +195,7 @@ def test_access_tokens_moved_into_the_profile(site, team_upload):  # noqa: F811
     page = site.get("/profile/", **proxied(HOST)).content.decode()
     assert "Access tokens" in page
     assert 'action="/access-tokens/create/"' in page   # the create form
-    assert "/api/v1/rounds/" in page                   # the API docs moved too
+    assert "/api/v1/rounds/" not in page               # the API docs are on the progression page
 
 
 def test_devbox_reset_without_a_devbox_is_an_error(site, team_upload):  # noqa: F811
@@ -257,15 +251,19 @@ def test_devbox_ssh_key_add_remove_and_reconfigure(site, team_upload, monkeypatc
     assert DevboxSSHKey.objects.filter(team=team).count() == 1 and calls == []
     assert "not allowed" in _flash(site) or "not a single-line" in _flash(site)
 
-    # Another team's key cannot be registered (would hijack confinement).
-    other = Team.objects.create(name="blue", competition=team.competition)
+    # Another team's key cannot be registered (would hijack confinement). The
+    # other team holds a different blob; this team tries to add that same blob.
+    import base64
+
     from core.models.user import User
 
-    DevboxSSHKey.objects.create(team=other, name="k", public_key=f"ssh-ed25519 {_BLOB} blue", created_by=User.objects.create(username="b"))
+    other = Team.objects.create(name="blue", competition=team.competition)
+    other_blob = base64.b64encode(b"y" * 40).decode()
+    DevboxSSHKey.objects.create(team=other, name="k", public_key=f"ssh-ed25519 {other_blob} blue", created_by=User.objects.create(username="b"))
     calls.clear()
-    _post(site, "/devbox/ssh-keys/add/", {"name": "dup", "public_key": f"ssh-ed25519 {_BLOB} mine"})
+    _post(site, "/devbox/ssh-keys/add/", {"name": "dup", "public_key": f"ssh-ed25519 {other_blob} mine"})
     assert DevboxSSHKey.objects.filter(team=team).count() == 1 and calls == []
-    assert "already registered" in _flash(site)
+    assert "already registered by another team" in _flash(site)
 
     # Remove the key -> gone, and a reconfigure is requested.
     calls.clear()
@@ -299,3 +297,36 @@ def test_leaving_a_team_removes_the_members_keys(site, team_upload, monkeypatch)
     assert _post(site, f"/leave_team/{team.uuid}", {}).status_code == 302
     assert DevboxSSHKey.objects.filter(team=team, created_by=admin).count() == 0
     assert calls == [f"/devbox/{team.uuid}/reconfigure/"]
+
+
+def test_devbox_key_fingerprint_is_unique_across_teams(db_clean):
+    """The DB itself refuses the same key under two teams (the race-proof guard
+    behind the dashboard's own check; docs/security-assessment.md D7). The
+    fingerprint ignores the free-text comment."""
+    import base64
+
+    from core.models.competition import Competition
+    from core.models.devbox import DevboxSSHKey
+    from core.models.team import Team
+    from django.db import IntegrityError, transaction
+
+    comp = Competition.objects.create(name="C")
+    a = Team.objects.create(name="a", competition=comp)
+    b = Team.objects.create(name="b", competition=comp)
+    blob = base64.b64encode(b"x" * 40).decode()
+    DevboxSSHKey.objects.create(team=a, public_key=f"ssh-ed25519 {blob} alice@laptop")
+
+    # Same key material, different comment, different team -> rejected by the DB.
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            DevboxSSHKey.objects.create(team=b, public_key=f"ssh-ed25519 {blob} bob@other")
+    # Same team, exact duplicate -> also rejected.
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            DevboxSSHKey.objects.create(team=a, public_key=f"ssh-ed25519 {blob} alice@laptop")
+
+    assert DevboxSSHKey.fingerprint(f"ssh-ed25519 {blob} x") == DevboxSSHKey.fingerprint(f"ssh-ed25519 {blob} y")
+    # A different key is fine, and its fingerprint is stored.
+    other = base64.b64encode(b"z" * 40).decode()
+    key = DevboxSSHKey.objects.create(team=b, public_key=f"ssh-ed25519 {other} b")
+    assert key.key_fingerprint == DevboxSSHKey.fingerprint(f"ssh-ed25519 {other}")

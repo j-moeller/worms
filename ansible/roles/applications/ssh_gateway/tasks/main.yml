@@ -4,10 +4,12 @@
 # (re)write the team user's authorized_keys from the database-provided list, so
 # adding/removing a team key or rebuilding takes effect on the next run.
 
+# No shell: a jump opens no session, so it does not need one. With a shell, a team
+# login could run commands here, on a VM that reaches every team's fabric address.
 - name: Ensure the team user exists
   ansible.builtin.user:
     name: "{{ ssh_gateway_user }}"
-    shell: /bin/sh
+    shell: /usr/sbin/nologin
     create_home: true
     state: present
 

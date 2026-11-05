@@ -1,0 +1,4 @@
+---
+# Seconds an apt task waits for another apt/dpkg run to release its lock (e.g.
+# an unattended upgrade that was already running when the timers were masked).
+apt_updates_lock_timeout: 900

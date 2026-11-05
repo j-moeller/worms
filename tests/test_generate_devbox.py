@@ -18,7 +18,7 @@ SPEC.loader.exec_module(gen)
 def test_addressing_is_in_range_and_disjoint():
     a0 = gen.team_addressing("t1", 0)
     a1 = gen.team_addressing("t2", 1)
-    devbox = ipaddress.ip_network("10.128.0.0/10")
+    devbox = ipaddress.ip_network("10.128.0.0/19")
     for a in (a0, a1):
         assert ipaddress.ip_network(a["ab_cidr"]).subnet_of(devbox)
         assert ipaddress.ip_network(a["bc_cidr"]).subnet_of(devbox)
@@ -34,7 +34,8 @@ def test_no_devbox_address_is_a_host_address():
     mgmt_devbox 10.6.0.1, devbox_ssh 10.7.0.1) and the SSH gateway (10.7.0.2)
     must never be handed to an (untrusted) devbox VM or gateway."""
     reserved = {"10.6.0.1", "10.7.0.1", "10.7.0.2"}
-    for index in range(32):
+    # The devbox network (10.128.0.0/19) bounds teams to 16 (indices 0..15).
+    for index in range(16):
         a = gen.team_addressing(f"t{index}", index)
         for key, value in a.items():
             if key.startswith(("maint_", "ssh_")):
@@ -42,11 +43,23 @@ def test_no_devbox_address_is_a_host_address():
 
 
 def test_services_source_follows_the_documented_block():
-    """team i -> 10.2.0.(32+i) for every supported index (0..31), the same
-    rule provision_devboxes uses for Devbox.services_source_ip."""
-    for index in range(32):
+    """team i -> 10.2.0.(32+i), the same rule provision_devboxes uses for
+    Devbox.services_source_ip. The devbox network (10.128.0.0/19) now bounds
+    teams to 16 (indices 0..15), so that is the supported range."""
+    for index in range(16):
         a = gen.team_addressing(f"t{index}", index)
         assert a["services_cidr"] == f"10.2.0.{32 + index}/24"
+
+
+def test_devbox_network_bounds_teams_to_sixteen():
+    """A 17th team (index 16) would need 10.128.32.0/24, outside the /19
+    devbox aggregate, so addressing fails closed instead of handing out a
+    network the firewall does not cover."""
+    import pytest
+
+    gen.team_addressing("t15", 15)  # the last team that fits
+    with pytest.raises(ValueError):
+        gen.team_addressing("t16", 16)
 
 
 def test_deterministic():

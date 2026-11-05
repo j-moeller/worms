@@ -4,7 +4,7 @@
     name: [python3-pip, python3-venv, acl, ca-certificates]
     state: present
     update_cache: "{{ internet_enabled | bool }}"
-    cache_valid_time: 3600
+    cache_valid_time: "{{ 3600 if internet_enabled | bool else omit }}"
 
 - name: Create devpi user
   ansible.builtin.user:
@@ -68,3 +68,77 @@
     enabled: true
     state: started
     daemon_reload: true
+
+# Clients only read: with --restrict-modify root, nobody but root can create
+# users or indexes or upload, and root's password stays in the vault
+# (docs/security-assessment.md, S2). devpi-init leaves root without a password.
+- name: Apply the service settings before securing it
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for devpi
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ devpi_port }}"
+    timeout: 120
+
+- name: Check whether root still has no password
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ devpi_port }}/+login"
+    method: POST
+    body_format: json
+    body: {user: root, password: ""}
+    headers: {Accept: application/json}
+    status_code: [200, 401]
+  register: devpi_empty_login
+  no_log: "{{ hide_secrets }}"
+
+- name: Give root its password
+  when: devpi_empty_login.status == 200
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ devpi_port }}/root"
+    method: PATCH
+    body_format: json
+    body: {password: "{{ devpi_root_password }}"}
+    headers:
+      Accept: application/json
+      X-Devpi-Auth: "{{ ('root:' ~ devpi_empty_login.json.result.password) | b64encode }}"
+  changed_when: true
+  no_log: "{{ hide_secrets }}"
+
+# By default devpi first downloads the name of every project on PyPI. That does not
+# finish within its 5-second request timeout here, so each lookup answers "does not
+# exist". This way it asks PyPI about each project directly, and only indexes what
+# it fetched. With the internet closed it knows only those projects.
+- name: Check how the mirror finds projects
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ devpi_port }}/root/pypi"
+    headers: {Accept: application/json}
+  register: devpi_mirror
+
+- name: Log in as root
+  when: not (devpi_mirror.json.result.mirror_no_project_list | default(false) | bool)
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ devpi_port }}/+login"
+    method: POST
+    body_format: json
+    body: {user: root, password: "{{ devpi_root_password }}"}
+    headers: {Accept: application/json}
+  register: devpi_root_login
+  no_log: "{{ hide_secrets }}"
+
+- name: Make the mirror ask PyPI about each project directly
+  when: not (devpi_mirror.json.result.mirror_no_project_list | default(false) | bool)
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ devpi_port }}/root/pypi"
+    method: PATCH
+    body_format: json
+    body: ["mirror_no_project_list=True"]
+    headers:
+      Accept: application/json
+      X-Devpi-Auth: "{{ ('root:' ~ devpi_root_login.json.result.password) | b64encode }}"
+  changed_when: true
+  no_log: "{{ hide_secrets }}"
+
+- name: Fill the mirror while the internet is open
+  ansible.builtin.include_tasks: seed.yml
+  when: internet_enabled | bool

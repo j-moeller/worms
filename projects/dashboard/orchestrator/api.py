@@ -138,19 +138,19 @@ def devbox_reconfigure(request: HttpRequest, team_uuid):
             kind__in=[HostJob.Kind.DEVBOX_REBUILD, HostJob.Kind.DEVBOX_PROVISION],
             state__in=[HostJob.State.QUEUED, HostJob.State.RUNNING],
         ).aggregate(latest=Max("id"))["latest"] or 0
-        queued = HostJob.objects.select_for_update().filter(
+        queued = HostJob.objects.filter(
             id__gt=barrier,
             kind=HostJob.Kind.DEVBOX_RECONFIGURE,
             state=HostJob.State.QUEUED,
             params__team_uuid__in=[str(uuid) for uuid in competition_teams],
-        ).order_by("id").first()
-        if queued is not None:
-            # The agent locks this row when claiming it: never change a
-            # snapshot it has already claimed and may currently be applying.
-            queued.params = {"team_uuid": str(team.uuid), "teams": teams}
-            queued.save(update_fields=["params"])
-            return JsonResponse({"job": str(queued.uuid), "reconfigure_enqueued": False,
-                                 "detail": "queued reconfigure updated with the latest keys"})
+        ).order_by("id")
+        # Preserve main's immutable snapshots; the agent may skip superseded
+        # queued jobs. Only an identical snapshot after the barrier can cover
+        # this request without a new job.
+        pending = next((job for job in queued if job.params.get("teams") == teams), None)
+        if pending is not None:
+            return JsonResponse({"job": str(pending.uuid), "reconfigure_enqueued": False,
+                                 "detail": "the current keys are already queued"})
         running = HostJob.objects.filter(
             id__gt=barrier,
             kind=HostJob.Kind.DEVBOX_RECONFIGURE, state=HostJob.State.RUNNING,

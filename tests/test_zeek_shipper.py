@@ -214,6 +214,60 @@ def test_follower_rewind(dirs):
     assert [json.loads(x)["n"] for x in f.read(10)] == [2]
 
 
+def test_follower_rewind_when_the_log_did_not_exist_at_the_last_commit(dirs):
+    """Normal while idle: Zeek writes a log only once it has something to say."""
+    logs, archive = dirs
+    f = zs.Follower("conn", logs, archive)
+    f.mark_committed()
+    f.rewind()  # no file was open at that commit, and none is now
+    write(logs / "conn.log", {"n": 1})
+    assert len(f.read(10)) == 1
+    f.rewind()  # none was open at that commit, but one is now: from its start
+    assert [json.loads(x)["n"] for x in f.read(10)] == [1]
+
+
+class FlakyDatabase:
+    def __init__(self):
+        self.down = True
+        self.closed = 0
+        self.events = []
+
+    def insert(self, flows, events):
+        if self.down:
+            raise RuntimeError("database down")
+        self.events += events
+        return 0
+
+    def close(self):
+        self.closed += 1
+
+
+def test_a_failed_insert_while_idle_does_not_wedge_the_shipper(dirs, tmp_path):
+    """With no log files yet, the heartbeat alone reaches the database. If that
+    failed, rewind() used to crash before the connection was closed, so its
+    aborted transaction failed every later insert until a restart."""
+    logs, archive = dirs
+    db = FlakyDatabase()
+    shipper = zs.Shipper(
+        {
+            "ZEEK_LOG_DIR": str(logs),
+            "ZEEK_ARCHIVE_DIR": str(archive),
+            "STATE_FILE": str(tmp_path / "state.json"),
+            "EVENT_LOGS": "dns",
+            "REPORT_SECONDS": "0",
+        },
+        db=db,
+    )
+    for follower in shipper.followers:  # what an idle round does: nothing to read
+        follower.mark_committed()
+    with pytest.raises(RuntimeError, match="database down"):
+        shipper.step()
+    assert db.closed == 1, "the failed connection must be dropped"
+    db.down = False
+    assert shipper.step() is True
+    assert [e[0] for e in db.events] == ["shipper"]
+
+
 # --- shipping -----------------------------------------------------------------
 
 

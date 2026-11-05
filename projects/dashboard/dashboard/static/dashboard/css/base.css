@@ -2,12 +2,12 @@
  * WORMS dashboard — structure and components.
  *
  * All colour, texture, typography and shape come from CSS custom properties
- * (the "token contract" below), which the three theme stylesheets set. This
- * file never hard-codes a colour, so a theme is only a set of tokens plus a
- * few optional flourishes. Nothing here depends on JavaScript.
+ * (the "token contract" below), which theme.css sets. This file never hard-codes
+ * a colour, so the theme is only a set of tokens plus a few optional flourishes.
+ * Nothing here depends on JavaScript.
  */
 
-/* ---- token contract (defaults; themes override on :root) ---------------- */
+/* ---- token contract (defaults; theme.css overrides on :root) ------------ */
 :root {
     --maxw: 1180px;
     --gap: 22px;
@@ -39,8 +39,8 @@
     --bad: #ef5a5a;
     --hot: #ff7a45;
     --focus: var(--accent);
-    /* The Dev environment recolours the whole site to this accent (themes
-       override it). Live keeps the theme's own --accent. */
+    /* The Dev environment recolours the whole site to this accent (theme.css
+       overrides it). Live keeps the theme's own --accent. */
     --accent-dev: #15803d;
     --accent-ink-dev: #ffffff;
 
@@ -297,7 +297,7 @@ textarea.input { resize: vertical; min-height: 64px; }
 .field--grow { flex: 1; min-width: 240px; }
 
 /* ---- tables ------------------------------------------------------------- */
-.table-wrap { overflow-x: auto; }
+.table-wrap { position: relative; overflow-x: auto; } /* relative: holds a visually hidden header inside the scroll area */
 .table { width: 100%; border-collapse: collapse; font-size: .9rem; }
 .table th, .table td { padding: 11px 14px; text-align: left; border-bottom: var(--border-w) solid var(--border); vertical-align: top; }
 .table thead th { font-size: .72rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); font-weight: 700; background: var(--surface-2); }
@@ -336,7 +336,9 @@ textarea.input { resize: vertical; min-height: 64px; }
 .stat__value { font-family: var(--font-display); font-size: 2.6rem; font-weight: 700; line-height: 1; color: var(--accent); }
 .stat__of { color: var(--faint); font-size: 1.4rem; }
 .stat__label { color: var(--muted); font-size: .85rem; }
-.pips { display: flex; gap: 7px; margin-top: 14px; }
+.pips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 14px; }
+.stat + .kv, .pips + .kv { margin-top: 16px; }
+.round-tabs.team-tabs { margin: 12px 0 16px; }
 .pip { width: 26px; height: 8px; border-radius: 3px; background: var(--border-strong); }
 .pip.is-on { background: var(--ok); box-shadow: 0 0 10px color-mix(in srgb, var(--ok) 60%, transparent); }
 
@@ -350,11 +352,20 @@ textarea.input { resize: vertical; min-height: 64px; }
 .code code { white-space: pre; }
 .copy-row { display: flex; gap: 8px; align-items: stretch; }
 .copy-row__value { flex: 1; min-width: 0; overflow-x: auto; padding: 12px 14px; background: var(--bg); border: var(--border-w) solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: var(--radius-sm); color: var(--accent); font-family: var(--font-mono); font-size: .82rem; white-space: nowrap; }
-.code__copy { position: absolute; top: 7px; right: 7px; opacity: .55; }
+/* The button sits beside the code, so a long line never runs under it. */
+pre.code[data-copy] { display: flex; align-items: flex-start; gap: 12px; }
+pre.code[data-copy] code { flex: 1; min-width: 0; overflow-x: auto; }
+.code--wrap code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.code__copy { flex: none; margin: -5px -7px -5px 0; opacity: .55; }
 .code__copy:hover { opacity: 1; }
+.code-label { margin: 0 0 6px; font-size: .82rem; font-weight: 600; }
+p + p { margin-top: 10px; }
+.panel__body p code { white-space: nowrap; }
+p + .code-label { margin-top: 14px; }
 
 /* ---- disclosures / confirm --------------------------------------------- */
 .disclosure, .confirm { margin: 0; }
+.vm-chain + .confirm, .muted + .confirm { margin-top: 18px; }
 .confirm summary, .disclosure summary { display: inline-flex; list-style: none; }
 .confirm summary::-webkit-details-marker, .disclosure summary::-webkit-details-marker { display: none; }
 .confirm[open] > summary { opacity: .6; }
@@ -364,6 +375,8 @@ textarea.input { resize: vertical; min-height: 64px; }
 .confirm--inline .confirm__body { position: absolute; z-index: 5; background: var(--surface); box-shadow: var(--shadow); min-width: 260px; }
 .confirm--inline { position: relative; }
 .disclosure[open] > summary { margin-bottom: 4px; }
+.panel > .disclosure > summary { margin: 16px 18px; }
+.panel > .disclosure[open] > summary { margin-bottom: 0; }
 .disclosure > .form { border-top: var(--border-w) solid var(--border); margin-top: 14px; padding-top: 16px; }
 
 /* ---- logs --------------------------------------------------------------- */
@@ -409,16 +422,10 @@ textarea.input { resize: vertical; min-height: 64px; }
 .pager { display: flex; align-items: center; justify-content: center; gap: 16px; }
 .pager__at { color: var(--muted); font-size: .82rem; font-family: var(--font-mono); }
 
-/* ---- footer / theme picker --------------------------------------------- */
+/* ---- footer ------------------------------------------------------------- */
 .site-footer { border-top: var(--border-w) solid var(--border); background: var(--header-bg); }
 .site-footer { max-width: none; }
-.site-footer__line { max-width: var(--maxw); margin: 0 auto; padding: 16px 20px 2px; color: var(--faint); font-size: .8rem; }
-.theme-picker { max-width: var(--maxw); margin: 0 auto; padding: 4px 20px 18px; display: flex; align-items: center; gap: 12px; }
-.theme-picker__label { color: var(--faint); font-size: .76rem; text-transform: uppercase; letter-spacing: .1em; }
-.theme-picker__options { display: inline-flex; gap: 4px; border: var(--border-w) solid var(--border); border-radius: 100px; padding: 3px; }
-.theme-picker__option { border: none; background: transparent; color: var(--muted); font: inherit; font-size: .8rem; font-weight: 600; padding: 5px 13px; border-radius: 100px; cursor: pointer; }
-.theme-picker__option:hover { color: var(--text); }
-.theme-picker__option[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.site-footer__line { max-width: var(--maxw); margin: 0 auto; padding: 16px 20px; color: var(--faint); font-size: .8rem; }
 
 /* ---- auth / centred panels --------------------------------------------- */
 .auth { max-width: 460px; margin: 6vh auto 0; }
@@ -447,6 +454,43 @@ textarea.input { resize: vertical; min-height: 64px; }
 .checklist { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .checklist li { display: flex; gap: 10px; align-items: baseline; }
 .secret { font-family: var(--font-mono); user-select: all; }
+
+/* The devbox as a picture: the gateway, then A, B and C, joined interface to interface. The
+   rows above and below the ports are equal, so the ports and wires sit on the same line. */
+.vm-chain { --wire: 40px; --dot: 9px; display: flex; gap: var(--wire); margin: 0; padding: 4px 0; list-style: none; }
+.vm-node { position: relative; flex: 1 1 0; min-width: 0; display: grid; grid-template-rows: 1fr auto 1fr; gap: 12px; padding: 14px 16px; background: var(--surface-2); border: var(--border-w) solid var(--border-strong); border-radius: var(--radius); }
+.vm-node:not(:last-child)::after { content: ""; position: absolute; top: 50%; left: 100%; width: calc(var(--wire) + 2px); height: 2px; margin-top: -1px; background: var(--border-strong); }
+.vm-node--gateway { flex: 0 0 190px; background: transparent; border-style: dashed; }
+.vm-node.is-captured { border-color: color-mix(in srgb, var(--ok) 65%, var(--border)); background: color-mix(in srgb, var(--ok) 7%, var(--surface-2)); }
+.vm-node__head { display: flex; align-items: center; gap: 10px; min-width: 0; align-self: start; }
+.vm-node__title { font-weight: 600; font-size: .9rem; }
+.vm-node__letter { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--radius-sm); background: var(--border-strong); font-weight: 700; font-size: .9rem; }
+.is-captured .vm-node__letter { background: var(--ok); color: var(--bg); }
+.vm-node__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: .78rem; color: var(--muted); }
+.vm-node__ports { display: flex; justify-content: space-between; gap: 12px; }
+.vm-node__state { margin: 0; align-self: end; }
+.vm-port { display: flex; flex-direction: column; gap: 1px; min-width: 0; font-family: var(--font-mono); }
+.vm-port--onward { margin-left: auto; text-align: right; }
+.vm-port__iface { font-size: .7rem; color: var(--muted); }
+.vm-port__ip { font-size: .82rem; overflow-wrap: anywhere; }
+.vm-node--gateway .vm-port__ip { font-size: .74rem; color: var(--muted); }
+.vm-port::before { content: ""; position: absolute; z-index: 1; top: 50%; width: var(--dot); height: var(--dot); margin-top: calc(var(--dot) / -2); box-sizing: border-box; border: 2px solid var(--muted); border-radius: 50%; background: var(--surface); }
+.vm-port--entry::before { left: calc(var(--dot) / -2 - 1px); }
+.vm-port--onward::before { right: calc(var(--dot) / -2 - 1px); }
+.is-captured .vm-port::before { border-color: var(--ok); }
+/* Too narrow for a row: the chain runs downwards, in on top and on at the bottom of each VM. */
+@media (max-width: 1100px) {
+    .vm-chain { --wire: 26px; flex-direction: column; }
+    .vm-node, .vm-node--gateway { flex: none; grid-template-rows: none; gap: 10px; }
+    .vm-node__ports { display: contents; }
+    .vm-node__head { order: 1; }
+    .vm-node__state { order: 2; }
+    .vm-port { order: 0; flex-direction: row; align-items: baseline; gap: 8px; padding-left: 14px; }
+    .vm-port--onward { order: 3; margin-left: 0; text-align: left; }
+    .vm-node:not(:last-child)::after { top: 100%; left: calc(16px + var(--dot) / 2 - 1px); width: 2px; height: calc(var(--wire) + 2px); margin-top: 0; }
+    .vm-port--entry::before { top: calc(var(--dot) / -2 - 1px); left: 16px; margin-top: 0; }
+    .vm-port--onward::before { top: auto; right: auto; bottom: calc(var(--dot) / -2 - 1px); left: 16px; margin-top: 0; }
+}
 
 @media (max-width: 860px) {
     .grid--2 { grid-template-columns: 1fr; }

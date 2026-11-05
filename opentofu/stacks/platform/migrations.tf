@@ -128,6 +128,12 @@ moved {
   to   = module.cloud_init.proxmox_virtual_environment_file.snippet["wazuh"]
 }
 
+# Wazuh was replaced by a plain rsyslog server (the syslog VM).
+moved {
+  from = module.cloud_init.proxmox_virtual_environment_file.snippet["wazuh"]
+  to   = module.cloud_init.proxmox_virtual_environment_file.snippet["syslog"]
+}
+
 moved {
   from = module.cloud_init.proxmox_virtual_environment_file.dns_vm_static
   to   = module.cloud_init.proxmox_virtual_environment_file.snippet["dns"]

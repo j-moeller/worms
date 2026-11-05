@@ -109,9 +109,44 @@ def test_devbox_reconfigure_enqueues_a_reconfigure_job(api, team):
 
     assert validation.validate("devbox_reconfigure", job.params)["teams"]
 
-    # Coalesced: a second reconfigure while one is queued does not pile up.
+    # Coalesced: the same keys again, while they are queued, does not pile up.
     assert reconfigure(api, team).json()["reconfigure_enqueued"] is False
     assert HostJob.objects.filter(kind=HostJob.Kind.DEVBOX_RECONFIGURE).count() == 1
+
+
+def test_devbox_reconfigure_never_loses_a_key_added_behind_a_job(api, team):
+    """A job carries the keys as they were when it was created. Coalescing with
+    it regardless told nine users their key was being installed, while the only
+    job held two of them. Found by the live end-to-end run."""
+    from core.models.devbox import DevboxSSHKey
+    from core.models.rounds import HostJob
+    from core.models.user import User
+
+    user = User.objects.create(username="keys@example.org", email="keys@example.org")
+
+    import base64
+    def key_for(label):
+        return "ssh-ed25519 " + base64.b64encode((label * 40).encode()).decode()
+
+    def add_key(label):
+        DevboxSSHKey.objects.create(team=team, name=label, public_key=key_for(label), created_by=user)
+
+    def keys_of(job):
+        return [key for spec in job.params["teams"] for key in spec["authorized_keys"]]
+
+    add_key("first")
+    assert reconfigure(api, team).json()["reconfigure_enqueued"] is True
+    add_key("second")  # the first job is still queued, and does not have this key
+    assert reconfigure(api, team).json()["reconfigure_enqueued"] is True
+
+    first = HostJob.objects.filter(kind=HostJob.Kind.DEVBOX_RECONFIGURE).order_by("id").first()
+    first.state = HostJob.State.RUNNING
+    first.save(update_fields=["state"])
+    add_key("third")  # a running job does not have it either
+    assert reconfigure(api, team).json()["reconfigure_enqueued"] is True
+
+    newest = HostJob.objects.filter(kind=HostJob.Kind.DEVBOX_RECONFIGURE).order_by("-id").first()
+    assert {key_for(name) for name in ("first", "second", "third")} <= set(keys_of(newest))
 
 
 def test_devbox_reconfigure_needs_the_token(api, team):
@@ -167,7 +202,7 @@ def test_queued_reconfigure_refreshes_the_keys_after_a_removal(api, team, app_ro
     DevboxSSHKey.objects.filter(team=team).delete()
     with as_role("django_orchestrator"):
         assert reconfigure(api, team).status_code == 200
-    job = HostJob.objects.get(kind=HostJob.Kind.DEVBOX_RECONFIGURE)
+    job = HostJob.objects.filter(kind=HostJob.Kind.DEVBOX_RECONFIGURE).order_by("-id").first()
     red = next(t for t in job.params["teams"] if t["slug"] == f"t{team.pk}")
     assert red["authorized_keys"] == []  # never re-install a revoked key
 
@@ -282,3 +317,31 @@ def test_full_snapshot_creation_is_ordered_with_key_revocation(api, team, app_ro
     assert last.kind == HostJob.Kind.DEVBOX_RECONFIGURE
     spec = next(t for t in last.params['teams'] if t['team_uuid'] == str(team.uuid))
     assert spec['authorized_keys'] == []
+
+
+@pytest.mark.parametrize('producer', ['reset', 'provision'])
+def test_identical_old_key_snapshot_cannot_skip_a_later_rebuild(api, team, app_roles, producer):
+    from conftest import as_role
+    from core.models.devbox import DevboxSSHKey
+    from core.models.rounds import HostJob
+    from orchestrator.rounds.devbox import provision
+
+    key = DevboxSSHKey.objects.get(team=team)
+    fields = {name: getattr(key, name) for name in ('team', 'created_by', 'name', 'public_key')}
+    with as_role('django_orchestrator'):
+        assert reconfigure(api, team).status_code == 200
+    original = HostJob.objects.get()
+    key.delete()
+    with as_role('django_orchestrator'):
+        if producer == 'reset':
+            assert reset(api, team).status_code == 200
+        else:
+            assert provision(team.competition)[1] is not None
+    barrier = HostJob.objects.order_by('-id').first()
+    DevboxSSHKey.objects.create(**fields)
+    with as_role('django_orchestrator'):
+        response = reconfigure(api, team)
+    latest = HostJob.objects.order_by('-id').first()
+    assert response.json()['reconfigure_enqueued'] is True
+    assert latest.pk > barrier.pk
+    assert latest.params['teams'] == original.params['teams']

@@ -49,11 +49,15 @@ locals {
   sg         = data.terraform_remote_state.firewall.outputs.security_groups
   sg_service = data.terraform_remote_state.firewall.outputs.private_internet_service_groups
 
-  # Per service, so a VM accepts only the port it actually serves (the broad
-  # `private_internet` group is the client side and stays on the sandbox NICs).
-  # net0: serve the services bridge with this service's own port, and use
-  #       apt-cache/DNS there (services_client).
-  # net1: SSH from the host; internet egress while internet access is allowed (Internet.yml).
+  # Per service, so a VM accepts only the port it actually serves: net0 gets this
+  # service's own group (e.g. pi_wikipedia opens 8888 only) instead of the broad
+  # `private_internet` group that opened the whole services-port union. The CLIENT
+  # side is unchanged (sandbox VMs / sandbox-gw keep the union).
+  # net0: serve the services bridge on this service's own port (ingress), and
+  #       reach ONLY the shared apt-cache for the VM's own package installs
+  #       (pi_apt_client, by IP) -- a dead end, no other egress to the services bridge.
+  # net1: SSH from the host; internet egress while internet access is allowed (Internet.yml);
+  #       audit logs to the syslog VM (routed by the host).
   firewall_rules = {
     for name, _ in local.services : name => [
       { group = local.sg_service[name], iface = "net0" },

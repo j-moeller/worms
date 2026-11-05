@@ -4,7 +4,7 @@
     name: [chrony, ca-certificates]
     state: present
     update_cache: "{{ internet_enabled | bool }}"
-    cache_valid_time: 3600
+    cache_valid_time: "{{ 3600 if internet_enabled | bool else omit }}"
 
 - name: Deploy chrony config
   ansible.builtin.template:
@@ -15,8 +15,26 @@
     mode: '0644'
   notify: Restart chrony
 
+- name: Create the chrony systemd drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/chrony.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install the chrony hardening drop-in
+  ansible.builtin.template:
+    src: hardening.conf.j2
+    dest: /etc/systemd/system/chrony.service.d/hardening.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart chrony
+
 - name: Enable and start chrony
   ansible.builtin.systemd:
     name: chrony
     enabled: true
     state: started
+    daemon_reload: true

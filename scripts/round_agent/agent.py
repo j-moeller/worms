@@ -29,7 +29,7 @@ import threading
 import time
 
 from round_agent import handlers, validation
-from round_agent.executor import Executor
+from round_agent.executor import DEFAULT_JOB_LOG_DIR, Executor
 
 log = logging.getLogger("round-agent")
 
@@ -69,7 +69,9 @@ class Agent:
     def __init__(self, env=None, executor=None, connection=None):
         self.env = env or dict(os.environ)
         self.cfg = config(self.env)
-        self.executor = executor or Executor(self.env.get("REPO_ROOT", os.getcwd()))
+        self.executor = executor or Executor(
+            self.env.get("REPO_ROOT", os.getcwd()), log_dir=self.env.get("JOB_LOG_DIR", DEFAULT_JOB_LOG_DIR)
+        )
         self._conn = connection
         self.running = True
 
@@ -107,25 +109,44 @@ class Agent:
 
     # -- running one job ------------------------------------------------------
 
+    def superseded(self, job_id, kind):
+        """A reconfigure job carries every team's keys, so a newer one queued
+        behind it covers everything it would do."""
+        if kind != "devbox_reconfigure":
+            return False
+        with self.conn().cursor() as cur:
+            cur.execute("SELECT 1 FROM host_jobs WHERE kind = %s AND state = 'queued' AND id > %s LIMIT 1", (kind, job_id))
+            return cur.fetchone() is not None
+
     def run_job(self, job_id, uuid, kind, params):
+        if self.superseded(job_id, kind):
+            self.finish(job_id, "done", {"superseded": True})
+            log.info("job %s (%s) skipped: a newer one is queued", uuid, kind)
+            return
         log.info("job %s (%s) starting", uuid, kind)
         stop = threading.Event()
         beat = threading.Thread(target=self._heartbeat_loop, args=(job_id, stop), daemon=True)
         beat.start()
-        try:
-            clean = validation.validate(kind, params)
-            result = handlers.HANDLERS[kind](self.executor, self.cfg, clean)
-            self.finish(job_id, "done", result)
-            log.info("job %s done", uuid)
-        except validation.Invalid as exc:
-            self.finish(job_id, "failed", error=f"invalid: {exc}")
-            log.warning("job %s rejected: %s", uuid, exc)
-        except Exception as exc:  # noqa: BLE001
-            self.finish(job_id, "failed", error=f"{type(exc).__name__}: {exc}")
-            log.exception("job %s failed", uuid)
-        finally:
-            stop.set()
-            beat.join(timeout=5)
+        with self.executor.job_log(uuid, kind) as job_log:
+            if job_log.path:
+                log.info("job %s output: %s", uuid, job_log.path)
+            try:
+                clean = validation.validate(kind, params)
+                result = handlers.HANDLERS[kind](self.executor, self.cfg, clean)
+                self.finish(job_id, "done", result)
+                job_log.note("job done")
+                log.info("job %s done", uuid)
+            except validation.Invalid as exc:
+                self.finish(job_id, "failed", error=f"invalid: {exc}")
+                job_log.note(f"job rejected: {exc}")
+                log.warning("job %s rejected: %s", uuid, exc)
+            except Exception as exc:  # noqa: BLE001
+                self.finish(job_id, "failed", error=f"{type(exc).__name__}: {exc}")
+                job_log.note(f"job failed: {type(exc).__name__}: {exc}")
+                log.exception("job %s failed", uuid)
+            finally:
+                stop.set()
+                beat.join(timeout=5)
 
     def _heartbeat_loop(self, job_id, stop):
         while not stop.wait(HEARTBEAT_SECONDS):

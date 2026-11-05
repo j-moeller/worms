@@ -57,7 +57,7 @@ def main():
             DJANGO_MEDIA_ROOT=session["media_root"], DJANGO_STATIC_ROOT=str(work / "static"),
             DB_HOST="127.0.0.1", DB_PORT=str(session["database_port"]), DB_NAME="mydb",
             DB_USER="django_dashboard", DB_PASSWORD="test-password", DB_SSLMODE="disable",
-            ORCHESTRATOR_URL=f"https://localhost:{args.orchestrator_port}", ORCHESTRATOR_API_TOKEN=token,
+            ORCHESTRATOR_URL=f"https://localhost:{args.orchestrator_port}", ORCHESTRATOR_API_TOKEN=token, ORCHESTRATOR_TLS_NAME="localhost",
             SSL_CERT_FILE=session["certificate"])
         project = REPO / "projects/dashboard"
         run(sys.executable, "manage.py", "collectstatic", "--noinput", env=env, cwd=project,

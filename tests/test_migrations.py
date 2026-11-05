@@ -1,15 +1,12 @@
 """The Django migrations as a whole (projects/dashboard/core/migrations).
 
-- Models and migrations agree (`makemigrations --check`).
-- A database created by an older release upgrades to exactly the schema a
-  fresh install gets, and keeps its rows. The older release's migration
-  files come from git (BASELINE). This is what protects the live database
-  when migrations are squashed or models are removed: Django must treat the
-  old migrations as applied (the squashed migration `replaces` them) and run
-  only what is new.
+No deployed database needs upgrading, so there is a single initial migration
+and no upgrade path to protect. Once a database that must keep its data exists,
+new migrations build on this one, and these tests should grow to cover upgrades.
 
-Tables that were removed on purpose since BASELINE are listed in REMOVED; an
-upgrade drops them, a fresh install never creates them.
+- Models and migrations agree (`makemigrations --check`).
+- A fresh database migrates as the migrator, as `make` does it.
+- Data migrations use the migrating connection.
 """
 
 from __future__ import annotations
@@ -26,12 +23,6 @@ pytest.importorskip("django")
 pytest.importorskip("psycopg2")
 
 DASHBOARD = REPO / "projects" / "dashboard"
-MIGRATIONS = "projects/dashboard/core/migrations"
-BASELINE = "6bb490a"  # the last commit with the original 13 migrations
-REMOVED = {"worm_deployment_plans", "worm_deployments"}  # unused models, dropped
-# The squash and the clean-up after it end here; migrations after this one
-# change the schema on purpose (test_baseline_schema_is_kept compares at it).
-SQUASH_ERA_END = "0003_alter_hostjob_kind"
 
 
 @pytest.fixture(scope="module")
@@ -53,38 +44,14 @@ def cluster():
         cluster.stop()
 
 
-@pytest.fixture(scope="module")
-def baseline_migrations(tmp_path_factory):
-    """The migration files of BASELINE as an importable package."""
-    names = subprocess.run(
-        ["git", "ls-tree", "--name-only", f"{BASELINE}:{MIGRATIONS}"],
-        cwd=REPO, capture_output=True, text=True,
-    )  # fmt: skip
-    if names.returncode != 0:
-        pytest.skip(f"git history without {BASELINE} (shallow clone?)")
-    root = tmp_path_factory.mktemp("baseline")
-    package = root / "baseline_migrations"
-    package.mkdir()
-    for name in names.stdout.split():
-        if name.endswith(".py"):
-            blob = subprocess.run(["git", "show", f"{BASELINE}:{MIGRATIONS}/{name}"], cwd=REPO,
-                                  capture_output=True, check=True).stdout  # fmt: skip
-            (package / name).write_bytes(blob)
-    (root / "baseline_settings.py").write_text(
-        "from config.settings.orchestrator import *  # noqa\n"
-        "MIGRATION_MODULES = {'core': 'baseline_migrations'}\n"
-    )
-    return root
-
-
-def django(cluster, dbname, *command, extra_path=None, settings="config.settings.orchestrator"):
+def django(cluster, dbname, *command):
     """manage.py <command> against database `dbname`, as the migrator."""
     import pg
 
     env = dict(
         os.environ,
         PRODUCTION="1",
-        DJANGO_SETTINGS_MODULE=settings,
+        DJANGO_SETTINGS_MODULE="config.settings.orchestrator",
         DJANGO_SECRET_KEY="test",
         DJANGO_ALLOWED_HOSTS="localhost",
         DB_MIGRATOR_USER=pg.MIGRATOR,
@@ -95,11 +62,11 @@ def django(cluster, dbname, *command, extra_path=None, settings="config.settings
         DB_PORT=str(cluster.port),
         DB_NAME=dbname,
         DB_SSLMODE="disable",
-        PYTHONPATH=os.pathsep.join(p for p in (str(extra_path or ""), str(DASHBOARD)) if p),
+        PYTHONPATH=str(DASHBOARD),
         PROXMOX_HOST="x", PROXMOX_USER="x", PROXMOX_TOKEN_NAME="x", PROXMOX_TOKEN_VALUE="x",
     )  # fmt: skip
     proc = subprocess.run([sys.executable, "manage.py", *command], cwd=DASHBOARD, env=env,
-                          capture_output=True, text=True)  # fmt: skip
+                          capture_output=True, text=True, timeout=300)  # fmt: skip
     return proc
 
 
@@ -111,38 +78,19 @@ def create_database(cluster, name):
     admin.close()
 
 
-def schema(cluster, dbname) -> dict:
-    """Tables, columns, constraints and indexes of the public schema.
-
-    Constraint and index *names* are left out: Django derives them from the
-    operation that created them (a squashed CreateModel names a unique
-    constraint differently from a later AlterField), which does not matter."""
-    conn = cluster.connect(dbname=dbname)
-    out = {}
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT table_name, column_name, data_type, character_maximum_length, numeric_precision,"
-            " is_nullable, column_default, is_identity"
-            " FROM information_schema.columns WHERE table_schema = 'public'"
-        )
-        for table, *column in cur.fetchall():
-            out.setdefault(table, {"columns": set(), "constraints": set(), "indexes": set()})
-            out[table]["columns"].add(tuple(column))
-        cur.execute(
-            "SELECT c.conrelid::regclass::text, c.contype, pg_get_constraintdef(c.oid)"
-            " FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace"
-            " WHERE n.nspname = 'public' AND c.conrelid <> 0"
-        )
-        for table, kind, definition in cur.fetchall():
-            out[table]["constraints"].add((kind, definition))
-        cur.execute(
-            "SELECT tablename, indexname, regexp_replace(indexdef, '^CREATE (UNIQUE )?INDEX \\S+ ', 'CREATE \\1INDEX ')"
-            " FROM pg_indexes WHERE schemaname = 'public'"
-        )
-        for table, _name, definition in cur.fetchall():
-            out[table]["indexes"].add(definition)
-    conn.close()
-    return out
+def test_data_migrations_use_the_migrating_connection():
+    """`migrate --database=migrator` holds its DDL locks in an open transaction.
+    An ORM call without .using(schema_editor.connection.alias) goes through the
+    default connection instead, blocks on those locks, and the migration can
+    never finish (a former migration did this: a hang on every fresh database).
+    Needs no PostgreSQL, unlike the rest of this file."""
+    unrouted = [
+        f"{path.relative_to(REPO)}:{number}: {line.strip()}"
+        for path in sorted(DASHBOARD.glob("*/migrations/*.py"))
+        for number, line in enumerate(path.read_text().splitlines(), 1)
+        if ".objects." in line and ".objects.using(" not in line
+    ]
+    assert not unrouted, "\n".join(unrouted)
 
 
 def test_models_match_the_migrations(cluster):
@@ -151,135 +99,18 @@ def test_models_match_the_migrations(cluster):
     assert proc.returncode == 0, "models changed without a migration:\n" + proc.stdout + proc.stderr
 
 
-def test_an_old_database_upgrades_to_the_fresh_schema(cluster, baseline_migrations):
-    # 1. A database as the BASELINE release left it, with some rows.
-    create_database(cluster, "upgraded")
-    proc = django(cluster, "upgraded", "migrate", "--no-input", "--database=migrator",
-                  extra_path=baseline_migrations, settings="baseline_settings")  # fmt: skip
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    conn = cluster.connect(dbname="upgraded")
-    with conn.cursor() as cur:
-        cur.execute("INSERT INTO competitions (name, created_at, is_dev_competition) VALUES ('WORMS 2025', now(), false) RETURNING id")
-        competition = cur.fetchone()[0]
-        cur.execute(
-            "INSERT INTO teams (name, competition_id, uuid, max_members, created_at)"
-            " VALUES ('red', %s, gen_random_uuid(), 2, now())",
-            (competition,),
-        )
-        cur.execute("SELECT count(*) FROM django_migrations WHERE app = 'core'")
-        recorded = cur.fetchone()[0]
-    conn.close()
-    assert recorded == 13  # 0001_initial .. 0013_team_api_indexes
-
-    # 2. The current migrations on top: only what is new may run.
-    proc = django(cluster, "upgraded", "migrate", "--no-input", "--database=migrator")
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    proc = django(cluster, "upgraded", "migrate", "--check", "--database=migrator")
-    assert proc.returncode == 0, "unapplied migrations after the upgrade:\n" + proc.stdout
-
-    # 3. A fresh install of the current release.
+def test_a_fresh_database_migrates(cluster):
     create_database(cluster, "fresh")
     proc = django(cluster, "fresh", "migrate", "--no-input", "--database=migrator")
     assert proc.returncode == 0, proc.stdout + proc.stderr
-
-    upgraded, fresh = schema(cluster, "upgraded"), schema(cluster, "fresh")
-    assert set(upgraded) == set(fresh)
-    for table in sorted(fresh):
-        assert upgraded[table] == fresh[table], table
-
-    conn = cluster.connect(dbname="upgraded")
-    with conn.cursor() as cur:
-        cur.execute("SELECT t.name, c.name FROM teams t JOIN competitions c ON c.id = t.competition_id")
-        assert cur.fetchall() == [("red", "WORMS 2025")]
-    conn.close()
-
-
-def test_baseline_schema_is_kept(cluster, baseline_migrations):
-    """Apart from the removed tables, a fresh install at the end of the squash
-    era has the BASELINE schema (squashing must not change a column,
-    constraint or index). It also proves the later migrations reverse."""
-    create_database(cluster, "baseline")
-    proc = django(cluster, "baseline", "migrate", "--no-input", "--database=migrator",
-                  extra_path=baseline_migrations, settings="baseline_settings")  # fmt: skip
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    create_database(cluster, "current")
-    proc = django(cluster, "current", "migrate", "--no-input", "--database=migrator")
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    # Back to the end of the squash era (later migrations add to the schema).
-    proc = django(cluster, "current", "migrate", "core", SQUASH_ERA_END, "--no-input", "--database=migrator")
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    baseline, current = schema(cluster, "baseline"), schema(cluster, "current")
-    for table in REMOVED:  # their foreign keys were theirs; nothing else pointed at them
-        baseline.pop(table, None)
-        current.pop(table, None)
-    assert set(current) == set(baseline)
-    for table in sorted(baseline):
-        assert current[table] == baseline[table], table
-
-
-def test_removed_tables_are_gone(cluster, baseline_migrations):
-    """Fresh installs never create the removed tables; an upgrade drops them."""
-    create_database(cluster, "gone_fresh")
-    assert django(cluster, "gone_fresh", "migrate", "--no-input", "--database=migrator").returncode == 0
-    create_database(cluster, "gone_upgraded")
-    proc = django(cluster, "gone_upgraded", "migrate", "--no-input", "--database=migrator",
-                  extra_path=baseline_migrations, settings="baseline_settings")  # fmt: skip
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert REMOVED <= set(schema(cluster, "gone_upgraded"))
-    assert django(cluster, "gone_upgraded", "migrate", "--no-input", "--database=migrator").returncode == 0
-    for db in ("gone_fresh", "gone_upgraded"):
-        assert not REMOVED & set(schema(cluster, db)), db
-
-
-def test_existing_uploads_are_attributed_to_their_team(cluster, baseline_migrations):
-    """Uploads from before Upload.team: the team the uploader had joined by
-    then (migration 0005); a user without a team leaves it empty."""
-    create_database(cluster, "uploads_team")
-    proc = django(cluster, "uploads_team", "migrate", "--no-input", "--database=migrator",
-                  extra_path=baseline_migrations, settings="baseline_settings")  # fmt: skip
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    conn = cluster.connect(dbname="uploads_team")
-    with conn.cursor() as cur:
-        cur.execute("INSERT INTO competitions (name, created_at, is_dev_competition) VALUES ('c', now(), false) RETURNING id")
-        competition = cur.fetchone()[0]
-        ids = {}
-        for name in ("red", "blue"):
-            cur.execute("INSERT INTO teams (name, competition_id, uuid, max_members, created_at)"
-                        " VALUES (%s, %s, gen_random_uuid(), 2, now()) RETURNING id", (name, competition))  # fmt: skip
-            ids[name] = cur.fetchone()[0]
-        for user in ("early", "later", "loner"):
-            cur.execute(
-                "INSERT INTO users (uuid, password, is_superuser, username, is_staff, is_active, date_joined,"
-                " first_name, last_name, email, created_at) VALUES (gen_random_uuid(), 'x', false, %s, false, true,"
-                " now(), '', '', '', now()) RETURNING id", (user,),
-            )  # fmt: skip
-            ids[user] = cur.fetchone()[0]
-        # `later` was in red when uploading, joined blue afterwards (red's row kept here).
-        memberships = [("early", "red", "1 day"), ("later", "red", "3 days"), ("later", "blue", "1 hour")]
-        for user, team, ago in memberships:
-            cur.execute("INSERT INTO team_memberships (user_id, team_id, created_at) VALUES (%s, %s, now() - %s::interval)",
-                        (ids[user], ids[team], ago))  # fmt: skip
-        cur.execute("INSERT INTO malware_artifacts (content_hash, storage_key, created_at) VALUES ('h', 'k', now()) RETURNING id")
-        artifact = cur.fetchone()[0]
-        for user, ago in (("early", "1 hour"), ("later", "2 days"), ("loner", "1 hour")):
-            cur.execute("INSERT INTO uploads (artifact_id, user_id, created_at) VALUES (%s, %s, now() - %s::interval)",
-                        (artifact, ids[user], ago))  # fmt: skip
-    conn.close()
-
-    proc = django(cluster, "uploads_team", "migrate", "--no-input", "--database=migrator")
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    conn = cluster.connect(dbname="uploads_team")
-    with conn.cursor() as cur:
-        cur.execute("SELECT u.username, t.name FROM uploads up JOIN users u ON u.id = up.user_id"
-                    " LEFT JOIN teams t ON t.id = up.team_id ORDER BY u.username")  # fmt: skip
-        assert cur.fetchall() == [("early", "red"), ("later", "red"), ("loner", None)]
-    conn.close()
+    proc = django(cluster, "fresh", "migrate", "--check", "--database=migrator")
+    assert proc.returncode == 0, "unapplied migrations after migrating:\n" + proc.stdout
 
 
 def test_enrollment_upgrade_preserves_populated_student_data(cluster):
-    """Upgrade Jonas's 0005 schema, including uploads, credentials and results."""
+    """Upgrade main's initial schema, including uploads, credentials and results."""
     create_database(cluster, "enrollment_upgrade")
-    proc = django(cluster, "enrollment_upgrade", "migrate", "core", "0005_upload_team", "--no-input", "--database=migrator")
+    proc = django(cluster, "enrollment_upgrade", "migrate", "core", "0001_initial", "--no-input", "--database=migrator")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     seed = '''
 from django.utils import timezone
@@ -322,7 +153,7 @@ Logging.objects.create(team=t, round=r, logging_attempt=attempt)
 def test_case_collision_blocks_the_upgrade_without_deleting_anything(cluster, kind):
     db = "collision_" + kind
     create_database(cluster, db)
-    proc = django(cluster, db, "migrate", "core", "0005_upload_team", "--no-input", "--database=migrator")
+    proc = django(cluster, db, "migrate", "core", "0001_initial", "--no-input", "--database=migrator")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     seed = '''
 from core.models.user import User
@@ -347,7 +178,7 @@ c = Competition.objects.create(name='Preserve everything')
     with conn.cursor() as cur:
         cur.execute(f"SELECT id,{column} FROM {table} ORDER BY id")
         assert cur.fetchall() == before
-        cur.execute("SELECT count(*) FROM django_migrations WHERE app='core' AND name='0006_case_insensitive_accounts_and_teams'")
+        cur.execute("SELECT count(*) FROM django_migrations WHERE app='core' AND name='0002_case_insensitive_accounts_and_teams'")
         assert cur.fetchone()[0] == 0
         # An operator resolves a spelling conflict; the migration then succeeds.
         cur.execute(f"UPDATE {table} SET {column}=%s WHERE id=%s", ["resolved-duplicate", before[-1][0]])
@@ -356,4 +187,52 @@ c = Competition.objects.create(name='Preserve everything')
     with conn.cursor() as cur:
         cur.execute(f"SELECT count(*) FROM {table}")
         assert cur.fetchone()[0] == 2
+    conn.close()
+
+
+@pytest.mark.parametrize('collision', [False, True])
+def test_existing_ssh_fingerprints_upgrade_atomically(cluster, collision):
+    import base64
+    import hashlib
+    db = 'ssh_collision' if collision else 'ssh_upgrade'
+    create_database(cluster, db)
+    proc = django(cluster, db, 'migrate', 'core', '0001_initial', '--no-input', '--database=migrator')
+    assert proc.returncode == 0, proc.stderr
+    canonical = base64.b64encode(b'x' * 40).decode()
+    alternate = canonical[:-3] + 'B=='
+    assert base64.b64decode(canonical) == base64.b64decode(alternate)
+    values = [alternate, canonical] if collision else [alternate]
+    seed = '''
+import hashlib
+from core.models.user import User
+from core.models.team import Team
+from core.models.competition import Competition
+from core.models.devbox import DevboxSSHKey
+u=User.objects.create(username='ssh-owner')
+c=Competition.objects.create(name='keys')
+t=Team.objects.create(name='same team',competition=c)
+'''
+    seed += f"values={values!r}\n"
+    seed += '''
+for encoded in values:
+    key='ssh-ed25519 '+encoded
+    DevboxSSHKey.objects.bulk_create([DevboxSSHKey(team=t,created_by=u,public_key=key,
+        key_fingerprint=hashlib.sha256(key.encode()).hexdigest())])
+'''
+    proc = django(cluster, db, 'shell', '-c', seed)
+    assert proc.returncode == 0, proc.stderr
+    conn = cluster.connect(dbname=db)
+    query = 'SELECT id,public_key,key_fingerprint FROM devbox_ssh_keys ORDER BY id'
+    with conn.cursor() as cursor:
+        cursor.execute(query); before = cursor.fetchall()
+    proc = django(cluster, db, 'migrate', '--no-input', '--database=migrator')
+    with conn.cursor() as cursor:
+        cursor.execute(query); after = cursor.fetchall()
+    if collision:
+        assert proc.returncode != 0 and 'same identity' in proc.stderr
+        assert before == after
+    else:
+        assert proc.returncode == 0, proc.stderr
+        assert [row[:2] for row in before] == [row[:2] for row in after]
+        assert after[0][2] == hashlib.sha256(('ssh-ed25519 '+canonical).encode()).hexdigest()
     conn.close()

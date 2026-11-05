@@ -5,7 +5,6 @@ from typing import List, Optional
 from core import clock
 from core.models.competition import ApplicationSetting, Competition, Round
 from core.models.team import TeamMembership
-from dashboard import themes
 from django.conf import settings
 from django.http import HttpRequest
 from django.shortcuts import redirect
@@ -87,9 +86,6 @@ class UserMetadataMiddleware:
         if request.path.startswith(API_PREFIX):
             return self.get_response(request)
         request.time_now = clock.now()
-        request.theme = themes.resolve(request)
-        request.theme_css = themes.stylesheet(request.theme)
-        request.themes = list(themes.THEMES.items())
         # Default rather than require the key: EnvironmentTransitionMiddleware
         # only sets it for authenticated users, so reading it must not assume it
         # exists and must not itself create a session (docs/security-assessment.md, D1).

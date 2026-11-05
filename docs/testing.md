@@ -1,13 +1,13 @@
 # Testing
 
-Two layers:
+Three layers:
 
-| | `worms test` | `worms simulate` |
-|---|---|---|
-| Runs | anywhere (laptop, CI, the Proxmox host) | on the Proxmox host, against the deployed platform |
-| Needs | Python 3; optionally PostgreSQL server binaries, `tofu` (+ provider), `ip`/`tc`/`tcpdump` and root, `nft`, `systemd-analyze` | a provisioned platform; a deployed sandbox for the traffic part |
-| Covers | configuration, code, privileges, mirror logic | the running system end to end: features, configuration, containment |
-| Changes things | nothing outside temp dirs and private network namespaces | creates a test team/token, removes it afterwards |
+| | `worms test` | `worms simulate` | `worms test tests/live --live` |
+|---|---|---|---|
+| Runs | anywhere (laptop, CI, the Proxmox host) | on the Proxmox host, against the deployed platform | on the Proxmox host, against the deployed platform |
+| Needs | Python 3; optionally PostgreSQL server binaries, `tofu` (+ provider), `ip`/`tc`/`tcpdump` and root, `nft`, `systemd-analyze` | a provisioned platform; a deployed sandbox for the traffic part | a provisioned platform in its base state, Node.js with Playwright |
+| Covers | configuration, code, privileges, mirror logic | the running system end to end: features, configuration, containment | the devbox journey of an administrator and a team, nothing faked |
+| Changes things | nothing outside temp dirs and private network namespaces | creates a test team/token, removes it afterwards | creates users, teams and devbox VMs, and leaves them |
 
 ## `worms test`: offline suite
 
@@ -39,6 +39,57 @@ tests/fixtures/platform-outputs.json`.
 `tofu validate` needs the `bpg/proxmox` provider. Without registry access,
 set `TF_CLI_CONFIG_FILE` to a config with a `filesystem_mirror` that holds
 the provider binary.
+
+The browser tests (`test_topology_page.py`) need Node and its Playwright package, and are
+skipped without them. To run them, with Node on `PATH`:
+
+```sh
+cd ..                                # outside the repo: nothing to commit or sync
+npm install --no-save --no-package-lock playwright
+npx playwright install chromium
+```
+
+On a server, install only the libraries Chromium reports missing (`ldd` on its binary), rather
+than `playwright install-deps`, which also adds an X server and fonts.
+
+## The live devbox journey
+
+`tests/live/test_devbox_journey.py` does on the real system what
+`docs/e2e-run-2026-11-04/protocol.md` records by hand. It takes about an hour and a half, more if a build
+hits the `zfs create` timeout. Without `--live` all of it is skipped, and with `--live` nothing else runs.
+To run the same journey by hand, follow `docs/manual-devbox-run.md`.
+
+```sh
+export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"    # Node.js with Playwright, see above
+.venv-test/bin/pytest tests/live --live -s --live-out=/var/tmp/worms-live-run
+```
+
+| Stage | Tests | What it does and checks |
+|---|---|---|
+| 0 | `test_00` | The base state: no devbox VMs, no volumes left by earlier VMs, only `admin`, no teams or rounds, internet denied, no jobs running |
+| 1 | `test_01`-`test_03` | The administrator signs in (one-time password, forced change), creates the dev competition, 3 teams and 9 users, by the form and the CSV import |
+| 2 | `test_04` | `worms devbox provision`, retried on the known `zfs create` timeout. 13 VMs, firewalls on, no watchdog stops |
+| 3 | `test_05` | Each user signs in and adds an SSH key. The key push jobs finish, and the old one-time password is refused |
+| 4 | `test_06`, `test_07` | Each user reaches their own VM A through the SSH gateway. Other teams' VMs, a shell on the gateway and an unregistered key are refused |
+| 5 | `test_08` | On all 3 VMs of each team: a file, `apt install`, `pip install`, `curl` to scoring and logging, the real internet closed |
+| 6 | `test_09`, `test_10` | The team's page shows scoring and logging, and no other team's. The database holds them, the keys and the jobs, and no `network_flows` on devbox addresses, by design. Zeek's heartbeat is current |
+| 7 | `test_11` | A user resets the devbox from the page |
+| 8 | `test_12`-`test_14` | The same keys sign in again. The file and both packages are gone on all 3 VMs, each with a new boot, host key and token. Firewalls on, score 0/3, earlier records kept, other teams untouched. The new tokens score again |
+
+The steps build on each other, so one whose prerequisite failed is skipped and says so. Within a step, a failed check does
+not stop the rest. Each run writes `report.md` with a row per check, and the screenshots, to `--live-out`. No password reaches them.
+
+**It does not get back to the base state by itself.** It leaves the teams and devboxes in place to look at, and refuses to start unless the base state holds. To run it again:
+
+```sh
+/usr/local/sbin/worms-node-run opentofu/stacks/devbox 'tofu destroy -auto-approve -parallelism=1'
+.venv-test/bin/pytest tests/live --live -s --live-wipe-database=<this node's name>
+```
+
+`--live-wipe-database` runs `worms reset-database --yes`, which **deletes every user, team and result**. It needs this node's name typed out, so a command copied from another machine does nothing.
+The apt cache and devpi keep what `make` put there, so `make` is not needed between runs. After changing what they hold, or any code, run `make` while no devbox VMs exist.
+
+`tests/test_live_suite.py` is the offline part: nothing of the journey runs without the option, its scripts parse, no password reaches a screenshot or a command line.
 
 ## `worms simulate`: end-to-end simulation
 
@@ -92,15 +143,15 @@ What it checks:
    request in `network_events`; the shipper and Zeek heartbeats younger than
    3/5 minutes.
 5. **Containment:**
-   - sandbox VM: cannot reach the database, dashboard, orchestrator, wazuh,
+   - sandbox VM: cannot reach the database, dashboard, orchestrator, syslog,
      the monitor, the Proxmox API/host, sandbox-gw's management address,
      non-API ports of the services, the internet;
-   - monitor: reaches only the database and wazuh;
+   - monitor: reaches only the database and syslog;
    - scoring/logging: reach only the database;
    - the database roles, tested **from their own VMs with their own
      credentials over verified TLS**: monitor INSERT-only, cannot read or
-     modify anything; scoring/logging only read token hashes, cannot read or
-     modify attempts or other tables;
+     modify anything; scoring/logging cannot read access tokens, and cannot read
+     or modify attempts or other tables;
    - frames the monitor sends on its capture NIC are dropped by the host
      (tc drop counter).
 6. **Cleanup:** the test team, token and everything submitted with it are
@@ -122,7 +173,7 @@ FAIL ("sandbox deployed"); the other checks still run.
   (the simulation checks capture scoring with an injected finished run, not a
   sandbox the conductor built; the lifecycle itself is covered offline in
   `test_rounds.py`/`test_round_agent.py`).
-- Wazuh: whether the audit logs arrive (only that auditd/rsyslog run).
+- syslog: whether the audit logs arrive (only that auditd/rsyslog run).
 - Load: flood behaviour of the APIs and the monitor (the limits are
   unit-tested, not stress-tested).
 - The private-internet services.
@@ -138,6 +189,8 @@ Two more files, both offline (`worms test`), covering the round orchestration
 | `test_team_api.py` | The team API through the dashboard's real URLs and middleware against PostgreSQL: bearer authentication (missing, malformed, unknown, revoked, token in the URL), team and competition scoping, scoring results, keyset paging (complete across identical timestamps), item and byte limits, bad parameters, the statement timeout, and that no session row is written (`docs/team_api.md`). |
 | `test_infra_view.py` | The TOPOLOGY view's infrastructure model on a realistic Proxmox snapshot: roles/status, no management network drawn, database ingress read from its firewall, devbox links never crossing teams, verified service edges (`docs/visualization.md`). |
 | `test_topology_page.py` | The round player in Chromium (Node Playwright) with fixture data. TOPOLOGY (staff): layout, hover card, tabs, playback, event badges and dots (click pauses), VM state over time, lazily fetched connections and log records (an XSS payload shown as text). Files: download, offline viewer, lossless round trip, the server's zip, the earlier format, broken, crafted and hostile files. PROGRESSION (a team): no infrastructure or firewall anywhere, VMs faint until captured, a Dev round without traffic, the zip link, a running round refreshed in place. Skipped without Node Playwright. |
+| `test_profile_page.py` | The profile's Team panel: tokens found in the dev view; captures, place and points overall and per round in the live view, matching the leaderboard and naming no VM. Also what moved to the Upload and Progression pages, and that devbox logs render as text. |
+| `test_devbox_page.py` | The team's devbox page: it lists each VM's usable addresses and the commands from A to C, and in Chromium the Copy button covers no command, Copy gives the exact command, Reset has room above it, and the page fits a phone. |
 | `test_round_agent.py`, `test_orchestrator_api.py`, `test_dashboard_frontend.py` | Devbox SSH keys end to end: the validators reject template/shell/quote characters in a key comment (template-injection guard) and a key blob shared by two teams; the agent writes the key var file tagged `!unsafe` (no `{{ }}` evaluated); a reset enqueues a rebuild carrying the full teams spec and that spec passes the agent validator; add/remove a key and leaving a team enqueue a `devbox_reconfigure` and revoke the member's keys. |
 | `test_api_roundtrip.py` | Write, then read back through the team API: a seeded generator (3 seeds) writes rounds, runs, VMs, events, submissions, captures, logs, flows and devboxes for three teams, with deliberate noise (another team's run on the same addresses, records outside a run's window, devbox records inside it, VMs never captured, traffic to infrastructure and unknown addresses, another competition), and keeps a ledger. The expected answer of every endpoint (rounds, scoring and logging fully paged, progression, flows, each log record, the zip, the page's own endpoint) is derived from the ledger alone and compared exactly: same items, values and keys, nothing of anyone else. Mutation-checked: naming an uncaptured VM, keeping traffic to one, serving another team's log record or logs, ignoring the Dev round's start, showing run errors -- each fails it. |
 | `test_progression.py` | The round progression (`docs/progression.md`) against PostgreSQL: what a team sees and never sees (uncaptured VMs, infrastructure, other teams, internals, secrets), staff seeing everything, Dev windows, the clock of running and finished rounds, log-record scoping, the zip, the team API's, the PROGRESSION page's and the staff endpoints. |
@@ -214,9 +267,8 @@ teams, missing/corrupt media recovery, disk-write interruption, simultaneous
 SSH-key registration, membership removal during registration, canonical key
 identity, and the agent's key-count/encoding limits. Orchestrator API tests
 check that queued reconfiguration jobs receive current keys and that changes
-during a running job get a follow-up. Deployment must apply the database
-permission role too: the orchestrator now needs column-scoped `UPDATE (params)`
-on `host_jobs` to refresh an unclaimed job; it still cannot change job state.
+during a running job get a follow-up. The reconciled code keeps main's immutable job snapshots, without an
+`UPDATE(params)` grant on `host_jobs`.
 
 Key updates must also follow any queued rebuild/provision that carries an older
 key snapshot. The API regressions cover that ordering and concurrent snapshot
@@ -294,7 +346,7 @@ it does not replace a live Zeek capture/rotation rehearsal.
 
 Deployment must run the updated `django_app` and `network_monitor` roles:
 
-- Dashboard installs `requests` and resolves `orchestrator.worms.internal` to
+- Dashboard uses the standard-library HTTPS client and resolves `orchestrator.worms.internal` to
   its management IP in a managed `/etc/hosts` block. Its HTTPS URL uses that
   hostname, which the certificate covers.
 - Orchestrator resolves the Proxmox node name locally and receives the public

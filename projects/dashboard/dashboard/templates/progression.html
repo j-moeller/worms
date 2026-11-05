@@ -72,4 +72,33 @@ browser test can load it with fixture data; the endpoints come from here.{% endc
 </div>
 <script src="{% static 'dashboard/js/topology.js' %}" defer></script>
 {% endif %}
+
+{% if environment == "dev" %}
+<section class="panel" aria-labelledby="logs-title">
+    <header class="panel__head"><h2 class="panel__title" id="logs-title">Logs</h2><p class="panel__meta">version {{ version }}</p></header>
+    <div class="panel__body log-list">
+        {% for row in logs %}
+        <details class="log-entry">
+            <summary><time datetime="{{ row.entry.created_at|date:'c' }}" data-localtime>{{ row.entry.created_at }}</time></summary>
+            <pre class="code"><code>{{ row.data }}</code></pre>
+        </details>
+        {% empty %}
+        <p class="empty">No devbox logs at this version.</p>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+{% if show_api %}
+<section class="panel" aria-labelledby="data-api-title">
+    <header class="panel__head"><h2 class="panel__title" id="data-api-title">Download your results</h2></header>
+    <div class="panel__body prose">
+        <p>Use these commands to retrieve your scoring and logs for a round as JSON. Pages hold up to 500 submissions or 200 logs (1 MiB); follow <code>page.next</code> until it is null. You need a token from <a href="{% url 'profile' %}">your profile</a>.</p>
+        <pre class="code" data-copy><code>TOKEN=...   # a token of your team
+curl -H "Authorization: Bearer $TOKEN" {{ request.scheme }}://{{ request.get_host }}/api/v1/rounds/
+curl -H "Authorization: Bearer $TOKEN" "{{ request.scheme }}://{{ request.get_host }}/api/v1/rounds/ID/scoring/?limit=500"
+curl -H "Authorization: Bearer $TOKEN" "{{ request.scheme }}://{{ request.get_host }}/api/v1/rounds/ID/logging/?limit=200&amp;cursor=NEXT"</code></pre>
+    </div>
+</section>
+{% endif %}
 {% endblock %}

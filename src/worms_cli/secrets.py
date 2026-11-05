@@ -3,11 +3,12 @@
     ansible/group_vars/vault.yml   encrypted with ansible-vault (git-ignored)
     ansible/.vault_pass            its key (generated, 0600, git-ignored)
 
-Three secrets are entered by the operator, once (`worms secrets set <name>`,
-prompted without echo or read from stdin): the Proxmox tokens, which only
-Proxmox can issue. Everything else -- database passwords, Django keys, the CA
-passphrase, API tokens, the SSH key -- is generated the first time it is
-missing and never rotated. Every consumer reads the vault: OpenTofu through the
+Three secrets are the Proxmox tokens, which only Proxmox can issue: `worms
+secrets issue <name>` creates or rotates one and stores it here, and `worms
+secrets check` verifies them (worms_cli/tokens.py). `worms secrets set <name>`
+stores one by hand (prompted without echo or read from stdin). Everything else
+-- database passwords, Django keys, the CA passphrase, API tokens, the SSH key
+-- is generated the first time it is missing and never rotated. Every consumer reads the vault: OpenTofu through the
 CLI (TF_VAR_* in its environment only), Ansible (-e @group_vars/vault.yml), the
 services and the round agent through Ansible, the CLI's own database and
 Proxmox access. No value is ever printed.
@@ -31,7 +32,7 @@ from pathlib import Path
 EXTERNAL = {
     "proxmox-token": (
         "vault_tofu_proxmox_api_token",
-        "OpenTofu's provisioning token, root@pam!<id>=<secret> (full form)",
+        "OpenTofu's provisioning token, worms-provision@pve!worms=<secret> (full form)",
         "MISSING: OpenTofu cannot run",
     ),
     "orchestrator-token": (
@@ -59,7 +60,10 @@ GENERATED = {
     "vault_dashboard_secret_key": 64,  # Django SECRET_KEY
     "vault_orchestrator_secret_key": 64,
     "vault_orchestrator_dashboard_token": 32,  # dashboard -> devbox reset
+    "vault_devpi_root_password": 24,  # nothing logs in with it: devpi is read-only
 }
+# Former homes of a secret that now has one: removed from the vault, not kept.
+SUPERSEDED = {"proxmox_api_token"}
 # The WORMS SSH key (generated; `worms secrets set ssh-key` imports one): the
 # one key every VM authorizes, used by OpenTofu, Ansible, the CLI and the
 # round agent (docs/accounts.md §4).
@@ -69,7 +73,7 @@ SSH_PUBLIC_KEY = "vault_worms_ssh_public_key"
 PROXMOX_TOKEN = re.compile(r"^[^@\s]+@[^!\s]+![^=\s]+=\S+$")
 HEADER = (
     "# The WORMS vault: every secret of the platform (docs/accounts.md §4).\n"
-    "# Enter the Proxmox tokens with `worms secrets set <name>`; everything else\n"
+    "# Issue the Proxmox tokens with `worms secrets issue <name>`; everything else\n"
     "# is generated when missing and never rotated. Do not edit by hand.\n"
 )
 
@@ -186,6 +190,9 @@ class Vault:
         """Generate every missing generated secret (never rotate one); returns
         the keys added."""
         values = self.load()
+        superseded = sorted(SUPERSEDED & set(values))
+        for key in superseded:
+            del values[key]
         added = [key for key in GENERATED if not values.get(key)]
         for key in added:
             values[key] = token(GENERATED[key])
@@ -199,7 +206,7 @@ class Vault:
         elif not values.get(SSH_PUBLIC_KEY):
             values[SSH_PUBLIC_KEY] = public_key_of(values[SSH_KEY])
             added.append(SSH_PUBLIC_KEY)
-        if added or not self.exists():
+        if added or superseded or not self.exists():
             self.save(values)
         return added
 

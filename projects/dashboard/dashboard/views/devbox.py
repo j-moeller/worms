@@ -1,10 +1,10 @@
 """The dashboard's development ("devbox") view and its actions.
 
 In the development environment (the dev/prod toggle in the nav), the home page
-shows the team's devbox instead of the leaderboard: the current dev score
-(tokens found in the devbox VMs), the VMs, the devbox logs, the SSH keys the
-team has registered, and how to connect. A reset rebuilds the devbox and clears
-the score by bumping the team's devbox version (docs/devbox.md).
+shows the team's devbox instead of the leaderboard: its VMs and how to connect.
+A reset rebuilds the devbox and clears the score by bumping the team's devbox
+version (docs/devbox.md). The profile shows the dev score and the SSH keys (which
+are changed here), and the progression page shows the devbox logs.
 
 Production view = the leaderboard (dashboard/views/leaderboard.py). This module
 only runs when request.is_dev_environment is set.
@@ -12,12 +12,10 @@ only runs when request.is_dev_environment is set.
 
 from __future__ import annotations
 
-import base64
 import json
 import re
 
 from core.models.devbox import Devbox, DevboxCapture, DevboxLog, DevboxSSHKey, DevboxVM
-from core.locking import serialized_resource
 from core.membership import membership_change
 from core.models.team import Team, TeamMembership
 from dashboard.views.decorators import user_in_team_required
@@ -26,7 +24,7 @@ from dashboard.views.util import render_with_base_info
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import F
 from django.http import HttpRequest
 from django.shortcuts import redirect
@@ -39,12 +37,61 @@ def pretty(log_data) -> str:
     return json.dumps(log_data, indent=2, ensure_ascii=False)
 
 
+def captured_vm_ids(team: Team) -> set[int]:
+    """The devbox VMs whose token the team has submitted at its current version."""
+    captures = DevboxCapture.objects.filter(team=team, devbox_version=team.devbox_version)
+    return set(captures.values_list("devbox_vm_id", flat=True))
+
+
+def devbox_logs(team: Team) -> list[dict]:
+    """The team's devbox logs at its current version, newest first."""
+    entries = (
+        DevboxLog.objects.filter(team=team, devbox_version=team.devbox_version)
+        .select_related("logging_attempt")
+        .order_by("-created_at")[:200]
+    )
+    return [{"entry": entry, "data": pretty(entry.logging_attempt.log_data)} for entry in entries]
+
+
 def home(request: HttpRequest):
     """Index dispatcher: the devbox in the development view, else the
     leaderboard (production)."""
     if request.session.get("is_dev_environment"):
         return devbox_home(request)
     return leaderboard(request)
+
+
+def _hops(vms) -> list[dict]:
+    """How to go on from A: to B, then from B to C. A VM's first address is on its link towards
+    A. -A passes the team's agent on to B for the next hop; C is the last, so it needs none."""
+    by_role = {vm.role: vm for vm in vms}
+    hops = []
+    for here, role, options in (("A", "b", "-A "), ("B", "c", "")):
+        vm = by_role.get(role)
+        if vm is not None and vm.addresses:
+            hops.append({"where": f"On {here}, go on to {role.upper()}", "command": f"ssh {options}root@{vm.addresses[0]}"})
+    return hops
+
+
+def _chain(vms) -> list[dict]:
+    """The VMs in order for the page's picture, each with the interface it is reached on and the
+    one that leads on. A VM's interfaces come in a fixed order: one per link, then the SSH
+    fabric (opentofu/stacks/devbox/main.tf)."""
+    by_role = {vm.role: vm for vm in vms}
+    chain = []
+    for role in ("a", "b", "c"):
+        vm = by_role.get(role)
+        if vm is None:
+            continue
+        links = [{"iface": f"eth{n}", "ip": ip} for n, ip in enumerate(vm.addresses)]
+        if role == "a":
+            entry = {"iface": f"eth{len(links)}" if links else "", "ip": vm.ssh_fabric_ip} if vm.ssh_fabric_ip else None
+            onward = links[0] if links else None
+        else:
+            entry = links[0] if links else None
+            onward = links[1] if len(links) > 1 else None
+        chain.append({"vm": vm, "letter": role.upper(), "entry": entry, "onward": onward})
+    return chain
 
 
 @login_required
@@ -54,11 +101,9 @@ def devbox_home(request: HttpRequest, team: Team):
     version = team.devbox_version
 
     vms = list(devbox.vms.order_by("role", "vm_identifier")) if devbox else []
-    captured_vm_ids = set(
-        DevboxCapture.objects.filter(team=team, devbox_version=version).values_list("devbox_vm_id", flat=True)
-    )
+    captured = captured_vm_ids(team)
     for vm in vms:
-        vm.found = vm.id in captured_vm_ids
+        vm.found = vm.id in captured
 
     # The "main" devbox VM (A) is the entry point teams SSH into (through the
     # gateway, to its SSH-fabric address). Fall back to the first VM.
@@ -66,17 +111,9 @@ def devbox_home(request: HttpRequest, team: Team):
     ssh_command = None
     if devbox and main_vm and devbox.ssh_gateway_host and main_vm.ssh_fabric_ip:
         ssh_command = (
-            f"ssh -J {devbox.ssh_gateway_user}@{devbox.ssh_gateway_host}"
+            f"ssh -A -J {devbox.ssh_gateway_user}@{devbox.ssh_gateway_host}"
             f":{devbox.ssh_gateway_port} root@{main_vm.ssh_fabric_ip}"
         )
-
-    logs = [
-        {"entry": entry, "data": pretty(entry.logging_attempt.log_data)}
-        for entry in DevboxLog.objects.filter(team=team, devbox_version=version)
-        .select_related("logging_attempt")
-        .order_by("-created_at")[:200]
-    ]
-    ssh_keys = list(DevboxSSHKey.objects.filter(team=team).order_by("-created_at"))
 
     context = {
         "devbox": devbox,
@@ -84,10 +121,8 @@ def devbox_home(request: HttpRequest, team: Team):
         "vms": vms,
         "main_vm": main_vm,
         "ssh_command": ssh_command,
-        "score": len(captured_vm_ids),
-        "total_tokens": len(vms),
-        "logs": logs,
-        "ssh_keys": ssh_keys,
+        "hops": _hops(vms),
+        "chain": _chain(vms),
     }
     return render_with_base_info(request, "devbox.html", context)
 
@@ -136,13 +171,6 @@ def devbox_reset(request: HttpRequest, team: Team):
     return redirect("index")
 
 
-def _key_blob(public_key: str) -> str:
-    # type + base64 blob, without the comment: the identity sshd matches on.
-    key_type, encoded = public_key.split(" ")[:2]
-    canonical = base64.b64encode(base64.b64decode(encoded, validate=True)).decode("ascii")
-    return f"{key_type} {canonical}"
-
-
 def _reconfigure_devbox(request: HttpRequest, team: Team, changed: str):
     """Ask the orchestrator to re-push the team's keys to the devbox and the
     gateway (no VM rebuild). Reports honestly whether it took effect."""
@@ -163,7 +191,7 @@ def _reconfigure_devbox(request: HttpRequest, team: Team, changed: str):
                 "next reset or provision; retry or contact an organiser if it persists.",
             )
         return
-    messages.success(request, f"SSH key {changed}. It is being installed on your devbox and the SSH gateway now.")
+    messages.success(request, f"SSH key {changed}. Your devbox and the SSH gateway are being updated now.")
 
 
 @login_required
@@ -174,29 +202,35 @@ def devbox_add_ssh_key(request: HttpRequest, team: Team):
     public_key = request.POST.get("public_key", "").strip()
     if not _valid_ssh_key(public_key):
         messages.error(request, "That is not a single-line OpenSSH public key (ssh-ed25519, ssh-rsa, ecdsa, sk-…), or it contains characters that are not allowed.")
-        return redirect("index")
-    blob = _key_blob(public_key)
-    # A membership can change after middleware resolved request.team.
+        return redirect("profile")
+    retry = False
+    # Membership can change after middleware resolved request.team. The team
+    # lock also makes the key-count limit atomic across its members.
     with membership_change(request.user, team):
         if not TeamMembership.objects.filter(user=request.user, team=team).exists():
             messages.error(request, "You are no longer a member of this team.")
             return redirect("profile")
-        with serialized_resource("ssh-key", blob):
-            # A key may belong to only one team: sshd matches a key to the first line,
-            # so a shared key would let another team inherit this team's gateway
-            # forward and log in to its devbox VMs (docs/security-assessment.md).
-            if any(_key_blob(k) == blob for k in DevboxSSHKey.objects.exclude(team=team).values_list("public_key", flat=True)):
-                messages.error(request, "That public key is already registered — by another team, or already by yours. Use a different key.")
-                return redirect("index")
-            if any(_key_blob(k) == blob for k in DevboxSSHKey.objects.filter(team=team).values_list("public_key", flat=True)):
-                messages.info(request, "Your team already has that key.")
-                return redirect("index")
+        fingerprint = DevboxSSHKey.fingerprint(public_key)
+        existing = DevboxSSHKey.objects.filter(key_fingerprint=fingerprint).first()
+        if existing is not None:
+            if existing.team_id != team.id:
+                messages.error(request, "That public key is already registered by another team. Use a different key.")
+                return redirect("profile")
+            messages.info(request, "Your team already has that key.")
+            retry = True
+        else:
             if DevboxSSHKey.objects.filter(team=team).count() >= 64:
                 messages.error(request, "Your team already has 64 SSH keys; remove an unused key first.")
-                return redirect("index")
-            DevboxSSHKey.objects.create(team=team, name=name, public_key=public_key, created_by=request.user)
-    _reconfigure_devbox(request, team, "added")
-    return redirect("index")
+                return redirect("profile")
+            try:
+                with transaction.atomic():
+                    DevboxSSHKey.objects.create(team=team, name=name, public_key=public_key, created_by=request.user)
+            except IntegrityError:
+                messages.error(request, "That public key is already registered. Use a different key.")
+                return redirect("profile")
+    # Network calls happen after releasing membership and team locks.
+    _reconfigure_devbox(request, team, "pushed again" if retry else "added")
+    return redirect("profile")
 
 
 @login_required
@@ -206,7 +240,7 @@ def devbox_delete_ssh_key(request: HttpRequest, team: Team, key_id: int):
     deleted, _ = DevboxSSHKey.objects.filter(id=key_id, team=team).delete()
     if deleted:
         _reconfigure_devbox(request, team, "removed")
-    return redirect("index")
+    return redirect("profile")
 
 
 # Accept only a single OpenSSH public key line of a known type, bounded length.
@@ -237,6 +271,8 @@ def _valid_ssh_key(value: str) -> bool:
     # type + base64 blob, then at most a one-token comment (no spaces).
     if len(parts) < 2 or len(parts) > 3 or parts[0] not in _SSH_TYPES or len(parts[1]) < 20:
         return False
+    import base64
+
     try:
         base64.b64decode(parts[1], validate=True)
     except Exception:

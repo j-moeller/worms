@@ -187,7 +187,7 @@
     const ZIP_MAX = { entries: 20000, json: 128 * 1024 * 1024, log: 1024 * 1024 };
     const CAP = { nodes: 10000, list: 100000, events: 200000, flows: 500000, rules: 4000, small: 512, status: 10000 };
     const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
-    const KNOWN_ROLES = new Set(["proxmox", "orchestrator", "dashboard", "database", "scoring", "logging", "monitor", "wazuh",
+    const KNOWN_ROLES = new Set(["proxmox", "orchestrator", "dashboard", "database", "scoring", "logging", "monitor", "syslog",
         "dns", "private_internet", "sandbox", "sandbox_gw", "devbox", "devbox_gw", "ssh_gateway", "other"]);
     const T_LIMIT = 1e8; // seconds; anything beyond is not a round
 
@@ -681,7 +681,7 @@
 
     const ROLE_LABEL = {
         proxmox: "Proxmox host", orchestrator: "orchestrator", dashboard: "dashboard", database: "database",
-        scoring: "scoring", logging: "logging", monitor: "monitor", wazuh: "wazuh", dns: "DNS",
+        scoring: "scoring", logging: "logging", monitor: "monitor", syslog: "syslog", dns: "DNS",
         private_internet: "private internet", sandbox: "sandbox VM", sandbox_gw: "sandbox gateway",
         devbox: "devbox VM", devbox_gw: "devbox gateway", ssh_gateway: "devbox SSH gateway", other: "other",
     };
@@ -980,7 +980,7 @@
         addNode(first("scoring"), serviceMid - 170, 360, CARD, team ? { sub: "flag submissions" } : undefined);
         addNode(first("logging"), serviceMid + 170, 360, CARD, team ? { sub: "your worm's logs" } : undefined);
         if (opts.showAux && !team) {
-            for (const n of byRole.wazuh || []) addNode(n, mid + 380, 220, CARD);
+            for (const n of byRole.syslog || []) addNode(n, mid + 380, 220, CARD);
             for (const n of byRole.ssh_gateway || []) addNode(n, LEFT + 120, 360, CARD);
             (byRole.other || []).forEach((n, i) => addNode(n, LEFT + 80 + i * (CARD.w + 20), Math.max(devBottom, sbBox.y + sbBox.h, piBox.y + piBox.h) + 70, CARD));
         }
@@ -2843,13 +2843,6 @@
             root.classList.remove("dragging");
             openFile(ev.dataTransfer.files[0]);
         });
-        if (window.matchMedia) {
-            window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-                readColors();
-                drawDensity();
-                drawFrame();
-            });
-        }
         if (TEAM) {
             await loadRounds();
             renderTabs();

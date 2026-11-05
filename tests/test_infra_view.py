@@ -33,7 +33,7 @@ def test_every_vm_is_a_node_with_its_role_and_status():
     m = model()
     roles = {n["name"]: n["role"] for n in m["nodes"]}
     assert roles["worms-pve"] == "proxmox"
-    for name in ("database", "orchestrator", "dashboard", "scoring", "logging", "monitor", "wazuh"):
+    for name in ("database", "orchestrator", "dashboard", "scoring", "logging", "monitor", "syslog"):
         assert roles[name] == name
     assert roles["dns"] == "dns"
     assert roles["apt-cache"] == roles["devpi"] == "private_internet"
@@ -50,8 +50,8 @@ def test_every_vm_is_a_node_with_its_role_and_status():
 
     b = node(m, "devbox-t2-b")
     assert (b["team"], b["devbox_role"]) == ("t2", "b")
-    # Gateways and wazuh are auxiliary (hidden unless asked for).
-    assert node(m, "sandbox-gw")["aux"] and node(m, "wazuh")["aux"]
+    # Gateways and syslog are auxiliary (hidden unless asked for).
+    assert node(m, "sandbox-gw")["aux"] and node(m, "syslog")["aux"]
     assert not node(m, "database")["aux"]
 
 

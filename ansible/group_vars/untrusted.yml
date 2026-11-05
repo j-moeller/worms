@@ -1,0 +1,13 @@
+---
+# Sandbox and devbox VMs and their gateways. Their apt only ever reaches the
+# private internet, never the Debian mirrors.
+apt_client_use_cache: true
+# By name, as for pip. Only these VMs can: private-internet VMs may reach the cache
+# but not DNS (opentofu/stacks/firewall, pi_apt_client), so they keep its address.
+apt_client_cache_host: apt-cache.worms.internal
+# A new VM's package index is empty, and these VMs can only fill it from the cache.
+apt_client_refresh_offline: true
+# No backports. Apt installs nothing from there unless told to, and the cache does
+# not hold its full index: with the internet closed that gives a 503, which Ansible's
+# apt module treats as fatal, so no gateway or VM could be configured.
+apt_client_suites: "trixie trixie-updates"

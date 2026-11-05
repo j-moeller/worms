@@ -6,8 +6,21 @@
     owner: root
     group: root
     mode: '0644'
+  register: apt_client_sources
 
 - name: Remove any apt CONNECT proxy (path-style needs none; it breaks HTTPS caching)
   ansible.builtin.file:
     path: /etc/apt/apt.conf.d/01proxy
     state: absent
+
+# The apt tasks after this use cache_valid_time, which looks only at the age of
+# the index, not at whether the sources changed. The apt-cache VM refreshed its
+# index minutes ago, before this role rewrote its sources, so without a refresh
+# here it would know no packages at all ("No package matching ...").
+- name: Refresh the package index from the new sources
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 0  # the sources just changed: however recent the index is
+  when:
+    - apt_client_sources is changed
+    - internet_enabled | bool or apt_client_refresh_offline | bool

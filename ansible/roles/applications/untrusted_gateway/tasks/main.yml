@@ -1,0 +1,21 @@
+---
+# Turn on a sandbox or devbox gateway's rules. Cloud-init wrote them to
+# /etc/nftables.conf, but the cloud image has no nftables and cloud-init never
+# touches apt. Until this runs the gateway has no NAT and no filter: its VMs reach
+# nothing, not even DNS, and it routes between segments it must keep apart.
+- name: Install nftables
+  ansible.builtin.apt:
+    name: nftables
+    state: present
+
+- name: Load the rules now and at every boot
+  ansible.builtin.systemd_service:
+    name: nftables
+    enabled: true
+    state: started
+
+- name: Check the rules are active
+  ansible.builtin.command: nft list ruleset
+  register: untrusted_gateway_rules
+  changed_when: false
+  failed_when: "'masquerade' not in untrusted_gateway_rules.stdout"

@@ -9,7 +9,7 @@ locals {
     blank           = { file = "vm-blank.yml", hostname = "vm" }
     postgresql      = { file = "vm-postgresq.yml", hostname = "postgresql" }
     django          = { file = "vm-django.yml", hostname = "django" }
-    wazuh           = { file = "vm-wazuh.yml", hostname = "wazuh" }
+    syslog          = { file = "vm-syslog.yml", hostname = "syslog" }
     dns             = { file = "vm-dns.yml", hostname = "dns" }
     flask           = { file = "vm-flask.yml", hostname = "flask" }
     network_monitor = { file = "vm-network-monitor.yml", hostname = "network-monitor" }
@@ -22,8 +22,10 @@ locals {
     wikipedia       = { file = "vm-wikipedia.yml", hostname = "wikipedia" }
   }
 
-  # Private-internet services with a data disk: where it is mounted.
+  # VMs with a data disk (private-internet services, the syslog VM): where it
+  # is mounted.
   data_mounts = {
+    syslog          = "/var/log/remote"
     apt_cache       = "/var/cache/apt-cacher-ng"
     devpi           = "/var/lib/devpi"
     docker_registry = "/var/lib/docker-registry"

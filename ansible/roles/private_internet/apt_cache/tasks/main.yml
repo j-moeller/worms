@@ -1,6 +1,7 @@
 ---
 # Runs before apt_client points this VM's own apt at the cache
 # (SetupPrivateInternet.yml).
+
 # The package starts the service as soon as it is configured, and the service
 # exits if it cannot write its cache dir, which fails the install. The data disk
 # is mounted there root-owned, so the dir has to change owner before the install,
@@ -32,7 +33,7 @@
     name: [apt-cacher-ng, ca-certificates]
     state: present
     update_cache: "{{ internet_enabled | bool }}"
-    cache_valid_time: 3600
+    cache_valid_time: "{{ 3600 if internet_enabled | bool else omit }}"
 
 - name: Configure apt-cacher-ng port
   ansible.builtin.lineinfile:

@@ -21,15 +21,7 @@ map $request_method $worms_login_key {
 limit_req_zone $worms_login_key zone=login:10m rate={{ nginx_login_rate }};
 
 {% endif %}
-server {
-    listen 80;
-    listen [::]:80;
-
-    server_name {{ tls_dns_name }};
-
-    return 301 https://$host$request_uri;
-}
-
+# HTTPS only: nothing listens on port 80, not even a redirect.
 server {
     listen 443 ssl;
     listen [::]:443 ssl;

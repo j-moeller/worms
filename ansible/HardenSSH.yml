@@ -1,0 +1,60 @@
+---
+# Bind sshd to each VM's own management address instead of the wildcard. SSH to
+# the static infrastructure and private-internet VMs is only ever initiated by
+# the Proxmox host over the management NIC (ansible_host == the VM's management
+# IP; see scripts/generate_inventory.py), so sshd has no reason to listen on the
+# data-plane / DMZ / services addresses. ListenAddress pins it to the management
+# IP, so even if a firewall rule were missing the daemon is simply not there on
+# any other address.
+#
+# Deliberately NOT applied to:
+#   - proxmox_host         (the hypervisor, managed outside this inventory)
+#   - sandbox / sandbox_gw (ephemeral, built by the round agent)
+#   - devbox / devbox_gw   (also serve team SSH on the devbox SSH fabric, not
+#                           only the management NIC -- binding to mgmt would cut
+#                           teams off)
+#   - ssh_gateway          (serves team SSH via host DNAT on another address)
+- name: Restrict sshd to the management address
+  hosts: all:!proxmox_host:!sandbox:!sandbox_gw:!devbox:!devbox_gw:!ssh_gateway
+  any_errors_fatal: true
+  become: true
+  gather_facts: false
+
+  tasks:
+    # Let sshd bind its management address even if that NIC is configured after
+    # ssh.service starts. The private-internet VMs reach Ansible on their second
+    # NIC (net1); with a specific ListenAddress, sshd can otherwise fail to bind
+    # on boot ("Cannot assign requested address") and the VM is unreachable over
+    # SSH. ip_nonlocal_bind lets the bind succeed and take effect once the
+    # address appears, so a reboot can never strand the daemon.
+    - name: Allow binding a management address that is not up yet
+      ansible.posix.sysctl:
+        name: net.ipv4.ip_nonlocal_bind
+        value: "1"
+        sysctl_set: true
+        state: present
+        reload: true
+
+    - name: Pin sshd ListenAddress to the management IP
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/15-worms-listen.conf
+        content: |
+          # Managed by Ansible (HardenSSH.yml). SSH reaches this VM only from
+          # the Proxmox host over the management NIC, so sshd listens there only.
+          ListenAddress {{ ansible_host }}
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Reload sshd
+
+    # Fail before the reload if the full sshd config (incl. drop-ins) is invalid,
+    # so a bad ListenAddress can never take the daemon down and lock us out.
+    - name: Validate the sshd configuration
+      ansible.builtin.command: sshd -t
+      changed_when: false
+
+  handlers:
+    - name: Reload sshd
+      ansible.builtin.systemd:
+        name: ssh
+        state: reloaded

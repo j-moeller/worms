@@ -8,8 +8,9 @@ it on devbox_provision/devbox_rebuild and `tofu apply`s the stack). Addressing
 is derived deterministically from each team's integer index, inside the devbox
 ranges in opentofu/shared/shared-variables.tf:
 
-    devbox networks   10.128.0.0/10   team i -> 10.128.(2i).0/24 (A-B link),
+    devbox networks   10.128.0.0/19   team i -> 10.128.(2i).0/24 (A-B link),
                                                10.128.(2i+1).0/24 (B-C link)
+                                      (a /19 = 32 /24 blocks = 16 teams, 0..15)
     devbox SSH fabric 10.7.0.0/16      team i -> 10.7.i.{11,12,13} (A,B,C)
     devbox maint.     10.6.0.0/16      team i -> 10.6.i.{2,11,12,13} (gw,A,B,C)
                                      (10.6.0.1 is the host's address there)
@@ -30,7 +31,11 @@ import json
 import re
 import sys
 
-DEVBOX_NETWORK = ipaddress.ip_network("10.128.0.0/10")
+# A /19 (32 /24 blocks) holds 16 teams: each uses two /24 link subnets
+# (A-B 10.128.(2i).0/24, B-C 10.128.(2i+1).0/24). team_addressing fails
+# closed for index >= 16 (its subnets fall outside this range), which keeps
+# the generator in step with the firewall aggregate networks.devbox_vms.
+DEVBOX_NETWORK = ipaddress.ip_network("10.128.0.0/19")
 SERVICES_BLOCK = ipaddress.ip_network("10.2.0.32/27")
 SSH_FABRIC_PREFIX = 16
 MAINT_PREFIX = 16

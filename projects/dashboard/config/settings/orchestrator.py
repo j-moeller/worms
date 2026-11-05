@@ -47,10 +47,6 @@ PROXMOX = {
 # collect_topology`). It needs the PVEAuditor role on `/` and nothing else, so
 # a leak exposes configuration but cannot change it. Kept apart from the token
 # above (which needs VM.PowerMgmt) on purpose.
-#
-# PROXMOX_CA_BUNDLE optionally points at the CA that signed the Proxmox API
-# certificate (e.g. a copy of /etc/pve/pve-root-ca.pem); it takes precedence
-# over PROXMOX_VERIFY_SSL.
 PROXMOX_READONLY = {
     "host": PROXMOX["host"],
     "port": PROXMOX["port"],
@@ -58,7 +54,7 @@ PROXMOX_READONLY = {
     "user": env("PROXMOX_READONLY_USER", ""),
     "token_name": env("PROXMOX_READONLY_TOKEN_NAME", ""),
     "token_value": env("PROXMOX_READONLY_TOKEN_VALUE", ""),
-    "verify_ssl": env("PROXMOX_CA_BUNDLE") or PROXMOX["verify_ssl"],
+    "verify_ssl": PROXMOX["verify_ssl"],
     "timeout": int(env("PROXMOX_TIMEOUT", "10")),
 }
 

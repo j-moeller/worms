@@ -24,7 +24,7 @@ locals {
     }
     siem = {
       address = "${var.host_ips.siem}/${split("/", var.networks.siem)[1]}"
-      comment = "SIEM: wazuh (receives syslog from every infrastructure VM, routed tcp 514 only)."
+      comment = "SIEM: syslog, the central rsyslog server (receives the audit logs of every infrastructure VM, routed tcp 514 only)."
     }
     services = {
       address = null

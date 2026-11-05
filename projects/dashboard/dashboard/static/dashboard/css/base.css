@@ -336,7 +336,9 @@ textarea.input { resize: vertical; min-height: 64px; }
 .stat__value { font-family: var(--font-display); font-size: 2.6rem; font-weight: 700; line-height: 1; color: var(--accent); }
 .stat__of { color: var(--faint); font-size: 1.4rem; }
 .stat__label { color: var(--muted); font-size: .85rem; }
-.pips { display: flex; gap: 7px; margin-top: 14px; }
+.pips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 14px; }
+.stat + .kv, .pips + .kv { margin-top: 16px; }
+.round-tabs.team-tabs { margin: 12px 0 16px; }
 .pip { width: 26px; height: 8px; border-radius: 3px; background: var(--border-strong); }
 .pip.is-on { background: var(--ok); box-shadow: 0 0 10px color-mix(in srgb, var(--ok) 60%, transparent); }
 
@@ -363,7 +365,7 @@ p + .code-label { margin-top: 14px; }
 
 /* ---- disclosures / confirm --------------------------------------------- */
 .disclosure, .confirm { margin: 0; }
-.pips + .confirm, .stat + .confirm { margin-top: 18px; }
+.vm-chain + .confirm, .muted + .confirm { margin-top: 18px; }
 .confirm summary, .disclosure summary { display: inline-flex; list-style: none; }
 .confirm summary::-webkit-details-marker, .disclosure summary::-webkit-details-marker { display: none; }
 .confirm[open] > summary { opacity: .6; }
@@ -373,6 +375,8 @@ p + .code-label { margin-top: 14px; }
 .confirm--inline .confirm__body { position: absolute; z-index: 5; background: var(--surface); box-shadow: var(--shadow); min-width: 260px; }
 .confirm--inline { position: relative; }
 .disclosure[open] > summary { margin-bottom: 4px; }
+.panel > .disclosure > summary { margin: 16px 18px; }
+.panel > .disclosure[open] > summary { margin-bottom: 0; }
 .disclosure > .form { border-top: var(--border-w) solid var(--border); margin-top: 14px; padding-top: 16px; }
 
 /* ---- logs --------------------------------------------------------------- */

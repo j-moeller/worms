@@ -83,14 +83,19 @@ class Session {
     const page = this.page;
     const command = page.locator("section[aria-labelledby=connect-title] [data-ssh-login] code");
     const hops = page.locator("section[aria-labelledby=connect-title] [data-ssh-hop] code");
-    return {
-      version: squash(await page.innerText("section[aria-labelledby=score-title] .panel__meta")),
-      score: squash(await page.innerText("section[aria-labelledby=score-title] .stat__value")),
-      logs: await page.$$eval("details.log-entry", (nodes) => nodes.map((n) => n.textContent)),
+    const state = {
+      version: squash(await page.innerText("section[aria-labelledby=vms-title] .panel__meta")),
       ssh_command: (await command.count()) ? squash(await command.first().innerText()) : null,
       hops: (await hops.allInnerTexts()).map(squash),
       vms: await page.$$eval("section[aria-labelledby=vms-title] [data-vm]", (nodes) => nodes.map((node) => squash(node.innerText))),
     };
+    // The score is on the profile and the logs are on the progression page.
+    await page.goto(`${this.base}/profile/`, { waitUntil: "load" });
+    state.score = squash(await page.innerText("section[aria-labelledby=team-title] .stat__value"));
+    await page.goto(`${this.base}/progression/`, { waitUntil: "load" });
+    state.logs = await page.$$eval("details.log-entry", (nodes) => nodes.map((n) => n.textContent));
+    await page.goto(`${this.base}/`, { waitUntil: "load" });
+    return state;
   }
 
   async setPassword(oldPassword, newPassword) {
@@ -201,8 +206,11 @@ const actions = {
     await s.login(r.user, r.password);
     await s.devView();
     if (r.shot) {
-      for (const entry of await s.page.locator("details.log-entry").all()) await entry.evaluate((e) => { e.open = true; });
       await s.shot(r.shot);
+      await s.page.goto(`${s.base}/progression/`, { waitUntil: "load" });
+      for (const entry of await s.page.locator("details.log-entry").all()) await entry.evaluate((e) => { e.open = true; });
+      await s.shot(`${r.shot}-logs`);
+      await s.page.goto(`${s.base}/`, { waitUntil: "load" });
     }
     return s.devState();
   },

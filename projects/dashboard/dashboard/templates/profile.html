@@ -25,14 +25,25 @@
     <section class="panel" aria-labelledby="team-title">
         <header class="panel__head">
             <h2 class="panel__title" id="team-title">Team</h2>
+            {% if performance.meta %}<p class="panel__meta">{{ performance.meta }}</p>{% endif %}
         </header>
         <div class="panel__body">
             {% if request.team %}
             <p class="lead">{{ request.team.name }}</p>
-            <ul class="links">
-                <li><a href="{% url 'upload' %}">Upload a worm</a></li>
-                <li><a href="{% url 'progression' %}">Round progression</a> (captures, logs, traffic)</li>
-            </ul>
+            {% if performance %}
+            {% if performance.tabs %}
+            <nav class="round-tabs team-tabs" aria-label="Your team's performance">
+                {% for tab in performance.tabs %}<a class="round-tabs__tab" href="{{ tab.url }}"{% if tab.selected %} aria-current="page"{% endif %}>{{ tab.name }}</a>{% endfor %}
+            </nav>
+            {% endif %}
+            <p class="stat"><span class="stat__value">{{ performance.value }}{% if performance.of %}<span class="stat__of">/{{ performance.of }}</span>{% endif %}</span><span class="stat__label">{{ performance.label }}</span></p>
+            {% if performance.pips %}<p class="pips" aria-hidden="true">{% for on in performance.pips %}<span class="pip{% if on %} is-on{% endif %}"></span>{% endfor %}</p>{% endif %}
+            {% if performance.facts %}<dl class="kv">{% for fact in performance.facts %}<div><dt>{{ fact.name }}</dt><dd>{{ fact.value }}</dd></div>{% endfor %}</dl>{% endif %}
+            {% elif request.is_dev_environment %}
+            <p class="muted">Your devbox has not been built yet.</p>
+            {% else %}
+            <p class="muted">No round has started yet.</p>
+            {% endif %}
             {% elif request.active_competition.is_registration_period %}
             <p>You are not in a team yet.</p>
             <p class="panel__actions"><a class="btn btn--primary" href="{% url 'team_registration' %}">Choose a team</a></p>
@@ -84,7 +95,7 @@
 <header class="page-head page-head--section">
     <p class="page-head__kicker">Credentials &amp; API</p>
     <h2 class="page-head__title">Access tokens</h2>
-    <p class="page-head__lead">Tokens your worm uses to submit flags and logs, and to download your results.</p>
+    <p class="page-head__lead">Tokens for downloading your results through the API, as shown on <a href="{% url 'progression' %}">Progression</a>.</p>
 </header>
 
 {% if created_access_token %}
@@ -134,7 +145,7 @@
             </tbody>
         </table>
     </div>
-    <details class="disclosure"{% if not access_tokens %} open{% endif %}>
+    <details class="disclosure">
         <summary class="btn">Create a token</summary>
         <form method="post" action="{% url 'create_access_token' %}" class="panel__body form">
             {% csrf_token %}
@@ -151,29 +162,6 @@
     </details>
 </section>
 
-<section class="panel" aria-labelledby="submit-api-title">
-    <header class="panel__head"><h2 class="panel__title" id="submit-api-title">Submit flags and logs</h2></header>
-    <div class="panel__body prose">
-        <p>From inside the sandbox, over the internal network. No token or team id: only one team runs at a time, so the server knows which. Capturing a VM means submitting its flag (<code>/etc/worms/flag</code> on each VM). The full contract for your worm is <code>docs/worm-contract.md</code>.</p>
-        <pre class="code" data-copy><code>curl -X POST https://scoring.worms.internal/submit \
-  -H "Content-Type: application/json" \
-  -d '{"vm_flag":"FLAG"}'</code></pre>
-        <pre class="code" data-copy><code>curl -X POST https://logging.worms.internal/submit \
-  -H "Content-Type: application/json" \
-  -d '{"log_data":{"event":"..."}}'</code></pre>
-    </div>
-</section>
-
-<section class="panel" aria-labelledby="data-api-title">
-    <header class="panel__head"><h2 class="panel__title" id="data-api-title">Download your results</h2></header>
-    <div class="panel__body prose">
-        <p>Your scoring and logs for a round as JSON. The token goes in the header, never the URL. Pages hold up to 500 submissions or 200 logs (1 MiB); follow <code>page.next</code> until it is null. Over the rate limit you get HTTP 429.</p>
-        <pre class="code" data-copy><code>TOKEN=...   # a token of your team
-curl -H "Authorization: Bearer $TOKEN" {{ request.scheme }}://{{ request.get_host }}/api/v1/rounds/
-curl -H "Authorization: Bearer $TOKEN" "{{ request.scheme }}://{{ request.get_host }}/api/v1/rounds/ID/scoring/?limit=500"
-curl -H "Authorization: Bearer $TOKEN" "{{ request.scheme }}://{{ request.get_host }}/api/v1/rounds/ID/logging/?limit=200&amp;cursor=NEXT"</code></pre>
-    </div>
-</section>
 {% elif request.team %}
 <section class="panel"><div class="panel__body"><p class="empty">Access tokens are available once registration has closed.</p></div></section>
 {% endif %}

@@ -208,7 +208,7 @@ devbox (stage 3) but no key registered.
 1. Sign in to `DASHBOARD` as the student with the one-time password; set a new
    password when forced.
 2. Switch to the **development** view (the nav toggle). You see the devbox: its
-   score (0), its VMs, the connect command, and **Reset**.
+   VMs, **Reset**, and the connect command.
 3. On your **profile** (`/profile/`), in **SSH keys**, paste your **public** key
    (e.g. `~/.ssh/id_ed25519.pub`) and add it.
 
@@ -312,10 +312,10 @@ VM's does not score.
 
 **Expected post state & how to check:**
 
-- **Score** = number of distinct tokens you submitted (1–3); each captured VM is
-  marked found.
-- **Logs** shows your submitted log entries (newest first), each expandable to
-  its JSON.
+- The **profile's Team panel** shows the score: the number of distinct tokens you
+  submitted (1–3). On the dev view, each captured VM is marked `Captured`.
+- **Logs**, on the **progression** page, shows your submitted log entries (newest
+  first), each expandable to its JSON.
 - These appear within a second or two of the submission (the processor is
   continuous). In the DB:
   ```sh
@@ -339,7 +339,7 @@ credits you (it is not your VM). The production view (leaderboard) shows
 - The dashboard reports the reset was requested; the agent runs a
   `devbox_rebuild` job (watch the agent shell): the three VMs are rebuilt with
   **fresh disks and new tokens**, and your keys are re-installed.
-- The **score starts over at 0** on the dev view, but **no records are deleted**
+- The **score starts over at 0** on the profile, but **no records are deleted**
   — the version was bumped:
   ```sh
   ssh debian@ORCH "psql -c \"SELECT name, devbox_version FROM teams WHERE name='alpha';\""  # incremented

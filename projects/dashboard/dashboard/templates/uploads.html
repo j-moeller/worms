@@ -44,4 +44,17 @@
         </table>
     </div>
 </section>
+
+<section class="panel" aria-labelledby="submit-api-title">
+    <header class="panel__head"><h2 class="panel__title" id="submit-api-title">Submit flags and logs</h2></header>
+    <div class="panel__body prose">
+        <p>Make your worm use these commands to capture a VM or write logging information. Capturing a VM means submitting its flag (<code>/etc/worms/flag</code> on each VM).</p>
+        <pre class="code" data-copy><code>curl -X POST https://scoring.worms.internal/submit \
+  -H "Content-Type: application/json" \
+  -d '{"vm_flag":"FLAG"}'</code></pre>
+        <pre class="code" data-copy><code>curl -X POST https://logging.worms.internal/submit \
+  -H "Content-Type: application/json" \
+  -d '{"log_data":{"event":"..."}}'</code></pre>
+    </div>
+</section>
 {% endblock %}

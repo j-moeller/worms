@@ -1,11 +1,10 @@
 """The dashboard's development ("devbox") view and its actions.
 
 In the development environment (the dev/prod toggle in the nav), the home page
-shows the team's devbox instead of the leaderboard: the current dev score
-(tokens found in the devbox VMs), the VMs, the devbox logs, and how to connect.
+shows the team's devbox instead of the leaderboard: its VMs and how to connect.
 A reset rebuilds the devbox and clears the score by bumping the team's devbox
-version (docs/devbox.md). The team's SSH keys are shown on the profile page and
-changed here.
+version (docs/devbox.md). The profile shows the dev score and the SSH keys (which
+are changed here), and the progression page shows the devbox logs.
 
 Production view = the leaderboard (dashboard/views/leaderboard.py). This module
 only runs when request.is_dev_environment is set.
@@ -35,6 +34,22 @@ def pretty(log_data) -> str:
     """The worm's log entry as indented JSON text. The template escapes it:
     it is attacker-controlled (written by the worm via the logging API)."""
     return json.dumps(log_data, indent=2, ensure_ascii=False)
+
+
+def captured_vm_ids(team: Team) -> set[int]:
+    """The devbox VMs whose token the team has submitted at its current version."""
+    captures = DevboxCapture.objects.filter(team=team, devbox_version=team.devbox_version)
+    return set(captures.values_list("devbox_vm_id", flat=True))
+
+
+def devbox_logs(team: Team) -> list[dict]:
+    """The team's devbox logs at its current version, newest first."""
+    entries = (
+        DevboxLog.objects.filter(team=team, devbox_version=team.devbox_version)
+        .select_related("logging_attempt")
+        .order_by("-created_at")[:200]
+    )
+    return [{"entry": entry, "data": pretty(entry.logging_attempt.log_data)} for entry in entries]
 
 
 def home(request: HttpRequest):
@@ -85,11 +100,9 @@ def devbox_home(request: HttpRequest, team: Team):
     version = team.devbox_version
 
     vms = list(devbox.vms.order_by("role", "vm_identifier")) if devbox else []
-    captured_vm_ids = set(
-        DevboxCapture.objects.filter(team=team, devbox_version=version).values_list("devbox_vm_id", flat=True)
-    )
+    captured = captured_vm_ids(team)
     for vm in vms:
-        vm.found = vm.id in captured_vm_ids
+        vm.found = vm.id in captured
 
     # The "main" devbox VM (A) is the entry point teams SSH into (through the
     # gateway, to its SSH-fabric address). Fall back to the first VM.
@@ -101,13 +114,6 @@ def devbox_home(request: HttpRequest, team: Team):
             f":{devbox.ssh_gateway_port} root@{main_vm.ssh_fabric_ip}"
         )
 
-    logs = [
-        {"entry": entry, "data": pretty(entry.logging_attempt.log_data)}
-        for entry in DevboxLog.objects.filter(team=team, devbox_version=version)
-        .select_related("logging_attempt")
-        .order_by("-created_at")[:200]
-    ]
-
     context = {
         "devbox": devbox,
         "version": version,
@@ -116,9 +122,6 @@ def devbox_home(request: HttpRequest, team: Team):
         "ssh_command": ssh_command,
         "hops": _hops(vms),
         "chain": _chain(vms),
-        "score": len(captured_vm_ids),
-        "total_tokens": len(vms),
-        "logs": logs,
     }
     return render_with_base_info(request, "devbox.html", context)
 

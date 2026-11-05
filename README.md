@@ -324,8 +324,9 @@ Details: `docs/testing.md`.
 Each team gets its own always-on, untrusted clone of the sandbox VMs (three VMs
 A–B–C) to develop against, reachable only by that team over a locked-down SSH
 gateway, completely isolated from the sandbox and from other teams' devboxes.
-Teams see it in the dashboard's **development view** (devbox score, logs, SSH
-keys, reset); scoring/logging attribute a devbox submission to its team by
+Teams see it in the dashboard's **development view** (the VMs, how to connect,
+reset; the score and SSH keys are on the profile, the logs on the progression
+page); scoring/logging attribute a devbox submission to its team by
 source address, so it never interferes with a running round. Full design,
 the devbox⇔sandbox isolation and the SSH gateway: **`docs/devbox.md`**.
 

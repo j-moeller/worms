@@ -41,10 +41,10 @@ existing `is_dev_environment` session flag; the home page dispatches
 (`dashboard/views/devbox.py`):
 
 - **Production** shows the leaderboard (and the usual CAPTURES/LOGS pages).
-- **Development** shows **no leaderboard**. It shows the team's devbox: the
-  current **score** (tokens found in A/B/C at the current version), the VMs,
-  the devbox **logs**, how to connect, and a **Reset** button. The team's **SSH
-  keys** (add/remove) are on the user's **profile**, next to the access tokens.
+- **Development** shows **no leaderboard**. It shows the team's devbox: the VMs,
+  a **Reset** button, and how to connect. The **score** (tokens found in A/B/C at
+  the current version) and the team's **SSH keys** (add/remove) are on the user's
+  **profile**, and the devbox **logs** are on the **progression** page.
 
 Both views show scoring and logging feedback for their own domain: the
 production view from `flag_captures`/`logging`, the development view from

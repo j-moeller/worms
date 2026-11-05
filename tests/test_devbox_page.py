@@ -142,7 +142,6 @@ def test_a_captured_vm_says_so_and_only_that_vm(site, team_upload):  # noqa: F81
     for letter in "AC":
         assert ">Not captured<" in nodes[letter] and ">Captured<" not in nodes[letter].split("</li>")[0]
     assert page.count("is-captured") == 1
-    assert "1 of 3 captured" in page
 
 
 def test_the_page_shows_no_address_a_team_cannot_use(site, team_upload):  # noqa: F811
@@ -195,6 +194,12 @@ def test_copy_gives_exactly_the_command(measured):
 def test_the_reset_button_has_room_above_it(measured):
     for width, seen in measured["widths"].items():
         assert seen["resetGap"] >= 12, width
+
+
+def test_create_a_token_has_room_around_it_and_its_form_starts_hidden(measured):
+    for width, seen in measured["profile"].items():
+        assert seen["createTokenInset"] >= 12, width
+        assert not seen["issueFormShown"], width
 
 
 def test_the_pages_fit_a_phone(measured):

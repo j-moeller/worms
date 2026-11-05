@@ -7,52 +7,11 @@
     <p class="page-head__lead">Your own copy of the sandbox: three VMs, A–B–C. Develop and test your worm here; nothing counts for the competition.</p>
 </header>
 
-<div class="grid grid--2">
-    <section class="panel" aria-labelledby="score-title">
-        <header class="panel__head"><h2 class="panel__title" id="score-title">Tokens found</h2><p class="panel__meta">version {{ version }}</p></header>
-        <div class="panel__body">
-            <p class="stat"><span class="stat__value">{{ score }}<span class="stat__of">/{{ total_tokens }}</span></span><span class="stat__label">tokens submitted at this version</span></p>
-            {% if vms %}<p class="pips" aria-hidden="true">{% for vm in vms %}<span class="pip{% if vm.found %} is-on{% endif %}"></span>{% endfor %}</p>{% endif %}
-            {% if devbox %}
-            <details class="confirm">
-                <summary class="btn btn--danger">Reset devbox</summary>
-                <div class="confirm__body">
-                    <p>This rebuilds all three VMs with fresh disks and new tokens; the score starts over. Earlier records are kept.</p>
-                    <form method="post" action="{% url 'devbox_reset' %}">{% csrf_token %}<button type="submit" class="btn btn--danger">Yes, rebuild my devbox</button></form>
-                </div>
-            </details>
-            {% else %}
-            <p class="muted">Your devbox has not been built yet, so there is nothing to reset.</p>
-            {% endif %}
-        </div>
-    </section>
-
-    <section class="panel" aria-labelledby="connect-title">
-        <header class="panel__head"><h2 class="panel__title" id="connect-title">Connect</h2>{% if main_vm %}<p class="panel__meta">entry VM {{ main_vm.vm_identifier }}</p>{% endif %}</header>
-        <div class="panel__body">
-            {% if ssh_command %}
-            <p>Log in to VM A through the gateway, then go on from there. <code>-A</code> forwards your SSH agent, so A and B can use your key for the next hop.</p>
-            <p>Make sure you registered an SSH identity: check the output of <code>ssh-add -L</code> on your laptop. It must include one of the keys in <a href="{% url 'profile' %}">your profile</a>.</p>
-            <p class="code-label">Log in to A</p>
-            <pre class="code code--wrap" data-copy data-ssh-login><code>{{ ssh_command }}</code></pre>
-            {% for hop in hops %}
-            <p class="code-label">{{ hop.where }}</p>
-            <pre class="code code--wrap" data-copy data-ssh-hop><code>{{ hop.command }}</code></pre>
-            {% endfor %}
-            <p class="muted">While you are connected, root on these VMs can use your agent, so use a key that is only for this devbox.</p>
-            {% elif not devbox %}
-            <p class="muted">Your devbox has not been built yet. It is created with your team; add an SSH key in <a href="{% url 'profile' %}">your profile</a> so you can connect once it is up.</p>
-            {% else %}
-            <p class="muted">Not ready yet: the devbox is still being built. The command appears here once it is up.</p>
-            {% endif %}
-        </div>
-    </section>
-</div>
-
-{% if chain %}
+{% if devbox %}
 <section class="panel" aria-labelledby="vms-title">
-    <header class="panel__head"><h2 class="panel__title" id="vms-title">VMs</h2><p class="panel__meta">{{ score }} of {{ total_tokens }} captured</p></header>
+    <header class="panel__head"><h2 class="panel__title" id="vms-title">VMs</h2><p class="panel__meta">version {{ version }}</p></header>
     <div class="panel__body">
+        {% if chain %}
         <ol class="vm-chain">
             {% if devbox.ssh_gateway_host %}
             <li class="vm-node vm-node--gateway">
@@ -76,21 +35,38 @@
             </li>
             {% endfor %}
         </ol>
+        {% else %}
+        <p class="muted">Not ready yet: the devbox is still being built.</p>
+        {% endif %}
+        <details class="confirm">
+            <summary class="btn btn--danger">Reset devbox</summary>
+            <div class="confirm__body">
+                <p>This rebuilds all three VMs with fresh disks and new tokens; the score starts over. Earlier records are kept.</p>
+                <form method="post" action="{% url 'devbox_reset' %}">{% csrf_token %}<button type="submit" class="btn btn--danger">Yes, rebuild my devbox</button></form>
+            </div>
+        </details>
     </div>
 </section>
 {% endif %}
 
-<section class="panel" aria-labelledby="logs-title">
-    <header class="panel__head"><h2 class="panel__title" id="logs-title">Logs</h2><p class="panel__meta">current version</p></header>
-    <div class="panel__body log-list">
-        {% for row in logs %}
-        <details class="log-entry">
-            <summary><time datetime="{{ row.entry.created_at|date:'c' }}" data-localtime>{{ row.entry.created_at }}</time></summary>
-            <pre class="code"><code>{{ row.data }}</code></pre>
-        </details>
-        {% empty %}
-        <p class="empty">No devbox logs at this version.</p>
+<section class="panel" aria-labelledby="connect-title">
+    <header class="panel__head"><h2 class="panel__title" id="connect-title">Connect</h2>{% if main_vm %}<p class="panel__meta">entry VM {{ main_vm.vm_identifier }}</p>{% endif %}</header>
+    <div class="panel__body">
+        {% if ssh_command %}
+        <p>Log in to VM A through the gateway, then go on from there. <code>-A</code> forwards your SSH agent, so A and B can use your key for the next hop.</p>
+        <p>Make sure you registered an SSH identity: check the output of <code>ssh-add -L</code> on your laptop. It must include one of the keys in <a href="{% url 'profile' %}">your profile</a>.</p>
+        <p class="code-label">Log in to A</p>
+        <pre class="code code--wrap" data-copy data-ssh-login><code>{{ ssh_command }}</code></pre>
+        {% for hop in hops %}
+        <p class="code-label">{{ hop.where }}</p>
+        <pre class="code code--wrap" data-copy data-ssh-hop><code>{{ hop.command }}</code></pre>
         {% endfor %}
+        <p class="muted">While you are connected, root on these VMs can use your agent, so use a key that is only for this devbox.</p>
+        {% elif not devbox %}
+        <p class="muted">Your devbox has not been built yet. It is created with your team; add an SSH key in <a href="{% url 'profile' %}">your profile</a> so you can connect once it is up.</p>
+        {% else %}
+        <p class="muted">Not ready yet: the devbox is still being built. The command appears here once it is up.</p>
+        {% endif %}
     </div>
 </section>
 {% endblock %}

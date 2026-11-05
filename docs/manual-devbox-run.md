@@ -472,12 +472,12 @@ This is where each action should leave a trace:
 
 ### 12a. The dashboard
 
-**Who:** Anna, in the browser. Open `/` in the **Dev** view and reload.
+**Who:** Anna, in the browser, in the **Dev** view.
 
 **Expect:**
-- **Tokens found:** `3/3` at `version 1`, or `1/3` if you ran 11f only on A.
-- **VMs:** `Captured` on each VM that submitted.
-- **Logs:** one entry per VM. Open an entry to see `marker: manual-run` and the VM's name.
+- `/profile/`, panel **Team:** `3/3` at `version 1`, or `1/3` if you ran 11f only on A.
+- `/`, panel **VMs:** `Captured` on each VM that submitted.
+- `/progression/`, panel **Logs:** one entry per VM. Open an entry to see `marker: manual-run` and the VM's name.
 - Only scoring and logging appear here. SSH, the file, apt and pip do not, as intended.
 
 Records reach the page through a background processor. The suite allows up to 5 minutes.
@@ -587,13 +587,13 @@ tail -n 8 /var/log/apt/history.log
 
 | Page | Input |
 |---|---|
-| `/`, in the **Dev** view, panel **Tokens found** | Press **Reset devbox** |
+| `/`, in the **Dev** view, panel **VMs** | Press **Reset devbox** |
 | The confirmation that opens below it | Press **Yes, rebuild my devbox** |
 
 **Expect at once:**
 - `Reset requested: your devbox VMs are being rebuilt and the score starts over.`
-- `version 2` and `0/3`.
-- `No devbox logs at this version.`
+- `version 2` on the panel **VMs**.
+- `0/3` on `/profile/`, and `No devbox logs at this version.` on `/progression/`.
 
 **Who:** root on the node. Wait for the rebuild, about 20 minutes:
 
@@ -646,9 +646,12 @@ python3 -c 'import tabulate' 2>/dev/null && echo present || echo absent
 
 ### 14c. The dashboard
 
-**Who:** Anna, in the browser. Reload `/` in the **Dev** view.
+**Who:** Anna, in the browser, in the **Dev** view.
 
-**Expect:** `version 2`, `0/3`, every VM `Not captured`, `No devbox logs at this version.`, and the same SSH command. On `/profile/`, the key is still listed.
+**Expect:**
+- `/`: `version 2`, every VM `Not captured`, and the same SSH command.
+- `/profile/`: `0/3`, and the key is still listed.
+- `/progression/`: `No devbox logs at this version.`
 
 ### 14d. The database
 

@@ -195,7 +195,7 @@ def test_access_tokens_moved_into_the_profile(site, team_upload):  # noqa: F811
     page = site.get("/profile/", **proxied(HOST)).content.decode()
     assert "Access tokens" in page
     assert 'action="/access-tokens/create/"' in page   # the create form
-    assert "/api/v1/rounds/" in page                   # the API docs moved too
+    assert "/api/v1/rounds/" not in page               # the API docs are on the progression page
 
 
 def test_devbox_reset_without_a_devbox_is_an_error(site, team_upload):  # noqa: F811

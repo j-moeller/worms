@@ -19,3 +19,10 @@
   register: untrusted_gateway_rules
   changed_when: false
   failed_when: "'masquerade' not in untrusted_gateway_rules.stdout"
+
+# Without it the gateway silently drops its VMs' traffic to the LLM endpoint.
+- name: Check the route to the LLM endpoint
+  ansible.builtin.command: ip route show {{ llm_access_ip }}
+  register: untrusted_gateway_llm_route
+  changed_when: false
+  failed_when: "'via' not in untrusted_gateway_llm_route.stdout"

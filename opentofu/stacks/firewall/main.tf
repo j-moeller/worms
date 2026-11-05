@@ -443,6 +443,16 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "sandbox_
     dest    = join(",", local.services_hosts)
     comment = "Sandbox -> services bridge (UDP)"
   }
+
+  rule {
+    type    = "in"
+    action  = "ACCEPT"
+    proto   = "tcp"
+    dport   = "443"
+    source  = local.networks.sandbox_vms
+    dest    = var.llm_access_ip
+    comment = "Sandbox -> LLM endpoint:443"
+  }
 }
 
 # =============================================================================
@@ -533,6 +543,15 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "devbox_g
     dest    = join(",", local.services_hosts)
     comment = "Devbox -> services bridge (UDP)"
   }
+  rule {
+    type    = "in"
+    action  = "ACCEPT"
+    proto   = "tcp"
+    dport   = "443"
+    source  = local.networks.devbox_vms
+    dest    = var.llm_access_ip
+    comment = "Devbox -> LLM endpoint:443"
+  }
 }
 
 # Sandbox/devbox leg of scoring/logging: inbound 443 from the per-team devbox
@@ -602,12 +621,29 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "devbox_s
 # so a worm may reach the configured LLM API on 443 and nothing else. Egress
 # only; the destination is a single operator-set address (llm_access_ip in
 # ansible/group_vars/all.yml, passed in by `worms`: worms_cli/session.py).
-# Routing/NAT for this traffic (the gateways, the host) is a separate concern:
-# this group only permits the packet to leave the VM, and those layers still
-# drop it (docs/security-assessment.md, "LLM endpoint").
+# This is the only way out of the sandbox and the devboxes; every layer on the
+# path allows only this address and port (docs/security-assessment.md,
+# "LLM endpoint"). This group lets the packet leave the VM.
 resource "proxmox_virtual_environment_cluster_firewall_security_group" "llm_access" {
   name    = "llm-access"
   comment = "Sandbox/devbox VMs -> LLM endpoint:443 (egress)"
+
+  rule {
+    type    = "out"
+    action  = "ACCEPT"
+    proto   = "tcp"
+    dport   = "443"
+    dest    = var.llm_access_ip
+    comment = "-> LLM endpoint:443"
+  }
+}
+
+# The same traffic leaving a sandbox or devbox gateway on its management NIC,
+# towards the host, which routes it to the WAN. The gateway has SNATed it to its
+# own management address by then. Gateways only, and only that NIC.
+resource "proxmox_virtual_environment_cluster_firewall_security_group" "llm_egress" {
+  name    = "llm-egress"
+  comment = "Sandbox/devbox gateways -> LLM endpoint:443, management NIC"
 
   rule {
     type    = "out"

@@ -39,7 +39,9 @@ locals {
 
 locals {
   sg = data.terraform_remote_state.firewall.outputs.security_groups
-  nw = local.platform.networks
+  # What the firewall stack allows; its gateways have to agree (sandbox-gw.tftpl).
+  llm_access_ip = data.terraform_remote_state.firewall.outputs.llm_access_ip
+  nw            = local.platform.networks
 
   # The router takes the first host address (.1) of every generated network;
   # the generator hands out .1 as the sandbox VMs' gateway.
@@ -136,6 +138,7 @@ resource "proxmox_virtual_environment_file" "sandbox_gw" {
       sandbox_networks   = "{ ${local.networks.sandbox_vms} }"
       services_network   = local.networks.services
       mgmt_host_ip       = local.host_ips.mgmt_sandbox
+      llm_access_ip      = local.llm_access_ip
       services_tcp_ports = local.private_internet_ports.tcp
       services_udp_ports = local.private_internet_ports.udp
     })
@@ -325,6 +328,12 @@ resource "proxmox_virtual_environment_firewall_rules" "gw" {
     security_group = local.sg.services_client
     iface          = local.gw_services_iface
     comment        = "Services leg: allowed ports only"
+  }
+
+  rule {
+    security_group = local.sg.llm_egress
+    iface          = local.gw_mgmt_iface
+    comment        = "LLM endpoint egress (443), towards the host"
   }
 
   rule {

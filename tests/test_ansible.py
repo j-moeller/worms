@@ -258,6 +258,51 @@ def test_devpi_only_lets_root_modify_and_root_has_a_generated_password(render):
     assert "vault_devpi_root_password" in defaults["devpi_root_password"]
 
 
+def test_the_host_routes_only_the_gateways_to_the_llm_endpoint(render, tmp_path, infrastructure):
+    """The one forward from an untrusted network to the WAN: the gateways' own addresses, one
+    destination, TCP 443. It does not depend on the internet window."""
+    require("nft")
+    llm = yaml.safe_load((ANSIBLE / "group_vars" / "all.yml").read_text())["llm_access_ip"]
+    text = render("ansible/roles/host/host_network", "worms.nft.j2")
+    lines = text.splitlines()
+
+    routed = [line.strip() for line in lines if f"ip daddr {llm}" in line and "accept" in line and "oifname" in line]
+    assert len(routed) == 2
+    assert all(line.endswith('tcp dport 443 counter accept comment "LLM endpoint"') for line in routed)
+    assert f"ip saddr {infrastructure['management_ips']['sandbox_gw']} ip daddr" in routed[0]
+    assert "ip saddr & 0.0.0.255 == 0.0.0.2 " in routed[1]  # 10.6.<team>.2, not a VM's .11-.13
+    nat = [line.strip() for line in lines if "masquerade" in line and llm in line]
+    assert len(nat) == 1 and f"ip daddr {llm} tcp dport 443 masquerade" in nat[0]
+
+    # Everything else that leaves through the WAN is still behind the empty gate.
+    assert [line for line in lines if 'oifname "vmbr0"' in line and llm not in line] == []
+
+    # The bridge layer: this address and port in both directions, nothing wider.
+    bridge = text.split("table bridge worms_bridge {", 1)[1]
+    for chain in ("sandbox", "devbox"):
+        body = bridge.split(f"chain {chain} {{", 1)[1].split("\n  }", 1)[0]
+        mine = [line.strip() for line in body.splitlines() if llm in line]
+        assert len(mine) == 3, chain
+        assert mine[0].endswith("tcp sport 443 accept") and mine[1].endswith("counter drop") and mine[2].endswith("tcp dport 443 accept")
+        assert f"@{chain}_syn" in mine[1]  # under the VM's usual limit
+        # Before the rules that drop every other outside address.
+        assert body.index(mine[2]) < body.index("ip daddr != {")
+
+    path = tmp_path / "worms.nft"
+    path.write_text(text)
+    proc = subprocess.run(["nft", "-c", "-f", str(path)], capture_output=True, text=True)
+    if proc.returncode != 0:
+        errors = [line for line in proc.stderr.splitlines() if "Error:" in line]
+        if errors and all("Operation not supported" in e or "Permission denied" in e for e in errors):
+            pytest.skip("this kernel cannot check the bridge family (nft -c): " + errors[0])
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_a_gateway_without_its_route_to_the_llm_endpoint_is_not_silent():
+    tasks = (ANSIBLE / "roles" / "applications" / "untrusted_gateway" / "tasks" / "main.yml").read_text()
+    assert "ip route show {{ llm_access_ip }}" in tasks and "failed_when: \"'via' not in" in tasks
+
+
 def test_host_firewall_publishes_the_devbox_ssh_gateway(render, tmp_path):
     """With the devbox SSH gateway published, the host DNATs teams to it and
     SNATs that same connection to its own fabric address, so the gateway sees

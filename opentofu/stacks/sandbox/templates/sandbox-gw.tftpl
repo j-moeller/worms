@@ -45,6 +45,7 @@ write_files:
       define SANDBOX = ${sandbox_networks}
       define SERVICES = ${services_network}
       define MGMT_HOST = ${mgmt_host_ip}
+      define LLM = ${llm_access_ip}
 
       table inet sandbox_gw {
         chain input {
@@ -64,6 +65,8 @@ write_files:
           # Services bridge on the allowed ports only.
           ip saddr $SANDBOX ip daddr $SERVICES tcp dport { ${services_tcp_ports} } accept
           ip saddr $SANDBOX ip daddr $SERVICES udp dport { ${services_udp_ports} } accept
+          # The only way out: the LLM endpoint, towards the host (docs/security-assessment.md).
+          ip saddr $SANDBOX ip daddr $LLM tcp dport 443 accept
         }
 
         chain output {
@@ -76,8 +79,27 @@ write_files:
         chain postrouting {
           type nat hook postrouting priority srcnat;
           ip saddr $SANDBOX ip daddr $SERVICES masquerade
+          # To the management address, the only source the host routes for this.
+          ip saddr $SANDBOX ip daddr $LLM tcp dport 443 masquerade
         }
       }
+
+  # Only this one address has a route out: no default route.
+  - path: /etc/systemd/system/worms-llm-route.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Route to the LLM endpoint, through the host
+      Wants=network-online.target
+      After=network-online.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/sbin/ip route replace ${llm_access_ip}/32 via ${mgmt_host_ip}
+
+      [Install]
+      WantedBy=multi-user.target
 
 # No nftables commands here: the image does not have it. A failing command leaves
 # cloud-init in `error`, which the playbook treats as fatal, before the role that
@@ -85,3 +107,5 @@ write_files:
 runcmd:
   - systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
   - sysctl --system
+  - systemctl daemon-reload
+  - systemctl enable --now worms-llm-route.service || true

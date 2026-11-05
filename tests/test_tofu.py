@@ -111,6 +111,45 @@ def test_the_llm_endpoint_is_the_only_external_destination_of_untrusted_vms():
     assert re.search(r"devbox\s+= local\.sg\.devbox\n.*?llm_access\s+= local\.sg\.llm_access", devbox, re.S)
 
 
+def test_every_layer_on_the_way_to_the_llm_endpoint_allows_only_it():
+    """The only way out of the sandbox and the devboxes. Each layer is independent, so each
+    is checked: one address, TCP 443, and on the gateways only the management NIC leads out."""
+    stacks = OPENTOFU / "stacks"
+    firewall = (stacks / "firewall" / "main.tf").read_text()
+    for name, network in (("sandbox_gw", "sandbox_vms"), ("devbox_gw", "devbox_vms")):
+        group = _security_group(firewall, name)
+        assert group.count("var.llm_access_ip") == 1, name
+        rule = next(r for r in group.split("rule {")[1:] if "var.llm_access_ip" in r)
+        for line in ('type    = "in"', 'proto   = "tcp"', 'dport   = "443"', f"source  = local.networks.{network}"):
+            assert line in rule, (name, line)
+    egress = _security_group(firewall, "llm_egress")
+    assert egress.count("rule {") == 1
+    for line in ('type    = "out"', 'proto   = "tcp"', 'dport   = "443"', "dest    = var.llm_access_ip"):
+        assert line in egress, line
+    # Nothing else in the firewall stack names the address.
+    assert firewall.count("var.llm_access_ip") == 4
+
+    sandbox = (stacks / "sandbox" / "main.tf").read_text()
+    assert re.search(r"security_group = local\.sg\.llm_egress\n\s+iface\s+= local\.gw_mgmt_iface", sandbox)
+    assert sandbox.count("local.sg.llm_egress") == 1
+    devbox = (stacks / "devbox" / "main.tf").read_text()
+    assert devbox.count("local.sg.llm_egress") == 1
+    assert re.search(r"devbox_gw\s+= local\.sg\.devbox_gw\n.*?llm_egress\s+= local\.sg\.llm_egress", devbox, re.S)
+    module = (OPENTOFU / "modules" / "devbox_vm" / "main.tf").read_text()
+    assert re.search(r'for_each = var\.is_gateway \? \[1\] : \[\]\n\s+content \{\n\s+security_group = var\.security_groups\["llm_egress"\]'
+                     r'\n\s+iface\s+= "net\$\{local\.mgmt_idx\}"', module)  # fmt: skip
+
+    for template in (stacks / "sandbox/templates/sandbox-gw.tftpl", stacks / "devbox/templates/devbox-gw.tftpl"):
+        text = template.read_text()
+        assert "define LLM = ${llm_access_ip}" in text
+        lines = [line.strip() for line in text.splitlines() if "$LLM" in line]
+        assert len(lines) == 2 and lines[0].endswith("ip daddr $LLM tcp dport 443 accept"), template
+        assert lines[1].endswith("ip daddr $LLM tcp dport 443 masquerade"), template
+        # A route to this one address, and still no default route.
+        assert "ip route replace ${llm_access_ip}/32 via ${mgmt_host_ip}" in text
+        assert "default via" not in text and "route add default" not in text
+
+
 def test_database_clients_are_allowed_everywhere(infrastructure):
     """A VM with a database role must be allowed by the Proxmox `database`
     security group, by pg_hba (its /32) and, if routed, by the host."""

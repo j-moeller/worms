@@ -189,6 +189,16 @@ resource "proxmox_virtual_environment_firewall_rules" "vm" {
     }
   }
 
+  # The gateways' way to the LLM endpoint: management NIC, towards the host.
+  dynamic "rule" {
+    for_each = var.is_gateway ? [1] : []
+    content {
+      security_group = var.security_groups["llm_egress"]
+      iface          = "net${local.mgmt_idx}"
+      comment        = "LLM endpoint egress (443), towards the host"
+    }
+  }
+
   # Management NIC: host SSH (Ansible).
   rule {
     security_group = var.security_groups["ssh"]

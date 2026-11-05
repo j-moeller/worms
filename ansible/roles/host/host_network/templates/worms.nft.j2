@@ -10,6 +10,9 @@
 #   from the infrastructure VMs -> the syslog VM (+ internet -> dashboard:443 if
 #   published). Nothing is forwarded from the sandbox,
 #   services or mirror bridges; the host has no address on them.
+# * The one way out for the sandbox and the devboxes: their gateways, from their
+#   own management addresses, to the LLM endpoint on TCP 443 and nowhere else
+#   (docs/security-assessment.md, "LLM endpoint"). Not gated by internet_wan.
 # * INPUT from VM bridges: replies to host-initiated connections (SSH) and
 #   orchestrator -> Proxmox API only.
 # * The mirror bridge is receive-only for the monitor (bridge table below,
@@ -124,6 +127,11 @@ table inet worms {
     iifname "{{ host_wan_interface }}" oifname "{{ b.devbox_ssh }}" ip daddr {{ ssh_gateway_ips.devbox_ssh }} tcp dport 22 ct status dnat accept comment "internet -> devbox SSH gateway"
 {% endif %}
 
+    # The LLM endpoint. By the gateways' addresses, so a VM's own management
+    # address does not get out this way. (Devbox gateways are 10.6.<team>.2.)
+    iifname "{{ b.mgmt_sandbox }}" oifname "{{ host_wan_interface }}" ip saddr {{ management_ips.sandbox_gw }} ip daddr {{ llm_access_ip }} tcp dport 443 counter accept comment "LLM endpoint"
+    iifname "{{ b.mgmt_devbox }}" oifname "{{ host_wan_interface }}" ip saddr {{ networks.mgmt_devbox }} ip saddr & 0.0.0.255 == 0.0.0.2 ip daddr {{ llm_access_ip }} tcp dport 443 counter accept comment "LLM endpoint"
+
     # Internet access (gated, see internet_wan).
     iifname @internet_zones oifname @internet_wan tcp dport { 80, 443, 53 } accept comment "internet allowed"
     iifname @internet_zones oifname @internet_wan udp dport 53 accept comment "internet allowed"
@@ -145,6 +153,7 @@ table inet worms {
   chain postrouting {
     type nat hook postrouting priority srcnat;
     iifname @internet_zones oifname @internet_wan masquerade comment "internet allowed"
+    iifname { "{{ b.mgmt_sandbox }}", "{{ b.mgmt_devbox }}" } oifname "{{ host_wan_interface }}" ip daddr {{ llm_access_ip }} tcp dport 443 masquerade comment "LLM endpoint"
 {% if host_publish_ssh_gateway | default(false) and ssh_gateway_ips.devbox_ssh is defined %}
     # Teams reach the devbox SSH gateway via the host DNAT above. SNAT that
     # connection to the host's own fabric address so the gateway sees a single
@@ -261,6 +270,10 @@ table bridge worms_bridge {
   chain devbox {
     ether type arp accept
     ether type ip6 drop
+    # The one outside address: the LLM endpoint, TCP 443, under the same rate limit.
+    ip saddr {{ llm_access_ip }} ip daddr {{ networks.devbox_vms }} tcp sport 443 accept
+    ip saddr {{ networks.devbox_vms }} ip daddr {{ llm_access_ip }} tcp dport 443 tcp flags & (syn | ack) == syn update @devbox_syn { ip saddr limit rate over {{ l.syn_per_second }}/second burst {{ l.syn_burst }} packets } counter drop
+    ip saddr {{ networks.devbox_vms }} ip daddr {{ llm_access_ip }} tcp dport 443 accept
     ip saddr != { {{ networks.devbox_vms }}, {{ networks.services }} } counter drop
     ip daddr != { {{ networks.devbox_vms }}, {{ networks.services }} } counter drop
     ip saddr {{ networks.devbox_vms }} ip daddr {{ networks.services }} tcp flags & (syn | ack) == syn update @devbox_services_syn { ip saddr limit rate over {{ l.services_syn_per_second }}/second burst {{ l.services_syn_burst }} packets } counter drop
@@ -272,6 +285,10 @@ table bridge worms_bridge {
   chain sandbox {
     ether type arp accept
     ether type ip6 drop
+    # The one outside address: the LLM endpoint, TCP 443, under the same rate limit.
+    ip saddr {{ llm_access_ip }} ip daddr {{ networks.sandbox_vms }} tcp sport 443 accept
+    ip saddr {{ networks.sandbox_vms }} ip daddr {{ llm_access_ip }} tcp dport 443 tcp flags & (syn | ack) == syn update @sandbox_syn { ip saddr limit rate over {{ l.syn_per_second }}/second burst {{ l.syn_burst }} packets } counter drop
+    ip saddr {{ networks.sandbox_vms }} ip daddr {{ llm_access_ip }} tcp dport 443 accept
     # Only sandbox addresses and replies from the services bridge exist here.
     ip saddr != { {{ networks.sandbox_vms }}, {{ networks.services }} } counter drop
     ip daddr != { {{ networks.sandbox_vms }}, {{ networks.services }} } counter drop

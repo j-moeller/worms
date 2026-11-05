@@ -51,7 +51,9 @@ data "terraform_remote_state" "firewall" {
 locals {
   platform = data.terraform_remote_state.platform.outputs.platform
   sg       = data.terraform_remote_state.firewall.outputs.security_groups
-  nw       = local.platform.networks
+  # What the firewall stack allows; the gateways have to agree (devbox-gw.tftpl).
+  llm_access_ip = data.terraform_remote_state.firewall.outputs.llm_access_ip
+  nw            = local.platform.networks
 
   ssh_public_keys = [trimspace(file(pathexpand(var.ssh_public_key)))]
 
@@ -136,6 +138,7 @@ resource "proxmox_virtual_environment_file" "devbox_gw" {
       ssh_public_keys    = local.ssh_public_keys
       services_network   = local.networks.services
       mgmt_host_ip       = local.host_ips.mgmt_devbox
+      llm_access_ip      = local.llm_access_ip
       services_tcp_ports = local.private_internet_ports.tcp
       services_udp_ports = local.private_internet_ports.udp
       devbox_segments    = [for b in each.value.segments : local.devbox_bridges[b].network_cidr]
@@ -237,6 +240,7 @@ module "devbox_gw" {
   security_groups = {
     devbox_gw       = local.sg.devbox_gw
     services_client = local.sg.services_client
+    llm_egress      = local.sg.llm_egress
     ssh             = local.sg.ssh
   }
 

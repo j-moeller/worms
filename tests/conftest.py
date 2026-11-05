@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO = Path(__file__).resolve().parent.parent
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -90,6 +91,11 @@ def generated_inventory(tmp_path_factory) -> Path:
     return out
 
 
+def _llm_access_ip() -> str:
+    """From group_vars/all.yml, which a generated inventory in a temporary directory does not load."""
+    return yaml.safe_load((REPO / "ansible" / "group_vars" / "all.yml").read_text())["llm_access_ip"]
+
+
 @pytest.fixture(scope="session")
 def render(generated_inventory, tmp_path_factory):
     """render(role_dir, template, **extra_vars) -> rendered text.
@@ -108,7 +114,7 @@ def render(generated_inventory, tmp_path_factory):
             str(REPO / "tests" / "ansible" / "render.yml"),
             "-e",
             json.dumps(
-                {"role_dir": str(REPO / role_dir), "template": template, "dest": str(dest), **extra}
+                {"role_dir": str(REPO / role_dir), "template": template, "dest": str(dest), "llm_access_ip": _llm_access_ip(), **extra}
             ),
         ]
         env = dict(os.environ, ANSIBLE_LOCALHOST_WARNING="false", ANSIBLE_NOCOLOR="1")

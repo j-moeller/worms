@@ -13,6 +13,7 @@ output "security_groups" {
     private_internet   = proxmox_virtual_environment_cluster_firewall_security_group.private_internet.name
     services_client    = proxmox_virtual_environment_cluster_firewall_security_group.services_client.name
     llm_access         = proxmox_virtual_environment_cluster_firewall_security_group.llm_access.name
+    llm_egress         = proxmox_virtual_environment_cluster_firewall_security_group.llm_egress.name
     pi_apt_client      = proxmox_virtual_environment_cluster_firewall_security_group.pi_apt_client.name
     sandbox            = proxmox_virtual_environment_cluster_firewall_security_group.sandbox.name
     sandbox_gw         = proxmox_virtual_environment_cluster_firewall_security_group.sandbox_gw.name
@@ -34,4 +35,10 @@ output "private_internet_service_groups" {
     for k, g in proxmox_virtual_environment_cluster_firewall_security_group.private_internet_service :
     k => g.name
   }
+}
+
+# The one external address sandbox and devbox VMs may send to. The gateways of
+# both stacks need it for their own rules and their route.
+output "llm_access_ip" {
+  value = var.llm_access_ip
 }

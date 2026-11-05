@@ -1,0 +1,28 @@
+# Managed by Ansible (role apt_cache). Hardening drop-in for the packaged unit,
+# same pattern as the application roles. apt-cacher-ng already runs as the
+# apt-cacher-ng user; it binds an unprivileged port, so it needs no capabilities.
+# Optional paths are prefixed with "-" so a missing one does not fail the unit.
+[Service]
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths={{ apt_cache_cache_dir }}
+ReadWritePaths=-{{ apt_cache_log_dir }}
+ReadWritePaths=-/run/apt-cacher-ng
+ProtectHome=tmpfs
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+RestrictAddressFamilies=AF_UNIX AF_INET

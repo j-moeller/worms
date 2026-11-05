@@ -171,7 +171,8 @@ locals {
   }
 
   # Ports sandbox VMs may use on the services bridge. Enforced on the sandbox
-  # VMs' and sandbox-gw's NICs (the host-side tap firewall).
+  # VMs' and sandbox-gw's NICs (the host-side tap firewall). This is the union a
+  # CLIENT may talk to; the per-service groups below are the SERVER side.
   private_internet_ports = {
     tcp = "53,80,443,3141,3142,5000,8888"
     udp = "53,123"
@@ -191,6 +192,22 @@ locals {
   # source, which the scoring/logging servers map to the team). The generated
   # devbox stack assigns within this block; sandbox-gw (10.2.0.2) is outside it.
   devbox_services_block = "10.2.0.32/27" # 10.2.0.32 - 10.2.0.63
+
+  # The port each private-internet service actually listens on. The firewall
+  # stack turns every entry into its own security group, so a service VM accepts
+  # only its own port instead of the union above (wikipedia no longer answers on
+  # 3142, apt-cache not on 8888, ...). `group` is explicit because Proxmox
+  # security-group names are length-limited. Keep in sync with the role defaults
+  # in ansible/roles/private_internet/*/defaults/main.yml.
+  private_internet_service_ports = {
+    apt_cache       = { group = "pi_apt_cache", tcp = "3142", udp = null }
+    devpi           = { group = "pi_devpi", tcp = "3141", udp = null }
+    docker_registry = { group = "pi_registry", tcp = "5000", udp = null }
+    manpages        = { group = "pi_manpages", tcp = "80", udp = null }
+    ntp             = { group = "pi_ntp", tcp = null, udp = "123" }
+    cve_search      = { group = "pi_cve_search", tcp = "5000", udp = null }
+    wikipedia       = { group = "pi_wikipedia", tcp = "8888", udp = null }
+  }
 
   # Proxmox API, reached by the orchestrator on its core gateway address.
   proxmox_host_ip  = local.host_ips.core

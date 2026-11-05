@@ -6,9 +6,45 @@ After=network.target
 Type=simple
 User={{ wikipedia_user }}
 Group={{ wikipedia_user }}
+# The data disk starts empty and the ZIM is fetched separately (download
+# script), so skip instead of failing while no ZIM is there: without this the
+# unit restart-loops in "activating" forever, because the *.zim glob below
+# expands to nothing.
+ExecCondition=/bin/sh -c 'ls {{ wikipedia_data_dir }}/*.zim >/dev/null 2>&1'
 ExecStart=/bin/sh -c '/usr/bin/kiwix-serve --port {{ wikipedia_port }} {{ wikipedia_data_dir }}/*.zim'
 Restart=on-failure
 RestartSec=5
+
+# Hardening (same pattern as the application roles). kiwix only ever reads the
+# ZIM files, so there is no writable path at all (ProtectSystem=strict leaves
+# the whole filesystem read-only) and it needs no capabilities. The ZIM is
+# fetched by the root-run download script and lands world-readable, which is
+# all the kiwix user needs. If a kiwix version ever wants to write (search
+# index, cache -- note the kiwix user's home IS the data dir), the fix is
+# ReadWritePaths={{ wikipedia_data_dir }}; untested here, no ZIM present yet.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=tmpfs
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# kiwix enumerates interfaces at startup (getifaddrs), which needs a netlink
+# socket; without AF_NETLINK it dies with a misleading "port 8888 ... need more
+# permissions" error. AF_INET6 because the host has IPv6 and getifaddrs walks it.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target

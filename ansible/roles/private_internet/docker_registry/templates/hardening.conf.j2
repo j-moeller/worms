@@ -1,0 +1,26 @@
+# Managed by Ansible (role docker_registry). Hardening drop-in for the packaged
+# unit, same pattern as the application roles. The registry already runs as the
+# docker-registry user and binds an unprivileged port, so it needs no
+# capabilities; its data directory is the only writable path.
+[Service]
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths={{ docker_registry_data_dir }}
+ProtectHome=tmpfs
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+RestrictAddressFamilies=AF_UNIX AF_INET

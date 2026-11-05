@@ -14,5 +14,38 @@ ExecStart={{ devpi_venv }}/bin/devpi-server \
 Restart=on-failure
 RestartSec=5
 
+# Hardening (same pattern as the application roles). devpi serves HTTP on an
+# unprivileged port and needs no capabilities at all; its server dir is the only
+# writable path.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths={{ devpi_server_dir }}
+ProtectHome=tmpfs
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# Serves clients and, while internet access is allowed, fetches from PyPI.
+# Who may reach it is scoped by the Proxmox firewall, not here.
+# AF_NETLINK: the process enumerates interfaces (getifaddrs) at bind time;
+# without it bind fails (see kiwix). AF_INET6: the host has IPv6.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+# Deliberately NO MemoryMax: devpi-web's Whoosh indexing peaks around 1.8 GB
+# while the mirror is populated. A ceiling here would reproduce the OOM that
+# previously crash-looped devpi and left its cache empty.
+
 [Install]
 WantedBy=multi-user.target

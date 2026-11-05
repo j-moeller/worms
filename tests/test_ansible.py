@@ -197,6 +197,24 @@ def test_per_team_service_names_resolve():
     assert {"*.scoring.worms.internal", "*.logging.worms.internal"} <= names
 
 
+def test_the_llm_endpoints_name_resolves_and_the_resolver_still_asks_nobody(render):
+    """Its certificate only matches the name, so a worm needs the name. It comes from its own
+    zone, with one record, so the offline resolver still refuses every other outside name."""
+    role = "ansible/roles/dns/setup_dns"
+    shared = yaml.safe_load((ANSIBLE / "group_vars" / "all.yml").read_text())
+    name, address = shared["llm_access_name"], shared["llm_access_ip"]
+    declared = render(role, "named.conf.local.j2", llm_access_name=name, dns_domain="worms.internal")
+    assert f'zone "{name}"' in declared
+    zone = render(role, "db.llm.j2", dns_domain="worms.internal")
+    records = [line.split() for line in zone.splitlines() if "IN\tA\t" in line or "IN\tCNAME" in line]
+    assert records == [["@", "IN", "A", address]]
+    options = render(role, "named.conf.options.j2", internet_enabled=False, dns_listen_address="10.2.0.2")
+    assert "recursion no;" in options
+    assert "recursion yes" not in options and "forwarders" not in options
+    tasks = yaml.safe_load((ANSIBLE / "roles/dns/setup_dns/tasks/main.yml").read_text())
+    assert any(t.get("ansible.builtin.template", {}).get("src") == "db.llm.j2" for t in tasks)
+
+
 def test_a_team_key_can_jump_through_the_ssh_gateway_but_run_nothing(render):
     """`restrict` does not stop commands. In the live run a team login got a shell
     on the gateway, reaching every team's VMs and syslog, and scp and sftp worked."""

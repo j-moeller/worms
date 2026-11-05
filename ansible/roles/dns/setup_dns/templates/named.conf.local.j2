@@ -4,3 +4,12 @@ zone "{{ dns_domain }}" {
 	file "/etc/bind/db.worms.internal";
 	notify no;
 };
+
+// The LLM endpoint, the one name outside worms.internal (docs/security-assessment.md). Its zone
+// holds this exact name and nothing else. With recursion off every other outside name is still
+// refused, so this gives no way to ask the outside world anything.
+zone "{{ llm_access_name }}" {
+	type master;
+	file "/etc/bind/db.llm";
+	notify no;
+};

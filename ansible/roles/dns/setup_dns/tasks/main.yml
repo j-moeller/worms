@@ -94,6 +94,15 @@
     mode: '0644'
   notify: Restart named
 
+- name: Deploy the LLM endpoint's zone data
+  ansible.builtin.template:
+    src: db.llm.j2
+    dest: /etc/bind/db.llm
+    owner: root
+    group: bind
+    mode: '0644'
+  notify: Restart named
+
 - name: Enable and start named
   ansible.builtin.systemd:
     name: named

@@ -132,11 +132,10 @@ You can also work on the VMs by hand over SSH. Setup, keys and how to connect:
 ## Reaching the LLM endpoint
 
 Your VMs can reach one server outside this system: `teachllm.mlsec.tu-berlin.de`,
-on TCP 443. Nothing else outside is reachable. The name does not resolve on the
-VMs, and its certificate is for the name, so give both:
+on TCP 443. Nothing else outside is reachable, and no other outside name resolves.
 
 ```sh
-curl --resolve teachllm.mlsec.tu-berlin.de:443:141.23.117.34 https://teachllm.mlsec.tu-berlin.de/
+curl https://teachllm.mlsec.tu-berlin.de/
 ```
 
 ## A minimal worm

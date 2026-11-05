@@ -11,6 +11,8 @@
 # endpoint, teachllm.mlsec.tu-berlin.de (security group llm-access,
 # docs/security-assessment.md). `worms` passes it to OpenTofu as TF_VAR_llm_access_ip.
 llm_access_ip: 141.23.117.34
+# Its name, the one outside name the private DNS answers (roles/dns/setup_dns).
+llm_access_name: teachllm.mlsec.tu-berlin.de
 
 # Addressing is the OpenTofu ground truth. `infrastructure_ips`,
 # `private_internet_ips`, `networks` and `proxmox` are provided by

@@ -104,6 +104,8 @@ Checked on 2026-11-05 on the devbox, acting as root on `devbox-t1-a` and on `dev
 
 ## No `/dev/kvm` on team VMs
 
+Every CPU value and what it opens: `docs/cpu-types.md`.
+
 Sandbox and devbox VMs are assumed hostile and rooted, so they must never get `/dev/kvm`. With it, root on the VM can make the node's kernel run its nested-virtualisation code, a large and complex part of KVM with a history of serious bugs. CVE-2021-29657, on AMD, was turned into a full escape from guest to host. A bug like that here would give a team root on the node, which holds every secret and could forge any result.
 
 **How it happened:** the devbox VMs were set to `cpu: host` by hand on 2026-11-05, and that passes the node's nesting on to them. The same day the setting was written into the devbox stack, without anyone checking what it exposed. It was live on all 9 devbox VMs for about 9 hours, with no round running.

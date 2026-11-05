@@ -116,6 +116,18 @@ Team VMs no longer get `/dev/kvm` (`docs/security-assessment.md`). This is the s
 
 `/etc/modprobe.d/worms-no-nesting.conf` is written, but `/sys/module/kvm_intel/parameters/nested` stays `Y` until the module reloads. That takes either a node restart, or stopping all VMs and reloading `kvm_intel`, which does not restart the node itself.
 
+### 3i. Turn hyperthreading off?
+
+- [ ] **Decide:** off now, or keep it until `worms-pve`?
+
+The node reports `SMT vulnerable` for L1TF and MDS. A malicious guest may be able to read what its sibling thread has in the cache, including the node or another VM. L1TF Reloaded was demonstrated against KVM, and no CPU type changes it (`docs/cpu-types.md`, "What no CPU type changes"). Turning it off takes effect at once and restarts nothing, but this node goes from 8 threads to 4 cores.
+
+### 3j. Move `cve-search` to `x86-64-v3`?
+
+- [ ] **Decide:** yes, after a test that MongoDB 8 runs on it, or leave it?
+
+It is on `cpu: host` for AVX, and `x86-64-v3` has AVX too. It has `/dev/kvm`, and its port 5000 is open from team VMs (`docs/cpu-types.md`).
+
 ### 4. Public certificate for the dashboard
 
 - [ ] Choose one.

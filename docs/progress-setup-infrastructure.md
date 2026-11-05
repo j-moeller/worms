@@ -19,6 +19,8 @@ Times are host time (CET); the VMs log in UTC (CET - 1h).
 
 **LLM endpoint, 2026-11-05:** `teachllm` is reachable from the sandbox and devbox VMs, as the one exception to "no internet". All 9 devbox VMs connect with TLS verified, and attempts to get anywhere else from a VM or a gateway, or to bypass the gateway, are blocked (`docs/security-assessment.md`, "LLM endpoint"). The three devbox gateways were rebuilt for it; the VMs were not. Not yet seen on a real sandbox.
 
+**CPU types, 2026-11-05:** `docs/cpu-types.md` lists where the CPU type is set, every value, and what each one opens. New from that work: this node's CPU leaks between hyperthreads whatever the CPU type, and L1TF Reloaded has been demonstrated against KVM, so turning hyperthreading off is now a decision (`docs/check-with-user.md`, 3i). `cve-search` still has `/dev/kvm`, and team VMs can reach its port 5000 (3j).
+
 **No `/dev/kvm` on team VMs, 2026-11-05:** `cpu: host` gave root on the devbox VMs `/dev/kvm`, which must not happen because they are assumed hostile and rooted. All 9 now run `x86-64-v3`, and sandbox VMs will too. Measured as root on each VM: `kvm_intel` refuses to load and `/dev/kvm` is gone. The agent refuses any other CPU before a round or a dev upload. Nesting off on the node is written but needs a restart (`docs/security-assessment.md`; `docs/check-with-user.md`, 3h).
 
 **VM settings, 2026-11-05:** the operator set the devbox VMs to `balloon: 512` by hand, and the devbox stack keeps it. Sandbox VMs now have the same memory floor. Gateways are unchanged.

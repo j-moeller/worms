@@ -141,7 +141,8 @@ def test_no_team_vm_is_offered_hardware_virtualisation():
     for name, text in {"devbox": devbox, "sandbox": sandbox}.items():
         code = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
         assert not re.search(r'(cpu_type|\btype)\s*=\s*"(host|max)"', code), name
-        assert "+vmx" not in code and "+svm" not in code, name
+        # `nested-virt` is Proxmox's own shorthand for either, and any token with VM.Config.CPU may set it.
+        assert "+vmx" not in code and "+svm" not in code and "nested-virt" not in code, name
 
 
 def test_every_layer_on_the_way_to_the_llm_endpoint_allows_only_it():

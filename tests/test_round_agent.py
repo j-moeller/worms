@@ -311,7 +311,7 @@ def test_check_flags_a_down_vm_and_dead_service():
 
 @pytest.mark.parametrize(
     "config",
-    ["cpu: host", "cpu: max", "cpu: x86-64-v3,flags=+vmx", "cpu: qemu64", "name: no-cpu-line", ""],
+    ["cpu: host", "cpu: max", "cpu: x86-64-v3,flags=+vmx", "cpu: x86-64-v3,flags=+nested-virt", "cpu: qemu64", "name: no-cpu-line", ""],
 )
 def test_check_refuses_a_sandbox_vm_without_the_cpu_that_hides_kvm(config):
     """Hostile root on a VM must not get /dev/kvm. Asked of the node, and anything unknown fails."""
@@ -406,7 +406,7 @@ def test_devbox_deploy_puts_the_worm_on_the_teams_vm_a_and_arms_it():
     assert ex.calls == [("run", "qm", "config", "100")], "it only reads this VM's config, and does not touch OpenTofu"
 
 
-@pytest.mark.parametrize("config", ["cpu: host", "cpu: max", "cpu: x86-64-v3,flags=+vmx", ""])
+@pytest.mark.parametrize("config", ["cpu: host", "cpu: max", "cpu: x86-64-v3,flags=+nested-virt", ""])
 def test_devbox_deploy_puts_no_worm_on_a_vm_that_could_use_kvm(config):
     ex = DevboxExecutor()
     ex.qm_config["100"] = config

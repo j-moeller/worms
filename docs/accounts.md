@@ -252,6 +252,23 @@ its real grants).
 
 ---
 
+### View as — the admin only
+
+The admin can see the dashboard as another user does: **Staff → Users**, then **View as** on a row, or **View as this user** on an account's page. A banner shows whose view it is. **Back to admin** leaves it.
+
+| Rule | How it is enforced |
+|---|---|
+| Only the admin | The account must be an active superuser, checked on every request. Staff are not superusers, and the dashboard's database role cannot set that flag |
+| It cannot be forged | The state lives only in the server-side session, under `_view_as`. No request parameter, header or cookie is read. It records which admin started it, and a mismatch is dropped. Starting takes a POST with a CSRF token |
+| Read only | While viewing, every write is refused by default (`ViewAsMiddleware`). Only three are allowed: leaving, signing out and the Live/Dev switch. So nothing can be done in the user's name: no SSH key, reset, upload, token or password |
+| Whom | Any active account except the admin. Deactivated accounts cannot be viewed, because they cannot sign in |
+| It ends by itself | As soon as the admin loses the flag or is deactivated, the user is deactivated or made admin, or the admin's password changes |
+| It touches nothing | Nobody is signed in: the session stays the admin's. The user's sessions, password and `last_login` do not change |
+
+Starting, leaving and signing out while viewing are logged by the dashboard service: `journalctl -u dashboard | grep view-as` on the dashboard VM.
+
+The team API is not affected. It authenticates by token and ignores sessions.
+
 ## 4. Environment
 
 **Where things run.** The controller is your laptop: it holds the checkout, the

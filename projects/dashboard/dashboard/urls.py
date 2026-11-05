@@ -1,4 +1,5 @@
 from dashboard.views.access import create_access_token, revoke_access_token
+from dashboard.views import view_as
 from dashboard.views.auth import login_view, logout_view
 from dashboard.views.password import change_password
 from dashboard.views.debug import debug_login_as, populate
@@ -48,6 +49,8 @@ urlpatterns = [
     #
     path("login/", login_view, name="login"),
     path("logout/", logout_view, name="logout"),
+    path("view-as/stop/", view_as.stop, name="view_as_stop"),
+    path("view-as/<uuid:uuid>/", view_as.start, name="view_as_start"),
     path("change-password/", change_password, name="change_password"),
     # Page-wide settings (plain form posts; enhance.js only speeds them up).
     path("environment/", set_environment, name="set_environment"),

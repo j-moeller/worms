@@ -35,6 +35,8 @@ LOGGING["loggers"]["dashboard"] = {
 
 
 MIDDLEWARE += [
+    # First: everything after it sees the user being viewed as request.user.
+    "dashboard.middleware.ViewAsMiddleware",
     "dashboard.middleware.EnvironmentTransitionMiddleware",
     "dashboard.middleware.UserMetadataMiddleware",
     # After UserMetadataMiddleware (needs request.user): force students off

@@ -24,6 +24,9 @@
                 <div><dt>Created</dt><dd>{{ subject.created_at|date:"Y-m-d H:i" }}</dd></div>
                 <div><dt>Last sign-in</dt><dd>{{ subject.last_login|date:"Y-m-d H:i"|default:"never" }}</dd></div>
             </dl>
+            {% if request.user.is_superuser and not subject.is_superuser and subject.is_active %}
+            <form method="post" action="{% url 'view_as_start' subject.uuid %}" class="panel__actions">{% csrf_token %}<button type="submit" class="btn">View as this user</button></form>
+            {% endif %}
         </div>
         {% if manageable %}
         <form method="post" class="panel__body form">

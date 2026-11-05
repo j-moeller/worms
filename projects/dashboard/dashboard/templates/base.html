@@ -14,6 +14,12 @@
     <a class="skip-link" href="#main">Skip to content</a>
 
     <header class="site-header">
+        {% if request.view_as %}
+        <div class="view-as" role="status">
+            <p class="view-as__text">Viewing as <strong>{{ request.view_as.username }}</strong>. Read only: nothing can be changed here.</p>
+            <form method="post" action="{% url 'view_as_stop' %}">{% csrf_token %}<button type="submit" class="btn btn--sm">Back to admin</button></form>
+        </div>
+        {% endif %}
         <div class="site-header__inner">
             <div class="site-header__group site-header__group--start">
             {# The brand is the home link: the leaderboard (Live) or the devbox (Dev). #}

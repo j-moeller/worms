@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Optional
@@ -5,6 +6,7 @@ from typing import List, Optional
 from core import clock
 from core.models.competition import ApplicationSetting, Competition, Round
 from core.models.team import TeamMembership
+from core.models.user import User
 from django.conf import settings
 from django.http import HttpRequest
 from django.shortcuts import redirect
@@ -76,6 +78,72 @@ def get_competition_state(
 # or touch a session: an anonymous call would otherwise insert a session row
 # per request (a database-write amplifier for anyone on the internet).
 API_PREFIX = "/api/"
+
+view_as_log = logging.getLogger("dashboard.view_as")
+
+# "View as": the admin sees the dashboard as another user does, read only. The state lives
+# only in the server-side session, under this key, and only dashboard/views/view_as.py sets
+# it. Nothing in a request can name a user to become. See docs/accounts.md.
+VIEW_AS_SESSION_KEY = "_view_as"
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+# All that can be done while viewing as someone: everything else that is not a read is refused,
+# so a page added later is read-only here unless it is added to this list.
+VIEW_AS_ALLOWED_WRITES = frozenset({"view_as_stop", "logout", "set_environment"})
+
+
+def is_admin(user) -> bool:
+    """The dashboard admin: the one superuser. Staff are not. The dashboard's database role
+    cannot set this flag, so no page can grant it (docs/security-assessment.md)."""
+    return user.is_authenticated and user.is_active and user.is_superuser
+
+
+def view_as_target(user, entry) -> Optional[User]:
+    """Whom `user` (the real, signed-in account) is viewing as, or None. Checked on every
+    request against the database, so the view ends as soon as this stops being allowed."""
+    if not is_admin(user) or not isinstance(entry, dict) or entry.get("by") != user.pk:
+        return None
+    target = entry.get("user")
+    if type(target) is not int:
+        return None
+    return User.objects.filter(pk=target, is_active=True, is_superuser=False).first()
+
+
+class ViewAsMiddleware:
+    """Must run right after AuthenticationMiddleware, before anything reads request.user.
+    request.real_user is who is really signed in. request.view_as is the user being viewed,
+    or None. The team API is left alone: it authenticates by token, never by session."""
+
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request: HttpRequest):
+        request.real_user = request.user
+        request.view_as = None
+        if request.path.startswith(API_PREFIX):
+            return self.get_response(request)
+        entry = request.session.get(VIEW_AS_SESSION_KEY)
+        if entry is not None:
+            target = view_as_target(request.user, entry)
+            if target is None:
+                # Not `del`: reading request.user flushes the session if the admin's password changed.
+                request.session.pop(VIEW_AS_SESSION_KEY, None)
+            else:
+                request.view_as = target
+                request.user = target
+        return self.get_response(request)
+
+    def process_view(self, request: HttpRequest, view_func, view_args, view_kwargs):
+        """Read only: deny by default. CSRF has already been checked by this point."""
+        if request.view_as is None or request.method in SAFE_METHODS:
+            return None
+        name = request.resolver_match.url_name
+        if name in VIEW_AS_ALLOWED_WRITES:
+            if name == "logout":
+                view_as_log.warning("view-as ended by sign-out: admin=%r viewed=%r", request.real_user.username, request.view_as.username)
+            return None
+        from dashboard.views.decorators import refuse
+
+        return refuse(request, f"You are viewing as {request.view_as.username}, which is read only. Go back to your admin account to change anything.", 403)
 
 
 class UserMetadataMiddleware:
@@ -153,6 +221,8 @@ class ForcePasswordChangeMiddleware:
             user is not None
             and user.is_authenticated
             and getattr(user, "must_change_password", False)
+            # The admin looking at a student who has not replaced their password yet.
+            and getattr(request, "view_as", None) is None
         ):
             allowed = {
                 reverse("change_password"),

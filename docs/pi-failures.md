@@ -148,9 +148,6 @@ is open. None can exist:
 - Private internet VMs can reach only `apt-cache:3142` (`pi_apt_client`).
 - The host has no IPv4 address on the services bridge (`vmbr23`).
 
-The docs also use `make internet-allow` and `make internet-deny offline`, which no
-longer exist. The Makefile has only `all`, `destroy` and `destroy_all`.
-
 **Decision needed:** a possible fix is a populate step that runs on each service VM
 against itself, but that is a design choice.
 

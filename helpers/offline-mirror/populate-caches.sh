@@ -2,8 +2,8 @@
 # Populate the private-internet caches so they can run fully offline.
 #
 # Run on a helper Debian/Ubuntu client INSIDE the private internet during the
-# population phase (`make internet-allow`: caches in online mode). Afterwards
-# run `make internet-deny offline`, and
+# population phase (`worms build internet-allow`: caches in online mode). Afterwards
+# run `worms build internet-deny` and `worms build offline`, and
 # redeploy -> the platform firewall seals egress and the caches serve offline.
 #
 # Fills the existing caches by pulling content THROUGH them:
@@ -98,4 +98,4 @@ echo
 echo "DONE. Next:"
 echo "  1) copy $MIRROR_DIR/feedformatter.zip to the cve-search VM; set cve_search_feedformatter_src to it."
 echo "  2) serve $MIRROR_DIR/mongodb as a local apt repo; set cve_search_mongodb_repo_url to it."
-echo "  3) make internet-deny offline"
+echo "  3) worms build internet-deny && worms build offline"

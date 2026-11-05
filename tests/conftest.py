@@ -1,4 +1,4 @@
-"""Shared fixtures for the offline test suite (`make test`).
+"""Shared fixtures for the offline test suite (`worms test`).
 
 Nothing here talks to Proxmox or a VM. Tests that need a tool that is not
 installed (ansible-playbook, tofu, PostgreSQL, ip/tc, root) are skipped with

@@ -5,7 +5,7 @@ You manage the platform with two tools:
 - **The `worms` CLI** (`src/manage.py`), for anything that needs the Proxmox host: builds, devboxes, the admin account, status.
 - **The dashboard's staff pages** (`/staff/`), for anything that only changes the database: teams, student accounts, rounds.
 
-**Rounds and sandboxes have never run on a real node.** Sections on them come from the code and its offline tests. The commands marked as such under [Stop and remove things](#stop-and-remove-things) have not been run either. Everything else here ran on this node on 2026-11-04 (`docs/e2e-run-2026-11-04/protocol.md`).
+**Rounds and sandboxes have never run on a real node.** Sections on them come from the code and its offline tests. The commands marked as such under [Stop and remove things](#stop-and-remove-things) have not been run either, nor has the reset under [Between rounds](#between-rounds). Everything else here ran on this node on 2026-11-04 (`docs/e2e-run-2026-11-04/protocol.md`).
 
 ## Quick reference
 
@@ -23,6 +23,7 @@ You manage the platform with two tools:
 | Start a round | Nothing to press: it starts at its **Starts** time |
 | Watch a round | `/staff/rounds/` |
 | See the results | `worms leaderboard` |
+| Reset the services between rounds | `worms build round-reset-services` |
 
 For the whole journey step by step, with every input and expected result, see `docs/manual-devbox-run.md`.
 
@@ -36,7 +37,7 @@ alias worms='/root/app/.venv-test/bin/python /root/app/src/manage.py'
 
 - The database commands need Django and psycopg2. `.venv-test` has them, and `worms test` creates it.
 - `worms --help` lists the commands by purpose: set up the system, manage production, see the status, debug a problem, develop and test, stop and tear down. `worms build --list` does the same for the build's components. Every command has its own `--help`.
-- `worms --dry-run <command>` prints what would happen and changes nothing. The flag goes before the command. **`secrets`, `teams delete` and `test` ignore it and really run.**
+- Every command starts by saying whether the VMs have internet access: `internet access: ● denied`. It should read `denied`, except during a build. If it reads `ALLOWED` with no build running, close it with `worms build internet-deny`. It reads `unknown` when the node cannot be asked, and the command goes on.
 - `[PRODUCTION] We are running in PRODUCTION mode` at the start of the output is expected.
 
 **The dashboard** is `https://worms-dev.mlsec.tu-berlin.de/` on `worms-dev`, and `https://worms.mlsec.tu-berlin.de/` in production.
@@ -66,6 +67,8 @@ Then give the admin a password:
 ```sh
 worms admin reset-password    # the last line is a one-time password, shown once
 ```
+
+**The last step of `worms build` snapshots the service VMs** that have no snapshot yet: the ephemeral VMs and the private internet VMs, including DNS. This is what a reset returns to ([Between rounds](#between-rounds)). Each VM is shut down for a moment for it. A snapshot that exists is kept.
 
 **These builds need the internet window, which is refused while any devbox or sandbox VM exists**, because neither may have internet access. Remove those VMs first ([Stop and remove things](#stop-and-remove-things)). The window closes again by itself, even if the build fails.
 
@@ -283,13 +286,35 @@ worms leaderboard
 
 ### Between rounds
 
-To rebuild the ephemeral and private internet VMs for a clean slate:
+To return the service VMs to a clean slate (scoring, logging, the monitor, DNS and the private internet):
 
 ```sh
 worms build round-reset-services
 ```
 
-It needs the internet window, so no sandbox or devbox VM may exist.
+**Not yet run on real VMs.** It is tested offline, and the safety check blocked the live test (`docs/check-with-user.md`, 3b).
+
+| | |
+|---|---|
+| **What it does** | Rolls each of these 11 VMs back to its snapshot `clean` and starts it, one after another, then waits until all are reachable |
+| **Takes** | About 2 minutes by estimate, from a rollback of 3.5 seconds on a test VM and boots of 17 to 73 seconds. A rebuild takes 20 minutes to an hour |
+| **Needs** | No internet window, so **devbox VMs can stay** |
+| **Refused** | While any sandbox VM exists, which means during a round. It also touches nothing unless every one of these VMs has a snapshot |
+| **Kept** | The database, the dashboard, the orchestrator and the logs on the syslog VM |
+| **Lost** | Whatever exists only on these VMs, such as flows the monitor has not sent yet |
+
+While it runs, scoring, logging and DNS are down, so submissions from devboxes fail. Do not run it while a host job is running.
+
+**The devbox map comes back a few minutes later.** It lives on scoring and logging, and the snapshot is older than it. So the reset enqueues a `devbox_reconfigure` job, and the round agent writes the map again from the database, in about 3 minutes. Until then, devbox submissions are not attributed to a team. If the reset cannot enqueue the job, it says so: run `worms devbox reconfigure`.
+
+**A reset also undoes what you deployed after the snapshot,** such as a `worms build provision` that changed these VMs, or a rotated database password. `worms build provision` warns about this. To make the change last, take a new snapshot. Both of these are refused while any devbox or sandbox VM exists, so remove those first ([Stop and remove things](#stop-and-remove-things)):
+
+| Command | What it does | When |
+|---|---|---|
+| `worms build rebuild-services` | Destroys these VMs, builds them from nothing and snapshots them. It needs the internet window and takes 20 minutes to an hour | Whenever in doubt. New VMs have seen nothing, so this is the snapshot to trust. A system built before snapshots existed needs this once |
+| `worms build snapshot-services` | Snapshots them as they are, replacing the old snapshot | Only if no team VM has reached them since they were last clean |
+
+**Why the second one needs care:** team VMs are assumed malicious and can reach these services. A snapshot taken after that could keep whatever they did, and every reset would bring it back.
 
 ## See the status
 
@@ -324,6 +349,7 @@ The infrastructure part comes live from the Proxmox API and the node. The compet
 | Host jobs, including devbox jobs, and the active run | `/staff/rounds/`, panel **Right now** |
 | All VMs on the node | `qm list` |
 | Can Ansible reach each VM? | `worms build ping` |
+| The snapshot a service VM returns to | `qm listsnapshot <vmid>` |
 | Which secrets are set, never their values | `worms secrets` |
 | Do the Proxmox tokens work? | `worms secrets check` |
 | What the round agent is doing | `tail -F /var/log/worms/jobs/latest.log` |
@@ -384,6 +410,9 @@ worms secrets issue proxmox-token   # create or rotate a Proxmox token, and stor
 worms secrets set ssh-key < key     # store a secret by hand
 worms node trust                    # once, for VMs that predate the WORMS key
 worms build internet-deny           # close the internet window by hand, if a build reports it still open
+worms build rebuild-services        # build the service VMs from nothing, and snapshot them
+worms build snapshot-services       # snapshot the service VMs as they are
+worms devbox reconfigure            # every team's keys and the devbox map again, from the database
 worms debug dashboard               # Ansible connection diagnostics, for one host or group
 worms test                          # the offline test suite
 worms simulate                      # the live simulation (docs/testing.md)

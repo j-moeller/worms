@@ -293,8 +293,9 @@ INSERT. (`tests/test_devbox.py`.)
 ## Operating it
 
 ```
-worms build devbox                 # make devbox-apply + devbox-configure
+worms build devbox                 # devbox-apply + devbox-configure
 worms devbox provision             # teams created on the dashboard get their devbox
+worms devbox reconfigure           # every team's keys and the source->team map again; a reset of the services enqueues it
 # a team resets from its profile in the dev view (Reset devbox), or:
 #   POST https://orchestrator/devbox/<team-uuid>/reset/   (dashboard token)
 ```

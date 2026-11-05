@@ -28,6 +28,10 @@ populate in online mode). Afterwards it **denies internet access again** — alw
 fails or you interrupt it — and switches DNS and the caches to offline mode.
 `worms build provision` does the same for the Ansible part only.
 
+The last step of `make` snapshots the ephemeral and private-internet VMs. Between
+rounds, `worms build round-reset-services` returns them to that state instead of
+rebuilding them (`docs/management.md`, "Between rounds").
+
 `make` prints the VM names and IP addresses it is configuring, and is safe to
 re-run: once everything is in place it changes nothing. `worms build show-config`
 reprints the configuration at any time.
@@ -107,7 +111,8 @@ worms build inventory                      # hosts Ansible will contact + VMs it
 worms build ping                           # one line per host: reachable or not
 worms debug database                # step by step: resolved address, TCP 22,
                                     # SSH login, Python, sudo, cloud-init
-worms debug database -- -vvv    # ... with the full SSH command and error
+cd ansible && ssh-agent sh -c 'ssh-add -q /etc/worms/ssh/worms && WORMS_SSH_AUTH_SOCK="$SSH_AUTH_SOCK" exec ansible-playbook Debug.yml --flush-cache -e target=database -vvv'
+                                    # ... on the node, with the full SSH command and error
 worms build provision -- --limit database -vvv        # run only against one VM
 worms build provision -- --limit orchestrator -e hide_secrets=false
                                     # show output of no_log tasks (secrets!)
@@ -195,8 +200,8 @@ No VM has internet access unless it is allowed (package installs and cache
 population for the dmz/core/ingest/mgmt-exposed VMs through host NAT): `make`
 allows it only while provisioning, and `worms build internet-allow` /
 `worms build internet-deny` toggle it by hand (`ansible/Internet.yml`). Allowing is
-refused while sandbox VMs exist; while it is allowed, the sandbox stack refuses
-to deploy. The state lives in
+refused while sandbox or devbox VMs exist; while it is allowed, the sandbox and
+devbox stacks refuse to deploy. The state lives in
 `/run/worms/internet-allowed` and runtime-only nftables rules, so a reboot
 always comes back denied.
 

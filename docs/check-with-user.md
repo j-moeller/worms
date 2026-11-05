@@ -45,6 +45,31 @@ ssh -p 2222 team@worms-dev.mlsec.tu-berlin.de
 You confirmed access by IP earlier. The IP now gets `400`, because the name is the only one
 accepted. The host cannot test either of these itself: the port forward only matches outside traffic. If the `ssh` times out, the network in front of the node may be blocking port 2222.
 
+### 3b. Try the snapshot reset on real VMs
+
+- [ ] Run this, or allow it and tell me to:
+
+The safety check blocked me from restarting the service VMs and from writing to them over SSH, so
+`worms build round-reset-services` has only run in offline tests. The real VMs have no snapshot yet. It
+needs no devbox or sandbox VM at the snapshot, so this removes the devboxes, which take about 17 minutes
+to build again:
+
+```sh
+/usr/local/sbin/worms-node-run opentofu/stacks/devbox 'tofu destroy -auto-approve -parallelism=1'
+worms build snapshot-services         # restarts the 11 service VMs
+time worms build round-reset-services # restarts them again
+worms build ping
+worms simulate
+worms devbox provision                # the devboxes again
+```
+
+**What to look at:** how long the reset really takes (my estimate is about 2 minutes), and whether `worms
+simulate` passes as it did before. Also run a reset once with devboxes up, and check that the map in
+`/etc/sandbox-api/devbox-teams` on scoring and logging comes back.
+
+**This node's snapshot is only good for this test,** because team VMs have reached these services. For a
+snapshot to trust, use `worms build rebuild-services` instead.
+
 ## Decide these
 
 ### 3c. What the apt cache should hold

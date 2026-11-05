@@ -84,7 +84,7 @@ resource "terraform_data" "guard" {
   lifecycle {
     precondition {
       condition     = !local.internet_allowed
-      error_message = "Internet access is allowed (/run/worms/internet-allowed). Run make internet-deny before deploying the devbox."
+      error_message = "Internet access is allowed (/run/worms/internet-allowed). Run `worms build internet-deny` before deploying the devbox."
     }
     precondition {
       condition = alltrue([

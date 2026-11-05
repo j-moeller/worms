@@ -2,7 +2,7 @@
 
 Three layers:
 
-| | `worms test` | `worms simulate` | `worms test tests/live --live` |
+| | `worms test` | `worms simulate` | `worms test -- tests/live --live` |
 |---|---|---|---|
 | Runs | anywhere (laptop, CI, the Proxmox host) | on the Proxmox host, against the deployed platform | on the Proxmox host, against the deployed platform |
 | Needs | Python 3; optionally PostgreSQL server binaries, `tofu` (+ provider), `ip`/`tc`/`tcpdump` and root, `nft`, `systemd-analyze` | a provisioned platform; a deployed sandbox for the traffic part | a provisioned platform in its base state, Node.js with Playwright |
@@ -12,7 +12,7 @@ Three layers:
 ## `worms test`: offline suite
 
 `worms test` creates `.venv-test` from `tests/requirements.txt` on first use
-and runs `pytest` (`worms test -k shipper -x` to narrow it down). A test
+and runs `pytest` (`worms test -- -k shipper -x` to narrow it down). A test
 whose tool is missing is **skipped with the reason** (`-ra` summary), so the
 suite runs everywhere and does as much as it can. On the development machine:
 138 passed, 2 skipped (its kernel lacks the nftables bridge family and the tc
@@ -96,7 +96,7 @@ The apt cache and devpi keep what `make` put there, so `make` is not needed betw
 ```
 # deploy a sandbox first (ideally >= 2 VMs), then:
 worms simulate                                 # = inventory + ansible-playbook Simulate.yml
-worms simulate -- -e sim_wait_seconds=600      # wait longer for the records
+worms build simulate -- -e sim_wait_seconds=600  # wait longer for the records
 ```
 
 The playbook plays a sandbox VM (`groups.sandbox[0]`, peer

@@ -258,10 +258,13 @@ run length; otherwise `ROUND_TIMING` (`config/settings/base.py`, env-tunable:
 `worm_start_delay` 300 s, `run_duration` 3600 s, `end_drain`, `slot_overhead`)
 and `ROUND_CONDUCTOR` (`job_timeout`, `capture_grace`).
 
-Rebuilding the ephemeral and private-internet VMs for a clean slate is
-`worms build round-reset-services` on the controller (it owns those stacks; the
-round agent only has the sandbox and devbox stacks). It needs an internet
-window, so run it between rounds, while no sandbox exists.
+Between rounds, `worms build round-reset-services` returns the ephemeral and
+private-internet VMs to the snapshot `worms build` took of them after setup. Nothing
+is rebuilt and no internet is needed, so devboxes can stay, but it is refused while a
+sandbox exists. It is the operator's command: the round agent never runs it. The
+devbox map lives on scoring and logging and is newer than the snapshot, so a reset
+also enqueues `devbox_reconfigure` to write it back. Not yet run on a real node; see
+`docs/management.md`, "Between rounds".
 
 `worms simulate` (`docs/testing.md`) checks the scoring path end to end: a flag
 submitted through the sandbox API becomes a `FlagCapture` and a `captured`

@@ -1,5 +1,5 @@
 ---
-# End-to-end simulation of the running platform (`make simulate`).
+# End-to-end simulation of the running platform (`worms simulate`).
 #
 # Plays a sandbox VM: submits a flag to scoring and a log to logging (through
 # sandbox-gw, DNS, nginx/TLS, the API, into the database), makes traffic to a
@@ -22,16 +22,16 @@
 # reach, what their database roles can and cannot do (from their own VMs,
 # with their own credentials, TLS verified).
 #
-# Needs a deployed sandbox (`cd opentofu/stacks/sandbox && make apply`, `make
-# inventory`) with at least one VM (two for the VM-to-VM traffic). Without a
-# sandbox, only the service/containment checks run.
+# Needs a deployed sandbox, as a round builds it, with at least one VM (two for
+# the VM-to-VM traffic). Without a sandbox, only the service/containment checks
+# run.
 #
 # Test data: a team "simulation-<run id>" with one access token, created for
 # the run and deleted at the end with everything submitted with that token.
 # The recorded flows are real observations and stay (random high ports).
 #
-#   make simulate                          (= ansible-playbook Simulate.yml)
-#   make simulate ARGS="-e sim_wait_seconds=600"
+#   worms simulate                         (= ansible-playbook Simulate.yml)
+#   worms build simulate -- -e sim_wait_seconds=600
 #
 # Every check is reported (PASS/FAIL) at the end; the run fails if one failed.
 

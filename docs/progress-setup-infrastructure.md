@@ -5,11 +5,13 @@ Times are host time (CET); the VMs log in UTC (CET - 1h).
 
 ## Status
 
-**Last updated:** 2026-11-04, after fixing how teams find and reach their devbox VMs.
+**Last updated:** 2026-11-05, after replacing the rebuild between rounds with a snapshot reset.
 
 **Re-run from a clean base state, 2026-11-04:** passed from start to finish, with a retried build (`docs/e2e-run-2026-11-04/protocol.md`). The automated suite is in `tests/live`.
 
 **The suite's first run, 16:37-16:59, stopped at the user's request, so it has still not run from start to finish.** Steps 00 to 04 passed: base state, admin sign-in, competition and teams, users, and the devbox build. **The build finished on its first attempt, in 17 minutes**, the first build since the TRIM; 4 of the 7 before it hit the disk timeout. One build is encouraging, but it does not prove F5 is gone. It stopped during step 05, with `alpha`'s 3 keys added and none for `bravo` or `charlie`. SSH, file, apt, pip, traces and reset did not run.
+
+**Snapshot reset, 2026-11-05:** `worms build round-reset-services` now rolls the 11 service VMs back to a snapshot instead of rebuilding them, so devboxes can stay (`docs/management.md`, "Between rounds"). **Tested offline only: the safety check blocked the live test** (`docs/check-with-user.md`, 3b), so the real VMs have no snapshot and a reset refuses, with a message. On a throwaway VM with a cloud-init disk: snapshot 3.1 s, rollback 3.5 s, and deleting it with its snapshot left no volume behind. The boots of the 11 VMs took 17 to 73 seconds, which gives an estimate of about 2 minutes. The old rebuild asked for the internet window only after destroying the VMs, so with a devbox up it left the services gone; `rebuild-services` now refuses first.
 
 **View as, 2026-11-05:** the admin can view the dashboard as another user, read only, from `/staff/users/` (`docs/accounts.md`, "View as"). Staff and students cannot.
 

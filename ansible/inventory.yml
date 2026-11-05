@@ -2,7 +2,7 @@
 #
 # Which VMs exist is decided by OpenTofu: inventory.generated.yml (written by
 # scripts/generate_inventory.py from the `ansible_hosts` output of every VM
-# stack, `make inventory`) puts each VM into the group named after its OpenTofu
+# stack, `worms build inventory`) puts each VM into the group named after its OpenTofu
 # key (db, dashboard, apt_cache, ...), with its management IP as ansible_host.
 # A VM that is not in the OpenTofu state has no host, so no play contacts it
 # (plays on an empty group are skipped).

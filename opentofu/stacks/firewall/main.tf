@@ -5,7 +5,7 @@
 # nothing but opentofu/shared/shared-variables.tf; the VM stacks read the group
 # names from this stack's `security_groups` output.
 #
-# Apply order: platform -> firewall -> VM stacks (make platform firewall).
+# Apply order: platform -> firewall -> VM stacks (worms build platform, worms build firewall).
 
 terraform {
   required_providers {

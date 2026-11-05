@@ -59,7 +59,7 @@ def get_teams(
     else:
         is_user_team = Value(False, output_field=BooleanField())
 
-    if request.session.get("is_dev_environment"):
+    if request.is_dev_environment:
         team_filter = Team.objects.filter(development_competition=competition)
     else:
         team_filter = Team.objects.filter(competition=competition)

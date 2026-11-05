@@ -15,6 +15,9 @@ from django.http import Http404, HttpRequest
 from django.shortcuts import redirect
 from django.views.decorators.http import require_POST
 
+# The dev/live switch (dashboard/views/navigation.py).
+ENVIRONMENT_SESSION_KEY = "is_dev_environment"
+
 
 @require_POST
 def start(request: HttpRequest, uuid):
@@ -28,6 +31,8 @@ def start(request: HttpRequest, uuid):
     # A new session key for the new state, as Django does at a login.
     request.session.cycle_key()
     request.session[VIEW_AS_SESSION_KEY] = {"by": request.user.pk, "user": target.pk}
+    # Each side starts in the live view: the dev view chosen while viewing is the student's.
+    request.session.pop(ENVIRONMENT_SESSION_KEY, None)
     view_as_log.warning("view-as started: admin=%r viewed=%r", request.user.username, target.username)
     return redirect("index")
 
@@ -38,6 +43,7 @@ def stop(request: HttpRequest):
     if target is None:
         return redirect("index")
     del request.session[VIEW_AS_SESSION_KEY]
+    request.session.pop(ENVIRONMENT_SESSION_KEY, None)
     request.session.cycle_key()
     view_as_log.warning("view-as stopped: admin=%r viewed=%r", request.real_user.username, target.username)
     return redirect("staff_user", uuid=target.uuid)

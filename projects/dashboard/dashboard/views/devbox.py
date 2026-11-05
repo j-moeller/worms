@@ -38,7 +38,7 @@ def captured_vm_ids(team: Team) -> set[int]:
 def home(request: HttpRequest):
     """Index dispatcher: the devbox in the development view, else the
     leaderboard (production)."""
-    if request.session.get("is_dev_environment"):
+    if request.is_dev_environment:
         return devbox_home(request)
     return leaderboard(request)
 

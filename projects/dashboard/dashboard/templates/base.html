@@ -1,5 +1,5 @@
 {% load static %}<!DOCTYPE html>
-{% with dev=request.session.is_dev_environment page=request.resolver_match.url_name %}
+{% with dev=request.is_dev_environment page=request.resolver_match.url_name %}
 <html lang="en" data-env="{% if dev %}dev{% else %}sandbox{% endif %}" data-now="{{ request.time_now|date:'c' }}">
 <head>
     <meta charset="utf-8">

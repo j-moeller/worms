@@ -6,6 +6,8 @@ through the dashboard's real middleware, with CSRF checks on, and try to.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from test_dashboard_login import HOST, proxied, site  # noqa: F401 (fixtures)
@@ -380,6 +382,38 @@ def test_the_environment_can_still_be_switched(people):
     _start(admin, people["student"])
     assert _post(admin, "/environment/", {"environment": "dev"}).status_code == 302
     assert admin.session["is_dev_environment"] is True and _viewing(admin)
+
+
+def _environment(client, path="/profile/"):
+    return re.search(r'<html lang="en" data-env="(\w+)"', _get(client, path).content.decode()).group(1)
+
+
+def test_the_admin_comes_back_from_the_dev_view_to_their_own(people):
+    """The admin has no team, so no switch: back from a student's dev view, they were stuck in it."""
+    admin = _client(people["admin"])
+    _start(admin, people["student"])
+    _post(admin, "/environment/", {"environment": "dev"})
+    assert _environment(admin) == "dev"
+    _leave(admin)
+    assert "is_dev_environment" not in admin.session
+    assert _environment(admin) == "sandbox" and _environment(admin, "/") == "sandbox"
+    _start(admin, people["student"])
+    assert _environment(admin) == "sandbox"  # and the next view starts live too
+
+
+def test_nobody_without_a_team_is_held_in_the_dev_view(people):
+    """Whatever the session says, such as for a student who has just left their team."""
+    for who in ("admin", "other"):
+        client = _client(people[who])
+        _get(client)
+        session = client.session
+        session["is_dev_environment"] = True
+        session.save()
+        assert _environment(client) == "sandbox" and _environment(client, "/") == "sandbox", who
+        assert 'name="environment"' not in _get(client).content.decode()
+    student = _client(people["student"])
+    _post(student, "/environment/", {"environment": "dev"})
+    assert _environment(student) == "dev"
 
 
 # ---- Seeing what they see

@@ -155,13 +155,17 @@ class UserMetadataMiddleware:
         if request.path.startswith(API_PREFIX):
             return self.get_response(request)
         request.time_now = clock.now()
-        # Default rather than require the key: EnvironmentTransitionMiddleware
-        # only sets it for authenticated users, so reading it must not assume it
-        # exists and must not itself create a session (docs/security-assessment.md, D1).
-        request.is_dev_environment = request.session.get("is_dev_environment", False)
 
         request.competition = ApplicationSetting.get_current_competition()
         request.team = TeamMembership.get_users_team(request.user, request.competition)
+
+        # The dev view is a team's devbox, and only a team member is offered the switch back. So
+        # without a team it is off whatever the session says, or someone left there would be stuck
+        # in it: the admin back from viewing as a student, or a student who left their team.
+        # Default rather than require the key: EnvironmentTransitionMiddleware only sets it for
+        # authenticated users, so reading it must not assume it exists and must not itself create
+        # a session (docs/security-assessment.md, D1).
+        request.is_dev_environment = bool(request.session.get("is_dev_environment", False)) and request.team is not None
 
         if request.team is None:
             request.dev_competition = None

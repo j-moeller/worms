@@ -44,21 +44,34 @@ Fix this together with the decision above. The dev view should say nothing about
 
 ## A manual Reset can still hold up a round
 
-- [ ] Make a manual Reset wait during a round, as a dev upload does.
+- [ ] **Decide:** leave it, wait for the whole round, or wait only near a round's timed jobs.
 
-A rebuild takes about 8 minutes and the agent does one job at a time, so a Reset during a round can delay that round's timed jobs. This is not new. A dev upload waits, and the agent takes a round's queued jobs first, but `POST /devbox/<team>/reset/` still queues a rebuild at once.
+A rebuild takes about 8 minutes and the agent does one job at a time and cannot interrupt it. A dev upload waits for the round, and the agent takes a round's queued jobs first, but `POST /devbox/<team>/reset/` still queues a rebuild at once. This is not new. From the code, not observed, a round job caught behind a rebuild has these effects:
 
-## Should the name `teachllm` resolve on the VMs?
+| Job | Effect of up to 8 minutes' delay |
+|---|---|
+| `prepare`, `check`, `deploy` | None on the team: the worm's hour starts when the fuse is armed. Later teams start later |
+| `release_secrets`, during the run | The secret comes late and the run's end does not move, so that team has less time to find it. In the default plan these jobs fall at 10, 20 and 30 minutes |
+| `teardown` | The next team starts later. A team's run is skipped if it no longer fits before the round's end |
+| Any but `release_secrets`, behind a hung rebuild | The job fails the run after 30 minutes in the queue. The agent lets a rebuild's `tofu apply` run for up to 90 minutes |
 
-- [ ] **Decide:** add it to the private DNS?
+Stopping and starting VMs in a round does not go through the agent, so that is not delayed.
 
-It does not resolve there, and its certificate only matches the name, so a worm has to pass `curl --resolve` with the address (`docs/worm-contract.md`). A record would make a normal request work. It would open nothing, because only that address and port are allowed.
+**What waiting costs:** runs go one after another, each about 82 minutes by default (`core/schedule.py`), and the next starts at once. So "wait for the round" means about 4 hours with 3 teams and 14 hours with 10. A dev upload already waits this long.
 
-## Should sandbox VMs use the same CPU and memory settings as the devbox?
+| Option | A round is delayed | A team waits |
+|---|---|---|
+| Leave it | Up to 8 minutes per job | Not at all |
+| Wait for the whole round | Never, apart from a rebuild already running when the round starts | 82 minutes per team in the round |
+| Wait only near timed jobs: start a rebuild when the next agent job is at least 15 minutes away | Only if a rebuild overruns | At most about one run, 82 minutes, with the default plan of 8 VMs. A round of 30 VMs has no such gap, so a rebuild would wait for the round |
 
-- [ ] **Decide:** the same, or leave them?
+Whichever is chosen should apply to dev uploads too. If a Reset waits, the version bump has to wait with it, otherwise the score is cleared hours before the VMs change. A second worker for devbox jobs would remove the conflict, but that is the parallel work that is on hold.
 
-The operator set the devbox VMs to `cpu: host` and `balloon: 512` by hand on 2026-11-05, and the stack now keeps that. Sandbox VMs still use `qemu64` and ballooning. So a worm that depends on the CPU can work on the devbox and fail in a round.
+## Which CPU type for the team VMs?
+
+- [ ] **Decide:** `docs/check-with-user.md`, 3h.
+
+`cpu: host` lets root on a devbox VM use KVM (`docs/security-assessment.md`). Sandbox VMs stay on `qemu64` until this is decided, so a worm that depends on the CPU can still work on the devbox and fail in a round. They do have the devbox VMs' memory floor now.
 
 ## Should the profile list only a user's own SSH keys?
 
@@ -70,6 +83,7 @@ The profile lists the whole team's keys, and any member can remove any of them. 
 
 - [ ] **`bash main.sh` on a real sandbox.** No round has run since the change. It has run on a real devbox, through a dev upload (`docs/devbox.md`), and the agent's commands are the same. Upload `worm.sh`, renamed to `main.sh`, and run a real round.
 - [ ] **The LLM endpoint from a real sandbox.** It works from all 9 devbox VMs. The sandbox gateway's rules are only checked by tests.
+- [ ] **The 512 MB floor on a real sandbox.** No sandbox has been built since the change.
 - [ ] **Live view of the profile's Team panel with real rounds.** The system has no rounds, so it says `No round has started yet`. Its numbers and layout have only been checked with test data.
 - [ ] **Port 2222 from outside.** Run `ssh -p 2222 team@worms-dev.mlsec.tu-berlin.de` from a laptop. Expect `Permission denied (publickey)`. A timeout may mean the network in front of the node blocks it. The node cannot test its own port forward.
 - [ ] **`Permission denied (publickey)` from A to B on alpha.** Seen by the user, not resolved. The hop worked on charlie's VMs with a key in the agent. Check `ssh-add -L` on the laptop, and if it lists the key, look at `ssh -v root@10.128.2.12`.

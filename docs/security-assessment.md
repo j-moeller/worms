@@ -85,6 +85,8 @@ Each layer is independent and allows only this address and port:
 
 `teachllm` sees the node's address for every team. `worms status` still says `internet access denied`, because that reports the internet window, which is closed.
 
+The private DNS answers the name, from a zone of its own with one record (`llm_access_name`, role `setup_dns`). The resolver still has no recursion and no forwarders, so every other outside name is refused and DNS gives no way to ask or tell the outside world anything.
+
 Checked on 2026-11-05 on the devbox, acting as root on `devbox-t1-a` and on `devbox-t1-gw`:
 
 | From | To | Result |
@@ -99,6 +101,27 @@ Checked on 2026-11-05 on the devbox, acting as root on `devbox-t1-a` and on `dev
 | Gateway | `teachllm:80`; `1.1.1.1:443` and `.35:443`, route added via the node; the node's SSH | Blocked |
 
 **Not seen yet:** a real sandbox. No round has run since this change, so the sandbox gateway's rules are only checked by tests (`test_every_layer_on_the_way_to_the_llm_endpoint_allows_only_it`).
+
+## `cpu: host` and nested virtualisation (open)
+
+Measured on 2026-11-05. The 9 devbox VMs run `cpu: host`, set by hand by the operator and written into the devbox stack the same day, so a reset keeps it. This node has nesting on (`/sys/module/kvm_intel/parameters/nested` is `Y`). So:
+
+| VM | CPU type | `vmx` visible | `/dev/kvm` |
+|---|---|---|---|
+| `devbox-t1-a`, `devbox-t2-a` | `host` | Yes | Yes. As root on `devbox-t1-a`, `KVM_CREATE_VM` succeeded |
+| `devbox-t1-gw` | `qemu64` | No | No |
+
+A worm runs as `debian`, which has passwordless `sudo`, and a team logs in as root, so both can use it. Sandbox VMs stay on `qemu64` until this is decided (`docs/check-with-user.md`, 3h).
+
+**The risk:** root on the VM can make the node's kernel run its nested-virtualisation code, a large and complex part of KVM with a history of serious bugs. CVE-2021-29657, on AMD, was turned into a full escape from guest to host. A bug like that here would give a team root on the node, which holds every secret and could forge any result. This is added attack surface, not a known hole in this kernel.
+
+**What it does not change:** the network. A nested guest's traffic leaves through the VM's own NIC, so every firewall layer still applies, and the VM keeps its limit of 1 core and 512 MB.
+
+`cpu: host` without nesting is much milder: the VM learns the exact CPU model and can use all of its features, but gets no new way into the node.
+
+### Hyperthreading (open)
+
+The node reports `SMT vulnerable` for `l1tf` and `mds` (i7-4900MQ, hyperthreading on). Root on a VM may be able to read data from whatever runs on the same core's other thread, including another VM or the node. This holds for every CPU type, so no choice above changes it. The fix is to turn hyperthreading off, which takes this node from 8 threads to 4 cores. What counts is the hardware of `worms-pve`, which has not been checked.
 
 ## Findings in full
 

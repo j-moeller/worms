@@ -19,7 +19,9 @@ Times are host time (CET); the VMs log in UTC (CET - 1h).
 
 **LLM endpoint, 2026-11-05:** `teachllm` is reachable from the sandbox and devbox VMs, as the one exception to "no internet". All 9 devbox VMs connect with TLS verified, and attempts to get anywhere else from a VM or a gateway, or to bypass the gateway, are blocked (`docs/security-assessment.md`, "LLM endpoint"). The three devbox gateways were rebuilt for it; the VMs were not. Not yet seen on a real sandbox.
 
-**VM settings, 2026-11-05:** the operator set the devbox VMs to `cpu: host` and `balloon: 512` by hand. The devbox stack now says so too, because a reset rebuilds the VMs from it. Sandbox VMs and gateways still use `qemu64` and ballooning.
+**VM settings, 2026-11-05:** the operator set the devbox VMs to `cpu: host` and `balloon: 512` by hand. The devbox stack now says so too, because a reset rebuilds the VMs from it. Sandbox VMs now have the same memory floor, but stay on `qemu64`: `cpu: host` lets root on a VM use KVM on this node, so the CPU type waits for a decision (`docs/check-with-user.md`, 3h). Gateways are unchanged.
+
+**`teachllm` in the private DNS, 2026-11-05:** the name now resolves on the VMs, so `curl https://teachllm.mlsec.tu-berlin.de/` works from all 9 devbox VMs with TLS verified. Every other outside name is still refused, and `scoring.worms.internal` still resolves. Not yet seen from a real sandbox.
 
 **Password resets, 2026-11-05:** staff keep the one-time password button, and each reset now adds a row to the new `password_resets` table in the same transaction. The dashboard's role may add and read rows but not change or remove them (`docs/accounts.md`, "Password resets are recorded"). This is the first migration after `0001_initial`, and it needs the grants applied too (`docs/management.md`).
 

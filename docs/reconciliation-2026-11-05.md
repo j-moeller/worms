@@ -53,3 +53,20 @@ The next live test should use an agreed deployed revision of the reconciled code
 plus whichever pending features Jonas intends to ship. PyPI currently seeds only
 `tabulate`; selecting and filling the intended offline package set (including
 `tqdm`) remains necessary before testing arbitrary pip installs.
+
+## Review of the pending feature patch
+
+The isolated preview passes 204 focused tests covering profile/progression views,
+team-scoped API and ZIP access, uploads, the shell worm contract, agent command
+construction and browser rendering. The browser-rendering checks use local
+fixture responses; they are not a live Proxmox/sandbox rehearsal.
+
+The patch applies to the reconciliation with one import conflict: removing the
+old devbox log helper must retain the membership-locking imports used by SSH-key
+registration. This was resolved in the preview only.
+
+Before shipping it, agree the `main.sh` contract change. Previously accepted
+archives with only `main.py` will need to be replaced or an explicit compatibility
+policy chosen before they are run by the new launcher. Commit the intended
+feature changes separately from the hostname/RAM overrides so the tested revision
+can be identified and deployed without overwriting other work on the node.

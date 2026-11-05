@@ -82,12 +82,12 @@ def test_proxy_headers_tls_static_files_and_body_limits(stack):
     assert client.get("/static/dashboard/js/topology.js").status_code == 200
     assert client.get("/profile/").headers["Strict-Transport-Security"].startswith("max-age=")
     assert client.get("/profile/", headers={"Host": "wrong.example"}).status_code == 400
-    response = client.session.post(client.base + "/theme/", data={"theme": "lab-dark"},
+    response = client.session.post(client.base + "/environment/", data={"environment": "live"},
         headers={"Origin": client.base, "X-CSRFToken": client.session.cookies.get("csrftoken"),
                  "X-Forwarded-Proto": "http"}, allow_redirects=False, timeout=15)
     assert response.status_code == 302  # nginx overrides the forged scheme
     assert "Secure" in response.headers["Set-Cookie"]
-    assert client.post("/theme/", {"theme": "lab"}, origin="https://wrong.example").status_code == 403
+    assert client.post("/environment/", {"environment": "live"}, origin="https://wrong.example").status_code == 403
     untrusted = requests.Session()
     untrusted.trust_env = False
     with pytest.raises(requests.exceptions.SSLError):

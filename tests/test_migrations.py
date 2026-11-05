@@ -1,8 +1,8 @@
 """The Django migrations as a whole (projects/dashboard/core/migrations).
 
-No deployed database needs upgrading, so there is a single initial migration
-and no upgrade path to protect. Once a database that must keep its data exists,
-new migrations build on this one, and these tests should grow to cover upgrades.
+Main's initial migration remains unchanged. Additive migrations preserve the
+existing accounts, uploaded artifacts and log data; collision tests prove an
+upgrade refuses ambiguous identities without deleting data.
 
 - Models and migrations agree (`makemigrations --check`).
 - A fresh database migrates as the migrator, as `make` does it.

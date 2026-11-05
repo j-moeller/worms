@@ -330,7 +330,11 @@ def test_zeek_can_rotate_its_logs(render):
     EXDEV and ended every log writer, while the service stayed active."""
     unit = render(MONITOR, "zeek.service.j2", **MONITOR_VARS)
     defaults = yaml.safe_load((ANSIBLE / "roles/applications/network_monitor/defaults/main.yml").read_text())
-    log_dir, archive_dir = Path(defaults["network_monitor_log_dir"]), Path(defaults["network_monitor_archive_dir"])
+    data_dir = defaults["network_monitor_data_dir"]
+    log_dir, archive_dir = (
+        Path(defaults[key].replace("{{ network_monitor_data_dir }}", data_dir))
+        for key in ("network_monitor_log_dir", "network_monitor_archive_dir")
+    )
     assert log_dir.parent == archive_dir.parent
     lines = [line.removeprefix("ReadWritePaths=") for line in unit.splitlines() if line.startswith("ReadWritePaths=")]
     assert lines == [str(log_dir.parent)]

@@ -412,7 +412,8 @@ def test_two_teams_run_one_after_another(db_clean):
         conductor.tick()
         flow_clock.advance(30)
         for run in runs:
-            fake_agent(run, sha)
+            # Real builds generate fresh flags even when VM names are reused.
+            fake_agent(run, lambda name, run_id=run.pk: sha(f"{run_id}:{name}"))
             run.refresh_from_db()
         if all(run.state in terminal for run in runs):
             break

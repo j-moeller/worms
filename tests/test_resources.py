@@ -36,9 +36,11 @@ def test_every_vm_balloons(path):
     assert "memory { dedicated =" not in text, f"{path}: fixed (no ballooning)"
 
 
-def test_sandbox_vm_ram_floor_is_half_the_ceiling():
+def test_a_sandbox_vm_keeps_a_devbox_vms_memory_floor():
+    """512 MB, as on a devbox VM, or half the ceiling on a larger VM. Never above the ceiling,
+    which Proxmox refuses: a round may set 256 MB per VM (core/schedule.py)."""
     text = (OTF / "stacks/sandbox/main.tf").read_text()
-    assert "floating = max(256, floor(each.value.ram / 2))" in text
+    assert "floating = min(each.value.ram, max(512, floor(each.value.ram / 2)))" in text
 
 
 def test_the_log_server_is_a_small_rsyslog_vm():

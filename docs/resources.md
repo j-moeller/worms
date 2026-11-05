@@ -47,7 +47,8 @@ actually uses (idle RSS in brackets):
 | syslog | 512 | 256 | rsyslog (~10 MB) |
 | monitor | 2048 | 1024 | Zeek — kept high (buffers under traffic) |
 | wikipedia | 1024 | 512 | kiwix-serve (mmaps the ZIM) |
-| devbox VM / gateway | 512 | 256 | nftables router / a team's playground |
+| devbox VM | 512 | 512 | a team's playground; the floor as the operator set it |
+| devbox gateway | 512 | 256 | nftables router |
 | SSH gateway | 512 | 256 | sshd jump host |
 
 ### Sandbox VM RAM is a round parameter
@@ -56,8 +57,10 @@ The sandbox generator used to hand each VM 1024/2048/4096 MB at random (avg
 ~1.4 GB → ~11 GB for 8 VMs). It now takes a single **ceiling per VM**, set per
 round on the dashboard (Staff → Rounds, "RAM per VM"; `sandbox_params.vm_ram`,
 `core/schedule.py`, validated again by the round agent). The default is **512
-MB** (floor 256), so a default round's 8 VMs cost ~4 GB of ceiling / ~2 GB
-committed. A worm that needs more is a per-round decision.
+MB**, and the floor is 512 MB as on a devbox VM (half the ceiling on a larger VM),
+so a default round's 8 VMs cost ~4 GB of ceiling and ~4 GB committed. Nothing
+checks the node's free RAM before a round: with 13 devbox VMs up and about 7 GB
+available, 8 VMs fit and 16 do not. A worm that needs more is a per-round decision.
 
 ### rsyslog instead of Wazuh
 
@@ -69,8 +72,8 @@ audit logs of every infrastructure VM as files (README, "Central logging").
 ## Rough budget after these changes
 
 Committed (floor) baseline drops from ~17 GB to **~4.4 GB**; a default round's
-sandbox from ~11 GB to **~2 GB**; a team's devbox from ~2 GB ceiling to ~1 GB
-committed. The sum of **ceilings** for a modest deployment (infra + a few teams
+sandbox from ~11 GB to **~4 GB**; a team's devbox stays at ~2 GB, because its VMs
+keep their whole 512 MB. The sum of **ceilings** for a modest deployment (infra + a few teams
 + one round) now sits around ~20–26 GB, and the host only commits a fraction of
 that at a time — so 32 GB holds several teams and a running round with room to
 spare.

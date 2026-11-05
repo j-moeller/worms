@@ -445,9 +445,10 @@ resource "proxmox_virtual_environment_vm" "vm" {
 
   memory {
     dedicated = each.value.ram
-    # Ballooning: the host reclaims a sandbox VM's unused RAM (a worm
-    # rarely needs its whole ceiling). Floor = half the ceiling (docs/resources.md).
-    floating = max(256, floor(each.value.ram / 2))
+    # The memory floor of a devbox VM (stacks/devbox/main.tf), so a worm tried there has
+    # the same room in a round. The host may reclaim unused RAM down to 512 MB, or half the
+    # ceiling on a larger VM (docs/resources.md). A VM below 512 MB keeps all of its RAM.
+    floating = min(each.value.ram, max(512, floor(each.value.ram / 2)))
   }
 
   # Only SSH is used: no guest agent (the host never parses guest-controlled

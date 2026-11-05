@@ -373,6 +373,74 @@ def test_next_run_waits_for_the_previous_teardown(one_run):
     assert run2.state == RoundRun.State.PREPARING
 
 
+def _second_team(one_run, upload=True):
+    from core.models.team import Team, TeamMembership
+    from core.models.user import User
+    from core.models.worms import MalwareArtifact, Upload
+    from django.utils import timezone
+
+    user = User.objects.create(username="u2")
+    team = Team.objects.create(name="team-b", competition=one_run["round"].competition)
+    TeamMembership.objects.create(user=user, team=team)
+    if upload:
+        artifact = MalwareArtifact.objects.create(content_hash="def", storage_key="k2")
+        Upload.objects.create(artifact=artifact, user=user, team=team, created_at=one_run["round"].round_start - timezone.timedelta(minutes=5))
+    return team
+
+
+def _round_runs(one_run, second_upload=True):
+    from core.models.rounds import RoundRun
+    from orchestrator.rounds.planner import plan_round
+
+    _second_team(one_run, upload=second_upload)
+    RoundRun.objects.all().delete()
+    return plan_round(one_run["round"], sandbox_params={"game_plan": {"first_stop_after": 60, "stop_interval": 60, "min_alive": 1}})
+
+
+def test_the_runs_of_a_round_share_its_sandbox(one_run):
+    """Built once from the round's seed and rolled back for every team: the same sandbox for
+    all, and the teardown in between keeps it."""
+    from core.models.rounds import HostJob
+
+    first, second = _round_runs(one_run)
+    power, clock = FakePower(), Clock()
+    conductor = make_conductor(power, clock)
+    drive(conductor, first, first, clock=clock)
+    drive(conductor, second, second, clock=clock)
+    prepares = HostJob.objects.filter(kind=HostJob.Kind.PREPARE).order_by("id")
+    assert [job.params["seed"] for job in prepares] == [one_run["round"].seed] * 2
+    assert first.seed != second.seed  # each run's game plan is still its own
+    teardowns = HostJob.objects.filter(kind=HostJob.Kind.TEARDOWN).order_by("id")
+    assert [(job.run_id, job.params["keep"]) for job in teardowns] == [(first.id, True), (second.id, False)]
+
+
+def test_no_sandbox_is_kept_for_a_run_that_has_nothing_to_run(one_run):
+    from core.models.rounds import HostJob
+
+    first, _second = _round_runs(one_run, second_upload=False)
+    power, clock = FakePower(), Clock()
+    drive(make_conductor(power, clock), first, first, clock=clock)
+    assert [job.params["keep"] for job in first.jobs.filter(kind=HostJob.Kind.TEARDOWN)] == [False]
+
+
+def test_a_sandbox_kept_for_a_run_that_is_then_skipped_is_destroyed(one_run):
+    """The round ran out of time for the next team: nothing is left to roll the sandbox back."""
+    from core.models.rounds import HostJob, RoundRun
+
+    first, second = _round_runs(one_run)
+    power, clock = FakePower(), Clock()
+    conductor = make_conductor(power, clock)
+    drive(conductor, first, first, clock=clock)
+    RoundRun.objects.filter(pk=second.pk).update(state=RoundRun.State.SKIPPED)
+    assert conductor.tick() is True
+    final = first.jobs.filter(kind=HostJob.Kind.TEARDOWN).order_by("-id").first()
+    assert final.params == {"keep": False} and final.state == HostJob.State.QUEUED
+    assert conductor.tick() is False  # it waits for that teardown, and asks for no other
+    fake_agent(first, sha)
+    assert conductor.tick() is False
+    assert first.jobs.filter(kind=HostJob.Kind.TEARDOWN).count() == 2
+
+
 def test_run_without_upload_is_skipped(db_clean):
     from core.models.competition import ApplicationSetting, Competition, Round
     from core.models.rounds import RoundRun

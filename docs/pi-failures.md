@@ -144,7 +144,8 @@ is open. None can exist:
 
 - Only `sandbox-gw` and `devbox-gw` may reach devpi and the registry (`services_client`),
   plus sandbox and devbox VMs (their own groups).
-- `Internet.yml` refuses to open the window while any sandbox or devbox VM exists.
+- `Internet.yml` refuses to open the window while any sandbox VM exists or any devbox VM runs, and
+  the firewall watchdog stops any of them that runs while it is open.
 - Private internet VMs can reach only `apt-cache:3142` (`pi_apt_client`).
 - The host has no IPv4 address on the services bridge (`vmbr23`).
 

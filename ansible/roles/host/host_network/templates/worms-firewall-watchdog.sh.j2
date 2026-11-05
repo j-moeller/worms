@@ -7,6 +7,7 @@
 # ruleset, hard-stop ALL such VMs (qm stop kills the QEMU process; no guest
 # cooperation needed). Devbox VMs are always-on but just as untrusted as the
 # sandbox, so an uncontained one is stopped too (docs/security-assessment.md).
+# The same while internet access is allowed and any of them runs.
 # Run every {{ host_fw_watchdog_interval }} by worms-firewall-watchdog.timer.
 set -u
 
@@ -27,6 +28,13 @@ fail() {
   wait
   exit 1
 }
+
+# No team VM runs while internet access is allowed: through DNS and the caches it would have a
+# way out. Internet.yml refuses to open the window then, and the build shuts the devboxes down
+# for it; this stops one that was started anyway.
+if [ -e "{{ host_internet_flag }}" ] && [ -n "$(running_untrusted_vms)" ]; then
+  fail "internet access is allowed ({{ host_internet_flag }}) while sandbox/devbox VMs run"
+fi
 
 systemctl is-active --quiet proxmox-firewall || fail "proxmox-firewall is not active"
 nft list table inet worms >/dev/null 2>&1 || fail "host table inet worms missing"

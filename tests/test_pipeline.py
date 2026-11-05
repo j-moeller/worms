@@ -333,39 +333,99 @@ def test_no_snapshot_while_a_team_vm_exists(node, monkeypatch, team_vm):
     assert steps(node) == []
 
 
-@pytest.mark.parametrize("team_vm", [DEVBOX, SANDBOX])
-def test_a_rebuild_refuses_before_it_destroys_anything(node, monkeypatch, team_vm):
-    """The window is refused while team VMs exist. It used to be asked for only after
-    the destroys, which left the services gone."""
-    monkeypatch.setattr(Recorder, "node_vms", [*SERVICES, team_vm])
-    with pytest.raises(BuildError, match="Refusing to destroy"):
+def test_a_rebuild_is_refused_during_a_round_before_it_destroys_anything(node, monkeypatch):
+    """The window is refused while a sandbox exists. It used to be asked for only after the
+    destroys, which left the services gone."""
+    monkeypatch.setattr(Recorder, "node_vms", [*SERVICES, SANDBOX])
+    with pytest.raises(BuildError, match="Refusing to open the internet window.*sandbox-1"):
         node.rebuild_services()
     assert steps(node) == []
 
 
-def test_a_build_snapshots_only_the_vms_without_one(node, monkeypatch):
-    """A new VM has seen nothing. One that has a snapshot may have been up during
-    rounds since, so it keeps the snapshot it has, and the build warns."""
+STOPPED_DEVBOX = {**DEVBOX, "vmid": 117, "name": "devbox-t1-b", "status": "stopped"}
+
+
+@pytest.mark.parametrize("component", ["rebuild-services", "provision", "all"])
+def test_running_devboxes_are_off_for_the_whole_window(node, monkeypatch, component):
+    """No team VM runs while the services can reach the internet (docs/IMPORTANT), and none
+    from the rollback to the new snapshot, which must hold nothing a team did. One that was
+    off stays off."""
+    monkeypatch.setattr(Recorder, "node_vms", [*SERVICES, DEVBOX, STOPPED_DEVBOX])
+    getattr(node, pipeline.COMPONENTS[component][0])()
+    calls = steps(node)
+    off, on = calls.index(("node", "qm shutdown 116 --timeout 120 --forceStop 1")), calls.index(("node", "qm start 116"))
+    window = [i for i, c in enumerate(calls) if c[:2] == ("ansible", "Internet.yml")]
+    snapshots = [i for i, c in enumerate(calls) if c[0] == "node" and " snapshot " in c[1]]
+    rollbacks = [i for i, c in enumerate(calls) if c[0] == "node" and "rollback" in c[1]]
+    assert off < min(window + rollbacks) and max(window + snapshots) < on
+    assert not any("117" in c[1] for c in calls if c[0] == "node")
+
+
+def test_devboxes_stay_off_while_the_window_is_left_open(node, monkeypatch, capsys):
+    monkeypatch.setattr(Recorder, "node_vms", [*SERVICES, DEVBOX])
+    monkeypatch.setattr(Recorder, "flag_exists", lambda self, path: True, raising=False)
+    with pytest.raises(BuildError):
+        node.provision()  # offline() refuses: the flag is still there
+    assert ("node", "qm start 116") not in steps(node)
+    assert "qm start 116" in capsys.readouterr().err
+
+
+def test_a_failed_build_starts_the_devboxes_again(node, monkeypatch):
+    """The window is closed whatever happens, and then the teams get their devboxes back."""
+    monkeypatch.setattr(Recorder, "node_vms", [*SERVICES, DEVBOX])
+    monkeypatch.setattr(Recorder, "fail_on", ("ansible", "SetupDNS.yml"))
+    with pytest.raises(BuildError):
+        node.provision()
+    assert steps(node)[-1] == ("node", "qm start 116")
+
+
+def test_provision_configures_clean_services_and_snapshots_them_again(node):
+    """A snapshot that kept up with every provision: what it changed stays, and since the VMs
+    were rolled back first, nothing a team VM did."""
+    node.provision()
+    calls = steps(node)
+    rollbacks = [i for i, c in enumerate(calls) if c[0] == "node" and "rollback" in c[1]]
+    configure = calls.index(("ansible", "SetupDbAndDashboard.yml"))
+    retaken = [c[1] for c in calls if c[0] == "node" and ("snapshot" in c[1])]
+    assert len(rollbacks) == 2 and max(rollbacks) < configure
+    assert retaken == ["qm delsnapshot 100 clean", "qm snapshot 100 clean --description 'worms abc1234'",
+                       "qm delsnapshot 111 clean", "qm snapshot 111 clean --description 'worms abc1234'"]  # fmt: skip
+    assert node.services_rolled_back
+
+
+def test_a_vm_up_without_a_snapshot_gets_none_and_the_build_says_why(node, monkeypatch):
+    """It was there before the build with no clean state to go back to: team VMs may have
+    reached it, and a snapshot now would keep that for every reset."""
     warnings = []
     monkeypatch.setattr(pipeline.output, "warn", warnings.append)
     monkeypatch.setattr(Recorder, "node_snapshots", {111: A_SNAPSHOT})
-    node.snapshot_new_services()
-    node_steps = [c[1] for c in steps(node) if c[0] == "node"]
-    assert node_steps == ["qm shutdown 100 --timeout 120 --forceStop 1",
-                          "qm snapshot 100 clean --description 'worms abc1234'", "qm start 100"]  # fmt: skip
-    assert len(warnings) == 1 and "rebuild-services" in warnings[0]
+    node.provision()
+    snapshotted = {c[1].split()[2] for c in steps(node) if c[0] == "node" and c[1].startswith("qm snapshot")}
+    assert snapshotted == {"111"}
+    assert len(warnings) == 1 and "docker-registry" in warnings[0] and "rebuild-services" in warnings[0]
+
+
+def test_a_vm_the_build_created_is_snapshotted(node, monkeypatch):
+    """New from OpenTofu, it has seen nothing yet."""
+    monkeypatch.setattr(Recorder, "node_vms", [SERVICES[0]])
+    monkeypatch.setattr(Recorder, "node_snapshots", {111: A_SNAPSHOT})
+    original = Recorder.tofu
+
+    def tofu(self, stack, *args, **kwargs):
+        if stack == "private_internet" and "apply" in args:
+            Recorder.node_vms = [*SERVICES]
+        return original(self, stack, *args, **kwargs)
+
+    monkeypatch.setattr(Recorder, "tofu", tofu)
+    node.build_all()
+    snapshotted = {c[1].split()[2] for c in steps(node) if c[0] == "node" and c[1].startswith("qm snapshot")}
+    assert snapshotted == {"100", "111"}
 
 
 def test_a_first_build_does_not_warn_about_snapshots(node, monkeypatch):
     warnings = []
     monkeypatch.setattr(pipeline.output, "warn", warnings.append)
+    monkeypatch.setattr(Recorder, "node_vms", [])
     monkeypatch.setattr(Recorder, "node_snapshots", {})
-    node.snapshot_new_services()
-    assert warnings == []
-
-
-def test_provision_warns_that_a_reset_would_undo_it(node, monkeypatch):
-    warnings = []
-    monkeypatch.setattr(pipeline.output, "warn", warnings.append)
-    node.provision()
-    assert len(warnings) == 1 and "older snapshot" in warnings[0]
+    node.build_all()
+    assert warnings == [] and not node.services_rolled_back

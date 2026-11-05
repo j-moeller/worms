@@ -55,7 +55,8 @@ def plan_round(round, base_seed=None, sandbox_params=None):
                 team=team,
                 upload_id=team.latest_upload_id,
                 position=position,
-                # Per-run seed, derived but distinct, so every sandbox differs.
+                # Per-run seed, derived but distinct: the run's game plan. The sandbox is the
+                # round's, from the round's seed, the same for every team (conductor.py).
                 seed=(base_seed * 1_000_003 + team.id) % (2**63),
                 sandbox_params=sandbox_params or {},
             )

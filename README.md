@@ -28,9 +28,11 @@ populate in online mode). Afterwards it **denies internet access again** — alw
 fails or you interrupt it — and switches DNS and the caches to offline mode.
 `worms build provision` does the same for the Ansible part only.
 
-The last step of `make` snapshots the ephemeral and private-internet VMs. Between
-rounds, `worms build round-reset-services` returns them to that state instead of
-rebuilding them (`docs/management.md`, "Between rounds").
+The ephemeral and private-internet VMs have a snapshot: `make` and `worms build
+provision` roll them back to it before configuring and take it again afterwards.
+Each round's first run returns them to it before it builds the round's sandbox,
+which every team's run then starts from, rolled back to its own snapshot
+(`docs/rounds.md`, "One sandbox per round"; `docs/management.md`, "Between rounds").
 
 `make` prints the VM names and IP addresses it is configuring, and is safe to
 re-run: once everything is in place it changes nothing. `worms build show-config`
@@ -200,7 +202,9 @@ No VM has internet access unless it is allowed (package installs and cache
 population for the dmz/core/ingest/mgmt-exposed VMs through host NAT): `make`
 allows it only while provisioning, and `worms build internet-allow` /
 `worms build internet-deny` toggle it by hand (`ansible/Internet.yml`). Allowing is
-refused while sandbox or devbox VMs exist; while it is allowed, the sandbox and
+refused while a sandbox VM exists or a devbox VM runs (a build shuts the devboxes
+down for the window and starts them again afterwards, and the firewall watchdog
+stops any team VM that runs while it is open); while it is allowed, the sandbox and
 devbox stacks refuse to deploy. The state lives in
 `/run/worms/internet-allowed` and runtime-only nftables rules, so a reboot
 always comes back denied.

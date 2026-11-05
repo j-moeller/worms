@@ -61,6 +61,8 @@ def config(env):
         # team's uuid to them at deploy (no access token anymore).
         "scoring_host": env.get("SCORING_HOST", ""),
         "logging_host": env.get("LOGGING_HOST", ""),
+        # The service VMs' management addresses, waited for after they are rolled back.
+        "service_hosts": [host for host in env.get("SERVICE_HOSTS", "").split(",") if host],
         "apply_timeout": int(env.get("APPLY_TIMEOUT", "5400")),
     }
 

@@ -12,13 +12,14 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
 import secrets
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 from generate_devbox import team_addressing
-from round_agent import validation
+from round_agent import snapshots, validation
 
 FLAG_PATH = "/etc/worms/flag"
 WORM_DIR = "/home/debian"
@@ -40,6 +41,14 @@ UNPACK = (
 CURRENT_TEAM_FILE = "/etc/sandbox-api/current-team"
 DEVBOX_TEAMS_FILE = "/etc/sandbox-api/devbox-teams"
 DEVBOX_GENERATED = "opentofu/stacks/devbox/generated_devboxes.tf"
+DEVBOX_ROLES = ("a", "b", "c")
+# While it exists, internet access is allowed (ansible Internet.yml).
+INTERNET_FLAG = "/run/worms/internet-allowed"
+# The VMs a sandbox reaches, which a new round's sandbox is built on after a rollback; their
+# snapshot is `worms build`'s (src/worms_cli/pipeline.py).
+SERVICE_POOLS = ("ephemeral", "private_internet")
+# The agent's own records on the node (root only).
+STATE_DIR = "/var/lib/worms"
 # Team code is assumed hostile and root on its VM. This CPU offers it no hardware virtualisation,
 # so no /dev/kvm and no way to drive the node's nested-KVM code (docs/security-assessment.md). The
 # sandbox and devbox stacks set it. These checks refuse anything else, such as a VM changed by hand.
@@ -114,20 +123,94 @@ def _release(ex, cfg, vm_names):
 # ---------------------------------------------------------------------------
 
 
+def _refuse_while_internet(cfg, what):
+    """Team VMs never run while the internet window is open (Internet.yml): the services they
+    reach could then reach out. OpenTofu refuses to build them then; a rollback or a start
+    goes past it, so these check it themselves."""
+    if Path(cfg.get("internet_flag", INTERNET_FLAG)).exists():
+        raise RuntimeError(f"internet access is allowed ({INTERNET_FLAG}): refusing to {what}")
+
+
+def _sandbox_hosts(ex):
+    """Every sandbox VM's management address, its gateway's too."""
+    hosts = ex.tofu_output("sandbox").get("ansible_hosts", {}) or {}
+    return [host["management_ip"] for host in hosts.values()]
+
+
+def _reusable_sandbox(ex, hcl):
+    """The VMs of the sandbox the stack holds, if it is the one `hcl` defines and every VM
+    of it has its clean snapshot; else None."""
+    if ex.sandbox_definition() != hcl:
+        return None
+    built = {int(host["vm_id"]) for host in (ex.tofu_output("sandbox").get("ansible_hosts", {}) or {}).values()}
+    pool = snapshots.pool_vms(ex, "sandbox")
+    if not built or {vm["vmid"] for vm in pool} != built:
+        return None
+    return pool if all(snapshots.has_clean(ex, vm) for vm in pool) else None
+
+
+def _destroy_sandbox(ex, cfg):
+    # One at a time: VMs destroyed in parallel fight over the storage lock, and a volume
+    # Proxmox gives up on then blocks whichever new VM gets that ID.
+    ex.tofu("sandbox", "destroy", "-auto-approve", "-input=false", "-parallelism=1", timeout=cfg.get("apply_timeout", 5400))
+    ex.worms("inventory", timeout=300)
+
+
+def _reset_services(ex, cfg):
+    """The service VMs back to the snapshot `worms build` took of them, all or none. Returns
+    what happened, for the run's record: without a snapshot on each, they stay as they are."""
+    vms = [vm for pool in SERVICE_POOLS for vm in snapshots.pool_vms(ex, pool)]
+    missing = sorted(vm["name"] for vm in vms if not snapshots.has_clean(ex, vm))
+    if not vms or missing:
+        return f"not reset: no clean snapshot on {', '.join(missing) or 'any service VM'} (`worms build rebuild-services`)"
+    snapshots.roll_back(ex, vms)
+    snapshots.wait_for_ssh(ex, cfg.get("service_hosts") or [cfg["scoring_host"], cfg["logging_host"]])
+    _restore_devbox_map(ex, cfg)
+    return f"reset: {len(vms)} VMs back to their clean snapshot"
+
+
+def _build_sandbox(ex, cfg, hcl):
+    """A new sandbox, snapshotted before any team's code reaches it. While it is built the
+    devbox VMs are shut down and the service VMs it installs from are back to their snapshot,
+    so nothing in it comes from team code: every later run of the round rolls back to it."""
+    _refuse_while_internet(cfg, "build a sandbox")
+    if ex.tofu_output("sandbox").get("ansible_hosts"):
+        _destroy_sandbox(ex, cfg)  # another round's, or one left half built: it may hold team code
+    devboxes = snapshots.shut_down(ex, snapshots.pool_vms(ex, "devbox"))
+    try:
+        services = _reset_services(ex, cfg)
+        ex.install_sandbox_definition(hcl)
+        ex.tofu("sandbox", "init", "-input=false", timeout=600)
+        ex.tofu("sandbox", "apply", "-auto-approve", "-input=false", "-parallelism=1", timeout=cfg.get("apply_timeout", 5400))
+        # Refresh the inventory and configure the sandbox guests (install the
+        # internal CA, so a worm can reach scoring/logging over verified HTTPS).
+        ex.worms("round-configure-sandbox", timeout=cfg.get("configure_timeout", 1800))
+        snapshots.take(ex, snapshots.pool_vms(ex, "sandbox"), f"worms round sandbox {hashlib.sha256(hcl.encode()).hexdigest()[:12]}")
+    finally:
+        if devboxes:
+            _refuse_while_internet(cfg, "start the devbox VMs again")
+            snapshots.start(ex, devboxes)
+    return services
+
+
 def prepare(ex, cfg, params):
-    """Build the sandbox for this run: generate the architecture from the
-    seed, apply it, refresh the inventory, and report the topology and VMs."""
+    """The run's sandbox. The runs of a round share one, generated from the round's seed and
+    parameters: the first run builds and snapshots it, every later one rolls it back to that
+    snapshot, which takes a boot instead of a build and leaves nothing of the team before.
+    Reports the topology and VMs."""
     with tempfile.TemporaryDirectory() as tmp:
         network_file = Path(tmp) / "network.json"
         hcl = ex.generate_sandbox(params["seed"], params["sandbox_params"], network_file)
-        ex.install_sandbox_definition(hcl)
         graph = ex.read_json(network_file)
 
-    ex.tofu("sandbox", "init", "-input=false", timeout=600)
-    ex.tofu("sandbox", "apply", "-auto-approve", "-input=false", "-parallelism=1", timeout=cfg.get("apply_timeout", 5400))
-    # Refresh the inventory and configure the sandbox guests (install the
-    # internal CA, so a worm can reach scoring/logging over verified HTTPS).
-    ex.worms("round-configure-sandbox", timeout=cfg.get("configure_timeout", 1800))
+    built = _reusable_sandbox(ex, hcl)
+    if built:
+        _refuse_while_internet(cfg, "start a sandbox")
+        snapshots.roll_back(ex, built)
+        services = "not reset: a later run of the round (the first one reset them)"
+    else:
+        services = _build_sandbox(ex, cfg, hcl)
+    snapshots.wait_for_ssh(ex, _sandbox_hosts(ex))
 
     vm_networks = _vm_networks(graph)
     vms = _sandbox_vms(ex)
@@ -135,6 +218,8 @@ def prepare(ex, cfg, params):
     # access switches, networks and VMs, with all edges) and the generated
     # OpenTofu definition are saved on the run for later visualisation.
     return {
+        "sandbox": "rolled back to its snapshot" if built else "built and snapshotted",
+        "services": services,
         "topology": graph,
         "sandbox_definition": hcl,
         "vms": [
@@ -256,11 +341,13 @@ def release_secrets(ex, cfg, params):
 
 
 def teardown(ex, cfg, params):
+    """After a run. With `keep` (another run of the round follows) the sandbox stays, powered
+    off, for the next prepare to roll back; else it is destroyed."""
     _clear_current_team(ex, cfg)
-    # One at a time: VMs destroyed in parallel fight over the storage lock, and a volume
-    # Proxmox gives up on then blocks whichever new VM gets that ID.
-    ex.tofu("sandbox", "destroy", "-auto-approve", "-input=false", "-parallelism=1", timeout=cfg.get("apply_timeout", 5400))
-    ex.worms("inventory", timeout=300)
+    if params["keep"]:
+        snapshots.stop(ex, snapshots.pool_vms(ex, "sandbox"))
+        return {"destroyed": False, "kept": True}
+    _destroy_sandbox(ex, cfg)
     return {"destroyed": True}
 
 
@@ -335,10 +422,29 @@ def _write_devbox_map(ex, cfg, teams):
         if info and info.get("services_source_ip"):
             lines.append(f"{info['services_source_ip']} {team['team_uuid']}")
     body = "".join(f"{line}\n" for line in lines)
+    _push_devbox_map(ex, cfg, body)
+    # Kept on the node too: a rollback of scoring and logging takes the map with it
+    # (_restore_devbox_map), and the database is not the agent's to read.
+    state = Path(cfg.get("state_dir", STATE_DIR))
+    state.mkdir(mode=0o700, parents=True, exist_ok=True)
+    copy = state / "devbox-teams"
+    with open(os.open(copy, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as fh:
+        fh.write(body)
+
+
+def _push_devbox_map(ex, cfg, body):
     for host in (cfg.get("scoring_host"), cfg.get("logging_host")):
         if not host:
             raise validation.Invalid("scoring_host/logging_host not configured for the round agent")
         ex.ssh(host, ["sudo", "install", "-m", "0640", "-o", "root", "-g", "www-data", "/dev/stdin", DEVBOX_TEAMS_FILE], input=body)
+
+
+def _restore_devbox_map(ex, cfg):
+    """After scoring and logging are rolled back: their snapshot is older than the map, so
+    devbox submissions would go unattributed until the next devbox job wrote it again."""
+    copy = Path(cfg.get("state_dir", STATE_DIR)) / "devbox-teams"
+    if copy.exists():
+        _push_devbox_map(ex, cfg, copy.read_text())
 
 
 def _devbox_report(ex, teams):
@@ -373,7 +479,10 @@ def devbox_provision(ex, cfg, params):
     Returns the devbox records for the orchestrator to register."""
     teams = params["teams"]
     ex.generate_devbox(teams, ex.repo_root / DEVBOX_GENERATED)
+    before = {(vm["vmid"], vm["name"]) for vm in snapshots.pool_vms(ex, "devbox")}
     ex.worms("devbox-apply", timeout=cfg.get("apply_timeout", 5400))
+    # Only the VMs this apply created: one that was there before may have had its team on it.
+    _snapshot_fresh_devbox_vms(ex, [vm for vm in _team_vms(ex) if (vm["vmid"], vm["name"]) not in before])
     _configure_devbox(ex, teams)
     report, sources = _devbox_report(ex, teams)
     _write_devbox_map(ex, cfg, teams)
@@ -403,20 +512,49 @@ def _devbox_replace_args(slug):
     return [f'-replace=module.devbox_vm["devbox-{slug}-{role}"].proxmox_virtual_environment_vm.vm' for role in ("a", "b", "c")]
 
 
+def _team_vms(ex, slug=None):
+    """The teams' devbox VMs (A, B, C; not the gateways) in the devbox pool, or one team's."""
+    names = {name for name, info in _devbox_vms(ex).items() if slug is None or info["team"] == slug}
+    return [vm for vm in snapshots.pool_vms(ex, "devbox") if vm["name"] in names]
+
+
+def _snapshot_fresh_devbox_vms(ex, vms):
+    """Snapshot devbox VMs OpenTofu has just created, once their first boot is done: before the
+    configuration puts the team's keys on them, so no team has been on them. A reset rolls
+    back to this, and the configuration and fresh tokens follow."""
+    if not vms:
+        return
+    ips = {info["vmid"]: info["maintenance_ip"] for info in _devbox_vms(ex).values()}
+    hosts = [ips[vm["vmid"]] for vm in vms]
+    snapshots.wait_for_first_boot(ex, hosts)
+    snapshots.take(ex, vms, "worms devbox: first boot, before any team key")
+    snapshots.wait_for_ssh(ex, hosts)
+
+
 def devbox_rebuild(ex, cfg, params):
-    """Rebuild one team's devbox VMs (fresh disks) and rewrite their tokens,
-    without touching other teams. The team's version has already been bumped by
-    the orchestrator (which clears the dashboard score); here the VMs are
-    replaced so the environment is truly fresh."""
+    """Give one team a fresh devbox and new tokens, without touching other teams. The team's
+    version has already been bumped by the orchestrator (which clears the dashboard score). Its
+    three VMs go back to the snapshot taken before the team was ever on them; VMs without one
+    (built before snapshots) are replaced instead, and snapshotted for the next time."""
     teams = params["teams"]
     slug = next((t["slug"] for t in teams if t["team_uuid"] == params["team_uuid"]), None)
     if slug is None:
         raise validation.Invalid("team_uuid is not in the teams list")
 
     ex.generate_devbox(teams, ex.repo_root / DEVBOX_GENERATED)
-    # Replace just this team's three VMs (fresh disks); the rest is a no-op.
-    ex.tofu("devbox", "apply", "-auto-approve", "-input=false", "-parallelism=1", *_devbox_replace_args(slug), timeout=cfg.get("apply_timeout", 5400))
-    ex.worms("inventory", timeout=300)
+    vms = _team_vms(ex, slug)
+    if len(vms) == len(DEVBOX_ROLES) and all(snapshots.has_clean(ex, vm) for vm in vms):
+        _refuse_while_internet(cfg, "start a devbox")
+        snapshots.roll_back(ex, vms)
+        ips = {info["vmid"]: info["maintenance_ip"] for info in _devbox_vms(ex).values()}
+        snapshots.wait_for_ssh(ex, [ips[vm["vmid"]] for vm in vms])
+        how = "rolled back to its snapshot"
+    else:
+        # Replace just this team's three VMs (fresh disks); the rest is a no-op.
+        ex.tofu("devbox", "apply", "-auto-approve", "-input=false", "-parallelism=1", *_devbox_replace_args(slug), timeout=cfg.get("apply_timeout", 5400))
+        ex.worms("inventory", timeout=300)
+        _snapshot_fresh_devbox_vms(ex, _team_vms(ex, slug))
+        how = "replaced and snapshotted"
     _configure_devbox(ex, teams)
 
     # Rewrite this team's tokens only.
@@ -429,6 +567,7 @@ def devbox_rebuild(ex, cfg, params):
     return {
         "team_uuid": params["team_uuid"],
         "devbox_version": params["devbox_version"],
+        "devbox": how,
         "vms": rebuilt,
         "addresses": _devbox_addresses(teams),
     }
@@ -460,8 +599,10 @@ def devbox_reconfigure(ex, cfg, params):
     source->team map, without rebuilding any VM or touching tokens. Enqueued
     when a team adds/removes a key or leaves (docs/devbox.md). Idempotent."""
     teams = params["teams"]
-    _configure_devbox(ex, teams)
+    # The map first: it is what a reset of scoring and logging takes, and the configuration
+    # takes minutes.
     _write_devbox_map(ex, cfg, teams)
+    _configure_devbox(ex, teams)
     return {"reconfigured": [t["slug"] for t in teams], "addresses": _devbox_addresses(teams)}
 
 

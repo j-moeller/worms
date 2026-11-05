@@ -373,6 +373,33 @@ def test_shell_scripts(render, tmp_path, role, template, extra):
         assert proc.returncode == 0, proc.stdout
 
 
+@pytest.mark.parametrize("flag, expected", [(True, 1), (False, 0)])
+def test_the_watchdog_stops_team_vms_while_internet_access_is_allowed(render, tmp_path, flag, expected):
+    """The build shuts the devboxes down for the internet window; one started anyway is stopped."""
+    flag_file = tmp_path / "internet-allowed"
+    if flag:
+        flag_file.write_text("allowed\n")
+    script = tmp_path / "watchdog.sh"
+    script.write_text(render("ansible/roles/host/host_network", "worms-firewall-watchdog.sh.j2", host_internet_flag=str(flag_file)))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    vms = '[{"vmid": 116, "pool": "devbox", "status": "running"}, {"vmid": 111, "pool": "ephemeral", "status": "running"}]'
+    fakes = {
+        "pvesh": f"echo '{vms}'",
+        "qm": f'echo "$@" >> {tmp_path}/qm.log',
+        "nft": "echo 'iifname tap116i0 accept'",  # every table there, rules for the VM
+        "systemctl": "exit 0",
+        "logger": "exit 0",
+    }
+    for name, body in fakes.items():
+        (bin_dir / name).write_text(f"#!/bin/sh\n{body}\n")
+        (bin_dir / name).chmod(0o755)
+    proc = subprocess.run(["bash", str(script)], env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}, capture_output=True, text=True)
+    assert proc.returncode == expected, proc.stderr
+    stopped = (tmp_path / "qm.log").read_text().split("\n") if (tmp_path / "qm.log").exists() else []
+    assert [line for line in stopped if line] == (["stop 116 --skiplock 1"] if flag else [])
+
+
 @pytest.mark.parametrize(
     "template",
     ["zeek.service.j2", "zeek-shipper.service.j2", "worms-capture-iface.service.j2",

@@ -264,6 +264,11 @@ class Executor:
                 stale.unlink()
         (sandbox / "generated_vms.tf").write_text(hcl)
 
+    def sandbox_definition(self):
+        """The generated sandbox definition the stack holds now, or "" if there is none."""
+        path = self.repo_root / "opentofu" / "stacks" / "sandbox" / "generated_vms.tf"
+        return path.read_text() if path.exists() else ""
+
     def read_json(self, path):
         return json.loads(Path(path).read_text() or "{}")
 

@@ -7,7 +7,7 @@ per-caller bearer token in settings.ORCHESTRATOR_API.
 The infrastructure side has no DNS, so ORCHESTRATOR_URL holds an IP address. The
 connection goes there, and the certificate is verified for ORCHESTRATOR_TLS_NAME
 against the system's trust store, which holds the internal CA. Standard library
-only: the dashboard VM has no way to install packages while devboxes exist.
+only: the dashboard VM installs packages only during a build's internet window.
 """
 
 from __future__ import annotations

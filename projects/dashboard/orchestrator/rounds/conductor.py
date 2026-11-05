@@ -18,6 +18,11 @@ State machine of a RoundRun (see docs/rounds.md):
 
 A failed host job or an exception moves the run to FAILED and tears the
 sandbox down. One run is active at a time (one sandbox fits on the host).
+
+The runs of a round share one sandbox, built from the round's seed: the first
+run's prepare builds and snapshots it, the others roll it back to that snapshot,
+so each team starts from the same clean sandbox. A teardown keeps it while
+another run of the round is still to come, and the last one destroys it.
 """
 
 from __future__ import annotations
@@ -106,7 +111,7 @@ class Conductor:
                     log.warning("run %s: could not stop %s", run.uuid, vm.vm_identifier)
             if run.ends_at is not None and run.ends_at > now:
                 fields["ends_at"] = now
-            self.request_job(run, HostJob.Kind.TEARDOWN)
+            self.request_job(run, HostJob.Kind.TEARDOWN, keep=self._sandbox_needed_after(run))
         # The next run waits for that teardown (_teardown_pending).
         self.set_state(run, RoundRun.State.FAILED, **fields)
 
@@ -143,6 +148,18 @@ class Conductor:
         estimate the dashboard uses when a round is created)."""
         timing = self.timing(run)
         return timing["worm_start_delay"] + timing["run_duration"] + self.cfg["end_drain"] + self.cfg["slot_overhead"]
+
+    def _sandbox_needed_after(self, run) -> bool:
+        """Whether another run of the round may still use its sandbox: keep it, powered off."""
+        return RoundRun.objects.filter(round_id=run.round_id, state=RoundRun.State.PENDING, upload__isnull=False).exists()
+
+    def _kept_sandbox(self):
+        """The run whose teardown kept the sandbox for a run that then never came (it was
+        skipped), if the host still holds that sandbox: it is destroyed once nothing is left."""
+        last = HostJob.objects.filter(kind=HostJob.Kind.TEARDOWN).order_by("-id").select_related("run").first()
+        if last is None or not (last.params or {}).get("keep") or last.state != HostJob.State.DONE:
+            return None
+        return last.run
 
     def _teardown_pending(self) -> bool:
         """True while a sandbox teardown has not completed, so the host may
@@ -202,7 +219,13 @@ class Conductor:
                 )  # fmt: skip
                 return True
             self.set_state(nxt, RoundRun.State.PREPARING)
-            self.request_job(nxt, HostJob.Kind.PREPARE, seed=nxt.seed, sandbox_params=nxt.sandbox_params)
+            # The round's seed: the same sandbox for every team (the run's own seed is its game plan's).
+            self.request_job(nxt, HostJob.Kind.PREPARE, seed=nxt.round.seed, sandbox_params=nxt.sandbox_params)
+            return True
+        kept = self._kept_sandbox()
+        if kept is not None:
+            log.info("no run left for the sandbox kept after run %s: destroying it", kept.uuid)
+            self.request_job(kept, HostJob.Kind.TEARDOWN, keep=False)
             return True
         return False
 
@@ -315,7 +338,7 @@ class Conductor:
             if self.now() - run.state_changed_at < timedelta(seconds=self.cfg["end_drain"]):
                 return False
             self.set_state(run, RoundRun.State.TEARING_DOWN)
-            self.request_job(run, HostJob.Kind.TEARDOWN)
+            self.request_job(run, HostJob.Kind.TEARDOWN, keep=self._sandbox_needed_after(run))
             return True
         return False
 

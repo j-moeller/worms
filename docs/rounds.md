@@ -1,7 +1,8 @@
 # Round orchestration
 
 How a round is run: every team's worm is evaluated, one team after another,
-in a freshly built sandbox with its own game plan. This document grows with the
+in the round's sandbox, rolled back to the same clean snapshot for each team,
+with its own game plan. This document grows with the
 implementation (see "Status" at the end).
 
 ## The problem: privileges
@@ -92,13 +93,13 @@ FINISHED ◀── TEARING_DOWN ◀── ENDING ◀─────────�
 | State | Who | What |
 |---|---|---|
 | PENDING | — | planned, waiting its turn; no upload, or not enough time left before the round's end for a whole run → SKIPPED (the reason is the run's error) |
-| PREPARING | agent (`prepare`) | generate + apply the sandbox, install the internal CA into the sandbox guests (SetupSandbox.yml), register its VMs and topology (the ephemeral/private-internet VMs are not rebuilt per run: `worms build round-reset-services` between rounds) |
+| PREPARING | agent (`prepare`) | the round's sandbox: rolled back to its snapshot, or for the round's first run built and snapshotted (below); register its VMs and topology |
 | CHECKING | agent (`check`) | firewalls up, mirror receive-only, every sandbox VM running |
 | DEPLOYING | agent (`deploy`) | fetch + verify the worm, copy it to the start VM and unpack it there (a zip without `main.sh` at its top level fails the run), release the initial secrets, arm the fuse; report when it was armed |
 | ARMED | conductor | wait until `worm_start_at` (the worm starts itself on the VM) |
 | RUNNING | conductor | run the game plan: stop/start VMs (its own token), request secret releases (agent) |
 | ENDING | conductor | stop every VM, let the monitor drain |
-| TEARING_DOWN | agent (`teardown`) | clear the running team on scoring/logging, destroy the sandbox |
+| TEARING_DOWN | agent (`teardown`) | clear the running team on scoring/logging; keep the sandbox, powered off, if another run of the round is to come (`keep`), else destroy it |
 | FINISHED / FAILED / SKIPPED | — | terminal; the next run starts |
 
 The deadline, uploads and the running order are the planner's
@@ -109,6 +110,48 @@ member who changes teams does not take uploads along), and each with the
 round's parameters (below). A run starts only if it can finish before the
 round's end (fuse + run + drain + `slot_overhead`); otherwise it is skipped,
 so a round's results are final at its end.
+
+## One sandbox per round, from snapshots
+
+The runs of a round share one sandbox, generated from the **round's** seed and
+parameters, so every team meets the same network; each run's own seed still
+drives its game plan. Team code is assumed hostile and root on its VMs, so the
+sandbox is snapshotted before any team's code reaches it, and every run starts
+from that snapshot (`scripts/round_agent/snapshots.py`):
+
+1. **The round's first run** finds no sandbox for this seed (the stack holds
+   another round's, or none, or one without a snapshot on every VM). `prepare`
+   destroys what is there, then shuts the running devbox VMs down, rolls the
+   service VMs (ephemeral, private internet) back to the snapshot `worms build`
+   took of them, applies and configures the sandbox, and snapshots every VM of
+   it, the gateway too, shut down first: no guest agent runs on them. Then it
+   starts the devboxes again. While all this runs, no team code runs anywhere
+   it could change what the sandbox installs from, and the private internet
+   is the clean one.
+2. **Every later run** rolls each sandbox VM back to that snapshot (disk and
+   configuration) and starts it: a boot instead of a build.
+3. **`teardown`** keeps the sandbox, powered off, while another run of the round
+   with an upload is pending, and destroys it otherwise. If that run is then
+   skipped (no time left), the conductor asks for a last teardown that destroys it.
+
+No internet window is needed for a new sandbox: it installs its packages from
+the apt cache, which the operator's builds fill with everything team VMs install
+(`apt_cache_seed_packages`, checked by `tests/test_ansible.py`). The internet window
+is refused while a sandbox exists, and the agent starts no sandbox or devbox VM
+while it is open.
+
+Rolling the services back loses the devbox map on scoring and logging (which
+devbox gateway address is which team), which is newer than their snapshot: the
+agent writes it again at once from its copy on the node, `/var/lib/worms/devbox-teams`,
+which every devbox job updates. `prepare` reports what happened under `sandbox`
+and `services`. Without a snapshot on every service VM, the services are left as
+they are and the run says so (`worms build rebuild-services` makes one).
+
+The operator can still reset the services by hand, outside a round, with
+`worms build round-reset-services` (`docs/management.md`, "Between rounds").
+
+None of this has run on a real node yet: the conductor and the agent are tested
+offline, with a fake Proxmox.
 
 ## Defining a round (dashboard, staff)
 
@@ -257,14 +300,6 @@ Timings: a round's own `timing` (set on the dashboard) for the fuse and the
 run length; otherwise `ROUND_TIMING` (`config/settings/base.py`, env-tunable:
 `worm_start_delay` 300 s, `run_duration` 3600 s, `end_drain`, `slot_overhead`)
 and `ROUND_CONDUCTOR` (`job_timeout`, `capture_grace`).
-
-Between rounds, `worms build round-reset-services` returns the ephemeral and
-private-internet VMs to the snapshot `worms build` took of them after setup. Nothing
-is rebuilt and no internet is needed, so devboxes can stay, but it is refused while a
-sandbox exists. It is the operator's command: the round agent never runs it. The
-devbox map lives on scoring and logging and is newer than the snapshot, so a reset
-also enqueues `devbox_reconfigure` to write it back. Not yet run on a real node; see
-`docs/management.md`, "Between rounds".
 
 `worms simulate` (`docs/testing.md`) checks the scoring path end to end: a flag
 submitted through the sandbox API becomes a `FlagCapture` and a `captured`

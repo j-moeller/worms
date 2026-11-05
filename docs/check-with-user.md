@@ -45,30 +45,31 @@ ssh -p 2222 team@worms-dev.mlsec.tu-berlin.de
 You confirmed access by IP earlier. The IP now gets `400`, because the name is the only one
 accepted. The host cannot test either of these itself: the port forward only matches outside traffic. If the `ssh` times out, the network in front of the node may be blocking port 2222.
 
-### 3b. Try the snapshot reset on real VMs
+### 3b. Try the snapshots on real VMs
 
 - [ ] Run this, or allow it and tell me to:
 
-The safety check blocked me from restarting the service VMs and from writing to them over SSH, so
-`worms build round-reset-services` has only run in offline tests. The real VMs have no snapshot yet. It
-needs no devbox or sandbox VM at the snapshot, so this removes the devboxes, which take about 17 minutes
-to build again:
+The safety check blocked me from restarting the service VMs and from writing to them over SSH, so no
+snapshot or rollback has run on a real VM: not of the services, not of a round's sandbox, not of a
+devbox at a reset. The real VMs have no snapshot yet. Team VMs have reached the service VMs on this
+node, so their first snapshot comes from a rebuild. Each of the two builds below shuts the running
+devboxes down while its internet window is open, 20 minutes to an hour:
 
 ```sh
-/usr/local/sbin/worms-node-run opentofu/stacks/devbox 'tofu destroy -auto-approve -parallelism=1'
-worms build snapshot-services         # restarts the 11 service VMs
-time worms build round-reset-services # restarts them again
+worms build                             # the new round agent and firewall watchdog on the node
+worms build rebuild-services            # the 11 service VMs from nothing, then snapshotted
+time worms build round-reset-services   # the reset by hand: about 2 minutes by estimate
 worms build ping
 worms simulate
-worms devbox provision                # the devboxes again
 ```
 
-**What to look at:** how long the reset really takes (my estimate is about 2 minutes), and whether `worms
-simulate` passes as it did before. Also run a reset once with devboxes up, and check that the map in
-`/etc/sandbox-api/devbox-teams` on scoring and logging comes back.
+Then, on the dashboard, reset one team's devbox twice. The first reset replaces its VMs and
+snapshots them (they predate snapshots); the second should roll them back, much faster.
 
-**This node's snapshot is only good for this test,** because team VMs have reached these services. For a
-snapshot to trust, use `worms build rebuild-services` instead.
+**What to look at:** how long the reset and the second devbox reset really take, whether `worms
+simulate` passes as it did before, and whether `/etc/sandbox-api/devbox-teams` on scoring and logging
+has every team again a few seconds after the reset. A round with two teams then shows the sandbox
+built once and rolled back for the second team (the prepare jobs' `sandbox` field).
 
 ## Decide these
 

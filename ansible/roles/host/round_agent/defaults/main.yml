@@ -43,6 +43,12 @@ round_agent_dashboard_media_root: "{{ dashboard_media_root }}"
 # uuid to them at deploy (the scoring/logging servers no longer use tokens).
 round_agent_scoring_host: "{{ management_ips.scoring }}"
 round_agent_logging_host: "{{ management_ips.logging }}"
+# The service VMs a sandbox reaches (ephemeral and private internet): the agent rolls them back to
+# their clean snapshot before it builds a round's sandbox, then waits until each answers over SSH
+# here (scripts/round_agent/handlers.py, prepare).
+round_agent_service_hosts: >-
+  {{ (['scoring', 'logging', 'monitor', 'dns'] | map('extract', management_ips) | select('defined') | list)
+     + ((private_internet_ips | default({})).values() | map(attribute='maintenance') | list) }}
 
 # Database (round_agent role; job queue only). Connects to the core address.
 round_agent_db_host: "{{ infrastructure_ips.database }}"

@@ -6,7 +6,8 @@
 #   * Host nftables: the WAN interface in the set `internet_wan`, which gates
 #     the forward/masquerade rules (empty = denied).
 # While allowed, host_internet_flag exists (tmpfs, gone after a reboot) and the
-# sandbox stack refuses to deploy. Allowing is refused while sandbox VMs exist.
+# sandbox and devbox stacks refuse to deploy. Allowing is refused while a sandbox
+# VM exists or a devbox VM runs (the pipeline shuts them down for the window).
 
 - name: Validate the requested state
   ansible.builtin.assert:
@@ -34,16 +35,21 @@
       register: internet_vms
       changed_when: false
 
-    # Opening the internet gives every untrusted VM an indirect path out (DNS
-    # forwarding, the caches). Devbox VMs are always-on, so this also stops the
-    # window while any devbox exists, not only during a round.
-    - name: Refuse while any untrusted (sandbox or devbox) VM exists
+    # Opening the internet gives every untrusted VM that runs an indirect path
+    # out (DNS forwarding, the caches). A sandbox exists only during a round, so
+    # any sandbox VM refuses it. Devbox VMs are always there: shut down, they
+    # cannot reach anything, so only a running one refuses it (the pipeline,
+    # src/worms_cli/pipeline.py, shuts them down for the window).
+    - name: Refuse while a sandbox VM exists or a devbox VM runs
       ansible.builtin.assert:
         that: untrusted_vms | length == 0
-        fail_msg: "Refusing: untrusted VM(s) {{ untrusted_vms | join(', ') }} in the sandbox/devbox pool"
+        fail_msg: "Refusing: untrusted VM(s) {{ untrusted_vms | join(', ') }} (sandbox VMs, or running devbox VMs)"
         quiet: true
       vars:
-        untrusted_vms: "{{ internet_vms.stdout | from_json | selectattr('pool', 'defined') | selectattr('pool', 'in', ['sandbox', 'devbox']) | map(attribute='vmid') | list }}"
+        resources: "{{ internet_vms.stdout | from_json | selectattr('pool', 'defined') }}"
+        untrusted_vms: >-
+          {{ (resources | selectattr('pool', 'equalto', 'sandbox') | map(attribute='vmid') | list)
+             + (resources | selectattr('pool', 'equalto', 'devbox') | rejectattr('status', 'equalto', 'stopped') | map(attribute='vmid') | list) }}
 
     # Flag first: from now on no sandbox can be deployed.
     - name: Create the flag directory

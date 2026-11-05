@@ -60,7 +60,13 @@ record. Each team has a `devbox_version` (on `teams`). A reset:
 1. goes through the orchestrator (the dashboard role may not change the
    version): `POST /devbox/<team>/reset/` **increments** `devbox_version` and
    enqueues a `devbox_rebuild` host job (carrying the whole competition's teams and their keys, so the agent can regenerate the stack and re-install keys);
-2. the round agent rebuilds the team's VMs (fresh disks) and writes new tokens.
+2. the round agent rolls the team's three VMs back to their snapshot `clean`,
+   then installs the team's keys again and writes new tokens. The snapshot is
+   taken when `devbox_provision` creates a VM, after its first boot and before
+   any team key is on it, so no team has been on it. A VM that existed before
+   snapshots, or has none for another reason, is replaced instead (fresh disk),
+   as every reset did before 2026-11-05, and snapshotted then. Not yet run on
+   a real devbox: tested offline (`tests/test_round_agent.py`).
 
 Devbox captures and logs are **tagged with the version in force** when they are
 recorded (`devbox_captures.devbox_version`, `devbox_logs.devbox_version`). The

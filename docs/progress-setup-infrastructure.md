@@ -5,7 +5,9 @@ Times are host time (CET); the VMs log in UTC (CET - 1h).
 
 ## Status
 
-**Last updated:** 2026-11-05, after replacing the rebuild between rounds with a snapshot reset.
+**Last updated:** 2026-11-05, after moving the services, a round's sandbox and devbox resets onto snapshots.
+
+**Snapshots everywhere, 2026-11-05 (later):** a round's sandbox is built once, for its first run, and snapshotted; every later run rolls it back. While it is built, the round agent shuts the devboxes down and rolls the service VMs back to their snapshot first, then writes the devbox map again from its own copy. A devbox reset rolls the team's three VMs back to a snapshot taken after their first boot. `worms build` and `provision` roll the service VMs back before configuring and snapshot them again afterwards. The internet window no longer needs the devboxes destroyed: a build shuts them down for it, and the firewall watchdog stops any team VM that runs while it is open. **All tested offline only** (`docs/rounds.md`, "One sandbox per round"; `docs/check-with-user.md`, 3b).
 
 **Re-run from a clean base state, 2026-11-04:** passed from start to finish, with a retried build (`docs/e2e-run-2026-11-04/protocol.md`). The automated suite is in `tests/live`.
 

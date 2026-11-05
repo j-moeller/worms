@@ -87,7 +87,7 @@ not stop the rest. Each run writes `report.md` with a row per check, and the scr
 ```
 
 `--live-wipe-database` runs `worms reset-database --yes`, which **deletes every user, team and result**. It needs this node's name typed out, so a command copied from another machine does nothing.
-The apt cache and devpi keep what `make` put there, so `make` is not needed between runs. After changing what they hold, or any code, run `make` while no devbox VMs exist.
+The apt cache and devpi keep what `make` put there, so `make` is not needed between runs. After changing what they hold, or any code, run `make`: it shuts running devbox VMs down while the internet window is open.
 
 `tests/test_live_suite.py` is the offline part: nothing of the journey runs without the option, its scripts parse, no password reaches a screenshot or a command line.
 

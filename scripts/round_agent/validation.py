@@ -223,13 +223,18 @@ def devbox_deploy(params):
     return out
 
 
-# Job kind -> validator. CHECK and TEARDOWN take no parameters.
+def teardown(params):
+    # Anything but true destroys the sandbox: the safe side.
+    return {"keep": params.get("keep", False) is True}
+
+
+# Job kind -> validator. CHECK takes no parameters.
 VALIDATORS = {
     "prepare": prepare,
     "check": lambda params: {},
     "deploy": deploy,
     "release_secrets": release_secrets,
-    "teardown": lambda params: {},
+    "teardown": teardown,
     "devbox_provision": devbox_provision,
     "devbox_rebuild": devbox_rebuild,
     "devbox_reconfigure": devbox_reconfigure,

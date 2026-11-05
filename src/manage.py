@@ -261,7 +261,9 @@ def _request_devbox_reconfigure(config) -> int:
 
 
 def _restore_devbox_map(config) -> int:
-    """After a reset, whatever goes wrong here must not read as a failed reset."""
+    """After the service VMs were rolled back or rebuilt: the map on scoring and
+    logging is newer than their snapshot. Whatever goes wrong here must not read as
+    a failed reset."""
     try:
         return _request_devbox_reconfigure(config)
     except (SystemExit, Exception) as exc:  # noqa: BLE001
@@ -474,14 +476,16 @@ def cmd_build(config, args) -> int:
         return 1
     method_name, _ = pipeline.COMPONENTS[component]
     pipe = pipeline.Pipeline(config, ansible_args=" ".join(args.make_args))
+    code = 0
     try:
         getattr(pipe, method_name)()
     except build.BuildError as exc:
         output.error(str(exc))
-        return 1
-    if component == "round-reset-services":
-        return _restore_devbox_map(config)
-    return 0
+        code = 1
+    # Also after a failure: a rollback that happened is not undone by one.
+    if pipe.services_rolled_back and pipe.devboxes_exist():
+        code = _restore_devbox_map(config) or code
+    return code
 
 
 def cmd_debug(config, args) -> int:
@@ -560,8 +564,9 @@ SECTIONS = (
     Section(
         "set up the system",
         "From an empty node to a running platform. `worms build` is safe to repeat; it opens the internet "
-        "window, which is refused while any devbox or sandbox VM exists. Its last step snapshots the service "
-        "VMs, as what a reset returns to. Afterwards: `worms admin reset-password` for the first login.",
+        "window, which is refused during a round and shuts running devboxes down while it is open. It keeps the "
+        "snapshot of the service VMs that a reset returns to. Afterwards: `worms admin reset-password` for the "
+        "first login.",
         commands=(
             ("secrets issue <name>", "create or rotate a Proxmox token and store it"),
             ("secrets set <name>", "store a secret by hand (prompted, or from stdin)"),

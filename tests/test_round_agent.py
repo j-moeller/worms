@@ -25,6 +25,14 @@ from round_agent import handlers, validation  # noqa: E402
 from round_agent.agent import Agent  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _agent_state(monkeypatch, tmp_path):
+    """A test's own agent records and internet flag, never this machine's: the tests may
+    run on the node itself."""
+    monkeypatch.setattr(handlers, "STATE_DIR", str(tmp_path / "agent-state"))
+    monkeypatch.setattr(handlers, "INTERNET_FLAG", str(tmp_path / "internet-allowed"))
+
+
 def _load_varfile_text(text):
     """Parse an agent key varfile (YAML with `!unsafe` string tags)."""
     import yaml
@@ -212,6 +220,24 @@ class FakeExecutor:
         self.systemctl = {}
         self.qm = {}
         self.qm_config = {}
+        # Proxmox: whether the sandbox stack holds VMs, the other pools' VMs, which VMs have
+        # their clean snapshot.
+        self.sandbox_built = True
+        self.pools = {"devbox": [], "ephemeral": [], "private_internet": []}
+        self.clean = set()
+        self.fail_on = None
+
+    def sandbox_pool(self):
+        if not self.sandbox_built:
+            return []
+        hosts = self.tofu_output("sandbox")["ansible_hosts"].values()
+        return [{"vmid": h["vm_id"], "name": h["name"], "node": "n", "status": "running", "pool": "sandbox"} for h in hosts]
+
+    def sandbox_definition(self):
+        return self.installed_hcl or ""
+
+    def qm_steps(self):
+        return [" ".join(c[1:]) for c in self.calls if c[:2] == ("run", "qm") and c[2] not in ("config", "status")]
 
     def job_log(self, job_uuid, kind):
         from contextlib import nullcontext
@@ -225,9 +251,15 @@ class FakeExecutor:
 
     def tofu(self, stack, *args, timeout=3600):
         self.calls.append(("tofu", stack, *args))
+        if self.fail_on and self.fail_on in args:
+            raise RuntimeError(f"tofu {self.fail_on} failed")
+        if stack == "sandbox" and args[:1] in (("apply",), ("destroy",)):
+            self.sandbox_built = args[0] == "apply"
         return ""
 
     def tofu_output(self, stack):
+        if stack == "sandbox" and not self.sandbox_built:
+            return {}
         return {
             "ansible_hosts": {
                 "sandbox_gw": {"name": "sandbox-gw", "vm_id": 950, "management_ip": "10.4.0.2"},
@@ -254,6 +286,13 @@ class FakeExecutor:
 
     def run(self, argv, check=False, timeout=60):
         self.calls.append(("run", *[str(a) for a in argv]))
+        if argv[:3] == ["pvesh", "get", "/cluster/resources"]:
+            return json.dumps(self.sandbox_pool() + [vm for vms in self.pools.values() for vm in vms])
+        if argv[:2] == ["pvesh", "get"] and argv[2].endswith("/snapshot"):
+            vmid = int(argv[2].split("/")[4])
+            return json.dumps([{"name": "clean"}] if vmid in self.clean else [] + [{"name": "current"}])
+        if argv[:2] == ["qm", "snapshot"]:
+            self.clean.add(int(argv[2]))
         if argv[0] == "systemctl":
             return self.systemctl.get(argv[2], "active")
         if argv[:2] == ["qm", "config"]:
@@ -275,9 +314,26 @@ CFG = {"dashboard_host": "10.5.0.18", "dashboard_media_root": "/opt/dashboard/me
        "scoring_host": "10.5.0.14", "logging_host": "10.5.0.15"}
 
 
+PREPARE = {"seed": 5, "sandbox_params": {"vms": 2}}
+SANDBOX_VMIDS = {900, 901, 950}  # the two VMs and the gateway
+SERVICE_VMS = [{"vmid": 111, "name": "scoring", "node": "n", "status": "running", "pool": "ephemeral"},
+               {"vmid": 100, "name": "apt-cache", "node": "n", "status": "running", "pool": "private_internet"}]  # fmt: skip
+DEVBOX_VMS = [{"vmid": 116, "name": "devbox-t1-a", "node": "n", "status": "running", "pool": "devbox"},
+              {"vmid": 117, "name": "devbox-t1-b", "node": "n", "status": "stopped", "pool": "devbox"}]  # fmt: skip
+
+
+def _prepare(ex, cfg=None):
+    return handlers.prepare(ex, cfg or CFG, validation.validate("prepare", PREPARE))
+
+
+def _first_index(steps, prefix):
+    return next(i for i, step in enumerate(steps) if step.startswith(prefix))
+
+
 def test_prepare_builds_sandbox_and_reports_topology():
     ex = FakeExecutor()
-    result = handlers.prepare(ex, CFG, validation.validate("prepare", {"seed": 5, "sandbox_params": {"vms": 2}}))
+    ex.sandbox_built = False
+    result = _prepare(ex)
     assert ("generate", 5, 2) in ex.calls
     assert any(c[:2] == ("tofu", "sandbox") and "apply" in c for c in ex.calls)
     assert ("worms", "round-configure-sandbox") in ex.calls  # inventory + install the CA
@@ -290,6 +346,109 @@ def test_prepare_builds_sandbox_and_reports_topology():
     assert result["topology"]["nodes"] and result["topology"]["edges"]
     assert any(n["type"] == "network" for n in result["topology"]["nodes"])
     assert result["sandbox_definition"] == ex.installed_hcl
+    assert result["sandbox"] == "built and snapshotted"
+
+
+def test_a_new_sandbox_is_snapshotted_before_any_team_reaches_it():
+    """Every VM, its gateway too, shut down first: no guest agent, so a running one would be
+    snapshotted like a power cut."""
+    ex = FakeExecutor()
+    ex.sandbox_built = False
+    _prepare(ex)
+    steps = ex.qm_steps()
+    for vmid in SANDBOX_VMIDS:
+        assert steps.index(f"qm shutdown {vmid} --timeout 120 --forceStop 1") < _first_index(steps, f"qm snapshot {vmid} clean")
+        assert f"qm start {vmid}" in steps
+    assert ex.clean == SANDBOX_VMIDS
+    assert not any(handlers.FLAG_PATH in c["argv"] for c in ex.ssh_calls)  # no flag yet, nor a worm
+
+
+def test_the_next_run_of_the_round_rolls_the_sandbox_back():
+    """The same seed and parameters: no build, the snapshot, and nothing of the team before."""
+    ex = FakeExecutor()
+    ex.sandbox_built = False
+    _prepare(ex)
+    ex.calls.clear()
+    result = _prepare(ex)
+    assert not any(c[0] in ("tofu", "worms") and c[1:2] != ("output",) and "output" not in c for c in ex.calls)
+    assert sorted(ex.qm_steps()) == sorted(f"qm rollback {vmid} clean --start 1" for vmid in SANDBOX_VMIDS)
+    assert result["sandbox"] == "rolled back to its snapshot" and {vm["name"] for vm in result["vms"]} == {"sandbox-a", "sandbox-b"}
+
+
+@pytest.mark.parametrize("change", ["another round", "a missing snapshot"])
+def test_a_sandbox_that_is_not_the_rounds_or_not_whole_is_destroyed_and_built_again(change):
+    ex = FakeExecutor()
+    ex.installed_hcl = "locals { seed = \"another round\" }" if change == "another round" else 'locals { seed = "x" }'
+    ex.clean = set() if change == "another round" else SANDBOX_VMIDS - {901}
+    _prepare(ex)
+    tofu = [c[2] for c in ex.calls if c[:2] == ("tofu", "sandbox") and c[2] in ("destroy", "apply")]
+    assert tofu == ["destroy", "apply"]
+    assert not any("rollback" in step for step in ex.qm_steps())
+
+
+def test_a_new_sandbox_is_built_on_reset_services_with_the_devboxes_off():
+    """What it installs comes from the private internet, which team code may have changed:
+    back to its snapshot first, and no devbox running until the sandbox is snapshotted."""
+    ex = FakeExecutor()
+    ex.sandbox_built = False
+    ex.pools.update(ephemeral=[SERVICE_VMS[0]], private_internet=[SERVICE_VMS[1]], devbox=list(DEVBOX_VMS))
+    ex.clean = {100, 111}
+    result = _prepare(ex)
+    steps = ex.qm_steps()
+    off, on = steps.index("qm shutdown 116 --timeout 120 --forceStop 1"), steps.index("qm start 116")
+    rollbacks = [steps.index(f"qm rollback {vmid} clean --start 1") for vmid in (100, 111)]
+    sandbox_snapshots = [_first_index(steps, f"qm snapshot {vmid} clean") for vmid in SANDBOX_VMIDS]
+    assert off < min(rollbacks) and max(rollbacks + sandbox_snapshots) < on
+    assert not any("117" in step for step in steps)  # it was off, it stays off
+    assert result["services"].startswith("reset: 2 VMs")
+
+
+def test_a_rollback_of_the_services_puts_the_devbox_map_back(tmp_path):
+    """The map is newer than the services' snapshot: devbox submissions would go unattributed."""
+    ex = FakeExecutor()
+    ex.sandbox_built = False
+    ex.pools.update(ephemeral=[SERVICE_VMS[0]])
+    ex.clean = {111}
+    state = tmp_path / "agent-state"
+    state.mkdir()
+    (state / "devbox-teams").write_text("10.2.0.33 11111111-1111-1111-1111-111111111111\n")
+    _prepare(ex)
+    pushed = [c for c in ex.ssh_calls if "/etc/sandbox-api/devbox-teams" in c["argv"]]
+    assert {c["host"] for c in pushed} == {"10.5.0.14", "10.5.0.15"}
+    assert all(c["input"] == "10.2.0.33 11111111-1111-1111-1111-111111111111\n" for c in pushed)
+
+
+def test_services_without_a_snapshot_are_left_as_they_are_and_reported():
+    ex = FakeExecutor()
+    ex.sandbox_built = False
+    ex.pools.update(ephemeral=[SERVICE_VMS[0]], private_internet=[SERVICE_VMS[1]])
+    ex.clean = {111}
+    result = _prepare(ex)
+    assert not any("rollback" in step for step in ex.qm_steps())
+    assert "not reset" in result["services"] and "apt-cache" in result["services"] and "rebuild-services" in result["services"]
+
+
+def test_the_devboxes_come_back_when_the_build_fails():
+    ex = FakeExecutor()
+    ex.sandbox_built = False
+    ex.pools.update(devbox=list(DEVBOX_VMS))
+    ex.fail_on = "apply"
+    with pytest.raises(RuntimeError, match="apply failed"):
+        _prepare(ex)
+    assert ex.qm_steps()[-1] == "qm start 116"
+
+
+@pytest.mark.parametrize("built", [False, True])
+def test_no_sandbox_is_started_while_internet_access_is_allowed(tmp_path, built):
+    """OpenTofu refuses a build then, but a rollback starts VMs past it."""
+    (tmp_path / "internet-allowed").write_text("allowed\n")
+    ex = FakeExecutor()
+    ex.pools.update(devbox=list(DEVBOX_VMS))
+    if built:
+        ex.installed_hcl, ex.clean = 'locals { seed = "x" }', set(SANDBOX_VMIDS)
+    with pytest.raises(RuntimeError, match="internet access is allowed"):
+        _prepare(ex)
+    assert ex.qm_steps() == [] and not any(c[0] == "tofu" and "output" not in c for c in ex.calls)
 
 
 def test_check_reports_ok_when_everything_is_up():
@@ -448,10 +607,24 @@ def test_deploy_rejects_tampered_artifact():
 
 def test_teardown():
     ex = FakeExecutor()
-    assert handlers.teardown(ex, CFG, {})["destroyed"] is True
+    assert handlers.teardown(ex, CFG, validation.validate("teardown", {}))["destroyed"] is True
     destroy = next(c for c in ex.calls if c[:2] == ("tofu", "sandbox") and "destroy" in c)
     # In parallel, VMs fight over the storage lock and leave volumes that block later VMs.
     assert "-parallelism=1" in destroy
+
+
+def test_teardown_keeps_the_sandbox_for_the_rounds_next_run_powered_off():
+    ex = FakeExecutor()
+    result = handlers.teardown(ex, CFG, validation.validate("teardown", {"keep": True}))
+    assert result == {"destroyed": False, "kept": True}
+    assert not any(c[:2] == ("tofu", "sandbox") and "destroy" in c for c in ex.calls)
+    assert sorted(ex.qm_steps()) == sorted(f"qm stop {vmid}" for vmid in SANDBOX_VMIDS)
+
+
+@pytest.mark.parametrize("keep", ["true", 1, "yes", None, {}])
+def test_only_a_real_true_keeps_a_sandbox(keep):
+    """Destroying is the safe side."""
+    assert validation.validate("teardown", {"keep": keep}) == {"keep": False}
 
 
 def test_devbox_gateway_permitopen_is_only_the_entry_vm():
@@ -517,6 +690,9 @@ def test_every_devbox_job_reports_where_the_vms_are(job, tmp_path):
         def ssh(self, host, argv, input=None, **_):
             pass
 
+        def run(self, argv, **_):
+            return "[]"  # Proxmox: no VM, no snapshot
+
     params = {
         "team_uuid": "11111111-1111-1111-1111-111111111111",
         "devbox_version": 2,
@@ -528,6 +704,137 @@ def test_every_devbox_job_reports_where_the_vms_are(job, tmp_path):
         "devbox-t2-b": ["10.128.2.12", "10.128.3.12"],
         "devbox-t2-c": ["10.128.3.13"],
     }
+
+
+# --- devbox snapshots -------------------------------------------------------------
+
+T1 = "11111111-1111-1111-1111-111111111111"
+DEVBOX_TEAMS = [{"slug": "t1", "index": 0, "team_uuid": T1, "authorized_keys": ["ssh-ed25519 " + "A" * 68 + " t1@laptop"]}]
+T1_VMIDS = {116, 117, 118}
+
+
+class DevboxFake(FakeExecutor):
+    """One team's devbox: three VMs, their gateway and the SSH gateway, once applied."""
+
+    def __init__(self, tmp_path, built_before=False):
+        super().__init__()
+        self.repo_root = tmp_path
+        self.devbox_built = built_before
+        self._sync()
+
+    def _sync(self):
+        self.pools["devbox"] = [
+            {"vmid": vmid, "name": f"devbox-t1-{role}", "node": "n", "status": "running", "pool": "devbox"}
+            for vmid, role in zip(sorted(T1_VMIDS), "abc")
+        ] + [{"vmid": 119, "name": "devbox-t1-gw", "node": "n", "status": "running", "pool": "devbox"}] if self.devbox_built else []
+
+    def generate_devbox(self, teams, output_file):
+        self.calls.append(("generate-devbox",))
+
+    def worms(self, component, timeout=3600, args=None):
+        super().worms(component, timeout, args)
+        if component == "devbox-apply":
+            self.devbox_built = True
+            self._sync()
+
+    def tofu(self, stack, *args, timeout=3600):
+        if stack == "devbox" and "apply" in args:
+            self.devbox_built = True
+            self._sync()
+        return super().tofu(stack, *args, timeout=timeout)
+
+    def tofu_output(self, stack):
+        if stack != "devbox":
+            return super().tofu_output(stack)
+        if not self.devbox_built:
+            return {}
+        hosts = {
+            f"devbox-t1-{role}": {"name": f"devbox-t1-{role}", "vm_id": vmid, "management_ip": f"10.6.0.{vmid}",
+                                  "host_vars": {"devbox_team": "t1", "devbox_ssh_ip": f"10.7.0.{vmid}"}}
+            for vmid, role in zip(sorted(T1_VMIDS), "abc")
+        }  # fmt: skip
+        hosts["devbox-t1-gw"] = {"name": "devbox-t1-gw", "vm_id": 119, "management_ip": "10.6.0.119", "host_vars": {}}
+        vms = [{"name": f"devbox-t1-{role}", "ssh_fabric_ip": f"10.7.0.{vmid}"} for vmid, role in zip(sorted(T1_VMIDS), "abc")]
+        return {"ansible_hosts": hosts, "devbox": {"t1": {"services_source_ip": "10.2.0.33", "vms": vms}}}
+
+    def steps(self):
+        """qm steps, configuration and SSH in the order they ran."""
+        return [" ".join(c[1:]) for c in self.calls if (c[:2] == ("run", "qm") and c[2] not in ("config", "status")) or c[0] == "worms"]
+
+
+def test_a_new_devbox_is_snapshotted_after_its_first_boot_and_before_any_team_key(tmp_path):
+    ex = DevboxFake(tmp_path)
+    handlers.devbox_provision(ex, CFG, validation.validate("devbox_provision", {"teams": DEVBOX_TEAMS}))
+    steps = ex.steps()
+    configure = steps.index("devbox-configure")
+    for vmid in T1_VMIDS:
+        assert steps.index(f"qm shutdown {vmid} --timeout 120 --forceStop 1") < _first_index(steps, f"qm snapshot {vmid} clean") < configure
+    assert ex.clean == T1_VMIDS  # not the gateways: a reset rolls back the team's own three
+    first_boot = [c["host"] for c in ex.ssh_calls if c["argv"] == ["cloud-init", "status", "--wait"]]
+    assert sorted(first_boot) == sorted(f"10.6.0.{vmid}" for vmid in T1_VMIDS)
+
+
+def test_a_devbox_that_was_there_before_gets_no_snapshot(tmp_path):
+    """Its team may have been on it: a snapshot now would bring that back at every reset."""
+    ex = DevboxFake(tmp_path, built_before=True)
+    handlers.devbox_provision(ex, CFG, validation.validate("devbox_provision", {"teams": DEVBOX_TEAMS}))
+    assert ex.clean == set() and not any("snapshot" in step for step in ex.steps())
+
+
+def _rebuild(ex):
+    params = {"team_uuid": T1, "devbox_version": 3, "teams": DEVBOX_TEAMS}
+    return handlers.devbox_rebuild(ex, CFG, validation.validate("devbox_rebuild", params))
+
+
+def test_a_devbox_reset_rolls_back_to_the_snapshot(tmp_path):
+    """Minutes of OpenTofu and first boot saved; the keys and new tokens still follow."""
+    ex = DevboxFake(tmp_path, built_before=True)
+    ex.clean = set(T1_VMIDS)
+    result = _rebuild(ex)
+    steps = ex.steps()
+    assert not any(c[:2] == ("tofu", "devbox") and "apply" in c for c in ex.calls)
+    assert [s for s in steps if "rollback" in s] == [f"qm rollback {vmid} clean --start 1" for vmid in sorted(T1_VMIDS)]
+    assert steps[-1] == "devbox-configure"
+    tokens = [c["host"] for c in ex.ssh_calls if handlers.FLAG_PATH in c["argv"]]
+    assert sorted(tokens) == sorted(f"10.6.0.{vmid}" for vmid in T1_VMIDS)
+    assert result["devbox"] == "rolled back to its snapshot" and len(result["vms"]) == 3
+
+
+def test_a_devbox_without_a_snapshot_is_replaced_and_snapshotted(tmp_path):
+    ex = DevboxFake(tmp_path, built_before=True)
+    ex.clean = {116, 117}
+    result = _rebuild(ex)
+    replace = next(c for c in ex.calls if c[:2] == ("tofu", "devbox") and "apply" in c)
+    assert sum(arg.startswith("-replace=") for arg in replace) == 3
+    assert ex.clean == T1_VMIDS and result["devbox"] == "replaced and snapshotted"
+    assert not any("rollback" in step for step in ex.steps())
+
+
+def test_no_devbox_is_rolled_back_while_internet_access_is_allowed(tmp_path):
+    (tmp_path / "internet-allowed").write_text("allowed\n")
+    ex = DevboxFake(tmp_path, built_before=True)
+    ex.clean = set(T1_VMIDS)
+    with pytest.raises(RuntimeError, match="internet access is allowed"):
+        _rebuild(ex)
+    assert not any("rollback" in step for step in ex.steps())
+
+
+def test_a_reconfigure_writes_the_map_before_the_minutes_of_configuration(tmp_path):
+    """After a reset of scoring and logging, the map is what is missing."""
+    ex = DevboxFake(tmp_path, built_before=True)
+    order = []
+    ex.ssh = lambda host, argv, input=None, timeout=120: order.append(("map", host)) if handlers.DEVBOX_TEAMS_FILE in argv else None
+    ex.worms = lambda component, timeout=3600, args=None: order.append(("configure", component))
+    handlers.devbox_reconfigure(ex, CFG, validation.validate("devbox_reconfigure", {"team_uuid": T1, "teams": DEVBOX_TEAMS}))
+    assert order == [("map", "10.5.0.14"), ("map", "10.5.0.15"), ("configure", "devbox-configure")]
+
+
+def test_the_agents_copy_of_the_map_is_root_only(tmp_path):
+    ex = DevboxFake(tmp_path, built_before=True)
+    handlers.devbox_reconfigure(ex, CFG, validation.validate("devbox_reconfigure", {"team_uuid": T1, "teams": DEVBOX_TEAMS}))
+    copy = tmp_path / "agent-state" / "devbox-teams"
+    assert copy.read_text() == f"10.2.0.33 {T1}\n"
+    assert oct(copy.stat().st_mode & 0o777) == "0o600" and oct(copy.parent.stat().st_mode & 0o777) == "0o700"
 
 
 def test_devbox_key_varfile_tags_keys_unsafe():
@@ -680,6 +987,24 @@ def test_round_agent_env_renders(render):
     assert "TF_VAR_proxmox_api_token=" not in env and "worms secrets set proxmox-token" in env
     assert "TF_VAR_ssh_public_key=/etc/worms/ssh/worms.pub" in env  # the WORMS key, from the vault
     assert "REPO_ROOT=/opt/worms" in env and "DB_SSLROOTCERT=/opt/worms/ansible/pki/worms/ca.crt" in env
+
+
+def test_round_agent_env_names_every_service_vm_it_waits_for(render):
+    """After rolling them back for a round's sandbox, which installs from the private internet."""
+    env = render(
+        "ansible/roles/host/round_agent", "round-agent.env.j2",
+        infrastructure_ips={"database": "10.11.0.16"},
+        management_ips={"dashboard": "10.5.0.18", "scoring": "10.5.0.14", "logging": "10.5.0.15",
+                        "monitor": "10.5.0.100", "dns": "10.5.0.11", "database": "10.3.0.16"},
+        private_internet_ips={"apt_cache": {"maintenance": "10.5.0.20", "network": "10.2.0.20"}},
+        postgres_db="mydb", pki_ca_cert_path="/etc/worms/ca.crt", vault_round_agent_db_password="secret",
+        dashboard_media_root="/opt/dashboard/media",
+    )  # fmt: skip
+    assert "SERVICE_HOSTS=10.5.0.14,10.5.0.15,10.5.0.100,10.5.0.11,10.5.0.20\n" in env
+    from round_agent.agent import config
+
+    assert config({"SERVICE_HOSTS": "10.5.0.14,10.5.0.20"})["service_hosts"] == ["10.5.0.14", "10.5.0.20"]
+    assert config({})["service_hosts"] == []
 
 
 def test_round_agent_env_carries_the_opentofu_inputs(render):
@@ -1056,9 +1381,10 @@ def test_install_d_creates_the_flag_directory(tmp_path):
     assert target.read_text() == "FLAG{x}" and oct(target.stat().st_mode & 0o777) == "0o444"
 
 
-def test_teardown_clears_the_running_team():
+@pytest.mark.parametrize("keep", [False, True])
+def test_teardown_clears_the_running_team(keep):
     """After a run, scoring and logging refuse round submissions (no current team)."""
     ex = FakeExecutor()
-    handlers.teardown(ex, CFG, {})
+    handlers.teardown(ex, CFG, {"keep": keep})
     cleared = [c for c in ex.ssh_calls if c["argv"] == ["sudo", "rm", "-f", "/etc/sandbox-api/current-team"]]
     assert {c["host"] for c in cleared} == {"10.5.0.14", "10.5.0.15"}

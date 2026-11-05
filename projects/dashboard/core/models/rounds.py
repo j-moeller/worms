@@ -29,7 +29,7 @@ class RoundRun(models.Model):
         ARMED = "armed"  # worm starts at worm_start_at
         RUNNING = "running"  # game plan executes
         ENDING = "ending"  # VMs stopped, monitor drains
-        TEARING_DOWN = "tearing_down"  # host: destroy the sandbox
+        TEARING_DOWN = "tearing_down"  # host: destroy the sandbox, or keep it for the round's next run
         FINISHED = "finished"
         FAILED = "failed"  # see `error`; the sandbox is torn down
         SKIPPED = "skipped"  # no upload before the deadline
@@ -123,11 +123,11 @@ class HostJob(models.Model):
     """
 
     class Kind(models.TextChoices):
-        PREPARE = "prepare"  # reset ephemeral + private internet, build the sandbox
+        PREPARE = "prepare"  # the round's sandbox: built (on reset services) or rolled back
         CHECK = "check"  # sanity checks (firewalls, VMs, services)
         DEPLOY = "deploy"  # worm artifact to the start VM + start timer
         RELEASE_SECRETS = "release_secrets"  # new secrets into VMs, hashes back
-        TEARDOWN = "teardown"  # destroy the sandbox
+        TEARDOWN = "teardown"  # destroy the sandbox, or keep it powered off for the round's next run
         # Devbox (docs/devbox.md): provision/rebuild a team's devbox VMs and
         # (re)write their tokens; run is null (a devbox job is team-scoped,
         # not round-scoped). The team uuid and version are in params.

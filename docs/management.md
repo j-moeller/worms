@@ -5,7 +5,7 @@ You manage the platform with two tools:
 - **The `worms` CLI** (`src/manage.py`), for anything that needs the Proxmox host: builds, devboxes, the admin account, status.
 - **The dashboard's staff pages** (`/staff/`), for anything that only changes the database: teams, student accounts, rounds.
 
-**Rounds and sandboxes have never run on a real node.** Sections on them come from the code and its offline tests. The commands marked as such under [Stop and remove things](#stop-and-remove-things) have not been run either, nor has the reset under [Between rounds](#between-rounds). Everything else here ran on this node on 2026-11-04 (`docs/e2e-run-2026-11-04/protocol.md`).
+**Rounds and sandboxes have never run on a real node.** Sections on them come from the code and its offline tests. The commands marked as such under [Stop and remove things](#stop-and-remove-things) have not been run either, nor has any snapshot or rollback described here: of the service VMs, of a round's sandbox, or of a devbox at a reset. Everything else here ran on this node on 2026-11-04 (`docs/e2e-run-2026-11-04/protocol.md`).
 
 ## Quick reference
 
@@ -23,7 +23,7 @@ You manage the platform with two tools:
 | Start a round | Nothing to press: it starts at its **Starts** time |
 | Watch a round | `/staff/rounds/` |
 | See the results | `worms leaderboard` |
-| Reset the services between rounds | `worms build round-reset-services` |
+| Reset the services between rounds | Nothing: each round does it. By hand: `worms build round-reset-services` |
 
 For the whole journey step by step, with every input and expected result, see `docs/manual-devbox-run.md`.
 
@@ -68,11 +68,11 @@ Then give the admin a password:
 worms admin reset-password    # the last line is a one-time password, shown once
 ```
 
-**The last step of `worms build` snapshots the service VMs** that have no snapshot yet: the ephemeral VMs and the private internet VMs, including DNS. This is what a reset returns to ([Between rounds](#between-rounds)). Each VM is shut down for a moment for it. A snapshot that exists is kept.
+**`worms build` and `worms build provision` keep the snapshot of the service VMs up to date.** These are the ephemeral VMs and the private internet VMs, including DNS, and their snapshot `clean` is what a reset returns them to ([Between rounds](#between-rounds)). Before it configures them, a build rolls back those that have a snapshot, so it works on clean VMs. Afterwards it takes the snapshot again, so the snapshot holds what the build changed. Each VM is shut down for a moment for that. A service VM that has been up without a snapshot gets none, because team VMs may have reached it. The build says so, and `worms build rebuild-services` makes one.
 
-**These builds need the internet window, which is refused while any devbox or sandbox VM exists**, because neither may have internet access. Remove those VMs first ([Stop and remove things](#stop-and-remove-things)). The window closes again by itself, even if the build fails.
+**These builds need the internet window, and no team VM may run while it is open.** They are refused while any sandbox VM exists, which means during a round. Running devbox VMs are shut down from the rollback until the new snapshot is taken, then started again, so teams lose their devbox while a build runs. The window closes again by itself, even if the build fails. If it cannot be closed, the devboxes stay off and the build names the command that starts them.
 
-**To redeploy only the Django code while devboxes exist,** use this. It opens no internet window and skips the package steps, so it cannot add a Python dependency. It takes about 3 minutes and restarts the dashboard and orchestrator services:
+**To redeploy only the Django code without shutting the devboxes down,** use this. It opens no internet window and skips the package steps, so it cannot add a Python dependency. It takes about 3 minutes and restarts the dashboard and orchestrator services:
 
 ```sh
 cd /root/app/ansible
@@ -195,13 +195,13 @@ tail -F /var/log/worms/jobs/latest.log
 |---|---|---|
 | Add an SSH key | `/profile/`, panel **SSH keys**, **Add key** | A `devbox_reconfigure` job installs it, in about 3 minutes |
 | Connect | The commands in panel **Connect**: `ssh -A -J team@<public name>:2222 root@<team's A>`, then one each for the hops to B and C | That works from outside, with the key in an SSH agent. On the node itself, use the gateway's address: `ssh -A -J team@10.7.0.2 root@<team's A>` |
-| Reset | **Reset devbox**, then **Yes, rebuild my devbox** | A `devbox_rebuild` job replaces that team's 3 VMs, in about 8 minutes (measured 2026-11-05). Other teams are not touched |
+| Reset | **Reset devbox**, then **Yes, rebuild my devbox** | A `devbox_rebuild` job rolls that team's 3 VMs back to the snapshot taken after their first boot, then puts the team's keys and new tokens on them. Other teams are not touched. Replacing the VMs took about 8 minutes (measured 2026-11-05), and about 3.5 of those were OpenTofu, which the rollback saves (estimate, not yet measured). A devbox built before snapshots is replaced once more, and snapshotted |
 
 ## Run a round
 
 **Not yet run on a real node.** The conductor and agent are tested offline only (`docs/rounds.md`, "What is not done here"). Also, a worm has no designed way from one sandbox VM to the next yet, because seeded vulnerabilities are not built. So a worm can capture only its start VM's flag.
 
-A round evaluates every team's worm, one team after another. Each team gets a freshly built sandbox and its own game plan.
+A round evaluates every team's worm, one team after another. Every team gets the same sandbox, built once for the round and rolled back to its snapshot before each run, and its own game plan.
 
 ### Create and configure
 
@@ -213,8 +213,8 @@ On `/staff/rounds/`, fill in **New round** and press **Create round**. Nothing i
 | | Name | | | |
 | | Starts | | In the future | UTC. Also the upload deadline |
 | | Ends | | After **Starts** | UTC. Runs that cannot finish by then are skipped |
-| | Seed | Random | 0 or more | Every team's sandbox and game plan derive from it |
-| Each team's sandbox | VMs | 8 | 1–250 | |
+| | Seed | Random | 0 or more | The round's sandbox, and each team's game plan, derive from it |
+| The round's sandbox | VMs | 8 | 1–250 | |
 | | Networks | 4 | 1–30 | No more than **VMs** |
 | | Sites | 1 | 1–8 | |
 | | Interfaces per VM at most | 3 | 1–8 | No more than **Networks** |
@@ -249,6 +249,8 @@ Before then:
 
 At **Starts**, the conductor plans one run per team, in an order shuffled by the seed, and works through them. A team's run is skipped if the team has no upload, or if too little time is left for a whole run.
 
+**The first run builds the round's sandbox.** The round agent shuts the running devbox VMs down, rolls the service VMs back to their snapshot, builds and configures the sandbox, snapshots it, and starts the devboxes again. Teams lose their devbox for that long. No internet window is needed: the sandbox installs its packages from the apt cache, which `worms build` filled with them. Every later run rolls the sandbox back to its snapshot, and the last one destroys it.
+
 ### Change or stop
 
 | When | What you can do, on `/staff/rounds/<id>/` |
@@ -268,7 +270,7 @@ A run moves through these states:
 pending → preparing → checking → deploying → armed → running → ending → tearing_down → finished
 ```
 
-It can also end as `skipped`, or as `failed`, where the sandbox is torn down and the next run starts after that.
+It can also end as `skipped`, or as `failed`, where its VMs are stopped and the next run starts after the teardown. A teardown keeps the sandbox, powered off, while another run of the round is still to come.
 
 To follow the services themselves, from the node:
 
@@ -286,13 +288,15 @@ worms leaderboard
 
 ### Between rounds
 
-To return the service VMs to a clean slate (scoring, logging, the monitor, DNS and the private internet):
+**Nothing to do.** The first run of the next round rolls the service VMs (scoring, logging, the monitor, DNS and the private internet) back to their snapshot before it builds that round's sandbox ([Start](#start)). Its prepare job says whether it did, under `services` in the job's result on `/staff/rounds/<id>/`. Without a snapshot on every one of these VMs, it leaves them as they are and says so.
+
+To reset them by hand, outside a round:
 
 ```sh
 worms build round-reset-services
 ```
 
-**Not yet run on real VMs.** It is tested offline, and the safety check blocked the live test (`docs/check-with-user.md`, 3b).
+**Not yet run on real VMs**, neither by the agent nor by hand. Both are tested offline, and the safety check blocked the live test (`docs/check-with-user.md`, 3b).
 
 | | |
 |---|---|
@@ -305,14 +309,14 @@ worms build round-reset-services
 
 While it runs, scoring, logging and DNS are down, so submissions from devboxes fail. Do not run it while a host job is running.
 
-**The devbox map comes back a few minutes later.** It lives on scoring and logging, and the snapshot is older than it. So the reset enqueues a `devbox_reconfigure` job, and the round agent writes the map again from the database, in about 3 minutes. Until then, devbox submissions are not attributed to a team. If the reset cannot enqueue the job, it says so: run `worms devbox reconfigure`.
+**The devbox map comes back afterwards.** The map tells scoring and logging which team a devbox submission is from: they see only the address of the team's devbox gateway, and the map pairs that address with the team. It is the file `/etc/sandbox-api/devbox-teams` on both, written by every devbox job, so it is newer than their snapshot and a rollback loses it. When the round agent rolls the services back itself, it writes the map again at once from its own copy on the node (`/var/lib/worms/devbox-teams`). After `worms build round-reset-services`, or a build that rolled them back, the CLI enqueues a `devbox_reconfigure` job, which writes the map first, as soon as the agent takes the job. Until then, devbox submissions are not attributed to a team. If the CLI cannot enqueue the job, it says so: run `worms devbox reconfigure`.
 
-**A reset also undoes what you deployed after the snapshot,** such as a `worms build provision` that changed these VMs, or a rotated database password. `worms build provision` warns about this. To make the change last, take a new snapshot. Both of these are refused while any devbox or sandbox VM exists, so remove those first ([Stop and remove things](#stop-and-remove-things)):
+**A reset undoes what was changed on these VMs after their snapshot** by anything other than `worms build` and `worms build provision`, which take it again. To make a new snapshot otherwise:
 
 | Command | What it does | When |
 |---|---|---|
-| `worms build rebuild-services` | Destroys these VMs, builds them from nothing and snapshots them. It needs the internet window and takes 20 minutes to an hour | Whenever in doubt. New VMs have seen nothing, so this is the snapshot to trust. A system built before snapshots existed needs this once |
-| `worms build snapshot-services` | Snapshots them as they are, replacing the old snapshot | Only if no team VM has reached them since they were last clean |
+| `worms build rebuild-services` | Destroys these VMs, builds them from nothing and snapshots them. It needs the internet window, so running devboxes are shut down meanwhile, and it takes 20 minutes to an hour. Refused during a round | Once on a system whose service VMs have been up without a snapshot, such as one built before snapshots. Also whenever in doubt: new VMs have seen nothing, so this is the snapshot to trust |
+| `worms build snapshot-services` | Snapshots them as they are, replacing the old snapshot. Refused while any devbox or sandbox VM exists | Only if no team VM has reached them since they were last clean |
 
 **Why the second one needs care:** team VMs are assumed malicious and can reach these services. A snapshot taken after that could keep whatever they did, and every reset would bring it back.
 

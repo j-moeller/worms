@@ -3,9 +3,10 @@
 A round is a database record: its window, its seed and the parameters every
 team's run gets (the sandbox size, the game plan, the timing;
 core/schedule.py). Creating one builds nothing. At the round's start the
-conductor on the orchestrator plans one run per team; for each run the round
-agent on the Proxmox host generates that team's sandbox from the seed, applies
-it with OpenTofu (root on the host), deploys the worm and tears it down again
+conductor on the orchestrator plans one run per team. The round agent on the
+Proxmox host builds the round's sandbox from the seed for the first run, with
+OpenTofu (root on the host), and snapshots it; every run starts from that
+snapshot, gets its team's worm, and the last one destroys the sandbox
 (docs/rounds.md). This page shows how far that got: the runs, their host jobs
 and errors, and the architecture each prepare reported.
 

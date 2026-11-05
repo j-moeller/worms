@@ -37,17 +37,19 @@ staff page draws it against the live infrastructure model.
   The document is that run's timeline (`orchestrator/rounds/timeline.py`):
   run events, submissions and logs within the run's window, the monitor's
   connections. Its clock's zero is the worm's start.
-- **Dev** (the team's development competition): there are no runs — the
-  devbox is always on. The document is what the team's devbox submitted and
-  logged during the round's window (from its start up to now, or its end).
-  A devbox VM counts as captured in the round when a submission in the window
-  carried its token (scored, or already scored at this devbox version). The
-  monitor records the sandbox only, so **a Dev document has no network
-  data** (`network.available: false`). Its clock's zero is the round's start.
+- **Dev** (the devbox): there are no runs and no rounds. The devbox is always on,
+  so there is one document, `round: null`: what the team's devbox submitted and
+  logged since its current version began (its last reset, or its creation), up to
+  now. It is never finished (`clock.finished: false`, `round_start` and `round_end`
+  null) and it grows until a reset starts it over. Its clock's zero is just before
+  the first activity. A devbox VM counts as captured when a submission in the window
+  carried its token (scored, or already scored at this devbox version). The monitor
+  records the sandbox only, so **it has no network data** (`network.available: false`).
 
-Which one a round is follows from its competition (the team's development
-competition → Dev). The PROGRESSION page shows the rounds of the environment
-switched on in the header (Live / Dev).
+A round of the team's development competition (staff can still create them) is
+served by the API like any round, as the devbox within that round's window. The
+PROGRESSION page does not use them: in the Dev view it shows the document above,
+and in the Live view the competition's rounds.
 
 ## The document (`worms-progression`, version 1)
 
@@ -141,7 +143,7 @@ logs/<ref>.json         one log record per file            (logs=1)
 network/flows.jsonl     the connections, one per line      (network=1)
 ```
 
-Name: `worms-<round>-<team>-<live|dev>.zip`. Open it on the PROGRESSION (or
+Name: `worms-<round>-<team>-<live|dev>.zip` (`worms-devbox-<team>-dev.zip` for the devbox). Open it on the PROGRESSION (or
 TOPOLOGY) page with **Open file…**: it is read in the browser (nothing is
 uploaded); the log records are read from the zip when opened.
 
@@ -154,6 +156,10 @@ uploaded); the log records are read from the zip when opened.
 | connections | `…/progression/flows/` | `…/flows/` | `…/flows/` |
 | one log record | `…/progression/logs/<ref>/` | `…/logs/<ref>/` | `…/logs/<ref>/` |
 | zip | `/api/v1/rounds/<id>/progression.zip` | `…/download/` | `…/download/` |
+
+The devbox has its own, with no round: `/api/v1/devbox/progression/` (and
+`…/logs/<ref>/`, `/api/v1/devbox/progression.zip`) for a token, and
+`/progression/devbox/` (and `…/logs/<ref>/`, `…/download/`) for the page.
 
 The page's endpoints serve the rounds of the environment switched on (Live:
 the competition, Dev: the development competition); another round is a 404.

@@ -19,6 +19,7 @@ def _dev_performance(team: Team) -> dict | None:
         "of": len(vms),
         "label": "tokens submitted at this version",
         "pips": [vm.id in found for vm in vms],
+        "can_reset": True,
     }
 
 

@@ -68,7 +68,7 @@ def test_an_upload_lands_where_the_agent_reads_it(team_site):
 
     from core.models.worms import MalwareArtifact
 
-    data = _zip({"main.py": "print('worm')\n"})
+    data = _zip({"main.sh": "echo worm\n"})
     assert "Uploaded worm.zip" in upload(team_site, data)
     artifact = MalwareArtifact.objects.get()
     digest = hashlib.sha256(data).hexdigest()
@@ -85,7 +85,7 @@ def test_the_same_bytes_again_keep_their_key(team_site):
     renamed by the storage (a renamed key fails the agent's validation)."""
     from core.models.worms import MalwareArtifact, Upload
 
-    data = _zip({"main.py": "print(1)\n"})
+    data = _zip({"main.sh": "echo 1\n"})
     upload(team_site, data)
     key = MalwareArtifact.objects.get().storage_key
     with as_role("postgres"):
@@ -97,8 +97,8 @@ def test_the_same_bytes_again_keep_their_key(team_site):
 
 @pytest.mark.parametrize("data, message", [
     (b"not a zip", "That is not a .zip archive"),
-    (_zip({"worm/main.py": "x"}), "no main.py at its top level"),
-    (_zip({"README.md": "x"}), "no main.py at its top level"),
+    (_zip({"worm/main.sh": "x"}), "no main.sh at its top level"),
+    (_zip({"README.md": "x"}), "no main.sh at its top level"),
 ])  # fmt: skip
 def test_what_cannot_run_is_refused(team_site, data, message):
     from core.models.worms import Upload

@@ -40,6 +40,9 @@ urlpatterns = [
     path("progression/rounds/<int:round_id>/flows/", progression.team_flows, name="progression_flows"),
     path("progression/rounds/<int:round_id>/logs/<uuid:ref>/", progression.team_log, name="progression_log"),
     path("progression/rounds/<int:round_id>/download/", progression.team_download, name="progression_download"),
+    path("progression/devbox/", progression.devbox_document, name="progression_devbox"),
+    path("progression/devbox/logs/<uuid:ref>/", progression.devbox_log, name="progression_devbox_log"),
+    path("progression/devbox/download/", progression.devbox_download, name="progression_devbox_download"),
     #
     path("upload/", upload, name="upload"),
     #
@@ -76,6 +79,9 @@ urlpatterns = [
         name="api_round_progression_log",
     ),
     path("api/v1/rounds/<int:round_id>/progression.zip", api.round_progression_zip, name="api_round_progression_zip"),
+    path("api/v1/devbox/progression/", api.devbox_progression, name="api_devbox_progression"),
+    path("api/v1/devbox/progression/logs/<uuid:ref>/", api.devbox_progression_log, name="api_devbox_progression_log"),
+    path("api/v1/devbox/progression.zip", api.devbox_progression_zip, name="api_devbox_progression_zip"),
     #
     # Staff administration (dashboard/views/staff*.py): database records only;
     # infrastructure is built from the console and the round agent.

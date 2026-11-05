@@ -94,7 +94,7 @@ FINISHED ◀── TEARING_DOWN ◀── ENDING ◀─────────�
 | PENDING | — | planned, waiting its turn; no upload, or not enough time left before the round's end for a whole run → SKIPPED (the reason is the run's error) |
 | PREPARING | agent (`prepare`) | generate + apply the sandbox, install the internal CA into the sandbox guests (SetupSandbox.yml), register its VMs and topology (the ephemeral/private-internet VMs are not rebuilt per run: `worms build round-reset-services` between rounds) |
 | CHECKING | agent (`check`) | firewalls up, mirror receive-only, every sandbox VM running |
-| DEPLOYING | agent (`deploy`) | fetch + verify the worm, copy it to the start VM and unpack it there (a zip without `main.py` at its top level fails the run), release the initial secrets, arm the fuse; report when it was armed |
+| DEPLOYING | agent (`deploy`) | fetch + verify the worm, copy it to the start VM and unpack it there (a zip without `main.sh` at its top level fails the run), release the initial secrets, arm the fuse; report when it was armed |
 | ARMED | conductor | wait until `worm_start_at` (the worm starts itself on the VM) |
 | RUNNING | conductor | run the game plan: stop/start VMs (its own token), request secret releases (agent) |
 | ENDING | conductor | stop every VM, let the monitor drain |
@@ -160,7 +160,7 @@ passed and every step it lists in `after` is done.
 Python's `zipfile` into `/home/debian/worm/` (python3 is in every Debian cloud
 image; `unzip` is not; entries cannot leave that directory). The fuse is a
 one-shot systemd timer (`systemd-run --on-active=<fuse>`) that runs
-`/usr/bin/python3 main.py` in `/home/debian/worm` as `debian`. The worm's
+`/bin/bash main.sh` in `/home/debian/worm` as `debian`. The worm's
 contract for teams -- the zip layout, the flag path, how to capture a VM and
 the submission limits -- is **`docs/worm-contract.md`**. The job reports `armed_at`, the
 moment the timer was armed; the conductor dates the worm's start from it.

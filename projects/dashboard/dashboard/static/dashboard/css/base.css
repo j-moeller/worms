@@ -365,7 +365,7 @@ p + .code-label { margin-top: 14px; }
 
 /* ---- disclosures / confirm --------------------------------------------- */
 .disclosure, .confirm { margin: 0; }
-.vm-chain + .confirm, .muted + .confirm { margin-top: 18px; }
+.stat + .confirm, .pips + .confirm, .kv + .confirm { margin-top: 18px; }
 .confirm summary, .disclosure summary { display: inline-flex; list-style: none; }
 .confirm summary::-webkit-details-marker, .disclosure summary::-webkit-details-marker { display: none; }
 .confirm[open] > summary { opacity: .6; }

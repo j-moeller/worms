@@ -93,7 +93,13 @@ class Session {
     await page.goto(`${this.base}/profile/`, { waitUntil: "load" });
     state.score = squash(await page.innerText("section[aria-labelledby=team-title] .stat__value"));
     await page.goto(`${this.base}/progression/`, { waitUntil: "load" });
-    state.logs = await page.$$eval("details.log-entry", (nodes) => nodes.map((n) => n.textContent));
+    // The logs are in the player's document; each record is fetched when it is needed.
+    state.logs = await page.evaluate(async () => {
+      const get = (url) => fetch(url, { headers: { Accept: "application/json" } }).then((r) => r.json());
+      const doc = await get("/progression/devbox/");
+      const refs = doc.timeline.events.filter((e) => e.kind === "log_received").map((e) => e.data.log.ref);
+      return Promise.all(refs.map((ref) => get(doc.logs.url.replace("{ref}", ref)).then((r) => JSON.stringify(r.data))));
+    });
     await page.goto(`${this.base}/`, { waitUntil: "load" });
     return state;
   }
@@ -208,8 +214,7 @@ const actions = {
     if (r.shot) {
       await s.shot(r.shot);
       await s.page.goto(`${s.base}/progression/`, { waitUntil: "load" });
-      for (const entry of await s.page.locator("details.log-entry").all()) await entry.evaluate((e) => { e.open = true; });
-      await s.shot(`${r.shot}-logs`);
+      await s.shot(`${r.shot}-progression`);
       await s.page.goto(`${s.base}/`, { waitUntil: "load" });
     }
     return s.devState();
@@ -219,7 +224,8 @@ const actions = {
     await s.login(r.user, r.password);
     await s.devView();
     const before = await s.devState();
-    await s.page.click("details.confirm > summary");
+    await s.page.goto(`${s.base}/profile/`, { waitUntil: "load" });
+    await s.page.click("section[aria-labelledby=team-title] details.confirm > summary");
     await s.shot("12-reset-confirmation", { fullPage: false });
     const status = await s.submit('form[action$="/devbox/reset/"] button[type="submit"]');
     const messages = await s.messages();

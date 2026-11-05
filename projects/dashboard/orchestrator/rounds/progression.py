@@ -53,13 +53,15 @@ a submitted flag's VM that is not visible is blanked.
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import io
 import json
 import zipfile
 
-from core.models.devbox import DevboxCapture, DevboxLog, DevboxVM
+from core.models.devbox import Devbox, DevboxCapture, DevboxLog, DevboxVM
 from core.models.logging import LoggingAttempt
-from core.models.rounds import RoundRun
+from core.models.rounds import HostJob, RoundRun
 from core.models.scoring import FlagCaptureAttempt
 
 from orchestrator.rounds import timeline
@@ -68,6 +70,8 @@ FORMAT = "worms-progression"
 VERSION = 1
 FLOW_LIMIT = 20000
 ATTEMPT_LIMIT = timeline.ATTEMPT_LIMIT
+# Seconds of the devbox's clock before its first activity.
+DEVBOX_LEAD_IN = 5
 
 # The zip's members (`package`).
 ZIP_DOCUMENT = "progression.json"
@@ -157,7 +161,10 @@ def _document(team, rnd, now, environment, clock, scene, tl, network):
         "generated_at": _iso(now),
         "audience": None,
         "environment": environment,
-        "round": {
+        # Null for the devbox, which has no rounds (build_devbox).
+        "round": None
+        if rnd is None
+        else {
             "id": rnd.id,
             "name": rnd.name,
             "competition": "development" if environment == "dev" else "main",
@@ -426,6 +433,60 @@ def team_scene(environment, team, infra, devbox_nodes=()):
 def _dev(team, rnd, now, infra):
     zero = rnd.round_start or now
     start, end = window(team, rnd, now, "dev")
+    tl, scene, network, t_min, t_max = _devbox_activity(team, start, end, zero, infra)
+    return _document(team, rnd, now, "dev", _clock(rnd, zero, now, t_min, t_max), scene, tl, network)
+
+
+def devbox_start(team):
+    """When the team's devbox version began: the reset that started it, else the
+    devbox's creation. None without a devbox."""
+    devbox = Devbox.objects.filter(team=team).first()
+    if devbox is None:
+        return None
+    reset = (
+        HostJob.objects.filter(
+            kind=HostJob.Kind.DEVBOX_REBUILD, params__team_uuid=str(team.uuid), params__devbox_version=team.devbox_version
+        )
+        .order_by("-id")
+        .first()
+    )
+    return reset.requested_at if reset is not None else devbox.created_at
+
+
+def build_devbox(team, *, now, infra=None):
+    """The team's devbox so far (audience "team"): what it submitted and logged since its
+    version began. The devbox has no rounds, so `round` is null, nothing is ever finished
+    and the clock runs up to now. Its zero is just before the first activity, so a replay
+    does not open on a long wait. None without a devbox."""
+    start = devbox_start(team)
+    if start is None:
+        return None
+    scope = {"team_uuid": str(team.uuid), "devbox": True, "created_at__gte": start, "created_at__lte": now}
+    first = [
+        model.objects.filter(**scope).order_by("created_at").values_list("created_at", flat=True).first()
+        for model in (FlagCaptureAttempt, LoggingAttempt)
+    ]
+    first = [ts for ts in first if ts is not None]
+    zero = max(start, min(first) - timedelta(seconds=DEVBOX_LEAD_IN)) if first else start
+    tl, scene, network, t_min, t_max = _devbox_activity(team, start, now, zero, infra or {})
+    clock = {
+        "t0": _iso(zero),
+        "round_start": None,
+        "round_end": None,
+        "now": _sec(now, zero),
+        "finished": False,
+        "t_min": t_min,
+        "t_max": max(t_max, t_min),
+    }
+    doc = _document(team, None, now, "dev", clock, scene, tl, network)
+    doc["audience"] = "team"
+    doc["timeline"].pop("flows", None)
+    return doc
+
+
+def _devbox_activity(team, start, end, zero, infra):
+    """What the team's devbox did between `start` and `end`, on a clock from `zero`:
+    (timeline, scene, network, t_min, t_max)."""
     vms = list(DevboxVM.objects.filter(devbox__team=team).order_by("role", "vm_identifier"))
     by_hash = {vm.ctf_flag_hash: vm for vm in vms if vm.ctf_flag_hash}
     by_id = {vm.id: vm for vm in vms}
@@ -535,8 +596,7 @@ def _dev(team, rnd, now, infra):
         "path": None,
         "url": None,
     }
-    clock = _clock(rnd, zero, now, t_min, t_max)
-    return _document(team, rnd, now, "dev", clock, team_scene("dev", team, infra, scene_nodes), tl, network)
+    return tl, team_scene("dev", team, infra, scene_nodes), network, t_min, t_max
 
 
 # --- log records and the zip -----------------------------------------------------------
@@ -556,6 +616,17 @@ def log_record(team, rnd, ref, *, now, environment=None):
         return None
     attempt = LoggingAttempt.objects.filter(
         uuid=ref, team_uuid=str(team.uuid), devbox=environment == "dev", created_at__gte=start, created_at__lte=end
+    ).first()
+    return _log_file(attempt) if attempt is not None else None
+
+
+def devbox_log_record(team, ref, *, now):
+    """One log record of the team's devbox so far, or None (as log_record)."""
+    start = devbox_start(team)
+    if start is None:
+        return None
+    attempt = LoggingAttempt.objects.filter(
+        uuid=ref, team_uuid=str(team.uuid), devbox=True, created_at__gte=start, created_at__lte=now
     ).first()
     return _log_file(attempt) if attempt is not None else None
 
@@ -592,6 +663,7 @@ def package(doc, logs=None) -> bytes:
 
 def filename(doc, extension="zip") -> str:
     """A download name: worms-<round>-<team>-<environment>.<extension>."""
-    parts = ["worms", doc["round"]["name"], doc["team"]["name"], doc["environment"]]
+    round_name = doc["round"]["name"] if doc["round"] else "devbox"
+    parts = ["worms", round_name, doc["team"]["name"], doc["environment"]]
     safe = "-".join("".join(c if c.isalnum() or c in "._-" else "_" for c in str(p)) for p in parts)
     return f"{safe}.{extension}"

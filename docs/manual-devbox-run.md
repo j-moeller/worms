@@ -383,7 +383,7 @@ apt-get install -y --no-install-recommends jq
 jq --version
 ```
 
-**Expect:** source `http://10.2.0.20:3142/deb.debian.org/debian`, `absent`, then a clean install and `jq-1.7`.
+**Expect:** source `http://apt-cache.worms.internal:3142/deb.debian.org/debian`, `absent`, then a clean install and `jq-1.7`.
 
 ### 11d. pip, through the private internet
 
@@ -477,7 +477,7 @@ This is where each action should leave a trace:
 **Expect:**
 - `/profile/`, panel **Team:** `3/3` at `version 1`, or `1/3` if you ran 11f only on A.
 - `/`, panel **VMs:** `Captured` on each VM that submitted.
-- `/progression/`, panel **Logs:** one entry per VM. Open an entry to see `marker: manual-run` and the VM's name.
+- `/progression/`, in the player: one log event per VM. Click one to see `marker: manual-run` and the VM's name.
 - Only scoring and logging appear here. SSH, the file, apt and pip do not, as intended.
 
 Records reach the page through a background processor. The suite allows up to 5 minutes.
@@ -587,13 +587,13 @@ tail -n 8 /var/log/apt/history.log
 
 | Page | Input |
 |---|---|
-| `/`, in the **Dev** view, panel **VMs** | Press **Reset devbox** |
+| `/profile/`, in the **Dev** view, panel **Team** | Press **Reset devbox** |
 | The confirmation that opens below it | Press **Yes, rebuild my devbox** |
 
 **Expect at once:**
 - `Reset requested: your devbox VMs are being rebuilt and the score starts over.`
-- `version 2` on the panel **VMs**.
-- `0/3` on `/profile/`, and `No devbox logs at this version.` on `/progression/`.
+- `version 2` and `0/3` on the panel **Team**.
+- On `/progression/`, no events yet.
 
 **Who:** root on the node. Wait for the rebuild, about 20 minutes:
 
@@ -651,7 +651,7 @@ python3 -c 'import tabulate' 2>/dev/null && echo present || echo absent
 **Expect:**
 - `/`: `version 2`, every VM `Not captured`, and the same SSH command.
 - `/profile/`: `0/3`, and the key is still listed.
-- `/progression/`: `No devbox logs at this version.`
+- `/progression/`: no events yet.
 
 ### 14d. The database
 

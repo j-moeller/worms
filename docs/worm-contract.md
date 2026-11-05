@@ -5,7 +5,7 @@ this is the part a team needs.
 
 ## The upload
 
-A **`.zip`** with **`main.py` at its top level** (not inside a folder). Upload
+A **`.zip`** with **`main.sh` at its top level** (not inside a folder). Upload
 it on the dashboard; your team's **latest upload before a round starts** is the
 one that runs (`docs/team_api.md` lists your uploads). At most 100 MiB.
 
@@ -13,19 +13,21 @@ The round agent copies the zip to a freshly built sandbox VM, unpacks it into
 `/home/debian/worm/`, and, after a short fuse, runs:
 
 ```
-python3 main.py        # working directory /home/debian/worm, user debian (with sudo)
+bash main.sh        # working directory /home/debian/worm, user debian (with sudo)
 ```
 
 So:
 
-- the entry point is **`main.py`**; everything else in the zip sits next to it
-  and you import it normally (`from mylib import ...`);
-- it is plain **`python3`** from the Debian image (the standard library; no
-  pip packages are installed for you — vendor anything else into the zip);
+- the entry point is **`main.sh`**; everything else in the zip sits next to it,
+  and `main.sh` starts whatever it needs from there (`python3 worm.py`, a binary);
+- `main.sh` needs no execute bit, because `bash` reads it. **The zip's file modes
+  are not kept**, so run anything else through its interpreter or `chmod +x` it first;
+- the Debian image has `bash`, `curl` and `python3` (the standard library). No pip
+  packages are installed for you: vendor anything else into the zip;
 - you run as **`debian`**, which has passwordless `sudo`, so you can become
   root on your VM. The VM is yours to do with as you like; the containment is
   the network and the firewall, not in-guest privilege (`docs/security-assessment.md`);
-- there is no time limit on `main.py` itself; the **round** ends after its
+- there is no time limit on `main.sh` itself; the **round** ends after its
   configured length (staff set it; the dashboard shows the countdown).
 
 ## Capturing a VM
@@ -34,17 +36,10 @@ Every sandbox VM holds a **flag** at **`/etc/worms/flag`** (readable by
 anyone on the VM). You capture a VM by **submitting its flag** to the scoring
 server:
 
-```python
-import json, ssl, urllib.request
-
-def submit_flag(flag):
-    body = json.dumps({"vm_flag": flag}).encode()
-    req = urllib.request.Request(
-        "https://scoring.worms.internal/submit",
-        data=body, headers={"Content-Type": "application/json"}, method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=10) as resp:   # HTTPS is verified: the
-        return resp.status                                   # internal CA is trusted
+```sh
+curl -X POST https://scoring.worms.internal/submit \
+  -H "Content-Type: application/json" \
+  -d "{\"vm_flag\":\"$(cat /etc/worms/flag)\"}"
 ```
 
 - **No token or team id.** Only one team runs at a time; the scoring server
@@ -114,6 +109,6 @@ dashboard's **development** view.
 
 ## A minimal worm
 
-`worm.py` in the repository is a working skeleton: it reads its own VM's flag,
-submits it, logs one line, and exits. Rename it to `main.py`, zip it, and
+`worm.sh` in the repository is a working skeleton: it reads its own VM's flag,
+submits it, logs one line, and exits. Rename it to `main.sh`, zip it, and
 upload it.

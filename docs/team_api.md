@@ -31,6 +31,9 @@ Authorization: Bearer <token>
 | `GET /api/v1/rounds/<id>/progression/flows/` | its network traffic (`{count, truncated, available, reason, flows}`; not recorded for Dev rounds) |
 | `GET /api/v1/rounds/<id>/progression/logs/<ref>/` | one log record of it: `{ref, received_at, data}` (404 for anything not the team's in that round) |
 | `GET /api/v1/rounds/<id>/progression.zip?logs=0\|1&network=0\|1` | all of it as one zip: `progression.json`, `logs/<ref>.json`, `network/flows.jsonl` (both parts default to included; `0` leaves them out). Open it on the PROGRESSION page to replay it. |
+| `GET /api/v1/devbox/progression/` | the devbox's progression so far (`docs/progression.md`). The devbox has no rounds, so this is one document with `round: null`, from its last reset up to now. 404 without a devbox |
+| `GET /api/v1/devbox/progression/logs/<ref>/` | one log record of it |
+| `GET /api/v1/devbox/progression.zip?logs=0\|1` | all of it as one zip: `progression.json`, `logs/<ref>.json` |
 
 Every response carries `team`, `round` and `run`; the paged ones `items` and
 `page`:

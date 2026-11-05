@@ -291,6 +291,29 @@ def test_every_write_is_refused_except_the_three_allowed(people):
     assert _viewing(admin)
 
 
+@pytest.mark.parametrize("path", ["/admin/logout/", "/admin/login/", "/admin/password_change/"])
+def test_djangos_own_admin_pages_are_refused_too(people, path):
+    """Django's /admin/logout/ has the same short name as our /logout/: it must not count."""
+    admin = _client(people["admin"])
+    _start(admin, people["student"])
+    response = _post(admin, path)
+    assert response.status_code == 403 and b"read only" in response.content
+    assert _viewing(admin)
+
+
+def test_staff_cannot_change_accounts_through_djangos_admin(people):
+    from core.models.user import User
+
+    staff = _client(people["staff"])
+    target = people["admin"]
+    assert _get(staff, "/admin/core/user/").status_code in (403, 404)
+    assert _get(staff, f"/admin/core/user/{target.pk}/change/").status_code in (403, 404)
+    token = staff.cookies["csrftoken"].value if "csrftoken" in staff.cookies else _get(staff) and staff.cookies["csrftoken"].value
+    response = staff.post(f"/admin/core/user/{target.pk}/change/", {"csrfmiddlewaretoken": token, "is_superuser": "on", "is_staff": "on"}, **ORIGIN, **proxied(HOST))
+    assert response.status_code in (403, 404)
+    assert User.objects.get(pk=people["staff"].pk).is_superuser is False
+
+
 @pytest.mark.parametrize("method", ["put", "patch", "delete"])
 def test_other_writing_methods_are_refused_too(people, method):
     admin = _client(people["admin"])

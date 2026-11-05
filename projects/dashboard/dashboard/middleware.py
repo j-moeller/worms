@@ -136,7 +136,8 @@ class ViewAsMiddleware:
         """Read only: deny by default. CSRF has already been checked by this point."""
         if request.view_as is None or request.method in SAFE_METHODS:
             return None
-        name = request.resolver_match.url_name
+        # view_name, not url_name: Django's own /admin/logout/ is also called "logout".
+        name = request.resolver_match.view_name
         if name in VIEW_AS_ALLOWED_WRITES:
             if name == "logout":
                 view_as_log.warning("view-as ended by sign-out: admin=%r viewed=%r", request.real_user.username, request.view_as.username)

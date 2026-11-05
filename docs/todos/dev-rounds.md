@@ -42,6 +42,24 @@ If they stay, at least correct the text in `templates/staff/competition.html`, b
 
 Fix this together with the decision above. The dev view should say nothing about rounds.
 
+## A manual Reset can still hold up a round
+
+- [ ] Make a manual Reset wait during a round, as a dev upload does.
+
+A rebuild takes about 8 minutes and the agent does one job at a time, so a Reset during a round can delay that round's timed jobs. This is not new. A dev upload waits, and the agent takes a round's queued jobs first, but `POST /devbox/<team>/reset/` still queues a rebuild at once.
+
+## Should the name `teachllm` resolve on the VMs?
+
+- [ ] **Decide:** add it to the private DNS?
+
+It does not resolve there, and its certificate only matches the name, so a worm has to pass `curl --resolve` with the address (`docs/worm-contract.md`). A record would make a normal request work. It would open nothing, because only that address and port are allowed.
+
+## Should sandbox VMs use the same CPU and memory settings as the devbox?
+
+- [ ] **Decide:** the same, or leave them?
+
+The operator set the devbox VMs to `cpu: host` and `balloon: 512` by hand on 2026-11-05, and the stack now keeps that. Sandbox VMs still use `qemu64` and ballooning. So a worm that depends on the CPU can work on the devbox and fail in a round.
+
 ## Should the profile list only a user's own SSH keys?
 
 - [ ] **Decide:** whole team, or only your own?
@@ -50,7 +68,8 @@ The profile lists the whole team's keys, and any member can remove any of them. 
 
 ## Not proven yet
 
-- [ ] **`bash main.sh` on a real sandbox.** No round has run since the change. A test checks the agent's command, and the sample worm has run under `bash` against a fake `curl`. Upload `worm.sh`, renamed to `main.sh`, and run a real round.
+- [ ] **`bash main.sh` on a real sandbox.** No round has run since the change. It has run on a real devbox, through a dev upload (`docs/devbox.md`), and the agent's commands are the same. Upload `worm.sh`, renamed to `main.sh`, and run a real round.
+- [ ] **The LLM endpoint from a real sandbox.** It works from all 9 devbox VMs. The sandbox gateway's rules are only checked by tests.
 - [ ] **Live view of the profile's Team panel with real rounds.** The system has no rounds, so it says `No round has started yet`. Its numbers and layout have only been checked with test data.
 - [ ] **Port 2222 from outside.** Run `ssh -p 2222 team@worms-dev.mlsec.tu-berlin.de` from a laptop. Expect `Permission denied (publickey)`. A timeout may mean the network in front of the node blocks it. The node cannot test its own port forward.
 - [ ] **`Permission denied (publickey)` from A to B on alpha.** Seen by the user, not resolved. The hop worked on charlie's VMs with a key in the agent. Check `ssh-add -L` on the laptop, and if it lists the key, look at `ssh -v root@10.128.2.12`.

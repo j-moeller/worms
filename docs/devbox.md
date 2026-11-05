@@ -93,6 +93,8 @@ orchestrator              picks it up in its attempt loop (rounds/devbox_runs.py
 | Least privilege | The dashboard cannot create host jobs or touch `devbox_runs`. Only the orchestrator asks the agent for anything |
 | The team does not see internals | A failed job's error stays in `devbox_runs.error`, for staff |
 
+**Run live on 2026-11-05,** on one team's devbox, through the deployed view with a real worm. The upload to the worm's start took 8 minutes 36 seconds: 8 minutes 11 seconds for the rebuild, 3 seconds for the deploy, 10 for the fuse. The worm ran on VM A as `debian` in `/home/debian/worm`, its flag scored, its log arrived, it reached the LLM endpoint and not `1.1.1.1`, the Progression showed it, and no other team's version changed. While a rebuild runs, the agent does nothing else, so uploads from several teams queue up behind each other.
+
 **The time limit** bounds `main.sh` only. It is a systemd limit on VM A, not a teardown: anything the worm started on B or C keeps running until the next reset. Set with `devbox_run_duration` in `ROUND_CONDUCTOR`, default one hour, the same as a round's default.
 
 ## Attribution without interfering with the round

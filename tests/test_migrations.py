@@ -1,11 +1,11 @@
 """The Django migrations as a whole (projects/dashboard/core/migrations).
 
-No deployed database needs upgrading, so there is a single initial migration
-and no upgrade path to protect. Once a database that must keep its data exists,
-new migrations build on this one, and these tests should grow to cover upgrades.
+A deployed database now holds data, so a change adds a migration instead of
+editing 0001_initial.
 
 - Models and migrations agree (`makemigrations --check`).
 - A fresh database migrates as the migrator, as `make` does it.
+- A database already on 0001_initial upgrades and keeps its data.
 - Data migrations use the migrating connection.
 """
 
@@ -105,3 +105,26 @@ def test_a_fresh_database_migrates(cluster):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     proc = django(cluster, "fresh", "migrate", "--check", "--database=migrator")
     assert proc.returncode == 0, "unapplied migrations after migrating:\n" + proc.stdout
+
+
+def test_an_existing_database_upgrades_and_keeps_its_data(cluster):
+    create_database(cluster, "upgrade")
+    proc = django(cluster, "upgrade", "migrate", "core", "0001", "--no-input", "--database=migrator")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    conn = cluster.connect(dbname="upgrade")
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO users (uuid, password, is_superuser, username, is_staff, is_active, date_joined, "
+            "first_name, last_name, email, must_change_password, created_at) VALUES (gen_random_uuid(), 'x', "
+            "false, 'kept', false, true, now(), '', '', '', false, now())"
+        )
+
+    proc = django(cluster, "upgrade", "migrate", "--no-input", "--database=migrator")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT username FROM users")
+        assert cur.fetchall() == [("kept",)]
+        cur.execute("SELECT count(*) FROM password_resets")
+        assert cur.fetchone() == (0,)
+    conn.close()

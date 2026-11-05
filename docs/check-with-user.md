@@ -98,6 +98,16 @@ devboxes. Its rule for gateways names only `sandbox-gw`, so devbox gateways woul
 
 **auditd on devboxes:** devbox VMs, their gateways and the SSH gateway have no auditd, so nothing done on a devbox appears in it. A devbox cannot reach the syslog VM, by design. So auditd on a devbox VM could only log locally, and a reset would erase it. The SSH gateway is trusted, so it could join the central log, which would record each login centrally and keep those records through a teardown. I recommend that part.
 
+### 3g. Check SSH host keys when deploying?
+
+- [ ] **Decide:** keep it off, or turn it on?
+
+SSH from the node and Ansible do not check host keys: `StrictHostKeyChecking no` in `/root/.ssh/config`, `host_key_checking = False` in `ansible/ansible.cfg`. Both date from 2026-10-14. So a deploy would not notice a VM being impersonated, and SSH connects anyway, even with `REMOTE HOST IDENTIFICATION HAS CHANGED`.
+
+On 2026-11-05 that warning appeared for the database, dashboard and orchestrator VMs. The likely cause is old `known_hosts` entries from earlier builds. On all three, the MAC address answering on the expected bridge is the one Proxmox assigned, and the traffic stays on this node. This is not cryptographic proof, because the VMs have no guest agent to read the key through.
+
+The risk is low while the traffic stays on local bridges, and rebuilds change the keys on purpose. Recommended before going live: turn checking on, with each build recording the new VMs' keys.
+
 ### 4. Public certificate for the dashboard
 
 - [ ] Choose one.

@@ -3,7 +3,8 @@
 Staff create student accounts one by one or from a CSV (core/accounts.py),
 reset a forgotten password to a new one-time password, deactivate an account,
 and put a user into a team. A one-time password is shown once, in the
-response to the request that made it (never stored, never cached).
+response to the request that made it (never stored, never cached). Each reset
+is recorded in password_resets (docs/accounts.md).
 
 Staff accounts are not made here: the dashboard's database role cannot create
 or promote one (setup_db_permissions); `worms admin create-staff` on the
@@ -167,7 +168,7 @@ def user_detail(request: HttpRequest, uuid):
 @require_POST
 def user_password(request: HttpRequest, uuid):
     user = _managed_user(request, uuid)
-    password = accounts.reset_password(user)
+    password = accounts.reset_password(user, by=request.user)
     return _credentials(request, [accounts.Created(user, password)], "New one-time password")
 
 

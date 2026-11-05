@@ -220,8 +220,8 @@ def db_clean(django_env):
             "TRUNCATE run_events, game_plan_steps, host_jobs, flag_captures, logging,"
             " flag_capture_attempts, logging_attempts, virtual_machines, round_runs,"
             " access_tokens, rounds, team_memberships, teams, uploads, malware_artifacts,"
-            " application_setting, competitions, users, network_flows, topology_snapshots,"
-            " django_session RESTART IDENTITY CASCADE"
+            " application_setting, competitions, users, password_resets, network_flows,"
+            " topology_snapshots, django_session RESTART IDENTITY CASCADE"
         )
     return django_env
 

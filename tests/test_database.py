@@ -116,6 +116,54 @@ def test_monitor_cannot_upsert(database):
            "ON CONFLICT (uid) DO UPDATE SET transport = 'udp'")  # fmt: skip
 
 
+# --- password resets ----------------------------------------------------------
+
+RESET_ROW = (
+    "INSERT INTO password_resets (created_at, actor_uuid, actor_username, actor_role, target_uuid, "
+    "target_username, target_role) VALUES (now(), gen_random_uuid(), 'tutor', 'staff', "
+    "gen_random_uuid(), 'anna', 'student')"
+)
+
+
+def test_dashboard_appends_password_resets_and_reads_them(database):
+    before = count(database, "password_resets")
+    run(database, "django_dashboard", RESET_ROW)
+    assert count(database, "password_resets") == before + 1
+    assert run(database, "django_dashboard", "SELECT count(*) FROM password_resets")[0][0] == before + 1
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "UPDATE password_resets SET actor_username = 'someone-else'",
+        "UPDATE password_resets SET created_at = now() - interval '1 year'",
+        "DELETE FROM password_resets",
+        "TRUNCATE password_resets",
+        "DROP TABLE password_resets",
+        "ALTER TABLE password_resets DROP COLUMN actor_username",
+        "ALTER TABLE password_resets RENAME TO old_resets",
+    ],
+)
+def test_dashboard_cannot_change_or_remove_password_resets(database, sql):
+    run(database, "django_dashboard", RESET_ROW)
+    before = run(database, "postgres", "SELECT * FROM password_resets ORDER BY id")
+
+    denied(database, "django_dashboard", sql)
+
+    assert run(database, "postgres", "SELECT * FROM password_resets ORDER BY id") == before
+
+
+@pytest.mark.parametrize("role", ["django_orchestrator", "round_agent", "dbuser_scoring", "dbuser_logging", "dbuser_network_monitor"])
+def test_no_other_service_can_write_password_resets(database, role):
+    denied(database, role, RESET_ROW)
+    denied(database, role, "DELETE FROM password_resets")
+
+
+@pytest.mark.parametrize("role", ["round_agent", "dbuser_scoring", "dbuser_logging", "dbuser_network_monitor"])
+def test_the_services_that_need_no_accounts_cannot_read_password_resets(database, role):
+    denied(database, role, "SELECT * FROM password_resets")
+
+
 # --- scoring / logging --------------------------------------------------------
 
 

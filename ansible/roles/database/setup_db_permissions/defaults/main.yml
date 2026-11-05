@@ -29,6 +29,10 @@ postgresql_table_privileges:
     # to a new one-time password (core/accounts.py).
     - privs: UPDATE (password, must_change_password)
       tables: [users]
+    # The record of those staff resets. Append only: no UPDATE or DELETE, so
+    # even a compromised dashboard cannot change or remove a row.
+    - privs: INSERT
+      tables: [password_resets]
     - privs: INSERT, UPDATE, DELETE
       tables: [django_session]
     # Students join and leave teams during registration (dashboard/views/teams.py);

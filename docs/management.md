@@ -78,6 +78,13 @@ ssh-agent sh -c 'ssh-add -q /etc/worms/ssh/worms && WORMS_SSH_AUTH_SOCK="$SSH_AU
 
 Do not leave out `--skip-tags packages`: without internet, `pip` hangs for minutes.
 
+**If the change adds a table or a database grant,** apply the grants as well once that has finished. `--limit orchestrator,dashboard` leaves out the database host. Until this runs, the dashboard is refused anything that needs the new grant:
+
+```sh
+cd /root/app/ansible
+ssh-agent sh -c 'ssh-add -q /etc/worms/ssh/worms && WORMS_SSH_AUTH_SOCK="$SSH_AUTH_SOCK" exec ansible-playbook -e @group_vars/vault.yml SetupDbAndDashboard.yml --limit database_hosts --start-at-task "List the tables in the public schema"'
+```
+
 Afterwards, check with:
 
 ```sh

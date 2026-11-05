@@ -237,6 +237,34 @@ stay), another team.
 `manage.py create_users` on the orchestrator does the same import from a file
 and prints an `email,password` CSV to stdout (`--output creds.csv` to a file).
 
+### Password resets are recorded
+
+Each new one-time password issued from Staff → Users adds a row to the
+`password_resets` table: when, who asked (uuid, username, `admin` or `staff`) and
+whose account it was (uuid, username, `student` or `staff`). It holds no password
+and no hash. There is no page for it yet. To read it:
+
+```sh
+ssh -i /etc/worms/ssh/worms debian@10.3.0.16 "sudo -u postgres psql -d mydb -c \
+  'SELECT created_at, actor_username, actor_role, target_username, target_role FROM password_resets ORDER BY created_at DESC'"
+```
+
+| Rule | How |
+|---|---|
+| No reset without a row | The password and the row commit in one transaction (`core/accounts.py`, `reset_password`). If the row cannot be written, the password stays as it was |
+| Who asked comes from the session | It is the signed-in account. Nothing in the request can name someone else |
+| Rows cannot be changed or removed by the dashboard | Its database role may only add and read them, so this holds even if the dashboard is compromised |
+| Rows outlive the accounts | They hold plain values, not foreign keys |
+
+**What it does not cover:**
+
+- A person who controls the dashboard VM could add false rows or set a password
+  with no row, because that role may do both. Rows already there stay as they are.
+- Not recorded, because no one resets someone else's account here: the admin's
+  password on the console (`worms admin reset-password`), a user changing their
+  own password, and the first password of a new account.
+- `worms reset-database` empties this table with all the others.
+
 ### First login forces a password change
 
 An account with `must_change_password` is held on `/change-password/` by

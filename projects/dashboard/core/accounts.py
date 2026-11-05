@@ -176,13 +176,32 @@ def import_rows(rows, *, staff=False, competition=None, using="default"):
     return created, problems
 
 
-def reset_password(user):
+def role_of(user) -> str:
+    if user.is_superuser:
+        return "admin"
+    return "staff" if user.is_staff else "student"
+
+
+def reset_password(user, *, by):
     """A new one-time password (returned once). Ends the user's sessions
-    (Django ties a session to the password hash)."""
+    (Django ties a session to the password hash). `by` is the signed-in account
+    asking for it: the reset and its row in password_resets commit together, so
+    neither can exist without the other."""
+    from core.models.user import PasswordReset
+
     password = generate_password()
     user.set_password(password)
     user.must_change_password = True
-    user.save(update_fields=["password", "must_change_password"])
+    with transaction.atomic():
+        user.save(update_fields=["password", "must_change_password"])
+        PasswordReset.objects.create(
+            actor_uuid=by.uuid,
+            actor_username=by.username,
+            actor_role=role_of(by),
+            target_uuid=user.uuid,
+            target_username=user.username,
+            target_role=role_of(user),
+        )
     return password
 
 

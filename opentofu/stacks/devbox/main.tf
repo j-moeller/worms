@@ -179,6 +179,11 @@ module "devbox_vm" {
   limits            = local.limits
   dns_server        = local.services_ips.dns
 
+  # As the operator set them on the running VMs on 2026-11-05. Written down here so
+  # a reset, which rebuilds the VMs from this file, keeps them.
+  cpu_type = "host"
+  ram_min  = 512
+
   # Experiment NICs (one per devbox segment this VM is on), then the SSH-fabric
   # NIC (vmbr7) and the maintenance NIC (vmbr6). Only the first segment carries
   # the default route (via the team's devbox-gw); a VM has one gateway.

@@ -111,6 +111,15 @@ def test_the_llm_endpoint_is_the_only_external_destination_of_untrusted_vms():
     assert re.search(r"devbox\s+= local\.sg\.devbox\n.*?llm_access\s+= local\.sg\.llm_access", devbox, re.S)
 
 
+def test_a_devbox_reset_keeps_the_operators_vm_settings():
+    """Set by hand on the running VMs. A reset rebuilds them from the stack, so they have to be there."""
+    devbox = (OPENTOFU / "stacks" / "devbox" / "main.tf").read_text()
+    vms = devbox.split('module "devbox_vm" {', 1)[1].split('module "devbox_gw"', 1)[0]
+    assert re.search(r'cpu_type = "host"\n\s+ram_min\s+= 512', vms)
+    gateways = devbox.split('module "devbox_gw" {', 1)[1]
+    assert "cpu_type" not in gateways.split("\n}\n", 1)[0] and "ram_min" not in gateways.split("\n}\n", 1)[0]
+
+
 def test_every_layer_on_the_way_to_the_llm_endpoint_allows_only_it():
     """The only way out of the sandbox and the devboxes. Each layer is independent, so each
     is checked: one address, TCP 443, and on the gateways only the management NIC leads out."""

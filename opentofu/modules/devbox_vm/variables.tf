@@ -28,6 +28,12 @@ variable "limits" {
   })
 }
 
+variable "cpu_type" {
+  description = "QEMU CPU type. Provider's default for the gateways; see stacks/devbox/main.tf for the VMs."
+  type        = string
+  default     = "qemu64"
+}
+
 variable "is_gateway" {
   description = "A per-team devbox gateway (router) rather than a plain devbox VM."
   type        = bool

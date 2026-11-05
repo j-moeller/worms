@@ -41,6 +41,7 @@ resource "proxmox_virtual_environment_vm" "vm" {
     cores = 1
     limit = 1
     units = var.limits.cpu_units
+    type  = var.cpu_type
   }
   # Ballooning (docs/resources.md): reclaimable down to ram_min under pressure.
   memory {

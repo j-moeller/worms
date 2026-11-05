@@ -536,8 +536,23 @@ def test_untrusted_vms_use_the_private_internet_for_packages():
     settings = yaml.safe_load((ANSIBLE / "group_vars" / "untrusted.yml").read_text())
     # Not left to `groups['apt_cache']`: the round agent's inventory lacks that group.
     assert settings["apt_client_use_cache"] is True and settings["apt_client_refresh_offline"] is True
+    # By name: the address stays one place, and apt's output says what it is talking to.
+    assert settings["apt_client_cache_host"] == "apt-cache.worms.internal"
     # The cache does not hold the backports index: fatal for Ansible's apt module.
     assert "backports" not in settings["apt_client_suites"]
+
+
+def test_the_apt_cache_has_a_name_and_private_internet_vms_keep_its_address():
+    """Untrusted VMs resolve the name. Private-internet VMs must not need DNS: their firewall
+    lets them reach only the cache, so a name would leave them with no packages at all."""
+    records = yaml.safe_load((ANSIBLE / "group_vars" / "dns.yml").read_text())
+    names = [record["name"] for key in records if isinstance(records[key], list) for record in records[key] if isinstance(record, dict) and "name" in record]
+    assert "apt-cache.worms.internal" in names
+    defaults = yaml.safe_load((ANSIBLE / "roles/private_internet/apt_client/defaults/main.yml").read_text())
+    assert defaults["apt_client_cache_host"] == "{{ private_internet_ips.apt_cache.network }}"
+    firewall = (REPO / "opentofu/stacks/firewall/main.tf").read_text()
+    group = firewall.split('"pi_apt_client"', 1)[1].split("\n}\n", 1)[0]
+    assert 'dport   = "3142"' in group and "53" not in group
 
 
 def test_the_cache_is_filled_with_what_untrusted_vms_install():

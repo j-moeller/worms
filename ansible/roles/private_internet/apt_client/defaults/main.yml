@@ -1,5 +1,7 @@
 ---
-# apt-cacher-ng endpoint (the apt_cache service VM) on the private network.
+# apt-cacher-ng endpoint (the apt_cache service VM) on the private network. By
+# address here, for private-internet VMs, which cannot reach DNS; group_vars/untrusted.yml
+# sets the name for the VMs that can.
 apt_client_cache_host: "{{ private_internet_ips.apt_cache.network }}"
 apt_client_cache_port: 3142
 # Where apt fetches from: through the cache, or straight from the Debian

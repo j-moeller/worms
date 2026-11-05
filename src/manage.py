@@ -6,30 +6,6 @@ pipeline (the top-level Makefile just calls `worms build` / `worms destroy`);
 it also shows live status from the one source of truth -- the database VM and
 the Proxmox API. Run it on your laptop with WORMS_SSH=root@<node> (OpenTofu and
 Ansible run there, with the secrets of the vault), or on the Proxmox node.
-
-    worms secrets                     # the vault: what is set (never a value)
-    worms secrets issue <name>        # create or rotate a Proxmox token, store it
-    worms secrets check               # do the stored tokens work, with exactly their rights?
-    worms secrets set <name>          # store a secret by hand
-    worms node trust                  # once: the WORMS key on VMs that predate it
-    worms build                       # full idempotent end-to-end setup (= make)
-    worms build <component>           # one step (see `worms build --list`)
-    worms status                      # components, internet, competition, rounds
-    worms teams [delete]              # teams are created/edited on the dashboard
-    worms devbox provision            # build the devboxes of new teams (host job)
-    worms users / worms leaderboard
-    worms admin reset-password        # one-time password for the dashboard admin
-    worms admin create-staff EMAIL    # a tutor account (students: on the dashboard)
-    worms simulate                    # end-to-end simulation (was make simulate)
-    worms test                        # the offline test suite (was make test)
-    worms debug <host>                # Ansible connection diagnostics
-    worms reset-database              # DANGER: wipe + re-migrate + re-init
-    worms destroy / destroy-all       # teardown
-    worms emergency-stop              # freeze: hard-stop ALL vms (does NOT destroy)
-
-Configuration (env or ~/.worms/config, no secrets): src/worms_cli/config.py;
-secrets: src/worms_cli/secrets.py; docs/accounts.md §4. Run `worms <command>
---help` for details.
 """
 
 from __future__ import annotations
@@ -39,7 +15,9 @@ import os
 import re
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
+from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -454,8 +432,7 @@ done
 
 def cmd_build(config, args) -> int:
     if args.list:
-        rows = [[name, help_text] for name, (_, help_text) in pipeline.COMPONENTS.items()]
-        print(output.table(rows, headers=["component", "what"]))
+        print(_components_overview())
         return 0
     component = args.component or "all"
     if component not in pipeline.COMPONENTS:
@@ -529,73 +506,247 @@ def cmd_destroy(config, args, key: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+# help: every command under what it is for
+# ---------------------------------------------------------------------------
+
+
+class Section(NamedTuple):
+    """One part of the help. `commands` are (as typed, one line); build_parser
+    takes each command's help from here, so a new command has to say what it is
+    for. `components` are `worms build` components that also get a line in
+    `worms --help`; `more_components` appear only in `worms build --list`."""
+
+    title: str
+    about: str
+    commands: tuple[tuple[str, str], ...] = ()
+    components: tuple[str, ...] = ()
+    more_components: tuple[str, ...] = ()
+
+
+SECTIONS = (
+    Section(
+        "set up the system",
+        "From an empty node to a running platform. `worms build` is safe to repeat; it opens the internet "
+        "window, which is refused while any devbox or sandbox VM exists. Afterwards: `worms admin "
+        "reset-password` for the first login.",
+        commands=(
+            ("secrets issue <name>", "create or rotate a Proxmox token and store it"),
+            ("secrets set <name>", "store a secret by hand (prompted, or from stdin)"),
+            ("node trust", "once: authorize the WORMS key on VMs that predate it (and for root on the node)"),
+            ("build [<component>]", "everything, end to end (= make), or one component: `worms build --list`"),
+        ),
+        more_components=("all", "init", "secrets", "platform", "firewall", "host-network", "infrastructure",
+                         "inventory", "configure", "provision", "offline", "internet-allow"),  # fmt: skip
+    ),
+    Section(
+        "manage production",
+        "The running competition, from the console. Teams, students and rounds are managed on the dashboard "
+        "instead (/staff/), and a round starts by itself.",
+        commands=(
+            ("devbox provision", "give new teams a devbox: enqueue the build for the round agent"),
+            ("admin reset-password", "one-time password for the dashboard admin, printed once (created if missing)"),
+            ("admin create-staff <email>", "a staff (tutor) account; one-time password printed once"),
+            ("teams delete <name>", "delete a team with everything it owns (its users stay)"),
+        ),
+        components=("round-reset-services", "internet-deny"),
+    ),
+    Section(
+        "run by the round agent",
+        "The agent runs these itself, for `worms devbox provision` and for rounds; `devbox` is the two devbox "
+        "steps together.",
+        more_components=("round-configure-sandbox", "devbox", "devbox-apply", "devbox-configure"),
+    ),
+    Section(
+        "see the status",
+        "These change nothing on the platform.",
+        commands=(
+            ("status", "components, internet, competition, rounds"),
+            ("teams", "teams, their members, who has signed in (create and edit them on the dashboard: Staff → Teams)"),
+            ("users", "all users: team, login status, one-time password"),
+            ("leaderboard", "the production leaderboard, in the console"),
+            ("secrets", "the vault: what is set, never a value (creates the vault and missing generated secrets)"),
+            ("secrets check", "ask Proxmox whether the stored tokens work, with exactly their rights"),
+        ),
+    ),
+    Section(
+        "debug a problem",
+        "When a build or a VM misbehaves. Host jobs log to /var/log/worms/jobs/ on the node.",
+        commands=(("debug <host>", "Ansible connection diagnostics for a host/group"),),
+        components=("ping", "show-config"),
+    ),
+    Section(
+        "develop and test",
+        "For working on the code. `test` runs offline, anywhere; `simulate` runs on the deployed platform, "
+        "where it creates a test team and removes it afterwards (docs/testing.md).",
+        commands=(
+            ("test [-- <pytest args>]", "run the offline test suite (.venv-test + pytest)"),
+            ("simulate", pipeline.COMPONENTS["simulate"][1]),
+        ),
+        more_components=("simulate",),
+    ),
+    Section(
+        "stop and tear down",
+        "Each asks first, unless given --yes. `emergency-stop` is the only hard stop of a running round; it "
+        "also stops the database and the dashboard.",
+        commands=(
+            ("emergency-stop", DESTRUCTIVE["emergency-stop"][1]),
+            ("reset-database", "DANGER: wipe + re-migrate + re-init the database"),
+            ("destroy", DESTRUCTIVE["destroy"][1]),
+            ("destroy-all", DESTRUCTIVE["destroy-all"][1]),
+            ("terminate", DESTRUCTIVE["terminate"][1]),
+        ),
+    ),
+)
+
+HELP_WIDTH = 79
+
+
+def _command_name(usage: str) -> str:
+    """`secrets issue <name>` -> `secrets issue`: the words that select the command."""
+    return re.split(r" [<\[]", usage)[0]
+
+
+def _command_help(command: str) -> str:
+    for section in SECTIONS:
+        for usage, text in section.commands:
+            if _command_name(usage) == command:
+                return text
+    raise KeyError(f"`worms {command}` is under no section of SECTIONS")
+
+
+def _add(subparsers, command: str, **kwargs) -> argparse.ArgumentParser:
+    """Add `worms <command>`, with its line in SECTIONS as its help."""
+    text = _command_help(command)
+    return subparsers.add_parser(command.split()[-1], help=text, description=text, **kwargs)
+
+
+def _format_sections(sections: list[tuple[Section, list[tuple[str, str]]]]) -> str:
+    """Each section that has rows: title, what it is for, then two columns."""
+    sections = [(section, rows) for section, rows in sections if rows]
+    column = max(len(usage) for _, rows in sections for usage, _ in rows)
+    parts = []
+    for section, rows in sections:
+        about = textwrap.fill(section.about, HELP_WIDTH, initial_indent="  ", subsequent_indent="  ")
+        lines = [output.heading(section.title), about]
+        lines += [
+            textwrap.fill(
+                text,
+                HELP_WIDTH,
+                initial_indent=f"  {usage:<{column}}  ",
+                subsequent_indent=" " * (column + 4),
+                break_long_words=False,
+                break_on_hyphens=False,
+            )
+            for usage, text in rows
+        ]
+        parts.append("\n".join(lines))
+    return "\n\n".join(parts)
+
+
+def _commands_overview() -> str:
+    """The sections of `worms --help`."""
+    return _format_sections([
+        (section, [*section.commands, *((f"build {c}", pipeline.COMPONENTS[c][1]) for c in section.components)])
+        for section in SECTIONS
+    ])  # fmt: skip
+
+
+def _components_overview() -> str:
+    """The sections of `worms build --list`."""
+    return _format_sections([
+        (section, [(name, pipeline.COMPONENTS[name][1]) for name in (*section.components, *section.more_components)])
+        for section in SECTIONS
+    ])  # fmt: skip
+
+
+# ---------------------------------------------------------------------------
 # argument parsing
 # ---------------------------------------------------------------------------
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="worms", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--config", help="path to a KEY=value config file (default ~/.worms/config)")
-    parser.add_argument("--dry-run", action="store_true", help="print what would run, change nothing")
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser = argparse.ArgumentParser(
+        prog="worms",
+        usage="worms [-h] [--config FILE] [--dry-run] <command> ...",
+        description=f"{__doc__}\n{_commands_overview()}",
+        epilog="Configuration (env or ~/.worms/config, no secrets): src/worms_cli/config.py;\n"
+        "secrets: src/worms_cli/secrets.py; docs/accounts.md §4. Run `worms <command>\n"
+        "--help` for details, and see docs/management.md for how it fits together.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--config", metavar="FILE", help="path to a KEY=value config file (default ~/.worms/config)")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print what would run, change nothing. Goes before the command. "
+        "`secrets`, `teams delete` and `test` ignore it and really run",
+    )
+    # The sections above replace argparse's flat list of commands. An explicit
+    # prog: older Pythons build it from the parser's custom usage otherwise.
+    sub = parser.add_subparsers(
+        dest="command", required=True, prog="worms", metavar="<command>", help=argparse.SUPPRESS
+    )
 
-    sub.add_parser("status", help="components, internet, competition, rounds")
+    _add(sub, "status")
 
-    teams_help = "list teams; delete one with its history (create/edit them on the dashboard: Staff → Teams)"
-    p_teams = sub.add_parser("teams", help=teams_help, description=teams_help)
+    p_teams = _add(sub, "teams")
     team_sub = p_teams.add_subparsers(dest="team_action")
-    p_delete = team_sub.add_parser("delete", help="delete a team with everything it owns (users unaffected)")
+    p_delete = _add(team_sub, "teams delete")
     p_delete.add_argument("name")
     p_delete.add_argument("--yes", action="store_true", help="skip confirmation")
 
     devbox_help = "the team devboxes: `provision` enqueues the build of new teams' devboxes for the round agent"
-    p_devbox = sub.add_parser("devbox", help="the team devboxes", description=devbox_help)
+    p_devbox = sub.add_parser("devbox", description=devbox_help)
     devbox_sub = p_devbox.add_subparsers(dest="devbox_action", required=True)
-    devbox_sub.add_parser("provision", help="give new teams a devbox: enqueue the provision host job")
+    _add(devbox_sub, "devbox provision")
 
-    sub.add_parser("users", help="all users: team, login status, one-time password")
-    sub.add_parser("leaderboard", help="the production leaderboard, in the console")
+    _add(sub, "users")
+    _add(sub, "leaderboard")
 
-    p_admin = sub.add_parser("admin", help="the dashboard admin account")
+    p_admin = sub.add_parser("admin", description="the dashboard admin account, and staff accounts")
     admin_sub = p_admin.add_subparsers(dest="admin_action", required=True)
-    p_reset_pw = admin_sub.add_parser("reset-password", help="new one-time password, printed once (created if missing)")
+    p_reset_pw = _add(admin_sub, "admin reset-password")
     p_reset_pw.add_argument("--username", default="admin")
     p_reset_pw.add_argument("--yes", action="store_true", help="skip confirmation")
-    p_staff = admin_sub.add_parser("create-staff", help="a staff (tutor) account; one-time password printed once")
+    p_staff = _add(admin_sub, "admin create-staff")
     p_staff.add_argument("email")
     p_staff.add_argument("--first-name", default="")
     p_staff.add_argument("--last-name", default="")
 
-    p_secrets = sub.add_parser("secrets", help="the vault: what is set (never values); issue and check the Proxmox tokens")
+    p_secrets = _add(sub, "secrets")
     secrets_sub = p_secrets.add_subparsers(dest="secrets_action")
-    p_issue = secrets_sub.add_parser("issue", help="create or rotate a Proxmox token and store it")
+    p_issue = _add(secrets_sub, "secrets issue")
     p_issue.add_argument("name", choices=["proxmox-token", "orchestrator-token", "topology-token"])
-    secrets_sub.add_parser("check", help="ask Proxmox whether the stored tokens work, with exactly their rights")
-    p_set = secrets_sub.add_parser("set", help="enter a secret (prompted, or from stdin)")
+    _add(secrets_sub, "secrets check")
+    p_set = _add(secrets_sub, "secrets set")
     p_set.add_argument("name", choices=["proxmox-token", "orchestrator-token", "topology-token", "ssh-key"])
 
-    p_node = sub.add_parser("node", help="the Proxmox node")
+    p_node = sub.add_parser("node", description="the Proxmox node")
     node_sub = p_node.add_subparsers(dest="node_action", required=True)
-    node_sub.add_parser("trust", help="once: authorize the WORMS key on VMs that predate it (and for root on the node)")
+    _add(node_sub, "node trust")
 
-    p_build = sub.add_parser("build", help="full pipeline, or one component (--list)")
+    p_build = _add(sub, "build", epilog=_components_overview(), formatter_class=argparse.RawDescriptionHelpFormatter)
     p_build.add_argument("component", nargs="?", help="component to build (default: all)")
     p_build.add_argument("--list", action="store_true", help="list components and exit")
-    p_build.add_argument("make_args", nargs="*", help="extra args passed to ansible-playbook (e.g. --limit db -vvv)")
+    p_build.add_argument(
+        "make_args", nargs="*", help="extra args passed to ansible-playbook, after `--` (e.g. -- --limit db -vvv)"
+    )
 
-    sub.add_parser("simulate", help="end-to-end simulation against the deployed platform")
+    _add(sub, "simulate")
 
-    p_test = sub.add_parser("test", help="run the offline test suite (.venv-test + pytest)")
-    p_test.add_argument("pytest_args", nargs="*", help="extra args passed to pytest (e.g. -k shipper -x)")
+    p_test = _add(sub, "test")
+    p_test.add_argument(
+        "pytest_args", nargs="*", help="extra args passed to pytest, after `--` (e.g. -- -k shipper -x)"
+    )
 
-    p_dbg = sub.add_parser("debug", help="Ansible connection diagnostics for a host/group")
+    p_dbg = _add(sub, "debug")
     p_dbg.add_argument("host")
 
-    p_reset = sub.add_parser("reset-database", help="DANGER: wipe + re-migrate + re-init the database")
+    p_reset = _add(sub, "reset-database")
     p_reset.add_argument("--yes", action="store_true")
 
-    for key, (_, help_text) in DESTRUCTIVE.items():
-        p = sub.add_parser(key, help=help_text)
+    for key in DESTRUCTIVE:
+        p = _add(sub, key)
         p.add_argument("--yes", action="store_true")
 
     return parser

@@ -8,6 +8,7 @@ the unconfigured status output below.
 
 from __future__ import annotations
 
+import argparse
 import os
 import subprocess
 import sys
@@ -337,3 +338,91 @@ def test_admin_create_staff_prints_a_one_time_password(initialised):
     assert row == [(True, False, True, "Tu")]
     again = worms(cluster, "admin", "create-staff", "tutor@uni.example", check=False)
     assert again.returncode != 0 and "already exists" in again.stderr
+
+
+# --- the help: every command under what it is for (no database needed) -------------
+
+
+def run_cli(*args):
+    proc = subprocess.run(
+        [sys.executable, str(MANAGE), *args],
+        capture_output=True, text=True, env=dict(os.environ, NO_COLOR="1", COLUMNS="80"),
+    )  # fmt: skip
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return proc.stdout
+
+
+def sections_of(text):
+    """{title: its text} of the `── title` parts of a help output."""
+    return {part.split("\n", 1)[0].strip(): part for part in text.split("── ")[1:]}
+
+
+def commands_of(parser, path=()):
+    """Every command that runs as typed: `teams` lists, `admin` alone is refused."""
+    subs = [action for action in parser._actions if isinstance(action, argparse._SubParsersAction)]
+    if path and not (subs and subs[0].required):
+        yield " ".join(path), parser
+    for sub in subs:
+        for name, child in sub.choices.items():
+            yield from commands_of(child, (*path, name))
+
+
+def test_help_says_what_sets_up_and_what_manages_production():
+    sections = sections_of(run_cli("--help"))
+    assert list(sections) == ["set up the system", "manage production", "see the status",
+                              "debug a problem", "develop and test", "stop and tear down"]  # fmt: skip
+    setup, production = sections["set up the system"], sections["manage production"]
+    assert "build [<component>]" in setup and "secrets issue <name>" in setup
+    assert "devbox provision" in production and "admin create-staff <email>" in production
+    assert "build round-reset-services" in production and "build round-reset-services" not in setup
+    # The flat list of argparse is gone, and with it a second list to keep true.
+    assert "positional arguments" not in run_cli("--help")
+
+
+def test_every_command_is_in_exactly_one_section():
+    cli = _cli_module()
+    listed = [cli._command_name(usage) for section in cli.SECTIONS for usage, _ in section.commands]
+    assert sorted(listed) == sorted(name for name, _ in commands_of(cli.build_parser()))
+
+
+def test_every_build_component_is_in_exactly_one_section():
+    cli = _cli_module()
+    from worms_cli import pipeline
+
+    listed = [name for section in cli.SECTIONS for name in (*section.components, *section.more_components)]
+    assert sorted(listed) == sorted(pipeline.COMPONENTS)
+
+
+def test_build_list_groups_the_components_as_the_help_does():
+    sections = sections_of(run_cli("build", "--list"))
+    assert "round-reset-services" in sections["manage production"]
+    assert "platform" in sections["set up the system"]
+    assert "devbox-apply" in sections["run by the round agent"]
+    assert "ping" in sections["debug a problem"]
+    # `worms build --help` shows the same list.
+    assert sections_of(run_cli("build", "--help")).keys() == sections.keys()
+
+
+def test_every_command_explains_itself():
+    cli = _cli_module()
+    for name, parser in commands_of(cli.build_parser()):
+        assert parser.description == cli._command_help(name)
+        assert parser.prog == f"worms {name}"
+
+
+def test_help_fits_a_terminal():
+    for args in (["--help"], ["build", "--list"], ["build", "--help"]):
+        too_long = [line for line in run_cli(*args).splitlines() if len(line) > 80]
+        assert not too_long, (args, too_long)
+
+
+def test_arguments_for_the_tools_go_after_a_double_dash():
+    """What the help promises for `build` and `test`."""
+    parser = _cli_module().build_parser()
+    assert parser.parse_args(["build", "provision", "--", "--limit", "db"]).make_args == ["--limit", "db"]
+    assert parser.parse_args(["test", "--", "-k", "shipper"]).pytest_args == ["-k", "shipper"]
+
+
+def test_a_command_is_still_required():
+    proc = subprocess.run([sys.executable, str(MANAGE)], capture_output=True, text=True)
+    assert proc.returncode == 2 and "usage: worms" in proc.stderr and "<command>" in proc.stderr

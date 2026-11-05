@@ -35,8 +35,8 @@ alias worms='/root/app/.venv-test/bin/python /root/app/src/manage.py'
 ```
 
 - The database commands need Django and psycopg2. `.venv-test` has them, and `worms test` creates it.
-- Every command has `--help`.
-- `worms --dry-run <command>` prints what would happen and changes nothing. The flag goes before the command.
+- `worms --help` lists the commands by purpose: set up the system, manage production, see the status, debug a problem, develop and test, stop and tear down. `worms build --list` does the same for the build's components. Every command has its own `--help`.
+- `worms --dry-run <command>` prints what would happen and changes nothing. The flag goes before the command. **`secrets`, `teams delete` and `test` ignore it and really run.**
 - `[PRODUCTION] We are running in PRODUCTION mode` at the start of the output is expected.
 
 **The dashboard** is `https://worms-dev.mlsec.tu-berlin.de/` on `worms-dev`, and `https://worms.mlsec.tu-berlin.de/` in production.

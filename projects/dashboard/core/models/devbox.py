@@ -27,8 +27,10 @@ import uuid
 from core import clock
 from core.models.scoring import FlagCaptureAttempt
 from core.models.logging import LoggingAttempt
+from core.models.rounds import HostJob
 from core.models.team import Team
 from core.models.user import User
+from core.models.worms import Upload
 from django.db import models
 from django.db.models import Q
 from django.db.models.functions import Now
@@ -171,6 +173,44 @@ class DevboxCapture(models.Model):
                 name="unique_devbox_capture_per_version",
             ),
         ]
+
+
+class DevboxRun(models.Model):
+    """One upload made in the dev view, running on the team's devbox: the devbox's
+    counterpart of a RoundRun. It resets the VMs, then runs on VM A. Written by the
+    orchestrator (orchestrator/rounds/devbox_runs.py); the dashboard only reads it."""
+
+    class State(models.TextChoices):
+        PENDING = "pending"  # waiting for a rebuild already in progress
+        RESETTING = "resetting"  # host: rebuild the team's VMs, new tokens
+        DEPLOYING = "deploying"  # host: the worm onto VM A, fuse lit
+        ARMED = "armed"  # worm starts at worm_start_at
+        RUNNING = "running"  # until ends_at
+        FINISHED = "finished"  # its time is up; the VMs stay as they are
+        FAILED = "failed"
+        REPLACED = "replaced"  # a newer upload or a manual reset came first
+
+    upload = models.OneToOneField(Upload, on_delete=models.CASCADE, related_name="devbox_run")
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="devbox_runs")
+    state = models.TextField(choices=State.choices, default=State.PENDING)
+    # The team's devbox_version this run reset the VMs to.
+    devbox_version = models.PositiveIntegerField(null=True, blank=True)
+    rebuild_job = models.ForeignKey(HostJob, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
+    deploy_job = models.ForeignKey(HostJob, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
+    armed_at = models.DateTimeField(null=True, blank=True)
+    worm_start_at = models.DateTimeField(null=True, blank=True)
+    ends_at = models.DateTimeField(null=True, blank=True)
+    # For staff: a host job's error can name internal details.
+    error = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(default=clock.now)
+    updated_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "devbox_runs"
+        indexes = [models.Index(fields=["team", "state"], name="devbox_runs_team_state")]
+
+    def __str__(self):
+        return f"DevboxRun({self.upload_id}, {self.state})"
 
 
 class DevboxLog(models.Model):

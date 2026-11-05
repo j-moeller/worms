@@ -67,6 +67,34 @@ recorded (`devbox_captures.devbox_version`, `devbox_logs.devbox_version`). The
 dashboard only shows the **current** version, so the score restarts at zero
 while the old rows stay for inspection. Nothing is deleted.
 
+## Uploads: running a worm on the devbox
+
+An upload in the dashboard's dev view runs on the team's devbox the way a round runs it on a
+sandbox, and has nothing to do with the sandbox or the rounds. On the page, each view warns
+what an upload does there.
+
+```
+dashboard                 stores the upload (Upload.devbox = true). That is all it can do.
+orchestrator              picks it up in its attempt loop (rounds/devbox_runs.py)
+  PENDING                 waits while a round is running, or for a rebuild in progress
+  RESETTING               devbox_rebuild: a new version, so the score starts over; new VMs, new tokens
+  DEPLOYING               devbox_deploy: the zip to VM A, hash checked, unpacked, fuse lit
+  ARMED -> RUNNING        bash main.sh starts after 10 s, as debian, as in a round
+  -> FINISHED             after an hour: systemd stops main.sh; the VMs stay as they are
+```
+
+| Rule | How |
+|---|---|
+| Never enters a round | `orchestrator/rounds/planner.py` and everything that asks for a team's entry filter on `devbox=False`. Each view lists only its own uploads |
+| A stale tab cannot pick the wrong one | The form says which view it came from, and it must match the session. Live and Dev share a session, so another tab can have switched |
+| A round's timing comes first | The agent runs one job at a time and a rebuild takes many minutes. So a dev upload waits while a round is running, and the agent takes a round's queued jobs first. **A manual Reset does not wait yet**, as before |
+| Only the latest upload runs | A newer upload replaces it, and so does a manual reset (the version no longer matches) |
+| Only the team's own VM A | The agent's validator and handler both refuse any other VM, whatever the database says |
+| Least privilege | The dashboard cannot create host jobs or touch `devbox_runs`. Only the orchestrator asks the agent for anything |
+| The team does not see internals | A failed job's error stays in `devbox_runs.error`, for staff |
+
+**The time limit** bounds `main.sh` only. It is a systemd limit on VM A, not a teardown: anything the worm started on B or C keeps running until the next reset. Set with `devbox_run_duration` in `ROUND_CONDUCTOR`, default one hour, the same as a round's default.
+
 ## Attribution without interfering with the round
 
 The scoring and logging servers used to assume only one team runs at a time

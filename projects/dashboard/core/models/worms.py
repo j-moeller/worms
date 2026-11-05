@@ -13,6 +13,9 @@ class MalwareArtifact(models.Model):
 
 
 class Upload(models.Model):
+    # Made in the dev view: it runs on the team's devbox and never enters a round
+    # (orchestrator/rounds/devbox_runs.py, orchestrator/rounds/planner.py).
+    devbox = models.BooleanField(default=False, db_default=False)
     artifact = models.ForeignKey(
         MalwareArtifact,
         on_delete=models.CASCADE,

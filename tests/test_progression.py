@@ -498,6 +498,51 @@ def test_the_devbox_summary_lists_only_what_was_captured(world):
     assert [c["vm"] for c in summary["captures"]] == ["devbox-t1-a"]
 
 
+def _uploaded_worm(world, version=1):
+    from core.models.devbox import DevboxRun
+    from core.models.user import User
+    from core.models.worms import MalwareArtifact, Upload
+    from django.utils import timezone
+
+    armed = world["now"] - timezone.timedelta(hours=1)
+    artifact = MalwareArtifact.objects.create(content_hash="d" * 64, storage_key="malware-artifacts/dd/dd/" + "d" * 64 + ".zip")
+    upload = Upload.objects.create(artifact=artifact, user=User.objects.get(username="student-a"), team=world["a"], devbox=True)
+    return DevboxRun.objects.create(
+        upload=upload, team=world["a"], state="running", devbox_version=version, armed_at=armed,
+        worm_start_at=armed + timezone.timedelta(seconds=10), ends_at=armed + timezone.timedelta(hours=1),
+    )  # fmt: skip
+
+
+def test_the_devbox_progression_shows_an_uploaded_worm_on_vm_a(world):
+    _devbox_since(world)
+    run = _uploaded_worm(world)
+
+    doc = _devbox_doc(world)
+
+    tl = doc["timeline"]
+    entry = {n["label"]: n["start_vm"] for n in tl["nodes"]}
+    assert entry == {"devbox-t1-a": True, "devbox-t1-b": False, "devbox-t1-c": False}
+    a = next(n["id"] for n in tl["nodes"] if n["label"] == "devbox-t1-a")
+    events = {e["kind"]: e for e in tl["events"]}
+    assert events["worm_deployed"]["node"] == a and events["worm_started"]["node"] == a and events["worm_started"]["data"] == {}
+    assert events["worm_started"]["t"] - events["worm_deployed"]["t"] == 10
+    assert run.upload.artifact.content_hash not in "\n".join(walk(doc))
+
+
+def test_a_worm_from_before_a_reset_is_not_shown(world):
+    from core.models.team import Team
+
+    _devbox_since(world)
+    _uploaded_worm(world, version=1)
+    Team.objects.filter(pk=world["a"].pk).update(devbox_version=2)
+    world["a"].refresh_from_db()
+
+    tl = _devbox_doc(world)["timeline"]
+
+    assert not [n for n in tl["nodes"] if n["start_vm"]]
+    assert not [e for e in tl["events"] if e["kind"] in ("worm_deployed", "worm_started")]
+
+
 def test_a_team_without_a_devbox_has_no_devbox_progression(world):
     from core.models.devbox import Devbox
 

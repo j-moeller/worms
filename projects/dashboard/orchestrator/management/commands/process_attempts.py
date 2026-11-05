@@ -51,6 +51,14 @@ class Command(BaseCommand):
             devbox.apply_devbox_jobs()
         except Exception:  # noqa: BLE001  (must not kill the loop)
             log.exception("devbox job reconciliation failed")
+        # Uploads made in the dev view: reset the devbox, then run them. After the
+        # reconciliation, so a rebuilt VM's token is known before the worm starts.
+        try:
+            from orchestrator.rounds import devbox_runs
+
+            devbox_runs.advance()
+        except Exception:  # noqa: BLE001  (must not kill the loop)
+            log.exception("advancing devbox runs failed")
         if flags or logs or dev_flags or dev_logs:
             log.info(
                 "processed %s capture(s), %s log(s); devbox %s capture(s), %s log(s)",

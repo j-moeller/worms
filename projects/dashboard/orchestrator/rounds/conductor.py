@@ -42,12 +42,31 @@ CONFIG = {
     "end_drain": 120,               # ENDING: let the monitor catch up before teardown
     "job_timeout": 1800,            # a host job with no heartbeat for this long failed
     "capture_grace": 120,           # captures/logs accepted this long after ends_at
+    # A dev upload (rounds/devbox_runs.py). Short fuse: the VMs were rebuilt just before.
+    "devbox_worm_start_delay": 10,
+    "devbox_run_duration": 3600,    # systemd stops main.sh after this, as a round would end it
     "slot_overhead": 900,           # allowance for prepare/check/deploy/teardown (core/schedule.py)
 }
 
 
 def config():
     return {**CONFIG, **getattr(settings, "ROUND_CONDUCTOR", {})}
+
+
+def parse_armed_at(result, now, job_timeout):
+    """A deploy job's `armed_at` if it is a sane timestamp (it comes from the host: not in
+    the future, at most a job timeout old), else None."""
+    from django.utils.dateparse import parse_datetime
+
+    try:
+        armed = parse_datetime(str(result.get("armed_at") or ""))
+    except ValueError:
+        return None
+    if armed is None or timezone.is_naive(armed):
+        return None
+    if armed > now + timedelta(seconds=5) or now - armed > timedelta(seconds=job_timeout):
+        return None
+    return armed
 
 
 class Conductor:
@@ -308,20 +327,7 @@ class Conductor:
         return True
 
     def _armed_at(self, result):
-        """The deploy job's `armed_at` if it is a sane timestamp (it comes
-        from the host: not in the future, at most a job timeout old)."""
-        from django.utils.dateparse import parse_datetime
-
-        try:
-            armed = parse_datetime(str(result.get("armed_at") or ""))
-        except ValueError:
-            return None
-        if armed is None or timezone.is_naive(armed):
-            return None
-        now = self.now()
-        if armed > now + timedelta(seconds=5) or now - armed > timedelta(seconds=self.cfg["job_timeout"]):
-            return None
-        return armed
+        return parse_armed_at(result, self.now(), self.cfg["job_timeout"])
 
     # -- game plan ------------------------------------------------------------
 

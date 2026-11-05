@@ -176,41 +176,46 @@ def deploy(ex, cfg, params):
     # record its uuid on every submission (no access token is used anymore).
     _set_current_team(ex, cfg, params["team_uuid"])
 
-    artifact = _fetch_artifact(ex, cfg, params["artifact"])
-    # Copy the verified zip onto the start VM, base64 over stdin so the binary
-    # survives the text channel and never appears on a command line.
-    ex.ssh(
-        start_ip,
-        ["/bin/sh", "-c", f"base64 -d > {WORM_DIR}/{WORM_ZIP}"],
-        input=base64.b64encode(artifact).decode("ascii"),
-    )
-    # Unpack it now, so a broken upload fails the deploy with a reason
-    # instead of a worm that never starts.
-    ex.ssh(
-        start_ip,
-        ["/bin/sh", "-c", UNPACK.format(dir=WORM_DIR, code=WORM_CODE, zip=WORM_ZIP, entry=WORM_ENTRY)],
-    )
-
+    _place_worm(ex, cfg, start_ip, params["artifact"])
     released = _release(ex, cfg, params["initial_secrets"])
-
-    # Arm a one-shot systemd timer on the VM: after worm_delay it runs the
-    # worm as the sandbox user, in its directory. No shell: fixed literals.
     delay = params["worm_delay"]
-    ex.ssh(
-        start_ip,
-        [
-            "sudo", "systemd-run", f"--on-active={delay}", f"--unit={WORM_UNIT}",
-            "--working-directory", f"{WORM_DIR}/{WORM_CODE}", "--uid", ex.ssh_user,
-            "/bin/bash", WORM_ENTRY,
-        ],
-    )
-    # When the fuse was lit (the host's clock): the conductor dates the worm's
-    # start from this, not from when it noticed the job was done.
-    armed_at = datetime.now(timezone.utc).isoformat()
+    armed_at = _arm_worm(ex, start_ip, delay)
     return {
         "released": released, "start_vm": start, "worm_delay": delay,
         "team_uuid": params["team_uuid"], "armed_at": armed_at,
     }  # fmt: skip
+
+
+def _place_worm(ex, cfg, ip, artifact):
+    """The verified zip onto a VM, unpacked."""
+    raw = _fetch_artifact(ex, cfg, artifact)
+    # base64 over stdin so the binary survives the text channel and never appears on a command line.
+    ex.ssh(
+        ip,
+        ["/bin/sh", "-c", f"base64 -d > {WORM_DIR}/{WORM_ZIP}"],
+        input=base64.b64encode(raw).decode("ascii"),
+    )
+    # Unpack it now, so a broken upload fails the deploy with a reason
+    # instead of a worm that never starts.
+    ex.ssh(
+        ip,
+        ["/bin/sh", "-c", UNPACK.format(dir=WORM_DIR, code=WORM_CODE, zip=WORM_ZIP, entry=WORM_ENTRY)],
+    )
+
+
+def _arm_worm(ex, ip, delay, *properties):
+    """Arm a one-shot systemd timer on the VM: after `delay` it runs the worm as the login user,
+    in its directory. No shell: fixed literals. Returns when the fuse was lit (the host's clock):
+    the worm's start is dated from this, not from when anyone noticed the job was done."""
+    ex.ssh(
+        ip,
+        [
+            "sudo", "systemd-run", f"--on-active={delay}", f"--unit={WORM_UNIT}", *properties,
+            "--working-directory", f"{WORM_DIR}/{WORM_CODE}", "--uid", ex.ssh_user,
+            "/bin/bash", WORM_ENTRY,
+        ],
+    )
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _set_current_team(ex, cfg, uuid):
@@ -363,6 +368,21 @@ def devbox_provision(ex, cfg, params):
     return {"vms": report, "services_sources": sources, "addresses": _devbox_addresses(teams)}
 
 
+def devbox_deploy(ex, cfg, params):
+    """Put a team's dev upload on its VM A and arm the fuse, as `deploy` does for a sandbox. The
+    rebuild before it wrote the tokens, and scoring and logging know a devbox by its gateway's
+    address, so there are no secrets to release and no current team to set. A devbox is not torn
+    down when its time is up, so systemd stops main.sh instead."""
+    start = params["start_vm"]
+    vm = _devbox_vms(ex).get(start)
+    if vm is None or vm["team"] != params["team_slug"]:
+        raise validation.Invalid(f"{start} is not a VM of team {params['team_slug']}")
+    _place_worm(ex, cfg, vm["maintenance_ip"], params["artifact"])
+    delay = params["worm_delay"]
+    armed_at = _arm_worm(ex, vm["maintenance_ip"], delay, f"--property=RuntimeMaxSec={params['run_duration']}")
+    return {"start_vm": start, "worm_delay": delay, "team_uuid": params["team_uuid"], "armed_at": armed_at}
+
+
 def _devbox_replace_args(slug):
     """`-replace` for a team's three VMs. No shell runs these, so the quotes must
     reach OpenTofu as they are: escaped ones are an invalid address."""
@@ -472,4 +492,5 @@ HANDLERS = {
     "devbox_provision": devbox_provision,
     "devbox_rebuild": devbox_rebuild,
     "devbox_reconfigure": devbox_reconfigure,
+    "devbox_deploy": devbox_deploy,
 }

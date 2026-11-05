@@ -85,7 +85,7 @@
             <thead><tr><th scope="col">Uploaded</th><th scope="col">Content hash</th></tr></thead>
             <tbody>
                 {% for upload in uploads %}
-                <tr><td>{{ upload.created_at|date:"Y-m-d H:i" }}</td><td class="mono truncate">{{ upload.artifact.content_hash }}</td></tr>
+                <tr><td>{{ upload.created_at|date:"Y-m-d H:i" }}</td><td class="mono truncate">{% if upload.devbox %}<span class="badge">dev</span> {% endif %}{{ upload.artifact.content_hash }}</td></tr>
                 {% empty %}
                 <tr><td colspan="2" class="empty">No uploads.</td></tr>
                 {% endfor %}

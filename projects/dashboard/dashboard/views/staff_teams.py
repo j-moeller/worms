@@ -64,7 +64,8 @@ def teams(request: HttpRequest):
     )
     teams_list = []
     for team in rows:
-        latest = team_uploads(team).aggregate(latest=Max("created_at"))["latest"]
+        # Its entry for a round, so not what it tried on its devbox.
+        latest = team_uploads(team).filter(devbox=False).aggregate(latest=Max("created_at"))["latest"]
         try:
             devbox = team.devbox
         except Devbox.DoesNotExist:

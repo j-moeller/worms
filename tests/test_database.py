@@ -164,6 +164,27 @@ def test_the_services_that_need_no_accounts_cannot_read_password_resets(database
     denied(database, role, "SELECT * FROM password_resets")
 
 
+# --- dev uploads --------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "INSERT INTO host_jobs (uuid, kind, params, state, result, error) VALUES (gen_random_uuid(), 'devbox_deploy', '{}', 'queued', '{}', '')",
+        "UPDATE devbox_runs SET state = 'finished'",
+        "DELETE FROM devbox_runs",
+    ],
+)
+def test_the_dashboard_cannot_start_a_devbox_run_itself(database, sql):
+    """It stores the upload. Only the orchestrator asks the agent for anything."""
+    denied(database, "django_dashboard", sql)
+
+
+@pytest.mark.parametrize("role", ["round_agent", "dbuser_scoring", "dbuser_logging", "dbuser_network_monitor"])
+def test_the_other_services_cannot_read_devbox_runs(database, role):
+    denied(database, role, "SELECT * FROM devbox_runs")
+
+
 # --- scoring / logging --------------------------------------------------------
 
 

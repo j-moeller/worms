@@ -3,13 +3,18 @@
 A plain multipart form (works without JavaScript); the static enhance.js only
 adds drag and drop and a progress bar to the very same request. An artifact is
 identified by the SHA-256 of the file's content: the same zip uploaded twice is
-stored once. An upload belongs to the uploader's team at the time; the team's
-latest upload before a round starts is its entry (orchestrator/rounds/planner.py).
+stored once. An upload belongs to the uploader's team at the time.
+
+The two views are separate. Live: the team's latest upload before a round starts
+is its entry (orchestrator/rounds/planner.py). Dev: the upload resets the team's
+devbox and then runs on VM A (orchestrator/rounds/devbox_runs.py), and never enters
+a round. Only the orchestrator acts on it: this view only stores it.
 """
 
 import hashlib
 import zipfile
 
+from core.models.devbox import DevboxRun, DevboxVM
 from core.models.team import Team
 from core.models.worms import MalwareArtifact, Upload
 from dashboard.views.decorators import user_in_team_required
@@ -27,6 +32,21 @@ FIELD = "artifact"
 ENTRY = "main.sh"
 # The multipart envelope around the file (boundaries, headers, the CSRF field).
 ENVELOPE = 64 * 1024
+# What a team sees of a dev upload. A failure's reason is for staff: it can name internals.
+RUN_STATUS = {
+    DevboxRun.State.PENDING: "Waiting for a reset or a round to finish",
+    DevboxRun.State.RESETTING: "Resetting your VMs",
+    DevboxRun.State.DEPLOYING: "Copying it to VM A",
+    DevboxRun.State.ARMED: "About to start",
+    DevboxRun.State.RUNNING: "Running",
+    DevboxRun.State.FINISHED: "Finished",
+    DevboxRun.State.FAILED: "Could not be started. Upload it again, or ask an organiser",
+    DevboxRun.State.REPLACED: "Replaced by a newer upload or a reset",
+}
+
+
+def _environment(request: HttpRequest) -> str:
+    return "dev" if request.is_dev_environment else "live"
 
 
 @login_required
@@ -40,9 +60,10 @@ def upload(request: HttpRequest, team: Team):
 
 
 def _history(request: HttpRequest, team: Team):
+    environment = _environment(request)
     uploads = (
-        Upload.objects.filter(team=team)
-        .select_related("user", "artifact")
+        Upload.objects.filter(team=team, devbox=environment == "dev")
+        .select_related("user", "artifact", "devbox_run")
         .prefetch_related("runs__round")
         .order_by("-created_at")
     )
@@ -54,6 +75,7 @@ def _history(request: HttpRequest, team: Team):
             key=lambda round: (round.round_start is not None, round.round_start, round.pk),
             reverse=True,
         )
+        run = getattr(upload, "devbox_run", None)
         rows.append(
             {
                 "content_hash": upload.artifact.content_hash,
@@ -61,12 +83,19 @@ def _history(request: HttpRequest, team: Team):
                 "username": upload.user.username,
                 "rounds": [round.name for round in rounds],
                 "referenced": bool(rounds),
+                "status": RUN_STATUS[run.state] if run else RUN_STATUS[DevboxRun.State.PENDING],
+                "ends_at": run.ends_at if run and run.state == DevboxRun.State.RUNNING else None,
             }
         )
     return render_with_base_info(
         request,
         "uploads.html",
-        {"uploads": rows, "max_size": settings.MAX_UPLOAD_SIZE},
+        {
+            "uploads": rows,
+            "max_size": settings.MAX_UPLOAD_SIZE,
+            "environment": environment,
+            "devbox_ready": environment != "dev" or DevboxVM.objects.filter(devbox__team=team).exists(),
+        },
     )
 
 
@@ -94,6 +123,21 @@ def _receive(request: HttpRequest, team: Team):
         declared = 0
     if declared > limit + ENVELOPE:
         messages.error(request, f"That file is larger than {filesizeformat(limit)}.")
+        return redirect("upload")
+
+    # The page says which view it was in. Live and Dev share a session, so another tab can have
+    # switched since, and an upload to the wrong one is either a round's entry or a reset.
+    environment = _environment(request)
+    if request.POST.get("environment") != environment:
+        messages.error(
+            request,
+            f"You are in the {environment.capitalize()} view now, not the one that page was opened in, "
+            "so nothing was uploaded. Check this page and upload again.",
+        )
+        return redirect("upload")
+    dev = environment == "dev"
+    if dev and not DevboxVM.objects.filter(devbox__team=team).exists():
+        messages.error(request, "Your devbox has not been built yet, so there is nothing to run this on.")
         return redirect("upload")
 
     uploaded = request.FILES.get(FIELD)
@@ -130,11 +174,15 @@ def _receive(request: HttpRequest, team: Team):
                     messages.error(request, "The upload could not be stored; try again.")
                     return redirect("upload")
             artifact = MalwareArtifact.objects.create(content_hash=content_hash, storage_key=storage_key)
-        Upload.objects.create(artifact=artifact, user=request.user, team=team)
+        Upload.objects.create(artifact=artifact, user=request.user, team=team, devbox=dev)
 
     messages.success(
         request,
         f"Uploaded {uploaded.name} ({filesizeformat(uploaded.size)}), sha256 {content_hash[:16]}…. "
-        "Your team's latest upload before a round starts is the one that runs.",
+        + (
+            "Your devbox VMs are being reset, and then it runs on VM A."
+            if dev
+            else "Your team's latest upload before a round starts is the one that runs."
+        ),
     )
     return redirect("upload")

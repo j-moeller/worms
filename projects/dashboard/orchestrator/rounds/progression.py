@@ -60,7 +60,7 @@ import io
 import json
 import zipfile
 
-from core.models.devbox import Devbox, DevboxCapture, DevboxLog, DevboxVM
+from core.models.devbox import Devbox, DevboxCapture, DevboxLog, DevboxRun, DevboxVM
 from core.models.logging import LoggingAttempt
 from core.models.rounds import HostJob, RoundRun
 from core.models.scoring import FlagCaptureAttempt
@@ -83,6 +83,7 @@ PI_ROLES = ("dns", "private_internet")
 # A team's service ends -> its scene's node ids.
 SERVICE_NODES = {"scoring": "role:scoring", "logging": "role:logging"}
 DEVBOX_LINKS = (("a", "b"), ("b", "c"))
+DEVBOX_ENTRY_ROLE = "a"  # where a dev upload starts (rounds/devbox_runs.py)
 DONE_STATES = {RoundRun.State.FINISHED, RoundRun.State.FAILED, RoundRun.State.SKIPPED}
 NO_DEVBOX_TRAFFIC = "The monitor records the sandbox only: devbox traffic is not recorded."
 
@@ -469,7 +470,8 @@ def build_devbox(team, *, now, infra=None):
         model.objects.filter(**scope).order_by("created_at").values_list("created_at", flat=True).first()
         for model in (FlagCaptureAttempt, LoggingAttempt)
     ]
-    first = [ts for ts in first if ts is not None]
+    worm = _devbox_worm(team)
+    first = [ts for ts in [*first, worm.armed_at if worm else None] if ts is not None]
     zero = max(start, min(first) - timedelta(seconds=DEVBOX_LEAD_IN)) if first else start
     tl, scene, network, t_min, t_max = _devbox_activity(team, start, now, zero, infra or {})
     clock = {
@@ -485,6 +487,16 @@ def build_devbox(team, *, now, infra=None):
     doc["audience"] = "team"
     doc["timeline"].pop("flows", None)
     return doc
+
+
+def _devbox_worm(team):
+    """The dev upload that was deployed on the devbox as it is now (a run resets the VMs, so
+    there is at most one per version), or None: a team can also run things by hand."""
+    return (
+        DevboxRun.objects.filter(team=team, devbox_version=team.devbox_version, armed_at__isnull=False)
+        .order_by("-id")
+        .first()
+    )
 
 
 def _devbox_activity(team, start, end, zero, infra):
@@ -543,6 +555,13 @@ def _devbox_activity(team, start, end, zero, infra):
     events = []
     for vm_id, t in captured_at.items():
         events.append({"t": t, "kind": "captured", "node": vm_id, "vm": vm_id, "data": {}})
+    # The uploaded worm, on the entry VM. Nothing is deployed or started if it was run by hand.
+    worm = _devbox_worm(team) if start is not None else None
+    entry_vm = next((str(vm.uuid) for vm in vms if vm.role == DEVBOX_ENTRY_ROLE), None) if worm else None
+    if entry_vm is not None:
+        for ts, kind in ((worm.armed_at, "worm_deployed"), (worm.worm_start_at, "worm_started")):
+            if ts is not None and start <= ts <= end:
+                events.append({"t": _sec(ts, zero), "kind": kind, "node": entry_vm, "vm": entry_vm, "data": {}})
     for t, attempt, result, vm in submissions:
         target = str(vm.uuid) if vm is not None and str(vm.uuid) in label else None
         events.append(
@@ -570,7 +589,7 @@ def _devbox_activity(team, start, end, zero, infra):
     nodes = [
         {
             "id": str(vm.uuid), "label": vm.vm_identifier, "group": "devbox", "devbox_role": vm.role or None,
-            "addresses": [], "networks": [], "start_vm": False, "captured": str(vm.uuid) in captured_at,
+            "addresses": [], "networks": [], "start_vm": str(vm.uuid) == entry_vm, "captured": str(vm.uuid) in captured_at,
             "captured_at": captured_at.get(str(vm.uuid)),
         }  # fmt: skip
         for vm in vms

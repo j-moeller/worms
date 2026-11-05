@@ -275,6 +275,7 @@ def team_progression(round_id) -> dict | None:
         devbox = [{"id": v, "name": f"devbox-t1-{x}", "role": "devbox", "status": "running", "active": True, "devbox_role": x, "team": None}
                   for v, x in ((a, "a"), (b, "b"), (c, "c"))]
         events = [
+            {"t": 60.0, "kind": "worm_started", "node": a, "vm": a, "data": {}},
             {"t": 3600.0, "kind": "captured", "node": a, "vm": a, "data": {}},
             {"t": 3600.0, "kind": "flag_submitted", "node": "role:scoring", "vm": None,
              "data": {"result": "captured", "flag_of": a, "flag_of_label": "devbox-t1-a", "hash_prefix": "aaaaaaaaaaaaaaaa",
@@ -289,7 +290,7 @@ def team_progression(round_id) -> dict | None:
         tl = {
             "run": None,
             "nodes": [{"id": n["id"], "label": n["name"], "group": "devbox", "devbox_role": n["devbox_role"], "addresses": [],
-                       "networks": [], "start_vm": False, "captured": t is not None, "captured_at": t}
+                       "networks": [], "start_vm": n["id"] == a, "captured": t is not None, "captured_at": t}
                       for n, t in ((devbox[0], 3600.0), (devbox[1], 9000.0), (devbox[2], None))],
             "networks": [], "edges": [],
             "vm_status": {a: [[0.0, "running"]], b: [[0.0, "running"]], c: [[0.0, "running"]]},

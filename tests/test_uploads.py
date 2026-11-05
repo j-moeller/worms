@@ -56,7 +56,7 @@ def upload(client, data, name="worm.zip"):
     token = re.search(rb'name="csrfmiddlewaretoken" value="([^"]+)"', page.content).group(1).decode()
     blob = io.BytesIO(data)
     blob.name = name
-    client.post("/upload/", {"csrfmiddlewaretoken": token, "artifact": blob},
+    client.post("/upload/", {"csrfmiddlewaretoken": token, "artifact": blob, "environment": "live"},
                 HTTP_ORIGIN=f"https://{HOST}", **proxied(HOST))  # fmt: skip
     return re.sub(r"\s+", " ", client.get("/upload/", **proxied(HOST)).content.decode())
 

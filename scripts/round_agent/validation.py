@@ -96,14 +96,18 @@ def deploy(params):
         "worm_delay": integer(params.get("worm_delay", 300), "worm_delay", 0, 86400),
         "initial_secrets": vm_names(params.get("initial_secrets", []), "initial_secrets", allow_empty=True),
     }
+    out["artifact"] = _artifact(params)
+    return out
+
+
+def _artifact(params):
     artifact = params.get("artifact") or {}
     if not isinstance(artifact, dict):
         raise Invalid("artifact must be an object")
-    out["artifact"] = {
+    return {
         "storage_key": storage_key(artifact.get("storage_key")),
         "content_hash": sha256(artifact.get("content_hash"), "artifact.content_hash"),
     }
-    return out
 
 
 def release_secrets(params):
@@ -204,6 +208,21 @@ def devbox_reconfigure(params):
     }
 
 
+def devbox_deploy(params):
+    out = {
+        "team_uuid": team_uuid(params.get("team_uuid")),
+        "team_slug": team_slug(params.get("team_slug")),
+        "start_vm": vm_name(params.get("start_vm"), "start_vm"),
+        "worm_delay": integer(params.get("worm_delay", 10), "worm_delay", 0, 86400),
+        "run_duration": integer(params.get("run_duration", 3600), "run_duration", 1, 7 * 86400),
+        "artifact": _artifact(params),
+    }
+    # Only a team's own entry VM, whatever the database says.
+    if out["start_vm"] != f"devbox-{out['team_slug']}-a":
+        raise Invalid(f"start_vm is not the team's VM A: {out['start_vm']!r}")
+    return out
+
+
 # Job kind -> validator. CHECK and TEARDOWN take no parameters.
 VALIDATORS = {
     "prepare": prepare,
@@ -214,6 +233,7 @@ VALIDATORS = {
     "devbox_provision": devbox_provision,
     "devbox_rebuild": devbox_rebuild,
     "devbox_reconfigure": devbox_reconfigure,
+    "devbox_deploy": devbox_deploy,
 }
 
 

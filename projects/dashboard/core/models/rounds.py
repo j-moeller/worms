@@ -137,6 +137,9 @@ class HostJob(models.Model):
         # the source->team map) without rebuilding any VM: run when a team adds
         # or removes a key, or leaves. Cheap and idempotent.
         DEVBOX_RECONFIGURE = "devbox_reconfigure"
+        # Put a team's dev upload on its devbox VM A and arm the fuse: `deploy` for
+        # the devbox (orchestrator/rounds/devbox_runs.py).
+        DEVBOX_DEPLOY = "devbox_deploy"
 
     class State(models.TextChoices):
         QUEUED = "queued"

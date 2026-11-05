@@ -4,38 +4,52 @@
 <header class="page-head">
     <p class="page-head__kicker">Artifacts</p>
     <h1 class="page-head__title">Upload a worm</h1>
-    <p class="page-head__lead">A <code>.zip</code> with <code>main.sh</code> at its top level. It runs on a sandbox VM as <code>bash main.sh</code>. Your team's latest upload before a round begins is the one that runs.</p>
+    <p class="page-head__lead">A <code>.zip</code> with <code>main.sh</code> at its top level. It runs on {% if environment == "dev" %}VM A of your devbox{% else %}a sandbox VM{% endif %} as <code>bash main.sh</code>.</p>
 </header>
 
 <section class="panel" aria-labelledby="upload-title">
     <header class="panel__head"><h2 class="panel__title" id="upload-title">Submit</h2></header>
+    {% if not devbox_ready %}
+    <div class="panel__body"><p class="alert alert--warn">Your devbox has not been built yet, so there is nothing to run an upload on.</p></div>
+    {% else %}
     <form method="post" action="{% url 'upload' %}" enctype="multipart/form-data" class="panel__body upload" data-upload data-max="{{ max_size }}">
         {% csrf_token %}
+        <input type="hidden" name="environment" value="{{ environment }}">
         <label class="dropzone" data-dropzone>
             <input class="dropzone__input" type="file" name="artifact" accept=".zip,application/zip" required data-file>
             <span class="dropzone__icon" aria-hidden="true"></span>
             <span class="dropzone__text" data-dropzone-text>Choose a .zip file<span class="dropzone__hint"> — or drag it here</span></span>
             <span class="dropzone__file" data-dropzone-file hidden></span>
         </label>
+        {% if environment == "dev" %}
+        <p class="alert alert--warn"><strong>This resets your devbox.</strong> All three VMs are rebuilt, so everything on them is lost and your captures start over. Then your upload runs on VM A, for up to an hour. It does not enter any round.</p>
+        {% else %}
+        <p class="alert alert--warn"><strong>This is your team's entry.</strong> Your latest upload before a round begins is the one that runs in that round. To try something first, switch to the Dev view.</p>
+        {% endif %}
         <div class="upload__actions">
             <span class="upload__status" data-upload-status role="status"></span>
-            <button type="submit" class="btn btn--primary">Upload</button>
+            <button type="submit" class="btn btn--primary">{% if environment == "dev" %}Upload, reset and run{% else %}Upload{% endif %}</button>
         </div>
     </form>
+    {% endif %}
 </section>
 
 <section class="panel" aria-labelledby="history-title">
     <header class="panel__head"><h2 class="panel__title" id="history-title">History</h2><p class="panel__meta">{{ uploads|length }} upload{{ uploads|length|pluralize }}</p></header>
     <div class="table-wrap">
         <table class="table table--uploads">
-            <thead><tr><th scope="col">Content hash</th><th scope="col">Uploaded</th><th scope="col">By</th><th scope="col">Rounds</th></tr></thead>
+            <thead><tr><th scope="col">Content hash</th><th scope="col">Uploaded</th><th scope="col">By</th><th scope="col">{% if environment == "dev" %}On your devbox{% else %}Rounds{% endif %}</th></tr></thead>
             <tbody>
                 {% for upload in uploads %}
                 <tr{% if upload.referenced %} class="is-referenced"{% endif %}>
                     <th scope="row" class="mono truncate" title="{{ upload.content_hash }}">{{ upload.content_hash }}</th>
                     <td><time datetime="{{ upload.time_date|date:'c' }}" data-localtime>{{ upload.time_date }}</time></td>
                     <td>{{ upload.username }}</td>
+                    {% if environment == "dev" %}
+                    <td>{{ upload.status }}{% if upload.ends_at %}, until <time datetime="{{ upload.ends_at|date:'c' }}" data-localtime>{{ upload.ends_at }}</time>{% endif %}</td>
+                    {% else %}
                     <td>{% for round in upload.rounds %}<span class="badge badge--accent upload-round">{{ round }}</span> {% empty %}<span class="muted">—</span>{% endfor %}</td>
+                    {% endif %}
                 </tr>
                 {% empty %}
                 <tr><td colspan="4" class="empty">No uploads yet.</td></tr>

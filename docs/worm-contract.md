@@ -5,11 +5,17 @@ this is the part a team needs.
 
 ## The upload
 
-A **`.zip`** with **`main.sh` at its top level** (not inside a folder). Upload
-it on the dashboard; your team's **latest upload before a round starts** is the
-one that runs (`docs/team_api.md` lists your uploads). At most 100 MiB.
+A **`.zip`** with **`main.sh` at its top level** (not inside a folder), at most
+100 MiB. Where it goes depends on the view you upload it in, and the two are
+completely separate:
 
-The round agent copies the zip to a freshly built sandbox VM, unpacks it into
+- **Live view:** your team's **latest upload before a round starts** is the one
+  that runs in that round.
+- **Dev view:** it **resets your devbox** at once, which rebuilds all three VMs and
+  starts your captures over, and then runs on VM A. It never enters a round
+  ([Developing against a devbox](#developing-against-a-devbox)).
+
+The round agent copies the zip to a freshly built VM, unpacks it into
 `/home/debian/worm/`, and, after a short fuse, runs:
 
 ```
@@ -102,10 +108,36 @@ recorded by a passive monitor and replayed on your PROGRESSION page.
 ## Developing against a devbox
 
 You do not have to wait for a round. Each team gets an always-on **devbox** (a
-private copy of the sandbox) to develop against over SSH; it submits to the
-same scoring/logging servers, attributed to your team, without touching a
-running round. Setup, keys and how to connect: `docs/devbox.md` and the
-dashboard's **development** view.
+private copy of the sandbox); it submits to the same scoring/logging servers,
+attributed to your team, without touching a running round.
+
+**Upload in the dashboard's Dev view** to try a worm the way a round runs it:
+
+1. All three VMs are rebuilt, so everything on them is lost, including anything
+   you left there over SSH, and your captures start over.
+2. Your zip is copied to **VM A** and unpacked, and `bash main.sh` starts after
+   10 seconds, as described above.
+3. It runs for up to an hour. Then `main.sh` is stopped, but anything it started on
+   B or C keeps running until the next reset. The VMs stay as they are, so you can
+   look around over SSH.
+
+Only your latest upload runs: a new one replaces the one before, and a Reset ends
+it. **It waits while a round is running**, because the platform can only do one such
+job at a time and a round's timing comes first. The Upload page shows where it is,
+and the Progression page shows what it did.
+
+You can also work on the VMs by hand over SSH. Setup, keys and how to connect:
+`docs/devbox.md` and the dashboard's Dev view.
+
+## Reaching the LLM endpoint
+
+Your VMs can reach one server outside this system: `teachllm.mlsec.tu-berlin.de`,
+on TCP 443. Nothing else outside is reachable. The name does not resolve on the
+VMs, and its certificate is for the name, so give both:
+
+```sh
+curl --resolve teachllm.mlsec.tu-berlin.de:443:141.23.117.34 https://teachllm.mlsec.tu-berlin.de/
+```
 
 ## A minimal worm
 

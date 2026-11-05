@@ -84,13 +84,14 @@ class Agent:
     # -- claiming -------------------------------------------------------------
 
     def claim(self):
-        """Claim the oldest queued job. Returns (id, uuid, kind, params) or None."""
+        """Claim the oldest queued job, a round's before a devbox's: a round's jobs are timed, and
+        a team's test must not hold them up. Returns (id, uuid, kind, params) or None."""
         conn = self.conn()
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE host_jobs SET state = 'running', started_at = now(), heartbeat_at = now() "
                 "WHERE id = (SELECT id FROM host_jobs WHERE state = 'queued' "
-                "ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1) "
+                "ORDER BY kind LIKE 'devbox%%', id FOR UPDATE SKIP LOCKED LIMIT 1) "
                 "RETURNING id, uuid, kind, params"
             )
             row = cur.fetchone()

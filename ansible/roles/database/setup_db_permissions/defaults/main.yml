@@ -94,6 +94,9 @@ postgresql_table_privileges:
       tables: [teams]
     - privs: INSERT
       tables: [devbox_captures, devbox_logs]
+    # Uploads made in the dev view (orchestrator/rounds/devbox_runs.py).
+    - privs: INSERT, UPDATE
+      tables: [devbox_runs]
 
   # Sandbox-facing APIs (roles/applications/sandbox_api): append one attempt,
   # recording the running team's uuid (the round agent tells them which team

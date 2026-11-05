@@ -550,6 +550,7 @@ def test_devbox_progression_always_shows_every_vm(devbox_page):
     assert "captured" in classes["devbox-t1-a"].split() and "captured" in classes["devbox-t1-b"].split()
     assert "uncaptured" in classes["devbox-t1-c"].split() and "captured" not in classes["devbox-t1-c"].split()
     assert c["flags"] == 2  # a flag on each captured VM
+    assert "start" in classes["devbox-t1-a"].split() and "start" not in classes["devbox-t1-b"].split()  # the uploaded worm
     assert "2 of 3 captured" in c["side"] and "faint until your worm finds their token" in c["side"]
 
 

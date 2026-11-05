@@ -167,6 +167,7 @@ def get_competition_state_presentation(
             latest_upload = (
                 Upload.objects.filter(
                     team=team,
+                    devbox=False,
                 )
                 .order_by("-created_at")
                 .first()

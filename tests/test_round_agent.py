@@ -352,6 +352,63 @@ def test_deploy_fetches_verifies_copies_and_arms():
     assert "--on-active=120" in arm["argv"]
 
 
+class DevboxExecutor(FakeExecutor):
+    def tofu_output(self, stack):
+        assert stack == "devbox"
+        host = lambda name, ip, team: {"name": name, "vm_id": 100, "management_ip": ip, "host_vars": {"devbox_team": team}}  # noqa: E731
+        return {"ansible_hosts": {
+            "devbox-t1-a": host("devbox-t1-a", "10.6.0.11", "t1"),
+            "devbox-t2-a": host("devbox-t2-a", "10.6.1.11", "t2"),
+            "t1-gw": host("devbox-t1-gw", "10.6.0.2", "t1"),
+        }}  # fmt: skip
+
+
+def _devbox_deploy(ex, **overrides):
+    key = "malware-artifacts/aa/bb/" + "c" * 64 + ".zip"
+    return validation.validate("devbox_deploy", {
+        "team_uuid": "11111111-2222-3333-4444-555555555555", "team_slug": "t1", "start_vm": "devbox-t1-a",
+        "artifact": {"storage_key": key, "content_hash": hashlib.sha256(ex.artifact_bytes).hexdigest()},
+        "worm_delay": 10, "run_duration": 3600, **overrides,
+    })  # fmt: skip
+
+
+def test_devbox_deploy_puts_the_worm_on_the_teams_vm_a_and_arms_it():
+    ex = DevboxExecutor()
+
+    result = handlers.devbox_deploy(ex, CFG, _devbox_deploy(ex))
+
+    assert result["start_vm"] == "devbox-t1-a" and result["armed_at"]
+    hosts = [c["host"] for c in ex.ssh_calls]
+    assert hosts[0] == "10.5.0.18" and set(hosts[1:]) == {"10.6.0.11"}  # the artifact, then only this VM
+    arm = next(c for c in ex.ssh_calls if "systemd-run" in c["argv"])
+    assert arm["argv"] == [
+        "sudo", "systemd-run", "--on-active=10", "--unit=worms-start", "--property=RuntimeMaxSec=3600",
+        "--working-directory", "/home/debian/worm", "--uid", "debian", "/bin/bash", "main.sh",
+    ]  # fmt: skip
+    # Scoring and logging know a devbox by its gateway's address: a round's team file stays out of it.
+    assert not [c for c in ex.ssh_calls if "/etc/sandbox-api/current-team" in c["argv"]]
+    assert ex.calls == [], "it does not touch OpenTofu or any other VM"
+
+
+def test_devbox_deploy_rejects_tampered_artifact():
+    ex = DevboxExecutor()
+    params = _devbox_deploy(ex, artifact={"storage_key": "malware-artifacts/aa/bb/" + "c" * 64 + ".zip", "content_hash": "0" * 64})
+    with pytest.raises(validation.Invalid, match="hash mismatch"):
+        handlers.devbox_deploy(ex, CFG, params)
+    assert not [c for c in ex.ssh_calls if "systemd-run" in c["argv"]]
+
+
+def test_devbox_deploy_only_reaches_the_teams_own_vm_a():
+    ex = DevboxExecutor()
+    for overrides in ({"start_vm": "devbox-t2-a"}, {"start_vm": "devbox-t1-b"}, {"start_vm": "sandbox-a"}):
+        with pytest.raises(validation.Invalid, match="not the team's VM A"):
+            _devbox_deploy(ex, **overrides)
+    with pytest.raises(validation.Invalid, match="not a VM of team"):
+        handlers.devbox_deploy(ex, CFG, _devbox_deploy(ex, team_slug="t3", start_vm="devbox-t3-a"))
+    with pytest.raises(validation.Invalid):
+        _devbox_deploy(ex, run_duration=0)
+
+
 def test_deploy_rejects_tampered_artifact():
     ex = FakeExecutor()
     key = "malware-artifacts/aa/bb/" + "c" * 64 + ".zip"
@@ -518,6 +575,19 @@ def test_loop_claims_each_job_once(agent_db):
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM host_jobs WHERE state = 'done'")
         assert cur.fetchone()[0] == 2
+
+
+def test_a_rounds_jobs_go_before_a_devboxs(agent_db):
+    agent, ex, conn = agent_db
+    _queue(conn, "devbox_deploy", {})
+    _queue(conn, "devbox_rebuild", {})
+    round_job = _queue(conn, "check", {})
+
+    assert agent.claim()[0] == round_job
+    # Among themselves, oldest first.
+    assert agent.claim()[2] == "devbox_deploy"
+    assert agent.claim()[2] == "devbox_rebuild"
+    assert agent.claim() is None
 
 
 def test_a_devbox_rebuild_gives_opentofu_addresses_it_accepts(tmp_path):

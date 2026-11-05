@@ -95,7 +95,7 @@ def test_upload_works_without_javascript(site, team_upload):  # noqa: F811
     upload = io.BytesIO(data); upload.name = "worm.zip"
     response = site.post(
         "/upload/",
-        {"csrfmiddlewaretoken": token, "artifact": upload},
+        {"csrfmiddlewaretoken": token, "artifact": upload, "environment": "live"},
         HTTP_ORIGIN=f"https://{HOST}", **proxied(HOST),
     )  # fmt: skip
     assert response.status_code == 302, response.content[:300]
@@ -110,7 +110,7 @@ def test_upload_rejects_a_non_zip_without_javascript(site, team_upload):  # noqa
     blob = io.BytesIO(b"not a zip"); blob.name = "evil.txt"
     response = site.post(
         "/upload/",
-        {"csrfmiddlewaretoken": token, "artifact": blob},
+        {"csrfmiddlewaretoken": token, "artifact": blob, "environment": "live"},
         HTTP_ORIGIN=f"https://{HOST}", **proxied(HOST),
     )  # fmt: skip
     assert response.status_code == 302

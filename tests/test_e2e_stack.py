@@ -273,7 +273,7 @@ def test_end_to_end_competition_journey(site, monkeypatch):  # noqa: F811
     zip_bytes = _zip_bytes({"main.sh": "echo worm\n"})
     blob = io.BytesIO(zip_bytes)
     blob.name = "worm.zip"
-    assert _post(site, "/upload/", files={"artifact": blob}, page="/upload/").status_code in (200, 302)
+    assert _post(site, "/upload/", {"environment": "live"}, files={"artifact": blob}, page="/upload/").status_code in (200, 302)
     from core.models.worms import MalwareArtifact, Upload
 
     upload = Upload.objects.get(team=alpha)

@@ -22,6 +22,7 @@ from core.models.rounds import HostJob
 from core.models.team import Team
 from django.conf import settings
 from django.db import transaction
+from django.db.models import F
 
 MAX_TEAMS = 32  # the services block 10.2.0.32/27
 
@@ -54,6 +55,40 @@ def provisioned_team_specs(competition) -> list[dict]:
     no devbox yet (not provisioned) is left out: it is not in the stack."""
     indices = {d.team_id: d.index for d in Devbox.objects.filter(team__competition=competition, index__isnull=False)}
     return [team_spec(team, indices[team.id]) for team in Team.objects.filter(competition=competition).order_by("id") if team.id in indices]
+
+
+def request_rebuild(team):
+    """Bump the team's devbox version (which immediately clears its dev score and logs,
+    without deleting any records) and enqueue a rebuild host job, which rebuilds its VMs and
+    rewrites their tokens. Returns (job, enqueued). Rebuilds never pile up: if one is queued or
+    running, that one comes back with enqueued False and the version stays
+    (docs/security-assessment.md, D2). Without a devbox there is nothing to rebuild: (None,
+    False), with the version bumped all the same, as a reset always did."""
+    with transaction.atomic():
+        Team.objects.select_for_update().get(pk=team.pk)
+        existing = HostJob.objects.filter(
+            kind=HostJob.Kind.DEVBOX_REBUILD,
+            state__in=[HostJob.State.QUEUED, HostJob.State.RUNNING],
+            params__team_uuid=str(team.uuid),
+        ).first()
+        if existing is not None:
+            return existing, False
+        Team.objects.filter(pk=team.pk).update(devbox_version=F("devbox_version") + 1)
+        team.refresh_from_db(fields=["devbox_version"])
+        if not Devbox.objects.filter(team=team).exists():
+            return None, False
+        # The agent regenerates the whole devbox stack and re-pushes every team's SSH keys, so
+        # the job carries the full teams list (with keys), not just this team: otherwise the
+        # rebuild fails validation and the VMs and keys are never updated.
+        job = HostJob.objects.create(
+            kind=HostJob.Kind.DEVBOX_REBUILD,
+            params={
+                "team_uuid": str(team.uuid),
+                "devbox_version": team.devbox_version,
+                "teams": provisioned_team_specs(team.competition),
+            },
+        )
+    return job, True
 
 
 class ProvisionError(ValueError):

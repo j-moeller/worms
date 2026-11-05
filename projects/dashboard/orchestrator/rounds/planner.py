@@ -1,5 +1,6 @@
 """Create the RoundRuns for a round: one per team, in a deterministic order,
 each with the team's latest upload before the round's deadline (round_start).
+An upload made in the dev view is not an entry: it only ever runs on the devbox.
 
 A team without an upload before the deadline still gets a run, in state
 PENDING with no upload; the conductor marks it SKIPPED. This keeps the running
@@ -27,6 +28,7 @@ def plan_round(round, base_seed=None, sandbox_params=None):
     latest_upload = (
         Upload.objects.filter(
             team=OuterRef("pk"),
+            devbox=False,
             created_at__lt=round.round_start,
         )
         .order_by("-created_at", "-id")

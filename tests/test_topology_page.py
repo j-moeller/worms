@@ -540,6 +540,7 @@ def test_devbox_progression_says_it_is_the_devbox_so_far(devbox_page):
     assert "your devbox so far" in c["meta"] and "updates every minute" in c["meta"]
     assert "round" not in c["meta"].lower()
     assert "Devbox · team-a" in c["side"] and "Your devbox so far" in c["side"] and "during the round" not in c["side"]
+    assert "round running" not in c["side"]
 
 
 def test_devbox_progression_fetches_a_log_from_its_own_address(devbox_page):

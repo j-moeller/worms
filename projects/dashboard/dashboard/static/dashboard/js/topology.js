@@ -1989,7 +1989,7 @@
         const state = roundState(d);
         append(side, [
             el("h3", null, `${r.round} · ${r.team}`),
-            el("div", { class: "sub" }, [env, r.present ? `run #${r.position} · ${r.state}` : d && d.environment === "live" ? "no run" : null, state ? `round ${state}` : null]
+            el("div", { class: "sub" }, [env, r.present ? `run #${r.position} · ${r.state}` : d && d.environment === "live" ? "no run" : null, state && (!d || d.round || d.environment !== "dev") ? `round ${state}` : null]
                 .filter(Boolean).join(" · ")),
             kvTable([
                 d && d.round && (d.round.start || d.round.end)

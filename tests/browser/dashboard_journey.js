@@ -40,7 +40,16 @@ const input = JSON.parse(fs.readFileSync(0, 'utf8'));
         await page.waitForFunction(() => document.getElementById('topo')?.topoState?.timeline);
         assert(await page.locator('#topo').isVisible());
         await page.locator('#topo-feed li', { hasText: 'log received' }).first().click();
-        await page.waitForFunction(() => document.querySelector('#topo-side pre.log-record')?.textContent.includes('local log'));
+        await page.waitForFunction(() => document.querySelector('#topo-side pre.log-record')?.textContent.includes('local log')).catch(async error => {
+            console.error(JSON.stringify({ phase: 'read-log', errors,
+                side: await page.locator('#topo-side').innerText(),
+                selected: await page.evaluate(() => {
+                    const s = document.getElementById('topo').topoState;
+                    return { type: s.selected?.type, kind: s.selected?.event?.kind, playing: s.playing,
+                             round: s.roundId, flowsLoaded: s.timeline?.flowsLoaded };
+                }) }));
+            throw error;
+        });
         const record = await page.locator('#topo-side pre.log-record').innerText();
         assert(record.includes('local log ü 🐛'));
         assert(record.includes('<img src=x onerror=alert(1)>'));

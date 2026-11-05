@@ -37,7 +37,7 @@ a live Proxmox host (the standing caveat — no node is available here).
   command to the main VM through the gateway (`devbox.md`).
 - **Prod view**: ✅ leaderboard (overall points, and per round every team
   ranked by the VMs it captured, with its sandbox's size), zip upload (a
-  team's uploads are its own, `Upload.team`; a zip must have `main.py` at its
+  team's uploads are its own, `Upload.team`; a zip must have `main.sh` at its
   top level), round countdown/status (`dashboard/views/leaderboard.py`,
   `uploads.py`, the status presentation in `views/util.py`,
   `tests/test_leaderboard.py`).

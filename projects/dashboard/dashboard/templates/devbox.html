@@ -38,13 +38,6 @@
         {% else %}
         <p class="muted">Not ready yet: the devbox is still being built.</p>
         {% endif %}
-        <details class="confirm">
-            <summary class="btn btn--danger">Reset devbox</summary>
-            <div class="confirm__body">
-                <p>This rebuilds all three VMs with fresh disks and new tokens; the score starts over. Earlier records are kept.</p>
-                <form method="post" action="{% url 'devbox_reset' %}">{% csrf_token %}<button type="submit" class="btn btn--danger">Yes, rebuild my devbox</button></form>
-            </div>
-        </details>
     </div>
 </section>
 {% endif %}

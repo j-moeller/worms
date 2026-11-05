@@ -161,8 +161,38 @@ def test_the_dev_dashboard_has_vms_first_and_no_score_or_logs(site, team_upload)
     assert page.index('id="vms-title"') < page.index('id="connect-title"')
     assert "score-title" not in page and "tokens submitted" not in page and 'class="stat' not in page
     assert "logs-title" not in page
-    vms = page.split('id="vms-title"', 1)[1].split("</section>", 1)[0]
-    assert "Reset devbox" in vms and 'action="/devbox/reset/"' in vms and "version 1" in vms
+    assert "Reset devbox" not in page and "/devbox/reset/" not in page
+    assert "version 1" in page.split('id="vms-title"', 1)[1].split("</section>", 1)[0]
+
+
+def test_the_reset_button_is_with_the_tokens_in_the_dev_view_only(site, rounds):  # noqa: F811
+    from core.models.team import Team
+
+    assert "/devbox/reset/" not in _get(site, "/profile/")  # live
+    _devbox(Team.objects.get(name="red"))
+    assert "/devbox/reset/" not in _get(site, "/profile/")  # still live, with a devbox
+    _dev_view(site)
+    panel = _team_panel(site)
+    assert "Reset devbox" in panel and 'action="/devbox/reset/"' in panel
+
+
+def test_a_dev_profile_without_a_devbox_has_nothing_to_reset(site, team_upload):  # noqa: F811
+    _dev_view(site)
+    assert "/devbox/reset/" not in _team_panel(site)
+
+
+def test_a_reset_comes_back_to_the_profile(site, team_upload, monkeypatch):  # noqa: F811
+    from dashboard import orchestrator_client
+
+    _devbox(team_upload[0])
+    _dev_view(site)
+    calls = []
+    monkeypatch.setattr(orchestrator_client, "post", lambda path, timeout=15: calls.append(path) or {"rebuild_enqueued": True})
+    token = _get(site, "/profile/").split('name="csrfmiddlewaretoken" value="', 1)[1].split('"', 1)[0]
+    response = site.post("/devbox/reset/", {"csrfmiddlewaretoken": token}, HTTP_ORIGIN=f"https://{HOST}", **proxied(HOST))
+    assert (response.status_code, response["Location"]) == (302, "/profile/")
+    assert calls == [f"/devbox/{team_upload[0].uuid}/reset/"]
+    assert "Reset requested" in _get(site, "/profile/")
 
 
 def _devbox_log(team, text):
@@ -171,26 +201,60 @@ def _devbox_log(team, text):
 
     attempt = LoggingAttempt.objects.create(team_uuid=str(team.uuid), devbox=True, log_data={"event": text}, processed=True)
     DevboxLog.objects.create(team=team, devbox_version=team.devbox_version, logging_attempt=attempt)
+    return attempt
 
 
-def test_devbox_logs_are_on_the_progression_page_as_text(site, team_upload):  # noqa: F811
+def test_the_dev_progression_page_needs_no_round(site, team_upload):  # noqa: F811
     team = team_upload[0]
-    _devbox_log(team, "<script>alert(1)</script>")
+    _devbox(team)
+    _devbox_log(team, "hello")
     _dev_view(site)
     page = _get(site, "/progression/")
-    assert 'id="logs-title"' in page and "version 1" in page
-    assert "<script>alert(1)" not in page and "&lt;script&gt;alert(1)" in page
+    assert ">Progression</h1>" in page and "Round progression" not in page and "during a round" not in page
+    assert "No rounds yet" not in page and "round-tabs" not in page
+    assert 'data-progression="/progression/devbox/"' in page and 'data-download="/progression/devbox/download/"' in page
+    assert "data-rounds" not in page
+    assert "Your devbox so far" in page and "<dt>Logs sent</dt><dd>1</dd>" in page
 
 
-def test_the_progression_page_says_when_there_are_no_devbox_logs(site, team_upload):  # noqa: F811
+def test_the_progression_pages_have_no_logs_section(site, team_upload):  # noqa: F811
+    team = team_upload[0]
+    _devbox(team)
+    _devbox_log(team, "only-in-the-player")
+    assert "logs-title" not in _get(site, "/progression/") and "only-in-the-player" not in _get(site, "/progression/")
     _dev_view(site)
-    assert "No devbox logs at this version." in _get(site, "/progression/")
+    assert "logs-title" not in _get(site, "/progression/") and "only-in-the-player" not in _get(site, "/progression/")
 
 
-def test_the_live_progression_page_has_no_devbox_logs(site, team_upload):  # noqa: F811
-    _devbox_log(team_upload[0], "only-for-dev")
+def test_the_dev_progression_page_before_the_devbox_is_built(site, team_upload):  # noqa: F811
+    _dev_view(site)
     page = _get(site, "/progression/")
-    assert "logs-title" not in page and "only-for-dev" not in page
+    assert "Your devbox has not been built yet." in page and 'id="topo"' not in page
+
+
+def test_the_dev_view_serves_the_devbox_document_its_logs_and_its_zip(site, team_upload):  # noqa: F811
+    import io
+    import json
+    import zipfile
+
+    team = team_upload[0]
+    _devbox(team)
+    attempt = _devbox_log(team, "<script>alert(1)</script>")
+    _dev_view(site)
+    doc = json.loads(_get(site, "/progression/devbox/"))
+    assert doc["round"] is None and doc["environment"] == "dev" and doc["clock"]["finished"] is False
+    assert doc["logs"]["url"] == "/progression/devbox/logs/{ref}/" and doc["logs"]["count"] == 1
+    record = json.loads(_get(site, doc["logs"]["url"].replace("{ref}", str(attempt.uuid))))
+    assert record["data"] == {"event": "<script>alert(1)</script>"}
+    assert site.get("/progression/devbox/logs/00000000-0000-0000-0000-000000000000/", **proxied(HOST)).status_code == 404
+    response = site.get("/progression/devbox/download/", **proxied(HOST))
+    assert response["Content-Type"] == "application/zip" and "worms-devbox-red-dev.zip" in response["Content-Disposition"]
+    assert f"logs/{attempt.uuid}.json" in zipfile.ZipFile(io.BytesIO(response.content)).namelist()
+
+
+def test_the_devbox_endpoints_without_a_devbox(site, team_upload):  # noqa: F811
+    assert site.get("/progression/devbox/", **proxied(HOST)).status_code == 404
+    assert site.get("/progression/devbox/download/", **proxied(HOST)).status_code == 404
 
 
 # ---- What moved
@@ -210,6 +274,34 @@ def test_downloading_is_explained_on_progression_and_not_on_the_profile(site, te
     page = _get(site, "/progression/")
     assert "data-api-title" in page and "/api/v1/rounds/" in page and '<a href="/profile/">your profile</a>' in page
     assert "data-api-title" not in _get(site, "/profile/")
+
+
+def test_the_download_commands_fit_the_view(site, team_upload):  # noqa: F811
+    assert "/api/v1/rounds/ID/progression.zip" in _get(site, "/progression/")
+    _devbox(team_upload[0])
+    _dev_view(site)
+    page = _get(site, "/progression/")
+    assert "/api/v1/devbox/progression.zip" in page and "/api/v1/rounds/" not in page
+
+
+def test_the_download_commands_use_the_rounds_real_id(site, rounds):  # noqa: F811
+    first = rounds["first"]
+    page = _get(site, f"/progression/?round={first.id}")
+    panel = page.split('id="data-api-title"', 1)[1]
+    assert f"/api/v1/rounds/{first.id}/scoring/" in panel and f"/api/v1/rounds/{first.id}/progression.zip" in panel
+    assert "/rounds/ID/" not in panel and "These commands are for Round 1" in panel
+
+
+def test_without_a_round_the_download_commands_say_what_id_means(site, team_upload):  # noqa: F811
+    panel = _get(site, "/progression/").split('id="data-api-title"', 1)[1]
+    assert "/api/v1/rounds/ID/progression.zip" in panel and "<code>ID</code> stands for a round's id" in panel
+
+
+def test_the_upload_description_is_short_and_says_how_it_runs(site, team_upload):  # noqa: F811
+    page = _get(site, "/upload/")
+    lead = page.split('class="page-head__lead">', 1)[1].split("</p>", 1)[0]
+    assert "<code>main.sh</code>" in lead and "<code>bash main.sh</code>" in lead
+    assert "docs/" not in page and "python" not in lead and len(lead) < 200
 
 
 def test_downloading_stays_hidden_until_registration_closes(site, team_upload, monkeypatch):  # noqa: F811

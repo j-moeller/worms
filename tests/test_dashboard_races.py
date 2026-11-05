@@ -41,7 +41,7 @@ def test_simultaneous_identical_uploads_both_succeed(site, app_roles, django_env
     clients, teams, users = student_clients()
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr("main.py", "print('concurrency fixture')\n")
+        archive.writestr("main.sh", "print('concurrency fixture')\n")
     data = buffer.getvalue()
     digest = hashlib.sha256(data).hexdigest()
     key = f"malware-artifacts/{digest[:2]}/{digest[2:4]}/{digest}.zip"
@@ -122,7 +122,7 @@ def test_reupload_repairs_a_missing_or_interrupted_file(site, app_roles, damage)
     from test_uploads import _zip
 
     clients, _, _ = student_clients()
-    data = _zip({"main.py": "print('repair')\n"})
+    data = _zip({"main.sh": "print('repair')\n"})
 
     def upload():
         blob = io.BytesIO(data)
@@ -150,7 +150,7 @@ def test_interrupted_upload_is_not_published_and_can_be_retried(site, app_roles,
     from test_uploads import _zip
 
     clients, _, _ = student_clients()
-    data = _zip({"main.py": "print('disk failure')\n"})
+    data = _zip({"main.sh": "print('disk failure')\n"})
     original = default_storage.save
 
     def broken_save(name, content, **kwargs):

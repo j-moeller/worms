@@ -198,7 +198,7 @@ def exercise_student_journey(config):
     assert bad_zip.status_code == 302 and "not a .zip archive" in alice.get("/upload/").text
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr("main.py", "print('local fixture; never executed')\n")
+        archive.writestr("main.sh", "print('local fixture; never executed')\n")
     data_zip = buffer.getvalue()
     for _ in range(2):
         assert alice.post("/upload/", files={"artifact": ("worm.zip", data_zip, "application/zip")}).status_code == 302

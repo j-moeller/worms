@@ -223,7 +223,7 @@ With the defaults, that is **82 minutes per team**, so 3 teams need at least **4
 
 Before then:
 
-1. **Teams upload their worm** on `/upload/`: a zip with `main.py` at its top level (`docs/worm-contract.md`). Each run uses the team's latest upload before **Starts**.
+1. **Teams upload their worm** on `/upload/`: a zip with `main.sh` at its top level (`docs/worm-contract.md`). Each run uses the team's latest upload before **Starts**.
 2. **Check that the services are up**, from the node:
 
    ```sh

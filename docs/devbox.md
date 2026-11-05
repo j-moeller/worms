@@ -41,10 +41,12 @@ existing `is_dev_environment` session flag; the home page dispatches
 (`dashboard/views/devbox.py`):
 
 - **Production** shows the leaderboard (and the usual CAPTURES/LOGS pages).
-- **Development** shows **no leaderboard**. It shows the team's devbox: the VMs,
-  a **Reset** button, and how to connect. The **score** (tokens found in A/B/C at
-  the current version) and the team's **SSH keys** (add/remove) are on the user's
-  **profile**, and the devbox **logs** are on the **progression** page.
+- **Development** shows **no leaderboard**. It shows the team's devbox: the VMs
+  and how to connect. The **score** (tokens found in A/B/C at the current version),
+  the **Reset** button and the team's **SSH keys** (add/remove) are on the user's
+  **profile**. The **progression** page replays what the devbox has done so far,
+  logs included. The devbox has no rounds, so that is one progression, which
+  grows until a reset starts it over.
 
 Both views show scoring and logging feedback for their own domain: the
 production view from `flag_captures`/`logging`, the development view from
@@ -263,7 +265,7 @@ INSERT. (`tests/test_devbox.py`.)
 ```
 worms build devbox                 # make devbox-apply + devbox-configure
 worms devbox provision             # teams created on the dashboard get their devbox
-# a team resets from the dashboard dev view (Reset devbox), or:
+# a team resets from its profile in the dev view (Reset devbox), or:
 #   POST https://orchestrator/devbox/<team-uuid>/reset/   (dashboard token)
 ```
 

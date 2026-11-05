@@ -329,6 +329,109 @@ def test_dev_round_is_the_devbox_in_the_window(world):
         assert word not in text, word
 
 
+def _devbox_since(world, team="a", hours_ago=30):
+    """The world's devbox has existed long enough to cover its submissions."""
+    from core.models.devbox import Devbox
+    from django.utils import timezone
+
+    Devbox.objects.filter(team=world[team]).update(created_at=world["now"] - timezone.timedelta(hours=hours_ago))
+
+
+def _devbox_doc(world, team="a"):
+    from orchestrator.rounds import progression
+
+    return progression.build_devbox(world[team], now=world["now"])
+
+
+def test_the_devbox_progression_has_no_round_and_is_never_finished(world):
+    from django.utils import timezone
+
+    _devbox_since(world)
+    doc = _devbox_doc(world)
+    assert doc["round"] is None and doc["environment"] == "dev" and doc["audience"] == "team"
+    clock = doc["clock"]
+    assert clock["finished"] is False and clock["now"] is not None
+    assert clock["round_start"] is None and clock["round_end"] is None
+    # The clock starts just before the first activity, and runs up to now.
+    assert clock["t0"] == (world["now"] - timezone.timedelta(hours=20, seconds=5)).isoformat()
+    assert clock["t_min"] == 0.0 and clock["t_max"] == clock["now"]
+    tl = doc["timeline"]
+    submissions = [e["data"]["result"] for e in tl["events"] if e["kind"] == "flag_submitted"]
+    assert submissions == ["captured", "invalid", "duplicate", "pending"]
+    assert [n["label"] for n in tl["nodes"]] == ["devbox-t1-a"]
+    assert [e["data"]["log"]["ref"] for e in tl["events"] if e["kind"] == "log_received"] == [str(world["logs"]["dev_a"].uuid)]
+    assert doc["network"]["available"] is False and "flows" not in tl
+    text = "\n".join(walk(doc))
+    for word in ("devbox-t1-b", "devbox-t1-c", "devbox-t2", "team-b", "10.6.", "10.7.", "9888", "10.2.0.3"):
+        assert word not in text, word
+
+
+def test_the_devbox_progression_starts_over_at_a_reset(world):
+    from core.models.rounds import HostJob
+    from django.utils import timezone
+
+    _devbox_since(world)
+    team = world["a"]
+    team.devbox_version = 2
+    team.save(update_fields=["devbox_version"])
+    requested = world["now"] - timezone.timedelta(hours=2)
+    HostJob.objects.create(kind=HostJob.Kind.DEVBOX_REBUILD, params={"team_uuid": str(team.uuid), "devbox_version": 2}, requested_at=requested)
+    # An older reset, and another team's, do not count.
+    HostJob.objects.create(kind=HostJob.Kind.DEVBOX_REBUILD, params={"team_uuid": str(team.uuid), "devbox_version": 1}, requested_at=world["now"])
+    HostJob.objects.create(kind=HostJob.Kind.DEVBOX_REBUILD, params={"team_uuid": str(world["b"].uuid), "devbox_version": 2}, requested_at=world["now"])
+    tl = _devbox_doc(world)["timeline"]
+    assert [e["data"]["result"] for e in tl["events"] if e["kind"] == "flag_submitted"] == ["pending"]
+    assert tl["nodes"] == [] and not [e for e in tl["events"] if e["kind"] == "log_received"]
+
+
+def test_a_team_without_a_devbox_has_no_devbox_progression(world):
+    from core.models.devbox import Devbox
+
+    Devbox.objects.filter(team=world["a"]).delete()
+    assert _devbox_doc(world) is None
+
+
+def test_the_devbox_progression_can_be_downloaded_with_the_teams_bearer_token(world):
+    _devbox_since(world)
+    response, body = api_get(world, "/api/v1/devbox/progression/")
+    assert response.status_code == 200 and body["round"] is None and body["team"]["name"] == "team-a"
+    ref = str(world["logs"]["dev_a"].uuid)
+    assert body["logs"]["url"] == "/api/v1/devbox/progression/logs/{ref}/"
+
+    response, record = api_get(world, body["logs"]["url"].replace("{ref}", ref))
+    assert response.status_code == 200 and record["data"] == {"dev": "a-log"}
+    response, missing = api_get(world, body["logs"]["url"].replace("{ref}", str(world["logs"]["dev_b"].uuid)))
+    assert response.status_code == 404 and missing["error"]["code"] == "not_found"  # team B's
+
+    response, _ = api_get(world, "/api/v1/devbox/progression.zip")
+    assert response.status_code == 200 and response["Content-Type"] == "application/zip"
+    assert response["Content-Disposition"] == 'attachment; filename="worms-devbox-team-a-dev.zip"'
+    archive = zipfile.ZipFile(io.BytesIO(response.content))
+    assert f"logs/{ref}.json" in archive.namelist() and "network/flows.jsonl" not in archive.namelist()
+    assert json.loads(archive.read("progression.json"))["round"] is None
+    response, _ = api_get(world, "/api/v1/devbox/progression.zip?logs=0")
+    assert zipfile.ZipFile(io.BytesIO(response.content)).namelist() == ["progression.json", "README.txt"]
+    response, bad = api_get(world, "/api/v1/devbox/progression.zip?logs=maybe")
+    assert response.status_code == 400 and bad["error"]["code"] == "bad_flag"
+
+
+def test_the_devbox_download_is_each_teams_own_and_needs_a_token(world):
+    from core.models.devbox import Devbox
+
+    _devbox_since(world)
+    _devbox_since(world, "b")
+    _, own = api_get(world, "/api/v1/devbox/progression/", token=TOKEN_B)
+    assert own["team"]["name"] == "team-b"
+    assert "devbox-t1-a" not in "\n".join(walk(own))
+    for path in ("/api/v1/devbox/progression/", "/api/v1/devbox/progression.zip"):
+        assert world["client"].get(path, **proxied(HOST)).status_code == 401
+        assert world["client"].get(path, HTTP_AUTHORIZATION="Bearer wrong", **proxied(HOST)).status_code == 401
+    assert world["client"].post("/api/v1/devbox/progression.zip", HTTP_AUTHORIZATION=f"Bearer {TOKEN_A}", **proxied(HOST)).status_code == 405
+    Devbox.objects.filter(team=world["a"]).delete()
+    response, body = api_get(world, "/api/v1/devbox/progression.zip")
+    assert response.status_code == 404 and body["error"]["code"] == "not_found"
+
+
 def test_clock(world):
     from django.utils import timezone
 
@@ -522,8 +625,11 @@ def test_progression_page_and_navigation(world):
     for gone in ("/captures/", "/logs/"):
         assert get(gone).status_code == 404
 
+    # The Dev view has no rounds: the devbox so far, whatever the address says.
+    _devbox_since(world)
     dev_page = as_user(world, world["student"], dev=True)(f"/progression/?round={world['rd'].id}").content.decode()
-    assert "Dev week" in dev_page and "devbox-t1-a" in dev_page and "devbox-t1-b" not in dev_page
+    assert "Dev week" not in dev_page and "Your devbox so far" in dev_page
+    assert "devbox-t1-a" in dev_page and "devbox-t1-b" not in dev_page
 
 
 def test_progression_data_for_the_team(world):

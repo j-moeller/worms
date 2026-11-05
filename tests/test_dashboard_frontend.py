@@ -80,7 +80,7 @@ def test_nothing_follows_the_visitors_os_colour_scheme():
 def _zip_bytes():
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr("main.py", "print('worm')\n")
+        archive.writestr("main.sh", "echo worm\n")
     return buffer.getvalue()
 
 

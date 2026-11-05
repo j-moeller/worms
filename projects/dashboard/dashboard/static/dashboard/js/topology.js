@@ -11,6 +11,8 @@
  *   data-rounds       the rounds of the active environment (the tabs)
  *   data-progression  one round's progression; the round id 0 in the URL is
  *                     replaced by the round's (data-download: its zip)
+ *   Without data-rounds it is the Dev view: the devbox has no rounds, and
+ *   data-progression is its one progression, which grows until a reset.
  *
  * A progression names where the rest is: its connections (network.url, or
  * inline, or in the zip) and each log record (logs.url with {ref}, or in the
@@ -60,6 +62,7 @@
     };
     // The team's page: its rounds, its scene; no infrastructure, no firewall.
     const TEAM = cfg.audience === "team";
+    const DEVBOX = TEAM && !cfg.rounds;
     // A round's URL from the page's template (round id 0 / the all-zero run uuid).
     const roundUrl = (template, id) => (TEAM ? template.replace(/\/rounds\/0\//, `/rounds/${encodeURIComponent(id)}/`) : template.replace(ZERO_UUID, id));
 
@@ -346,7 +349,7 @@
                 // Identifies what is played (the player keeps its speed per run).
                 key: uuid || `${doc ? doc.environment : ""}:${round ? round.id : ""}:${team ? team.uuid : ""}`,
                 uuid, team: txt(g.team, 256) || (team ? team.name : ""), team_uuid: txt(g.team_uuid, 64), team_slug: optTxt(g.team_slug, 128),
-                round: txt(g.round, 256) || (round ? round.name : ""), state: txt(g.state, 32), position: num(g.position),
+                round: txt(g.round, 256) || (round ? round.name : doc && doc.environment === "dev" ? "Devbox" : ""), state: txt(g.state, 32), position: num(g.position),
                 worm_start_at: optTxt(g.worm_start_at, 64), ends_at: optTxt(g.ends_at, 64), start_vm: optTxt(g.start_vm, 256),
                 duration: time(g.duration) ?? clock.round_end ?? null,
                 t_min: Math.min(0, clock.t_min ?? 0, time(g.t_min) ?? 0),
@@ -550,7 +553,7 @@
 
     function bundleName() {
         const d = S.mode === "live" ? null : S.doc;
-        const parts = d && S.timeline ? ["worms", d.round ? d.round.name : "round", d.team ? d.team.name : "team", d.environment] : ["worms", "infrastructure"];
+        const parts = d && S.timeline ? ["worms", d.round ? d.round.name : d.environment === "dev" ? "devbox" : "round", d.team ? d.team.name : "team", d.environment] : ["worms", "infrastructure"];
         parts.push(new Date().toISOString().slice(0, 19));
         return `${parts.join("-").replace(/[^A-Za-z0-9._-]+/g, "_")}.json`;
     }
@@ -1971,6 +1974,7 @@
         const tl = S.timeline;
         if (!tl) {
             const msg = S.timelineError ? S.timelineError.message
+                : DEVBOX ? "Loading your devbox…"
                 : TEAM ? (S.roundId ? "Loading the round…" : "Pick a round.")
                     : S.runUuid ? "Loading the run…" : "Pick a team.";
             append(side, [el("h3", null, "Round"), el("p", { class: "hint" }, msg)]);
@@ -1985,7 +1989,7 @@
         const state = roundState(d);
         append(side, [
             el("h3", null, `${r.round} · ${r.team}`),
-            el("div", { class: "sub" }, [env, r.present ? `run #${r.position} · ${r.state}` : d && d.environment === "live" ? "no run" : null, state ? `round ${state}` : null]
+            el("div", { class: "sub" }, [env, r.present ? `run #${r.position} · ${r.state}` : d && d.environment === "live" ? "no run" : null, state && (!d || d.round || d.environment !== "dev") ? `round ${state}` : null]
                 .filter(Boolean).join(" · ")),
             kvTable([
                 d && d.round && (d.round.start || d.round.end)
@@ -2000,7 +2004,7 @@
         ]);
         if (d && d.audience === "team") {
             append(side, [el("p", { class: "hint" }, d.environment === "dev"
-                ? "Your devbox during the round: the VMs your worm found a token on, what it submitted and logged."
+                ? `Your devbox ${d.round ? "during the round" : "so far"}: the VMs your worm found a token on, what it submitted and logged.`
                 : "Your run: only the VMs your worm captured are shown (faint until their capture), with their traffic to each other, scoring, logging and the private internet.")]);
         }
         const feed = el("ul", { class: "feed", id: "topo-feed" });
@@ -2482,7 +2486,7 @@
         const error = TEAM ? S.roundsError : S.runsError;
         const count = TEAM ? ((S.rounds && S.rounds.rounds) || []).length : ((S.runs && S.runs.rounds) || []).length;
         if (error) rounds.appendChild(el("span", { class: "topo-tabs-empty is-warn" }, `rounds: ${error.message}`));
-        else if ((TEAM ? S.rounds : S.runs) && !count) rounds.appendChild(el("span", { class: "topo-tabs-empty" }, TEAM ? "No rounds yet." : "No round has been evaluated yet."));
+        else if (!DEVBOX && (TEAM ? S.rounds : S.runs) && !count) rounds.appendChild(el("span", { class: "topo-tabs-empty" }, TEAM ? "No rounds yet." : "No round has been evaluated yet."));
 
         const teams = clear($("topo-teams"));
         if (TEAM || S.mode !== "round") return;
@@ -2683,13 +2687,15 @@
         if (TEAM) {
             const d = S.doc;
             if (!d) {
-                meta.appendChild(document.createTextNode(S.timelineError ? "" : S.roundId ? "Loading the round…" : ""));
+                meta.appendChild(document.createTextNode(S.timelineError ? "" : DEVBOX ? "Loading your devbox…" : S.roundId ? "Loading the round…" : ""));
                 return;
             }
             const state = roundState(d);
-            meta.appendChild(document.createTextNode(`${d.round ? shorten(d.round.name, 60) : "Round"} · ${d.environment === "dev" ? "Dev: your devbox" : "Live: your run"}`));
+            meta.appendChild(document.createTextNode(d.round || d.environment !== "dev"
+                ? `${d.round ? shorten(d.round.name, 60) : "Round"} · ${d.environment === "dev" ? "Dev: your devbox" : "Live: your run"}`
+                : "Dev: your devbox so far"));
             if (d.generated_at) meta.appendChild(document.createTextNode(` · as of ${shorten(fmtDate(d.generated_at), 40)}`));
-            if (state === "running") meta.appendChild(el("span", { class: "stale" }, " · the round is running (updates every minute)"));
+            if (state === "running") meta.appendChild(el("span", { class: "stale" }, d.round ? " · the round is running (updates every minute)" : " · updates every minute"));
             return;
         }
         if (!m) {
@@ -2776,7 +2782,7 @@
 
     async function loadRounds() {
         try {
-            S.rounds = await getJSON(cfg.rounds);
+            S.rounds = DEVBOX ? { rounds: [] } : await getJSON(cfg.rounds);
             S.roundsError = null;
         } catch (error) {
             S.roundsError = error;
@@ -2804,7 +2810,7 @@
         $("topo-teams").parentElement.hidden = true;
         root.querySelector(".topo-title").textContent = "// PROGRESSION";
         $("topo-svg").setAttribute("aria-label", "Round progression: the VMs you captured and their connections");
-        $("topo-reload").title = "Reload the rounds and the round shown";
+        $("topo-reload").title = DEVBOX ? "Reload your devbox's progression" : "Reload the rounds and the round shown";
     }
 
     async function init() {
@@ -2849,7 +2855,8 @@
             const wanted = readHash();
             const ids = ((S.rounds && S.rounds.rounds) || []).map((r) => r.id);
             const id = [wanted.round, cfg.round, S.rounds && S.rounds.default].find((x) => x && ids.includes(x));
-            if (id) await selectTeamRound(id, wanted.round === id ? wanted.t : undefined);
+            if (DEVBOX) await selectTeamRound("devbox", wanted.t);
+            else if (id) await selectTeamRound(id, wanted.round === id ? wanted.t : undefined);
             else rebuild();
             // A running round grows: reload it every minute (keeping the view).
             setInterval(() => {

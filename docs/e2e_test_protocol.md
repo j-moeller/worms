@@ -208,7 +208,7 @@ devbox (stage 3) but no key registered.
 1. Sign in to `DASHBOARD` as the student with the one-time password; set a new
    password when forced.
 2. Switch to the **development** view (the nav toggle). You see the devbox: its
-   VMs, **Reset**, and the connect command.
+   VMs and the connect command.
 3. On your **profile** (`/profile/`), in **SSH keys**, paste your **public** key
    (e.g. `~/.ssh/id_ed25519.pub`) and add it.
 
@@ -271,7 +271,7 @@ root. Check `cat /etc/worms/flag` exists, and `hostname` is `devbox-<team>-a`.
 
 **Do:** act as a worm would. Read your VM's token and submit it to scoring, and
 send a log line to logging (from the devbox VM, over its own DNS; the sample is
-`worm.py` in the repo and `docs/worm-contract.md`):
+`worm.sh` in the repo and `docs/worm-contract.md`):
 
 ```python
 python3 - <<'PY'
@@ -314,8 +314,8 @@ VM's does not score.
 
 - The **profile's Team panel** shows the score: the number of distinct tokens you
   submitted (1–3). On the dev view, each captured VM is marked `Captured`.
-- **Logs**, on the **progression** page, shows your submitted log entries (newest
-  first), each expandable to its JSON.
+- The **progression** page replays your submissions and logs; click a log event
+  to see its JSON.
 - These appear within a second or two of the submission (the processor is
   continuous). In the DB:
   ```sh
@@ -332,7 +332,7 @@ credits you (it is not your VM). The production view (leaderboard) shows
 
 **Prior state:** a non-zero dev score and some logs (stage 7).
 
-**Do:** on the dev view, **Reset** → confirm ("Yes, rebuild my devbox").
+**Do:** on your profile in the dev view, **Reset** → confirm ("Yes, rebuild my devbox").
 
 **Expected post state & how to check:**
 
@@ -361,8 +361,8 @@ credits you (it is not your VM). The production view (leaderboard) shows
 
 **Prior state:** the student is in a team; the production view is selected.
 
-**Do:** **Upload** page → upload a `.zip` with **`main.py` at its top level**
-(`worm.py` in the repo renamed to `main.py` is a working skeleton;
+**Do:** **Upload** page → upload a `.zip` with **`main.sh` at its top level**
+(`worm.sh` in the repo renamed to `main.sh` is a working skeleton;
 `docs/worm-contract.md`). Do this **before R1's start time** — the team's latest
 upload before `round_start` is the one that runs.
 
@@ -376,8 +376,8 @@ upload before `round_start` is the one that runs.
   ```
 
 **Edge cases to try (each refused, nothing stored):** not a zip → "That is not a
-.zip archive"; a zip with `main.py` **nested** in a folder, or none at all → "no
-main.py at its top level"; a file **> 100 MiB** → refused. Uploading the **same
+.zip archive"; a zip with `main.sh` **nested** in a folder, or none at all → "no
+main.sh at its top level"; a file **> 100 MiB** → refused. Uploading the **same
 bytes** again reuses the same stored key (content-addressed).
 
 ---
@@ -489,7 +489,7 @@ page plays each run's timeline.
 | 6 | devbox ops | scoring/logging return 201; recorded with `devbox=true` |
 | 7 | feedback | dev score + logs update within seconds |
 | 8 | reset | version bumped, score 0, old rows kept, new tokens |
-| 9 | upload | `main.py`-at-top zip stored under the media root |
+| 9 | upload | `main.sh`-at-top zip stored under the media root |
 | 10 | round runs | per team PENDING→…→FINISHED; sandbox gone after teardown |
 | 11 | results | score + logs + progression visible to the team, and only its own |
 

@@ -312,6 +312,15 @@ def team_progression(round_id) -> dict | None:
     return None
 
 
+def devbox_progression() -> dict:
+    """The Dev view's document: the devbox so far, with no round (progression.build_devbox)."""
+    doc = team_progression(3)
+    doc["round"] = None
+    doc["clock"].update(round_start=None, round_end=None, finished=False)
+    doc["logs"]["url"] = "/progression/devbox/logs/{ref}/"
+    return doc
+
+
 def team_flows() -> dict:
     v0, v1 = _uuid(0), _uuid(1)
     f = []

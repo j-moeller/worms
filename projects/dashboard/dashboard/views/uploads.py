@@ -30,7 +30,7 @@ from django.template.defaultfilters import filesizeformat
 log = logging.getLogger("dashboard")
 
 FIELD = "artifact"
-ENTRY = "main.py"
+ENTRY = "main.sh"
 # The multipart envelope around the file (boundaries, headers, the CSRF field).
 ENVELOPE = 64 * 1024
 
@@ -78,14 +78,14 @@ def _history(request: HttpRequest, team: Team):
 
 def _check_zip(uploaded) -> str | None:
     """Why this file cannot run as a worm, or None. The round agent unpacks
-    the zip and starts `python3 main.py` from its top level
+    the zip and starts `bash main.sh` from its top level
     (docs/worm-contract.md)."""
     uploaded.seek(0)
     try:
         with zipfile.ZipFile(uploaded) as archive:
             names = set(archive.namelist())
     except (zipfile.BadZipFile, OSError, ValueError):
-        return "That is not a .zip archive. The worm is unpacked and its main.py started."
+        return f"That is not a .zip archive. The worm is unpacked and its {ENTRY} started."
     if ENTRY not in names:
         return f"The zip has no {ENTRY} at its top level (not in a folder): that is the file that is started."
     return None

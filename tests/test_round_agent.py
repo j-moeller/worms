@@ -865,7 +865,7 @@ def test_every_deploy_command_reaches_the_vm_unchanged():
     from round_agent.executor import Executor
 
     ex = FakeExecutor()
-    ex.artifact_bytes = _zip({"main.py": "print('hi')\n"})
+    ex.artifact_bytes = _zip({"main.sh": "echo hi\n"})
     handlers.deploy(ex, CFG, _deploy_params(ex))
     for call in ex.ssh_calls:
         assert shlex.split(Executor.remote_command(call["argv"])) == [str(a) for a in call["argv"]]
@@ -895,22 +895,22 @@ def _replay_on_the_vm(ex, home, start_ip="10.4.0.10"):
 def test_the_zip_arrives_intact_and_is_unpacked(tmp_path, monkeypatch):
     monkeypatch.setattr(handlers, "WORM_DIR", str(tmp_path))
     ex = FakeExecutor()
-    ex.artifact_bytes = _zip({"main.py": "print('hi')\n", "lib/util.py": "x = 1\n", "../../escape": "no"})
+    ex.artifact_bytes = _zip({"main.sh": "echo hi\n", "lib/util.py": "x = 1\n", "../../escape": "no"})
     result = handlers.deploy(ex, CFG, _deploy_params(ex))
     unpack = _replay_on_the_vm(ex, tmp_path)
     assert unpack.returncode == 0, unpack.stderr
     assert (tmp_path / handlers.WORM_ZIP).read_bytes() == ex.artifact_bytes  # not base64 text
-    assert (tmp_path / "worm" / "main.py").read_text() == "print('hi')\n"
+    assert (tmp_path / "worm" / "main.sh").read_text() == "echo hi\n"
     assert (tmp_path / "worm" / "lib" / "util.py").exists()
     # Nothing outside the worm's directory.
     assert not (tmp_path.parent / "escape").exists() and not (tmp_path / "escape").exists()
-    # The fuse runs `python3 main.py` in that directory as the sandbox user,
+    # The fuse runs `bash main.sh` in that directory as the sandbox user,
     # after the delay -- no shell, nothing run at deploy time.
     arm = next(c for c in ex.ssh_calls if "systemd-run" in c["argv"])
     assert arm["argv"][:2] == ["sudo", "systemd-run"] and "--on-active=120" in arm["argv"]
     assert arm["argv"][arm["argv"].index("--working-directory") + 1] == f"{tmp_path}/worm"
     assert arm["argv"][arm["argv"].index("--uid") + 1] == "debian"
-    assert arm["argv"][-2:] == ["/usr/bin/python3", "main.py"]
+    assert arm["argv"][-2:] == ["/bin/bash", "main.sh"]
     # The conductor dates the worm's start from when the fuse was lit.
     from datetime import datetime, timezone
 
@@ -919,10 +919,10 @@ def test_the_zip_arrives_intact_and_is_unpacked(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("entries, message", [
-    ({"worm/main.py": "x"}, "no main.py at its top level"),
-    ({"README": "x"}, "no main.py at its top level"),
+    ({"worm/main.sh": "x"}, "no main.sh at its top level"),
+    ({"README": "x"}, "no main.sh at its top level"),
 ])  # fmt: skip
-def test_an_upload_without_main_py_fails_the_deploy_with_a_reason(tmp_path, monkeypatch, entries, message):
+def test_an_upload_without_main_sh_fails_the_deploy_with_a_reason(tmp_path, monkeypatch, entries, message):
     monkeypatch.setattr(handlers, "WORM_DIR", str(tmp_path))
     ex = FakeExecutor()
     ex.artifact_bytes = _zip(entries)

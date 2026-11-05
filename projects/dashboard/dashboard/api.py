@@ -9,6 +9,9 @@
     GET /api/v1/rounds/<round>/progression/flows/     its connections (network traffic)
     GET /api/v1/rounds/<round>/progression/logs/<ref>/  one log record
     GET /api/v1/rounds/<round>/progression.zip?logs=0|1&network=0|1
+    GET /api/v1/devbox/progression/                   the devbox's progression so far (it has no rounds)
+    GET /api/v1/devbox/progression/logs/<ref>/        one log record
+    GET /api/v1/devbox/progression.zip?logs=0|1
                                                       all of it as one zip (both default to 1)
 
     Authorization: Bearer <access token>
@@ -409,3 +412,38 @@ def round_progression_zip(request, team, round_id):
         raise ApiError(400, "bad_flag", str(error)) from None
     _, doc = _progression(team, round_id, flows=network)
     return progression_views.zip_response(doc, logs)
+
+
+def _devbox_progression(team):
+    doc = progression.build_devbox(team, now=clock.now(), infra=live_address_index())
+    if doc is None:
+        raise ApiError(404, "not_found", "Your team has no devbox.")
+    zero = progression_views.ZERO_UUID
+    log_url = reverse("api_devbox_progression_log", args=[zero]).replace(zero, "{ref}")
+    return progression_views.with_links(doc, None, log_url)
+
+
+@api_view
+def devbox_progression(request, team):
+    """The devbox's progression so far (docs/progression.md): it has no rounds, so this
+    is one document, from when its current version began up to now."""
+    return _devbox_progression(team)
+
+
+@api_view
+def devbox_progression_log(request, team, ref):
+    """One log record of the devbox's progression: {ref, received_at, data}."""
+    record = progression.devbox_log_record(team, ref, now=clock.now())
+    if record is None:
+        raise ApiError(404, "not_found", "No such log on your devbox.")
+    return record
+
+
+@api_view
+def devbox_progression_zip(request, team):
+    """All of it as one zip: progression.json and logs/<ref>.json (logs=1)."""
+    try:
+        logs = progression_views.flag(request, "logs")
+    except progression_views.BadFlag as error:
+        raise ApiError(400, "bad_flag", str(error)) from None
+    return progression_views.zip_response(_devbox_progression(team), logs)

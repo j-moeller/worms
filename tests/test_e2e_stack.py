@@ -253,8 +253,8 @@ def test_end_to_end_competition_journey(site, monkeypatch):  # noqa: F811
     session = site.session
     session["is_dev_environment"] = True
     session.save()
-    dev_home = site.get("/", **proxied(HOST))
-    assert dev_home.status_code == 200 and 'action="/devbox/reset/"' in dev_home.content.decode()  # the devbox view
+    assert 'id="vms-title"' in site.get("/", **proxied(HOST)).content.decode()  # the devbox view
+    assert 'action="/devbox/reset/"' in site.get("/profile/", **proxied(HOST)).content.decode()  # its score and reset
 
     # ---- STEP 8: the user resets the devbox ------------------------------------
     # Dashboard POST -> orchestrator (real): the version is bumped (the score
@@ -270,7 +270,7 @@ def test_end_to_end_competition_journey(site, monkeypatch):  # noqa: F811
     session = site.session
     session["is_dev_environment"] = False  # back to the production view
     session.save()
-    zip_bytes = _zip_bytes({"main.py": "print('worm')\n"})
+    zip_bytes = _zip_bytes({"main.sh": "echo worm\n"})
     blob = io.BytesIO(zip_bytes)
     blob.name = "worm.zip"
     assert _post(site, "/upload/", files={"artifact": blob}, page="/upload/").status_code in (200, 302)

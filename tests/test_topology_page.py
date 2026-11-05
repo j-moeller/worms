@@ -495,6 +495,70 @@ def team_page(tmp_path_factory):
     return result
 
 
+DEVBOX_DRIVER = REPO / "tests" / "browser" / "devbox_progression.js"
+# The Dev view, as templates/progression.html serves it: no data-rounds, one progression.
+DEVBOX_DATA = (
+    "hidden data-audience='team' data-environment='dev' data-progression='/progression/devbox/' "
+    "data-download='/progression/devbox/download/' data-refresh-ms='500'"
+)
+
+
+@pytest.fixture(scope="module")
+def devbox_page(tmp_path_factory):
+    work = tmp_path_factory.mktemp("progression-devbox")
+    (work / "page.html").write_text(page_html(DEVBOX_DATA))
+    (work / "doc.json").write_text(json.dumps(topology_fixtures.devbox_progression()))
+    (work / "log.json").write_text(json.dumps(topology_fixtures.log_record()))
+    shots = work / "shots"
+    shots.mkdir()
+    proc = subprocess.run(
+        ["node", str(DEVBOX_DRIVER), str(work / "page.html"), str(work / "doc.json"), str(work / "log.json"), str(shots)],
+        capture_output=True, text=True, timeout=180, cwd=REPO,
+    )  # fmt: skip
+    lines = [line for line in proc.stdout.splitlines() if line.startswith("{")]
+    assert lines, proc.stdout + proc.stderr
+    result = json.loads(lines[-1])
+    assert "fatal" not in result, (result["fatal"], result.get("errors"), result.get("checks"))
+    keep = os.environ.get("WORMS_SCREENSHOTS")
+    if keep:
+        os.makedirs(keep, exist_ok=True)
+        for shot in shots.iterdir():
+            shutil.copy(shot, keep)
+    return result
+
+
+def test_devbox_progression_plays_without_a_round(devbox_page):
+    assert devbox_page["errors"] == []
+    c = devbox_page["checks"]
+    assert c["state"]["mode"] == "round" and c["state"]["error"] is None
+    assert c["tabs"] == [] and "No rounds" not in c["roundsText"] and "Pick a round" not in c["side"]
+    assert not [p for p in devbox_page["requests"] if "/rounds" in p]
+
+
+def test_devbox_progression_says_it_is_the_devbox_so_far(devbox_page):
+    c = devbox_page["checks"]
+    assert "your devbox so far" in c["meta"] and "updates every minute" in c["meta"]
+    assert "round" not in c["meta"].lower()
+    assert "Devbox · team-a" in c["side"] and "Your devbox so far" in c["side"] and "during the round" not in c["side"]
+    assert "round running" not in c["side"]
+
+
+def test_devbox_progression_fetches_a_log_from_its_own_address(devbox_page):
+    c = devbox_page["checks"]
+    assert [p for p in devbox_page["requests"] if p.startswith("/progression/devbox/logs/")]
+    assert c["logSide"] and c["xss"] is False
+
+
+def test_devbox_progression_downloads_its_own_zip(devbox_page):
+    c = devbox_page["checks"]
+    assert c["zip"] == "/progression/devbox/download/?logs=1&network=0" and c["networkDisabled"] is True
+
+
+def test_devbox_progression_keeps_reloading_and_keeps_the_time(devbox_page):
+    refresh = devbox_page["checks"]["refresh"]
+    assert refresh["after"] > refresh["before"] and refresh["tAfter"] == refresh["t"]
+
+
 def test_team_page_no_script_errors(team_page):
     # The one failed request is the upcoming round (404) below.
     failed = [e for e in team_page["errors"] if "Failed to load resource" in e]

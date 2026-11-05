@@ -37,12 +37,9 @@ function measure() {
             border: style.borderTopColor, background: style.backgroundColor,
         };
     });
-    const chain = document.querySelector(".vm-chain").getBoundingClientRect();
-    const reset = document.querySelector(".confirm summary").getBoundingClientRect();
     return {
         blocks,
         nodes,
-        resetGap: reset.top - chain.bottom,
         pageScrolls: document.documentElement.scrollWidth > document.documentElement.clientWidth,
     };
 }
@@ -86,6 +83,8 @@ function measure() {
         out.profile[width] = await page.evaluate(() => ({
             pageScrolls: document.documentElement.scrollWidth > document.documentElement.clientWidth,
             keysPanel: !!document.querySelector("section[aria-labelledby=keys-title]"),
+            resetGap: document.querySelector("section[aria-labelledby=team-title] .confirm summary").getBoundingClientRect().top
+                - document.querySelector("section[aria-labelledby=team-title] .pips").getBoundingClientRect().bottom,
             createTokenInset: document.querySelector(".disclosure summary").getBoundingClientRect().left - document.querySelector(".disclosure").closest(".panel").getBoundingClientRect().left,
             issueFormShown: document.querySelector(".disclosure form").checkVisibility(),
         }));

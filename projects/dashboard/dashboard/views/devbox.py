@@ -3,8 +3,8 @@
 In the development environment (the dev/prod toggle in the nav), the home page
 shows the team's devbox instead of the leaderboard: its VMs and how to connect.
 A reset rebuilds the devbox and clears the score by bumping the team's devbox
-version (docs/devbox.md). The profile shows the dev score and the SSH keys (which
-are changed here), and the progression page shows the devbox logs.
+version (docs/devbox.md). The profile has the dev score, the reset button and the
+SSH keys (the last two are handled here), and the progression page has the logs.
 
 Production view = the leaderboard (dashboard/views/leaderboard.py). This module
 only runs when request.is_dev_environment is set.
@@ -12,10 +12,9 @@ only runs when request.is_dev_environment is set.
 
 from __future__ import annotations
 
-import json
 import re
 
-from core.models.devbox import Devbox, DevboxCapture, DevboxLog, DevboxSSHKey, DevboxVM
+from core.models.devbox import Devbox, DevboxCapture, DevboxSSHKey, DevboxVM
 from core.membership import membership_change
 from core.models.team import Team, TeamMembership
 from dashboard.views.decorators import user_in_team_required
@@ -31,26 +30,10 @@ from django.shortcuts import redirect
 from django.views.decorators.http import require_POST
 
 
-def pretty(log_data) -> str:
-    """The worm's log entry as indented JSON text. The template escapes it:
-    it is attacker-controlled (written by the worm via the logging API)."""
-    return json.dumps(log_data, indent=2, ensure_ascii=False)
-
-
 def captured_vm_ids(team: Team) -> set[int]:
     """The devbox VMs whose token the team has submitted at its current version."""
     captures = DevboxCapture.objects.filter(team=team, devbox_version=team.devbox_version)
     return set(captures.values_list("devbox_vm_id", flat=True))
-
-
-def devbox_logs(team: Team) -> list[dict]:
-    """The team's devbox logs at its current version, newest first."""
-    entries = (
-        DevboxLog.objects.filter(team=team, devbox_version=team.devbox_version)
-        .select_related("logging_attempt")
-        .order_by("-created_at")[:200]
-    )
-    return [{"entry": entry, "data": pretty(entry.logging_attempt.log_data)} for entry in entries]
 
 
 def home(request: HttpRequest):
@@ -141,7 +124,7 @@ def devbox_reset(request: HttpRequest, team: Team):
     # You cannot reset a devbox you do not have (it is created with the team).
     if not Devbox.objects.filter(team=team).exists():
         messages.error(request, "You have no devbox to reset yet — it is created together with your team.")
-        return redirect("index")
+        return redirect("profile")
 
     try:
         result = orchestrator_client.post(f"/devbox/{team.uuid}/reset/")
@@ -156,19 +139,19 @@ def devbox_reset(request: HttpRequest, team: Team):
                 "Devbox version bumped (development mode: no orchestrator, so the "
                 "VMs are not really rebuilt). The score starts over.",
             )
-            return redirect("index")
+            return redirect("profile")
         messages.error(
             request,
             f"Could not reset your devbox: {error}. Please try again; if it keeps "
             "failing, contact an organiser.",
         )
-        return redirect("index")
+        return redirect("profile")
 
     if result.get("rebuild_enqueued", True):
         messages.success(request, "Reset requested: your devbox VMs are being rebuilt and the score starts over.")
     else:
         messages.info(request, "A rebuild of your devbox is already in progress.")
-    return redirect("index")
+    return redirect("profile")
 
 
 def _reconfigure_devbox(request: HttpRequest, team: Team, changed: str):

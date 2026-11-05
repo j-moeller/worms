@@ -11,6 +11,8 @@ or Dev):
     /progression/rounds/<round>/flows/              its connections
     /progression/rounds/<round>/logs/<ref>/         one log record
     /progression/rounds/<round>/download/           the zip (?logs=0|1&network=0|1)
+    /progression/devbox/                            the devbox's progression so far
+    /progression/devbox/logs/<ref>/, .../download/  (the Dev view: the devbox has no rounds)
 
 Staff (any run; the TOPOLOGY page):
 
@@ -22,7 +24,7 @@ is decided by the builder (audience "team"), never by the player.
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from core import clock
 from core.models.competition import Round
@@ -31,7 +33,6 @@ from core.models.scoring import FlagCapture, FlagCaptureAttempt
 from core.models.logging import LoggingAttempt
 from core.models.team import Team
 from dashboard.views.decorators import user_in_team_required
-from dashboard.views.devbox import devbox_logs
 from dashboard.views.topology import latest_snapshot, live_address_index, with_team_names
 from dashboard.views.util import render_with_base_info
 from django.contrib.auth.decorators import login_required
@@ -126,21 +127,20 @@ def default_round(rounds, now):
     return (active or started[-1:] or rounds[:1] or [None])[0]
 
 
-def summary(team: Team, rnd: Round, now, environment: str) -> dict:
+def devbox_summary(doc: dict) -> dict:
+    """What the Dev page shows without JavaScript, from the devbox's document."""
+    zero = datetime.fromisoformat(doc["clock"]["t0"])
+    kinds = [e["kind"] for e in doc["timeline"]["events"]]
+    return {
+        "captures": [{"vm": n["label"], "at": zero + timedelta(seconds=n["captured_at"])} for n in doc["timeline"]["nodes"]],
+        "submissions": kinds.count("flag_submitted"),
+        "logs": kinds.count("log_received"),
+    }
+
+
+def summary(team: Team, rnd: Round, now) -> dict:
     """What the page shows without JavaScript: the captured VMs and the
     counts (cheap queries; no flows, no log records)."""
-    if environment == "dev":
-        doc = progression.build(team, rnd, now=now, environment="dev")
-        zero = rnd.round_start or now
-        kinds = [e["kind"] for e in doc["timeline"]["events"]]
-        return {
-            "run": None,
-            "captures": [
-                {"vm": n["label"], "at": zero + timedelta(seconds=n["captured_at"])} for n in doc["timeline"]["nodes"]
-            ],
-            "submissions": kinds.count("flag_submitted"),
-            "logs": kinds.count("log_received"),
-        }
     run = RoundRun.objects.filter(round=rnd, team=team).first()
     captures = (
         FlagCapture.objects.filter(team=team, round=rnd)
@@ -166,12 +166,32 @@ def summary(team: Team, rnd: Round, now, environment: str) -> dict:
 @user_in_team_required
 def progression_page(request: HttpRequest, team: Team):
     now = clock.now()
+    environment = _environment(request)
+    # The results are fetched with an access token: as on the profile, none before this.
+    show_api = not team.competition.is_registration_period()
+    if environment == "dev":
+        # The devbox has no rounds: there is one progression, up to now.
+        doc = progression.build_devbox(team, now=now)
+        return render_with_base_info(
+            request,
+            "progression.html",
+            {
+                "environment": environment,
+                "summary": devbox_summary(doc) if doc is not None else None,
+                "version": team.devbox_version,
+                "links": {
+                    "zip": reverse("progression_devbox_download"),
+                    "events": reverse("progression_devbox_download") + "?logs=0&network=0",
+                    "json": reverse("progression_devbox"),
+                },
+                "show_api": show_api,
+            },
+        )
     rounds = _rounds(request)
     selected = None
     if request.GET.get("round", "").isdigit():
         selected = next((r for r in rounds if r.id == int(request.GET["round"])), None)
     selected = selected or default_round(rounds, now)
-    environment = _environment(request)
     return render_with_base_info(
         request,
         "progression.html",
@@ -179,12 +199,16 @@ def progression_page(request: HttpRequest, team: Team):
             "rounds": [{"round": r, "state": round_state(r, now)} for r in rounds],
             "selected": selected,
             "selected_state": round_state(selected, now) if selected else None,
-            "summary": summary(team, selected, now, environment) if selected else None,
+            "summary": summary(team, selected, now) if selected else None,
+            "links": {
+                "zip": reverse("progression_download", args=[selected.id]),
+                "events": reverse("progression_download", args=[selected.id]) + "?logs=0&network=0",
+                "json": reverse("progression_data", args=[selected.id]),
+            }
+            if selected
+            else None,
             "environment": environment,
-            "logs": devbox_logs(team) if environment == "dev" else [],
-            "version": team.devbox_version,
-            # The results are fetched with an access token: as on the profile, none before this.
-            "show_api": not team.competition.is_registration_period(),
+            "show_api": show_api,
         },
     )
 
@@ -227,6 +251,43 @@ def _team_document(request, team, round_id, flows=False):
     )  # fmt: skip
     log_url = reverse("progression_log", args=[rnd.id, ZERO_UUID]).replace(ZERO_UUID, "{ref}")
     return rnd, with_links(doc, reverse("progression_flows", args=[rnd.id]), log_url)
+
+
+def _devbox_document(team):
+    doc = progression.build_devbox(team, now=clock.now(), infra=live_address_index())
+    if doc is None:
+        raise Http404("Your team has no devbox.")
+    log_url = reverse("progression_devbox_log", args=[ZERO_UUID]).replace(ZERO_UUID, "{ref}")
+    return with_links(doc, None, log_url)
+
+
+@never_cache
+@login_required
+@user_in_team_required
+def devbox_document(request: HttpRequest, team: Team):
+    return _json(_devbox_document(team))
+
+
+@never_cache
+@login_required
+@user_in_team_required
+def devbox_log(request: HttpRequest, ref, team: Team):
+    record = progression.devbox_log_record(team, ref, now=clock.now())
+    if record is None:
+        return _json({"error": "No such log on your devbox."}, status=404)
+    return _json(record)
+
+
+@never_cache
+@login_required
+@user_in_team_required
+def devbox_download(request: HttpRequest, team: Team):
+    try:
+        logs = flag(request, "logs")
+        flag(request, "network")  # accepted as for a round; the devbox has no network data
+    except BadFlag as error:
+        return _json({"error": str(error)}, status=400)
+    return zip_response(_devbox_document(team), logs)
 
 
 @never_cache

@@ -192,7 +192,7 @@ def test_copy_gives_exactly_the_command(measured):
 
 
 def test_the_reset_button_has_room_above_it(measured):
-    for width, seen in measured["widths"].items():
+    for width, seen in measured["profile"].items():
         assert seen["resetGap"] >= 12, width
 
 

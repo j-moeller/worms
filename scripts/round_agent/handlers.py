@@ -23,10 +23,10 @@ from round_agent import validation
 FLAG_PATH = "/etc/worms/flag"
 WORM_DIR = "/home/debian"
 WORM_ZIP = "user-worm.zip"
-# The zip is unpacked here; the worm is `python3 main.py` run in this
+# The zip is unpacked here; the worm is `bash main.sh` run in this
 # directory (docs/worm-contract.md).
 WORM_CODE = "worm"
-WORM_ENTRY = "main.py"
+WORM_ENTRY = "main.sh"
 WORM_UNIT = "worms-start"
 # Unpack with Python's zipfile (python3 is in every Debian cloud image -- cloud-
 # init and Ansible need it; unzip is not installed). It keeps every entry
@@ -201,7 +201,7 @@ def deploy(ex, cfg, params):
         [
             "sudo", "systemd-run", f"--on-active={delay}", f"--unit={WORM_UNIT}",
             "--working-directory", f"{WORM_DIR}/{WORM_CODE}", "--uid", ex.ssh_user,
-            "/usr/bin/python3", WORM_ENTRY,
+            "/bin/bash", WORM_ENTRY,
         ],
     )
     # When the fuse was lit (the host's clock): the conductor dates the worm's

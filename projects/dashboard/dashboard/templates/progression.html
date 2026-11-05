@@ -5,32 +5,43 @@
 {% block content %}
 <header class="page-head">
     <p class="page-head__kicker">{% if environment == "dev" %}Dev · your devbox{% else %}Live · your runs{% endif %}</p>
-    <h1 class="page-head__title">Round progression</h1>
-    <p class="page-head__lead">{% if environment == "dev" %}Replay what your worm did on your devbox during a round: the tokens it submitted, the logs it sent.{% else %}Replay your run in a round like a video: the VMs your worm captured, the flags it submitted, the logs it sent and its traffic.{% endif %} Only the VMs you captured in the round are shown.</p>
+    <h1 class="page-head__title">{% if environment == "dev" %}Progression{% else %}Round progression{% endif %}</h1>
+    <p class="page-head__lead">{% if environment == "dev" %}What your worm has done on your devbox so far: the VMs it captured, the tokens it submitted and the logs it sent. A reset starts it over.{% else %}Replay your run in a round like a video: the VMs your worm captured, the flags it submitted, the logs it sent and its traffic. Only the VMs you captured in the round are shown.{% endif %}</p>
 </header>
 
-{% if not rounds %}
+{% if environment == "live" and not rounds %}
 <section class="panel"><div class="panel__body"><p class="empty">No rounds yet.</p></div></section>
+{% elif environment == "dev" and not summary %}
+<section class="panel"><div class="panel__body"><p class="empty">Your devbox has not been built yet.</p></div></section>
 {% else %}
 {% comment %}Without JavaScript: the round links, a summary and the downloads.
 topology.js replaces the summary with the player (the same downloads are in
 its bar).{% endcomment %}
+{% if environment == "live" %}
 <nav class="round-tabs" aria-label="Rounds" data-progression-tabs>
     {% for item in rounds %}
     <a class="round-tabs__tab" href="?round={{ item.round.id }}"{% if item.round.id == selected.id %} aria-current="page"{% endif %}>{{ item.round.name }} <span class="badge{% if item.state == 'active' %} badge--accent{% endif %}">{{ item.state }}</span></a>
     {% endfor %}
 </nav>
+{% endif %}
 
-{% if selected %}
+{% if summary %}
 <section class="panel" aria-labelledby="summary-title" data-progression-summary>
     <header class="panel__head">
+        {% if environment == "dev" %}
+        <h2 class="panel__title" id="summary-title">Your devbox so far</h2>
+        <p class="panel__meta">version {{ version }}</p>
+        {% else %}
         <h2 class="panel__title" id="summary-title">{{ selected.name }}</h2>
         <p class="panel__meta">{% if selected.round_start %}<time datetime="{{ selected.round_start|date:'c' }}" data-localtime>{{ selected.round_start }}</time>{% endif %}{% if selected.round_end %} – <time datetime="{{ selected.round_end|date:'c' }}" data-localtime>{{ selected.round_end }}</time>{% endif %}</p>
+        {% endif %}
     </header>
     <div class="panel__body">
         <dl class="kv">
+            {% if environment == "live" %}
             <dt>Round</dt><dd>{{ selected_state }}</dd>
-            {% if environment == "live" %}<dt>Your run</dt><dd>{% if summary.run %}{{ summary.run.state }}{% else %}not planned{% endif %}</dd>{% endif %}
+            <dt>Your run</dt><dd>{% if summary.run %}{{ summary.run.state }}{% else %}not planned{% endif %}</dd>
+            {% endif %}
             <dt>Flags submitted</dt><dd>{{ summary.submissions }}</dd>
             <dt>Logs sent</dt><dd>{{ summary.logs }}</dd>
         </dl>
@@ -47,14 +58,18 @@ its bar).{% endcomment %}
             </table>
         </div>
         {% else %}
-        <p class="empty">Nothing captured in this round{% if selected_state != "finished" %} yet{% endif %}.</p>
+        <p class="empty">{% if environment == "dev" %}Nothing captured yet.{% else %}Nothing captured in this round{% if selected_state != "finished" %} yet{% endif %}.{% endif %}</p>
         {% endif %}
         <p class="panel__actions">
-            <a class="btn btn--primary" href="{% url 'progression_download' selected.id %}" download>Download .zip</a>
-            <a class="btn btn--ghost" href="{% url 'progression_download' selected.id %}?logs=0&amp;network=0" download>Events only</a>
-            <a class="btn btn--ghost" href="{% url 'progression_data' selected.id %}">JSON</a>
+            <a class="btn btn--primary" href="{{ links.zip }}" download>Download .zip</a>
+            <a class="btn btn--ghost" href="{{ links.events }}" download>Events only</a>
+            <a class="btn btn--ghost" href="{{ links.json }}">JSON</a>
         </p>
+        {% if environment == "dev" %}
+        <p class="muted">The replay needs JavaScript. The zip holds the progression (progression.json) and every log record (logs/); “Events only” leaves the log records out.</p>
+        {% else %}
         <p class="muted">The replay needs JavaScript. The zip holds the round's progression (progression.json), every log record (logs/) and the network traffic (network/); “Events only” leaves both out. The same data is in the team API (see your profile).</p>
+        {% endif %}
     </div>
 </section>
 {% endif %}
@@ -64,40 +79,34 @@ browser test can load it with fixture data; the endpoints come from here.{% endc
 <div class="topo" id="topo" hidden
      data-audience="team"
      data-environment="{{ environment }}"
-     data-round="{{ selected.id|default:'' }}"
+     {% if environment == "dev" %}data-progression="{% url 'progression_devbox' %}"
+     data-download="{% url 'progression_devbox_download' %}"
+     {% else %}data-round="{{ selected.id|default:'' }}"
      data-rounds="{% url 'progression_rounds' %}"
      data-progression="{% url 'progression_data' 0 %}"
-     data-download="{% url 'progression_download' 0 %}">
+     data-download="{% url 'progression_download' 0 %}"{% endif %}>
 {% include "topology/player.html" %}
 </div>
 <script src="{% static 'dashboard/js/topology.js' %}" defer></script>
-{% endif %}
-
-{% if environment == "dev" %}
-<section class="panel" aria-labelledby="logs-title">
-    <header class="panel__head"><h2 class="panel__title" id="logs-title">Logs</h2><p class="panel__meta">version {{ version }}</p></header>
-    <div class="panel__body log-list">
-        {% for row in logs %}
-        <details class="log-entry">
-            <summary><time datetime="{{ row.entry.created_at|date:'c' }}" data-localtime>{{ row.entry.created_at }}</time></summary>
-            <pre class="code"><code>{{ row.data }}</code></pre>
-        </details>
-        {% empty %}
-        <p class="empty">No devbox logs at this version.</p>
-        {% endfor %}
-    </div>
-</section>
 {% endif %}
 
 {% if show_api %}
 <section class="panel" aria-labelledby="data-api-title">
     <header class="panel__head"><h2 class="panel__title" id="data-api-title">Download your results</h2></header>
     <div class="panel__body prose">
-        <p>Use these commands to retrieve your scoring and logs for a round as JSON. Pages hold up to 500 submissions or 200 logs (1 MiB); follow <code>page.next</code> until it is null. You need a token from <a href="{% url 'profile' %}">your profile</a>.</p>
+        {% if environment == "dev" %}
+        <p>Use these commands to retrieve your devbox's progression so far, as JSON or as a zip with every log record. You need a token from <a href="{% url 'profile' %}">your profile</a>.</p>
         <pre class="code" data-copy><code>TOKEN=...   # a token of your team
+curl -H "Authorization: Bearer $TOKEN" {{ request.scheme }}://{{ request.get_host }}/api/v1/devbox/progression/
+curl -H "Authorization: Bearer $TOKEN" -o progression.zip {{ request.scheme }}://{{ request.get_host }}/api/v1/devbox/progression.zip</code></pre>
+        {% else %}
+        <p>Use these commands to retrieve your scoring and logs for a round as JSON. Pages hold up to 500 submissions or 200 logs (1 MiB); follow <code>page.next</code> until it is null. You need a token from <a href="{% url 'profile' %}">your profile</a>. {% if selected %}These commands are for {{ selected.name }}; the first one lists all your rounds and their ids.{% else %}<code>ID</code> stands for a round's id, which the first command lists.{% endif %}</p>
+        {% with round_id=selected.id|default:"ID" %}<pre class="code" data-copy><code>TOKEN=...   # a token of your team
 curl -H "Authorization: Bearer $TOKEN" {{ request.scheme }}://{{ request.get_host }}/api/v1/rounds/
-curl -H "Authorization: Bearer $TOKEN" "{{ request.scheme }}://{{ request.get_host }}/api/v1/rounds/ID/scoring/?limit=500"
-curl -H "Authorization: Bearer $TOKEN" "{{ request.scheme }}://{{ request.get_host }}/api/v1/rounds/ID/logging/?limit=200&amp;cursor=NEXT"</code></pre>
+curl -H "Authorization: Bearer $TOKEN" "{{ request.scheme }}://{{ request.get_host }}/api/v1/rounds/{{ round_id }}/scoring/?limit=500"
+curl -H "Authorization: Bearer $TOKEN" "{{ request.scheme }}://{{ request.get_host }}/api/v1/rounds/{{ round_id }}/logging/?limit=200&amp;cursor=NEXT"
+curl -H "Authorization: Bearer $TOKEN" -o progression.zip {{ request.scheme }}://{{ request.get_host }}/api/v1/rounds/{{ round_id }}/progression.zip</code></pre>{% endwith %}
+        {% endif %}
     </div>
 </section>
 {% endif %}

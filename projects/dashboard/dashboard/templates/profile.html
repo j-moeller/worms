@@ -43,6 +43,43 @@
     </section>
 </div>
 
+{% if request.team %}
+<section class="panel" aria-labelledby="keys-title">
+    <header class="panel__head"><h2 class="panel__title" id="keys-title">SSH keys</h2><p class="panel__meta">{{ ssh_keys|length }} registered</p></header>
+    <div class="panel__body"><p class="muted">Keys your team can use to log in to its devbox.</p></div>
+    <div class="table-wrap">
+        <table class="table">
+            <thead><tr><th scope="col">Label</th><th scope="col">Public key</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+            <tbody>
+                {% for key in ssh_keys %}
+                <tr>
+                    <th scope="row">{{ key.name|default:"(unnamed)" }}</th>
+                    <td class="mono truncate" title="{{ key.public_key }}">{{ key.public_key }}</td>
+                    <td class="row-action">
+                        <form method="post" action="{% url 'devbox_delete_ssh_key' key.id %}">{% csrf_token %}<button type="submit" class="btn btn--ghost btn--sm btn--danger">Remove</button></form>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="3" class="empty">No keys yet. Add one to log in to your devbox.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <form method="post" action="{% url 'devbox_add_ssh_key' %}" class="panel__body form form--inline">
+        {% csrf_token %}
+        <div class="field">
+            <label class="field__label" for="key-name">Label</label>
+            <input class="input" type="text" id="key-name" name="name" placeholder="laptop" maxlength="200">
+        </div>
+        <div class="field field--grow">
+            <label class="field__label" for="key-value">Public key</label>
+            <input class="input mono" type="text" id="key-value" name="public_key" placeholder="ssh-ed25519 AAAA…" required>
+        </div>
+        <div class="form__actions"><button type="submit" class="btn btn--primary">Add key</button></div>
+    </form>
+</section>
+{% endif %}
+
 {% if show_access_tokens %}
 <header class="page-head page-head--section">
     <p class="page-head__kicker">Credentials &amp; API</p>

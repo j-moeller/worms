@@ -32,7 +32,7 @@
         <div class="panel__body">
             {% if ssh_command %}
             <p>Log in to VM A through the gateway, then go on from there. <code>-A</code> forwards your SSH agent, so A and B can use your key for the next hop.</p>
-            <p>Make sure you registered an SSH identity: check the output of <code>ssh-add -L</code> on your laptop. It must include one of the keys below.</p>
+            <p>Make sure you registered an SSH identity: check the output of <code>ssh-add -L</code> on your laptop. It must include one of the keys in <a href="{% url 'profile' %}">your profile</a>.</p>
             <p class="code-label">Log in to A</p>
             <pre class="code code--wrap" data-copy data-ssh-login><code>{{ ssh_command }}</code></pre>
             {% for hop in hops %}
@@ -41,7 +41,7 @@
             {% endfor %}
             <p class="muted">While you are connected, root on these VMs can use your agent, so use a key that is only for this devbox.</p>
             {% elif not devbox %}
-            <p class="muted">Your devbox has not been built yet. It is created with your team; add an SSH key below so you can connect once it is up.</p>
+            <p class="muted">Your devbox has not been built yet. It is created with your team; add an SSH key in <a href="{% url 'profile' %}">your profile</a> so you can connect once it is up.</p>
             {% else %}
             <p class="muted">Not ready yet: the devbox is still being built. The command appears here once it is up.</p>
             {% endif %}
@@ -79,40 +79,6 @@
     </div>
 </section>
 {% endif %}
-
-<section class="panel" aria-labelledby="keys-title">
-    <header class="panel__head"><h2 class="panel__title" id="keys-title">SSH keys</h2><p class="panel__meta">{{ ssh_keys|length }} registered</p></header>
-    <div class="table-wrap">
-        <table class="table">
-            <thead><tr><th scope="col">Label</th><th scope="col">Public key</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
-            <tbody>
-                {% for key in ssh_keys %}
-                <tr>
-                    <th scope="row">{{ key.name|default:"(unnamed)" }}</th>
-                    <td class="mono truncate" title="{{ key.public_key }}">{{ key.public_key }}</td>
-                    <td class="row-action">
-                        <form method="post" action="{% url 'devbox_delete_ssh_key' key.id %}">{% csrf_token %}<button type="submit" class="btn btn--ghost btn--sm btn--danger">Remove</button></form>
-                    </td>
-                </tr>
-                {% empty %}
-                <tr><td colspan="3" class="empty">No keys yet. Add one to connect.</td></tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-    <form method="post" action="{% url 'devbox_add_ssh_key' %}" class="panel__body form form--inline">
-        {% csrf_token %}
-        <div class="field">
-            <label class="field__label" for="key-name">Label</label>
-            <input class="input" type="text" id="key-name" name="name" placeholder="laptop" maxlength="200">
-        </div>
-        <div class="field field--grow">
-            <label class="field__label" for="key-value">Public key</label>
-            <input class="input mono" type="text" id="key-value" name="public_key" placeholder="ssh-ed25519 AAAA…" required>
-        </div>
-        <div class="form__actions"><button type="submit" class="btn btn--primary">Add key</button></div>
-    </form>
-</section>
 
 <section class="panel" aria-labelledby="logs-title">
     <header class="panel__head"><h2 class="panel__title" id="logs-title">Logs</h2><p class="panel__meta">current version</p></header>

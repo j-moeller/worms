@@ -15,7 +15,7 @@ import subprocess
 import pytest
 
 from conftest import REPO
-from test_dashboard_login import HOST, proxied, site  # noqa: F401 (fixtures)
+from test_dashboard_login import HOST, login, proxied, site  # noqa: F401 (fixtures)
 from test_dashboard_pages import team_upload  # noqa: F401 (fixture)
 
 pytest.importorskip("django")
@@ -45,7 +45,6 @@ def _page(site, team, index=1, addresses=True, captured=()) -> str:  # noqa: F81
         )  # fmt: skip
         if role in captured:
             DevboxCapture.objects.create(team=team, devbox_vm=vm, devbox_version=team.devbox_version)
-    # With a key: its table is wider than a phone, and that must stay inside the table's own scroll area.
     DevboxSSHKey.objects.create(team=team, name="laptop", public_key="ssh-ed25519 " + "A" * 68 + " someone@laptop")
     page = site.get("/", **proxied(HOST)).content.decode()
     token = page.split('name="csrfmiddlewaretoken" value="', 1)[1].split('"', 1)[0]
@@ -54,6 +53,18 @@ def _page(site, team, index=1, addresses=True, captured=()) -> str:  # noqa: F81
     response = site.get("/", **proxied(HOST))
     assert response.status_code == 200
     return response.content.decode()
+
+
+def _profile(site) -> str:  # noqa: F811
+    response = site.get("/profile/", **proxied(HOST))
+    assert response.status_code == 200
+    return response.content.decode()
+
+
+def _post(site, path, data=None):  # noqa: F811
+    page = _profile(site)
+    token = page.split('name="csrfmiddlewaretoken" value="', 1)[1].split('"', 1)[0]
+    return site.post(path, {**(data or {}), "csrfmiddlewaretoken": token}, HTTP_ORIGIN=f"https://{HOST}", **proxied(HOST))
 
 
 def _port(iface, ip) -> str:
@@ -71,6 +82,45 @@ def test_the_page_tells_you_to_check_your_agent_and_does_not_start_one(site, tea
     page = _page(site, team_upload[0])
     assert "<code>ssh-add -L</code>" in page
     assert "ssh-agent -s" not in page and "id_ed25519" not in page
+
+
+def test_ssh_keys_are_on_the_profile_and_not_on_the_devbox_page(site, team_upload):  # noqa: F811
+    page = _page(site, team_upload[0])
+    assert "keys-title" not in page and "/devbox/ssh-keys/" not in page
+    assert '<a href="/profile/">your profile</a>' in page
+    profile = _profile(site)
+    assert 'id="keys-title"' in profile and ">1 registered<" in profile
+    assert "someone@laptop" in profile
+    assert 'action="/devbox/ssh-keys/add/"' in profile and "/devbox/ssh-keys/" in profile.split("someone@laptop", 1)[1]
+
+
+def test_adding_and_removing_a_key_come_back_to_the_profile(site, team_upload, monkeypatch):  # noqa: F811
+    from core.models.devbox import Devbox, DevboxSSHKey
+    from dashboard import orchestrator_client
+
+    team = team_upload[0]
+    Devbox.objects.create(team=team, index=1)
+    monkeypatch.setattr(orchestrator_client, "post", lambda path, timeout=15: {"reconfigure_enqueued": True})
+
+    key = "ssh-ed25519 " + "B" * 68 + " me@laptop"
+    added = _post(site, "/devbox/ssh-keys/add/", {"name": "laptop", "public_key": key})
+    assert (added.status_code, added["Location"]) == (302, "/profile/")
+    profile = _profile(site)
+    assert "SSH key added." in profile and "me@laptop" in profile
+
+    refused = _post(site, "/devbox/ssh-keys/add/", {"name": "bad", "public_key": "not a key"})
+    assert (refused.status_code, refused["Location"]) == (302, "/profile/")
+    assert "not a single-line" in _profile(site)
+
+    removed = _post(site, f"/devbox/ssh-keys/{DevboxSSHKey.objects.get(team=team).id}/delete/")
+    assert (removed.status_code, removed["Location"]) == (302, "/profile/")
+    profile = _profile(site)
+    assert "me@laptop" not in profile and ">0 registered<" in profile
+
+
+def test_someone_without_a_team_gets_no_keys_panel(site):  # noqa: F811
+    assert login(site, HOST, f"https://{HOST}").status_code == 302
+    assert "keys-title" not in _profile(site)
 
 
 def test_the_picture_joins_the_vms_interface_to_interface(site, team_upload):  # noqa: F811
@@ -115,10 +165,12 @@ def measured(site, team_upload, tmp_path):  # noqa: F811
     html = tmp_path / "page.html"
     # The highest index has the longest addresses, so the least room.
     html.write_text(_page(site, team_upload[0], index=31, captured={"a", "c"}))
+    profile = tmp_path / "profile.html"
+    profile.write_text(_profile(site))
     shots = os.environ.get("WORMS_SCREENSHOTS", "")
     if shots:
         os.makedirs(shots, exist_ok=True)
-    run = subprocess.run(["node", str(DRIVER), str(html), str(STATIC), shots], capture_output=True, text=True, cwd=REPO, timeout=120)
+    run = subprocess.run(["node", str(DRIVER), str(html), str(profile), str(STATIC), shots], capture_output=True, text=True, cwd=REPO, timeout=120)
     assert run.returncode == 0, run.stderr
     return json.loads(run.stdout)
 
@@ -145,8 +197,10 @@ def test_the_reset_button_has_room_above_it(measured):
         assert seen["resetGap"] >= 12, width
 
 
-def test_the_page_fits_a_phone(measured):
+def test_the_pages_fit_a_phone(measured):
     assert not measured["widths"]["390"]["pageScrolls"]
+    # The keys table is wider than a phone: that must stay inside its own scroll area.
+    assert measured["profile"]["390"]["keysPanel"] and not measured["profile"]["390"]["pageScrolls"]
 
 
 def test_every_box_holds_its_text(measured):

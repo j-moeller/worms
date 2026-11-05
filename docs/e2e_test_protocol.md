@@ -208,13 +208,13 @@ devbox (stage 3) but no key registered.
 1. Sign in to `DASHBOARD` as the student with the one-time password; set a new
    password when forced.
 2. Switch to the **development** view (the nav toggle). You see the devbox: its
-   score (0), its VMs, the SSH keys panel, the connect command, and **Reset**.
-3. In **SSH keys**, paste your **public** key (e.g. `~/.ssh/id_ed25519.pub`) and
-   add it.
+   score (0), its VMs, the connect command, and **Reset**.
+3. On your **profile** (`/profile/`), in **SSH keys**, paste your **public** key
+   (e.g. `~/.ssh/id_ed25519.pub`) and add it.
 
 **Expected post state & how to check:**
 
-- The key is listed on the dev view.
+- The key is listed on the profile.
 - A reconfigure reached the host agent (no VM rebuild): on the agent shell you
   see a `devbox_reconfigure` job run; in the DB:
   ```sh

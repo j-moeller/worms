@@ -275,14 +275,16 @@ A key's comment may not contain spaces, or the dashboard refuses the key.
 
 | Page | Field | Input |
 |---|---|---|
-| Top bar | | Switch the toggle to **Dev**, then open `/` |
-| `/`, panel **SSH keys** | Label | `anna-laptop` |
+| `/profile/`, panel **SSH keys** | Label | `anna-laptop` |
 | | Public key | the one line printed by `cat` above |
 | | | Press **Add key** |
 
 **Expect:**
 - `SSH key added. Your devbox and the SSH gateway are being updated now.`
 - `1 registered` on the panel.
+
+Then switch the toggle in the top bar to **Dev** and open `/`:
+
 - The panel **Connect** shows `ssh -A -J team@worms-dev.mlsec.tu-berlin.de:2222 root@10.7.0.11`, then the commands from A to B and from B to C. Use these from outside. On the node, use the gateway's address, as in step 10.
 - The panel **VMs** draws the gateway and each VM, with every interface's name and address.
 
@@ -646,7 +648,7 @@ python3 -c 'import tabulate' 2>/dev/null && echo present || echo absent
 
 **Who:** Anna, in the browser. Reload `/` in the **Dev** view.
 
-**Expect:** `version 2`, `0/3`, every VM `Not captured`, `No devbox logs at this version.`, the key still listed, and the same SSH command.
+**Expect:** `version 2`, `0/3`, every VM `Not captured`, `No devbox logs at this version.`, and the same SSH command. On `/profile/`, the key is still listed.
 
 ### 14d. The database
 

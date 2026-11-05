@@ -2,9 +2,10 @@
 
 In the development environment (the dev/prod toggle in the nav), the home page
 shows the team's devbox instead of the leaderboard: the current dev score
-(tokens found in the devbox VMs), the VMs, the devbox logs, the SSH keys the
-team has registered, and how to connect. A reset rebuilds the devbox and clears
-the score by bumping the team's devbox version (docs/devbox.md).
+(tokens found in the devbox VMs), the VMs, the devbox logs, and how to connect.
+A reset rebuilds the devbox and clears the score by bumping the team's devbox
+version (docs/devbox.md). The team's SSH keys are shown on the profile page and
+changed here.
 
 Production view = the leaderboard (dashboard/views/leaderboard.py). This module
 only runs when request.is_dev_environment is set.
@@ -106,7 +107,6 @@ def devbox_home(request: HttpRequest, team: Team):
         .select_related("logging_attempt")
         .order_by("-created_at")[:200]
     ]
-    ssh_keys = list(DevboxSSHKey.objects.filter(team=team).order_by("-created_at"))
 
     context = {
         "devbox": devbox,
@@ -119,7 +119,6 @@ def devbox_home(request: HttpRequest, team: Team):
         "score": len(captured_vm_ids),
         "total_tokens": len(vms),
         "logs": logs,
-        "ssh_keys": ssh_keys,
     }
     return render_with_base_info(request, "devbox.html", context)
 
@@ -199,7 +198,7 @@ def devbox_add_ssh_key(request: HttpRequest, team: Team):
     public_key = request.POST.get("public_key", "").strip()
     if not _valid_ssh_key(public_key):
         messages.error(request, "That is not a single-line OpenSSH public key (ssh-ed25519, ssh-rsa, ecdsa, sk-…), or it contains characters that are not allowed.")
-        return redirect("index")
+        return redirect("profile")
     # A key may belong to only one team: sshd matches a key to the first
     # authorized_keys line, so a shared key would let another team inherit this
     # team's gateway forward and log in to its devbox VMs
@@ -215,7 +214,7 @@ def devbox_add_ssh_key(request: HttpRequest, team: Team):
             _reconfigure_devbox(request, team, "pushed again")
         else:
             messages.error(request, "That public key is already registered by another team. Use a different key.")
-        return redirect("index")
+        return redirect("profile")
     try:
         with transaction.atomic():
             DevboxSSHKey.objects.create(team=team, name=name, public_key=public_key, created_by=request.user)
@@ -223,9 +222,9 @@ def devbox_add_ssh_key(request: HttpRequest, team: Team):
         # Lost a race against a simultaneous add of the same key (another team,
         # or a double submit): the UNIQUE constraint held.
         messages.error(request, "That public key is already registered. Use a different key.")
-        return redirect("index")
+        return redirect("profile")
     _reconfigure_devbox(request, team, "added")
-    return redirect("index")
+    return redirect("profile")
 
 
 @login_required
@@ -235,7 +234,7 @@ def devbox_delete_ssh_key(request: HttpRequest, team: Team, key_id: int):
     deleted, _ = DevboxSSHKey.objects.filter(id=key_id, team=team).delete()
     if deleted:
         _reconfigure_devbox(request, team, "removed")
-    return redirect("index")
+    return redirect("profile")
 
 
 # Accept only a single OpenSSH public key line of a known type, bounded length.

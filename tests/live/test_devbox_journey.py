@@ -254,7 +254,7 @@ def test_05_users_sign_in_and_add_keys(journey):
             key_name=f"{member.short}-laptop", key=member.public_key, shots=i == 0,
         )  # fmt: skip
         check(f"{member.short}: one-time password", "Forced to `/change-password/`, then signed in", f"{r['firstPath']} → {r['afterPath']}", r["firstPath"] == "/change-password/" and r["afterPath"] != "/change-password/")
-        check(f"{member.short}: add an SSH key", "Saved, and being pushed", f"{r['keyStatus']}, {r['keys']}, {r['messages'][-1:]}", r["keyStatus"] == 200 and any("being updated" in m for m in r["messages"]))
+        check(f"{member.short}: add an SSH key", "Saved, and being pushed", f"{r['keyStatus']}, {r['keys']}, {r['messages'][-1:]}", r["keyStatus"] == 200 and r["onProfile"] and any("being updated" in m for m in r["messages"]))
         check(f"{member.short}: the page", "Shows the SSH command, no JavaScript errors", r["ssh_command"], bool(r["ssh_command"]) and not r["jsErrors"])
         split_ssh_command(r["ssh_command"])
         if i == 0:

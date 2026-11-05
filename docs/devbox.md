@@ -43,8 +43,8 @@ existing `is_dev_environment` session flag; the home page dispatches
 - **Production** shows the leaderboard (and the usual CAPTURES/LOGS pages).
 - **Development** shows **no leaderboard**. It shows the team's devbox: the
   current **score** (tokens found in A/B/C at the current version), the VMs,
-  the devbox **logs**, the team's **SSH keys** (add/remove), how to connect, and
-  a **Reset** button.
+  the devbox **logs**, how to connect, and a **Reset** button. The team's **SSH
+  keys** (add/remove) are on the user's **profile**, next to the access tokens.
 
 Both views show scoring and logging feedback for their own domain: the
 production view from `flag_captures`/`logging`, the development view from
@@ -179,7 +179,7 @@ The gateway protects itself in depth (docs/security-assessment.md):
   output-DROP policy already forbids it — this is the second layer). The gateway
   is not on any bridge a sandbox VM can reach.
 
-Teams manage their keys on the dashboard dev view (`DevboxSSHKey`); the keys are
+Teams manage their keys on the dashboard profile page (`DevboxSSHKey`); the keys are
 installed both on the gateway (for the jump) and on the devbox VMs (for the
 final auth). Adding or removing a key enqueues a **`devbox_reconfigure`** host
 job (through the orchestrator, like reset) that re-pushes every team's keys to

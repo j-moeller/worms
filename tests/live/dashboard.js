@@ -89,7 +89,6 @@ class Session {
       logs: await page.$$eval("details.log-entry", (nodes) => nodes.map((n) => n.textContent)),
       ssh_command: (await command.count()) ? squash(await command.first().innerText()) : null,
       hops: (await hops.allInnerTexts()).map(squash),
-      keys: squash(await page.innerText("section[aria-labelledby=keys-title] .panel__meta")),
       vms: await page.$$eval("section[aria-labelledby=vms-title] [data-vm]", (nodes) => nodes.map((node) => squash(node.innerText))),
     };
   }
@@ -180,13 +179,17 @@ const actions = {
     const afterPath = s.path();
     await s.devView();
     if (r.shots) await s.shot("07-dev-view-before-key");
+    await s.page.goto(`${s.base}/profile/`, { waitUntil: "load" });
     await s.page.fill("#key-name", r.key_name);
     await s.page.fill("#key-value", r.key);
     const keyStatus = await s.submit('form[action$="/devbox/ssh-keys/add/"] button[type="submit"]');
     const messages = await s.messages();
-    const state = await s.devState();
+    const keys = squash(await s.page.innerText("section[aria-labelledby=keys-title] .panel__meta"));
+    const onProfile = s.path() === "/profile/";
     if (r.shots) await s.shot("08-ssh-key-added");
-    return { status, firstPath, afterPath, keyStatus, messages, keys: state.keys, ssh_command: state.ssh_command };
+    await s.devView();
+    const state = await s.devState();
+    return { status, firstPath, afterPath, keyStatus, messages, keys, onProfile, ssh_command: state.ssh_command };
   },
 
   async try_login(s, r) {

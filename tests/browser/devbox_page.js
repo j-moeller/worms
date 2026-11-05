@@ -1,12 +1,12 @@
 // Measures the devbox page (templates/devbox.html, rendered by Django) in Chromium and prints
 // the observations as JSON; the assertions are in tests/test_devbox_page.py.
 //
-//   node devbox_page.js <page.html> <static dir> <screenshots dir or "">
+//   node devbox_page.js <page.html> <profile.html> <static dir> <screenshots dir or "">
 const fs = require("fs");
 const path = require("path");
 const { chromium } = require("playwright");
 
-const [pagePath, staticDir, shots] = process.argv.slice(2);
+const [pagePath, profilePath, staticDir, shots] = process.argv.slice(2);
 const ORIGIN = "https://worms.test"; // https: the clipboard needs a secure page
 const TYPES = { ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".woff2": "font/woff2" };
 
@@ -56,6 +56,7 @@ function measure() {
         const url = new URL(route.request().url());
         if (url.origin !== ORIGIN) return route.abort();
         if (url.pathname === "/page") return route.fulfill({ contentType: "text/html", body: fs.readFileSync(pagePath, "utf8") });
+        if (url.pathname === "/profile-page") return route.fulfill({ contentType: "text/html", body: fs.readFileSync(profilePath, "utf8") });
         const file = path.join(staticDir, url.pathname.replace(/^\/static\//, ""));
         if (url.pathname.startsWith("/static/") && fs.existsSync(file)) {
             return route.fulfill({ contentType: TYPES[path.extname(file)] || "application/octet-stream", body: fs.readFileSync(file) });
@@ -77,6 +78,17 @@ function measure() {
     await page.setViewportSize({ width: 1280, height: 1000 });
     await page.locator("[data-ssh-login] [data-copy-button]").click();
     out.copied = await page.evaluate(() => navigator.clipboard.readText());
+
+    await page.goto(`${ORIGIN}/profile-page`);
+    out.profile = {};
+    for (const width of [1280, 390]) {
+        await page.setViewportSize({ width, height: 1000 });
+        out.profile[width] = await page.evaluate(() => ({
+            pageScrolls: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+            keysPanel: !!document.querySelector("section[aria-labelledby=keys-title]"),
+        }));
+        if (shots) await page.screenshot({ path: path.join(shots, `profile-${width}.png`), fullPage: true });
+    }
 
     await browser.close();
     console.log(JSON.stringify(out));

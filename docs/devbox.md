@@ -1,328 +1,138 @@
-# Devbox: team-personalised development environments
+# Devbox: a team's development environment
 
-A **devbox** is a team's own, always-on clone of the sandbox VMs. Teams develop
-and test their worm against it between (and during) rounds, over SSH, without
-touching the competition. It is built from the same resources as the sandbox
-and is held to the same containment — but it is reachable **only by its team**,
-and devbox traffic can **never** reach the sandbox (or vice versa), even though
-they share the hypervisor and the scoring/logging/private-internet services.
-
-This document is the design and the security analysis. Status and open items
-are at the end.
+A **devbox** is a team's own, always-on set of three untrusted VMs to develop and test its worm
+on, between and during rounds, over SSH. It is built like the sandbox and held to the same
+containment, but it is reachable **only by its team**, and devbox traffic never reaches the
+sandbox or another team's devbox, although all of them share the node and the services. How to
+operate it: `docs/management.md`. What it means for a team: `docs/worm-contract.md`. Whether the
+containment holds: `docs/security-assessment.md`.
 
 ## What a team gets
 
-Per team, three untrusted VMs **A, B, C** wired in a chain **A–B, B–C** (B is
-the only pivot between the two segments), plus a per-team router (**devbox-gw**)
-for egress. The VMs are the same as sandbox VMs (Debian image, internal CA
-installed, assumed rooted) and carry the same per-VM disk and network limits.
-Each VM holds one **token**; the team's **dev score** is the number of distinct
-tokens its worm has submitted to scoring at the current devbox version.
+Three VMs **A, B, C** in a chain (A–B, B–C; B is the only way from A to C), plus a per-team router
+**devbox-gw**. Debian, the internal CA trusted, `x86-64-v3` CPU (no `/dev/kvm`), 512 MB RAM, the
+sandbox's disk and NIC limits. Each VM holds a **token** in `/etc/worms/flag`; the team's dev
+score is the number of distinct tokens submitted to scoring at the current devbox version.
 
 ```
-            team's laptop
-                 │  ssh -A -J team@<gateway> root@<team's A>
-                 ▼
-        devbox SSH gateway (trusted, hardened)      vmbr7 (devbox SSH fabric, port-isolated)
-                 │  jump, SSH tty only                         │
-                 ▼                                             ▼
+ team's laptop ── ssh -A -J team@<public name>:2222 root@<A> ──▶ SSH gateway (trusted, vmbr7)
+                                                                     │ TCP to the team's A:22 only
    A ─────── B ─────── C        (A on vmbr9xx0, B on both, C on vmbr9xx1)
     \        │        /
-     \       ▼       /          default route
-      ──► devbox-gw ◄──  ──SNAT──►  services bridge ──►  scoring / logging / private internet
-          (per team)              (10.2.0.32+i)         (<team>.scoring.worms.internal, …)
+     └──▶ devbox-gw ◀──┘  ── SNAT to 10.2.0.32+i ──▶ scoring / logging / DNS / private internet
+                                                    + teachllm.mlsec.tu-berlin.de:443
 ```
 
-## The dashboard: development vs production view
+## SSH access through one gateway
 
-The nav toggles between the **production** view (the competition: leaderboard,
-captures, logs) and the **development** view (the devbox). This reuses the
-existing `is_dev_environment` session flag; the home page dispatches
-(`dashboard/views/devbox.py`):
-
-- **Production** shows the leaderboard (and the usual CAPTURES/LOGS pages).
-- **Development** shows **no leaderboard**. It shows the team's devbox: the VMs
-  and how to connect. The **score** (tokens found in A/B/C at the current version),
-  the **Reset** button and the team's **SSH keys** (add/remove) are on the user's
-  **profile**. The **progression** page replays what the devbox has done so far,
-  logs included. The devbox has no rounds, so that is one progression, which
-  grows until a reset starts it over.
-
-Both views show scoring and logging feedback for their own domain: the
-production view from `flag_captures`/`logging`, the development view from
-`devbox_captures`/`devbox_logs`.
-
-## Reset without deleting data: the devbox version
-
-Resetting rebuilds the three VMs and "clears the score", but we keep every
-record. Each team has a `devbox_version` (on `teams`). A reset:
-
-1. goes through the orchestrator (the dashboard role may not change the
-   version): `POST /devbox/<team>/reset/` **increments** `devbox_version` and
-   enqueues a `devbox_rebuild` host job (carrying the whole competition's teams and their keys, so the agent can regenerate the stack and re-install keys);
-2. the round agent rolls the team's three VMs back to their snapshot `clean`,
-   then installs the team's keys again and writes new tokens. The snapshot is
-   taken when `devbox_provision` creates a VM, after its first boot and before
-   any team key is on it, so no team has been on it. A VM that existed before
-   snapshots, or has none for another reason, is replaced instead (fresh disk),
-   as every reset did before 2026-11-05, and snapshotted then. Not yet run on
-   a real devbox: tested offline (`tests/test_round_agent.py`).
-
-Devbox captures and logs are **tagged with the version in force** when they are
-recorded (`devbox_captures.devbox_version`, `devbox_logs.devbox_version`). The
-dashboard only shows the **current** version, so the score restarts at zero
-while the old rows stay for inspection. Nothing is deleted.
-
-## Uploads: running a worm on the devbox
-
-An upload in the dashboard's dev view runs on the team's devbox the way a round runs it on a
-sandbox, and has nothing to do with the sandbox or the rounds. On the page, each view warns
-what an upload does there.
+Teams never reach a devbox VM directly. A shared, hardened **SSH gateway** (published by host
+DNAT on port 2222) is the only way in. For every registered key, its `team` account's
+`authorized_keys` holds:
 
 ```
-dashboard                 stores the upload (Upload.devbox = true). That is all it can do.
-orchestrator              picks it up in its attempt loop (rounds/devbox_runs.py)
-  PENDING                 waits while a round is running, or for a rebuild in progress
-  RESETTING               devbox_rebuild: a new version, so the score starts over; new VMs, new tokens
-  DEPLOYING               devbox_deploy: the zip to VM A, hash checked, unpacked, fuse lit
-  ARMED -> RUNNING        bash main.sh starts after 10 s, as debian, as in a round
-  -> FINISHED             after an hour: systemd stops main.sh; the VMs stay as they are
+restrict,port-forwarding,command="/usr/sbin/nologin",permitopen="<the team's A>:22" <key>
 ```
 
-| Rule | How |
-|---|---|
-| Never enters a round | `orchestrator/rounds/planner.py` and everything that asks for a team's entry filter on `devbox=False`. Each view lists only its own uploads |
-| A stale tab cannot pick the wrong one | The form says which view it came from, and it must match the session. Live and Dev share a session, so another tab can have switched |
-| A round's timing comes first | The agent runs one job at a time and a rebuild takes many minutes. So a dev upload waits while a round is running, and the agent takes a round's queued jobs first. **A manual Reset does not wait yet**, as before |
-| Only the latest upload runs | A newer upload replaces it, and so does a manual reset (the version no longer matches) |
-| Only the team's own VM A | The agent's validator and handler both refuse any other VM, whatever the database says |
-| Least privilege | The dashboard cannot create host jobs or touch `devbox_runs`. Only the orchestrator asks the agent for anything |
-| The team does not see internals | A failed job's error stays in `devbox_runs.error`, for staff |
-
-**Run live on 2026-11-05,** on one team's devbox, through the deployed view with a real worm. The upload to the worm's start took 8 minutes 36 seconds: 8 minutes 11 seconds for the rebuild, 3 seconds for the deploy, 10 for the fuse. The worm ran on VM A as `debian` in `/home/debian/worm`, its flag scored, its log arrived, it reached the LLM endpoint and not `1.1.1.1`, the Progression showed it, and no other team's version changed. While a rebuild runs, the agent does nothing else, so uploads from several teams queue up behind each other.
-
-**The time limit** bounds `main.sh` only. It is a systemd limit on VM A, not a teardown: anything the worm started on B or C keeps running until the next reset. Set with `devbox_run_duration` in `ROUND_CONDUCTOR`, default one hour, the same as a round's default.
-
-## Attribution without interfering with the round
-
-The scoring and logging servers used to assume only one team runs at a time
-(the round), attributed via `/etc/sandbox-api/current-team`. The devbox breaks
-that assumption: any team's devbox can submit at any time, including during a
-round. The two must not be confused.
-
-Solution — **attribution by source address**:
-
-- each team's **devbox-gw SNATs** its VMs to **one** services-bridge address
-  from the block `10.2.0.32/27` (`Devbox.services_source_ip`, fixed by the
-  team's stable index);
-- the scoring/logging servers read a map `/etc/sandbox-api/devbox-teams`
-  (`<source-ip> <team-uuid>`, written when devboxes are provisioned). A request
-  whose source (passed by nginx as `X-Client-IP`) is in the map is a **devbox**
-  submission **for that team**; anything else falls through to the single
-  running round (the current-team file). The `devbox` column on the attempt
-  records which it was;
-- the attempt processor turns devbox attempts into `DevboxCapture`s of the
-  team's **own** VMs at the **current** version (and `DevboxLog`s), never into
-  round captures.
-
-Why this can't be forged or crossed:
-
-- a devbox-gw's services NIC is **ipfilter-pinned** to its one address, so a
-  team cannot source-spoof another team's identity;
-- the gateways and sandbox-gw sit in the same services subnet, so the host
-  nftables **drops gateway↔gateway** traffic on the services bridge — a devbox
-  can reach the service VMs, never another gateway;
-- devbox and round submissions use **separate rate-limit buckets**, so one
-  cannot starve the other.
-
-### `<team>.scoring.worms.internal`
-
-The DNS server has wildcard records (`group_vars/dns.yml`), so
-`<team>.scoring.worms.internal` resolves to the scoring server with no per-team
-records. The scoring/logging certificates carry a wildcard
-SAN (`*.scoring.worms.internal`, `*.logging.worms.internal`), so a devbox
-reaches its per-team name over **verified** HTTPS. The hostname is per-team for
-clarity and TLS; the enforced attribution is the ipfilter-pinned SNAT source
-above (a name alone is not a network control).
-
-## SSH access: a locked-down gateway
-
-Teams never reach a devbox VM directly. A single **trusted, hardened** SSH
-gateway (OpenTofu, published by host DNAT on port `2222`) is the only way in:
-
-```
-ssh -A -J team@<proxmox-wan>:2222 root@<team's A VM>
-```
-
-The gateway is deliberately minimal (`ssh-gateway.tftpl`): agent, X11, stream
-and TCP listen forwarding are all off; root login and passwords are off. The
-real confinement is **per key**: the `ssh_gateway` Ansible role writes the
-team account's `authorized_keys` with, for every registered key,
-
-```
-restrict,port-forwarding,command="/usr/sbin/nologin",permitopen="<the team's ENTRY VM (A)>:22" <key>
-```
-
-`restrict` disables most features; `port-forwarding` re-enables only TCP
-forwarding, and `permitopen` limits it to **that team's entry VM (A)** on the
-devbox SSH fabric — a single host. `restrict` does not stop commands, so
-`command=` and the account's `nologin` shell do: no commands, shell, `scp` or
-`sftp` on the gateway. A jump opens no session, so it still works. So a key can
-`ProxyJump` into its own team's **A** and nothing else; the worm reaches **B** and
-**C** by pivoting inside the devbox network, exactly as it would in the sandbox.
-The SSH tty is the only thing that flows.
-
-### From A to B and C
-
-A team member logs in to A, then goes on from there. A and C share no network, so
-the way to C is through B. The dashboard's **Connect** panel prints each command
-with the team's real addresses, and its **VMs** panel draws the gateway and the VMs,
-joined interface to interface, and marks each captured VM:
+So a key can only forward TCP to its own team's A on port 22: no shell, command, `scp` or `sftp`
+on the gateway (the account's shell is `nologin` too). From A, members go on to B and C with the
+forwarded agent; the VMs hold the team's public keys and no private key. The dashboard's
+**Connect** panel prints each hop with the team's real addresses and tells users to check
+`ssh-add -L`.
 
 ```sh
-ssh-add -L                                 # on the laptop: must include a registered key
-ssh -A -J team@<proxmox-wan>:2222 root@<A> # on the laptop
-ssh -A root@<B on the A-B link>            # on A
-ssh root@<C on the B-C link>               # on B
+ssh -A -J team@<public name>:2222 root@<A>   # on the laptop
+ssh -A root@<B on the A-B link>              # on A
+ssh root@<C on the B-C link>                 # on B
 ```
 
-The VMs hold the team's public keys but no private key, so these hops use the
-forwarded agent (`-A`). The gateway's `restrict` does not get in the way: agent
-forwarding runs inside the session with A, and the gateway only carries its TCP
-connection. While someone is connected, root on these VMs can use their agent,
-which is why the panel says to use a key only for this devbox.
+The gateway's own protection: `authorized_keys`, `.ssh` and the home are root-owned; its firewall
+accepts SSH only from the node's address on vmbr7, where the host DNAT puts every team.
 
-`ssh-add -L` matters because SSH can log in to A by reading a key file directly,
-even with an empty agent. The hop to B then fails with `Permission denied
-(publickey)`, because the agent is all it has.
+**Keys** are managed on the dashboard profile. Adding or removing one enqueues a
+`devbox_reconfigure` job that re-pushes every team's keys to the gateway and the VMs; leaving a
+team removes the member's keys. A key is validated on the dashboard and again by the agent (one
+OpenSSH line, a known type, base64, a comment from a safe character set), written to Ansible's
+variables tagged `!unsafe`, and may belong to only one team (sshd uses the first matching line, so
+a shared key would hand one team another's confinement). Security findings D6 and D7.
 
-Every devbox job (`devbox_provision`, `devbox_rebuild`, `devbox_reconfigure`)
-reports the addresses, from `scripts/generate_devbox.py`, and the orchestrator
-stores those of the newest job in `devbox_vms.addresses`. The page leaves out the
-maintenance addresses, and the SSH fabric addresses of B and C, which a team
-cannot use. VMs built before jobs reported addresses get them at the next key
-change.
+## Reset: a new version, VMs rolled back
 
-The gateway protects itself in depth (docs/security-assessment.md):
+Each team has a `devbox_version`. A reset (dashboard profile, or a dev upload):
 
-- the team account's home, `.ssh` and `authorized_keys` are **root-owned**, so a
-  team cannot rewrite its own `permitopen`/`restrict` line;
-- the gateway reaches the VMs over **vmbr7**, which is **port-isolated**
-  (hookscript — available but `root@pam`-gated), so devbox VMs reach the gateway
-  and the host but never each other across teams. The gateway's own port stays
-  non-isolated (it must reach every team's A);
-- teams arrive through the host DNAT, which SNATs them to the host's fabric
-  address; the gateway's firewall accepts SSH **only from that address**, so a
-  devbox VM sharing vmbr7 cannot open a connection to the gateway (its own
-  output-DROP policy already forbids it — this is the second layer). The gateway
-  is not on any bridge a sandbox VM can reach.
+1. goes through the orchestrator (the dashboard's role may not change the version), which
+   increments `devbox_version` and enqueues a `devbox_rebuild` job carrying every team's keys;
+2. the agent rolls the team's three VMs back to their snapshot `clean`, then installs the keys
+   and new tokens. The snapshot is taken when `devbox_provision` creates a VM, after its first
+   boot and before any team key is on it. A VM without one is replaced and snapshotted instead.
 
-Teams manage their keys on the dashboard profile page (`DevboxSSHKey`); the keys are
-installed both on the gateway (for the jump) and on the devbox VMs (for the
-final auth). Adding or removing a key enqueues a **`devbox_reconfigure`** host
-job (through the orchestrator, like reset) that re-pushes every team's keys to
-the VMs and the gateway without rebuilding anything; a reset and a full
-provision do the same as part of their work. Leaving a team removes that
-member's keys and reconfigures, so access is revoked.
+Captures and logs are tagged with the version in force; the dashboard shows only the current
+one, so the score restarts at zero and nothing is deleted. **The rollback has not run on a real
+devbox yet**; replacing the VMs took about 8 minutes.
 
-A registered key is **validated** on the dashboard and again in the agent: a
-single OpenSSH line, known type, base64 blob, and a comment restricted to a
-safe charset. The comment restriction is a security boundary, not cosmetic: the
-agent renders each key through Jinja into the devbox/gateway `authorized_keys`
-on the Proxmox host as root, so a `{{ … }}` in a comment would otherwise be
-evaluated (template injection). As defence in depth the agent also writes the
-keys to the Ansible var file tagged `!unsafe`, so key text is never templated.
-A given key may belong to **only one team** (the agent fails a job closed if a
-blob appears under two teams): sshd matches a key to the first
-`authorized_keys` line, so a shared key would let one team inherit another's
-confinement. See docs/security-assessment.md (D6, D7).
+## Uploads: a worm on the devbox
 
-## Isolation: devbox ⇔ sandbox can never communicate
+An upload in the dev view runs on the team's devbox the way a round runs on a sandbox, and never
+enters a round.
 
-Enforced in depth, by construction:
+```
+dashboard      stores the upload (Upload.devbox = true). That is all it can do
+orchestrator   rounds/devbox_runs.py
+  PENDING      waits while a round runs, or for a reset in progress
+  RESETTING    devbox_rebuild: new version, VMs back to their snapshot, new tokens
+  DEPLOYING    devbox_deploy: the zip to VM A, hash checked, unpacked, fuse lit
+  RUNNING      bash main.sh as debian after 10 s
+  FINISHED     after devbox_run_duration (1 h): systemd stops main.sh; the VMs stay as they are
+```
 
-| Layer | Why they cannot meet |
+Only the latest upload runs (a newer one or a manual reset replaces it); only on the team's own
+A (the agent refuses anything else); a failed job's error stays with staff. The time limit
+bounds `main.sh` only: what it started on B or C runs until the next reset. Live on 2026-11-05:
+8 min 36 s from upload to start, flag scored, log received. While a reset runs the agent does
+nothing else, so uploads from several teams queue behind each other.
+
+## Attribution without touching a round
+
+Any team's devbox can submit at any time, including during a round. Scoring and logging tell
+them apart by source address:
+
+- each devbox-gw SNATs its VMs to **one** services address from `10.2.0.32/27`
+  (`Devbox.services_source_ip`, from the team's stable index), and that NIC is ipfilter-pinned;
+- scoring and logging read `/etc/sandbox-api/devbox-teams` (`<source ip> <team uuid>`), written
+  by every devbox job and restored by the agent after a rollback of the services. A source in the
+  map is a devbox submission for that team; only the sandbox-gw's source maps to the running
+  round; any other source is refused (fail closed);
+- devbox and round submissions have separate rate-limit buckets.
+
+`<team>.scoring.worms.internal` resolves to scoring through a wildcard record and is covered by the
+certificate, for verified HTTPS. The name is for clarity; the source address is what counts.
+
+## Isolation from the sandbox and other teams
+
+| Layer | What separates them |
 |---|---|
-| Networks | devbox `10.128.0.0/19` and sandbox `10.64.0.0/10` are disjoint; VMs on different, dedicated bridges (`vmbr9*` vs `vmbr1*`). |
-| Host routing | the host has no address on either family and never routes `vmbr9*`↔`vmbr1*`; the FORWARD policy is drop and only *same-bridge* traffic is accepted. |
-| Services bridge (shared) | both environments reach scoring/logging/PI here, but the host drops **gateway↔gateway**, and each gateway's Proxmox firewall accepts no inbound service connections — so neither can reach the other's SNAT address. |
-| Per-VM firewall | the `devbox`/`sandbox` security groups scope traffic to their own network; a devbox VM cannot even address a sandbox VM. |
-| Reset budgets | separate nft rate sets and rate buckets. |
+| Networks | Devbox `10.128.0.0/10` and sandbox `10.64.0.0/10` are disjoint, on different bridges (`vmbr9*`, `vmbr1*`) |
+| Node | No address on either; never routes `vmbr9*`↔`vmbr1*`; drops gateway↔gateway on the services bridge |
+| Per-VM firewall | `devbox`/`devbox_gw` groups: own team's networks, the gateway, the service hosts on their ports, `teachllm:443` |
+| Gateways | Accept no inbound service connections, so no one reaches another's SNAT address |
+| Rate limits | Separate nftables sets and scoring/logging buckets |
 
-What a devbox **can** reach: its own team's devbox VMs (the experiment),
-scoring and logging (team-attributed), the private internet, and DNS — all via
-its devbox-gw. What it **cannot** reach: the Proxmox host, the database, the
-dashboard, the orchestrator, the monitor, syslog, the sandbox, and other teams'
-devboxes.
+**What every team shares:** vmbr6 (maintenance, SSH from the node only) and vmbr7 (the SSH
+fabric). Their port isolation is **not active**, so all teams' VMs share layer 2 there, and only
+the per-VM firewall keeps them apart; ICMP errors pass even that (S19). One conntrack table on the
+node serves all of them (S18). Both are open findings in `docs/security-assessment.md`.
 
-## Resources, limits, maintenance
+## Data model and privileges
 
-Devbox VMs live on the same untrusted storage as the sandbox
-(`local-zfs-sandbox`) with the same CPU weight, NIC rate limits and disk
-IOPS/bandwidth caps, and the same per-VM host-side rate limits (new TCP
-connections, UDP packet rates). They are reachable for maintenance (Ansible)
-only from the host on the **untrusted devbox maintenance bridge** `vmbr6`
-(port-isolated, host SSH only), exactly like the sandbox management bridge.
+`core/models/devbox.py`: `Devbox` (index 0–31, `services_source_ip`, gateway), `DevboxVM` (role,
+addresses, the token's hash), `DevboxSSHKey`, `DevboxCapture`/`DevboxLog` tagged with the version,
+`Team.devbox_version`, and a `devbox` flag on the attempts. The dashboard role may only
+insert/delete `devbox_ssh_keys`; the orchestrator writes the rest; scoring and logging only add
+the `devbox` column to their one INSERT.
 
-## Data model (`core/models/devbox.py`)
+## Build
 
-- `Devbox` (one per team): `index` (stable 0..31), `services_source_ip`, the
-  SSH-gateway address/port, the gateway VMID.
-- `DevboxVM` (A/B/C): identifier, role, maintenance IP, VMID, addresses,
-  `ctf_flag_hash` (the token; plaintext only ever on the VM).
-- `DevboxSSHKey`: a team's registered public key.
-- `DevboxCapture` / `DevboxLog`: tagged with `devbox_version`; unique per
-  (team, VM, version) / per attempt.
-- `Team.devbox_version`; `devbox` flag on `flag_capture_attempts` /
-  `logging_attempts`.
-
-Least privilege: the public dashboard role may only INSERT/DELETE
-`devbox_ssh_keys`; the orchestrator role writes the devbox tables and bumps the
-version; the scoring/logging roles only add the `devbox` column to their one
-INSERT. (`tests/test_devbox.py`.)
-
-## OpenTofu and provisioning
-
-- `opentofu/stacks/devbox` (+ `opentofu/modules/devbox_vm`): the per-team
-  bridges, VMs and gateway, and the shared SSH gateway. `generated_devboxes.tf`
-  is written by `scripts/generate_devbox.py` (one block per team, deterministic
-  addressing from the index). Validated with `tofu validate`.
-- Provisioning is a console step after teams are created (on the dashboard,
-  which builds no infrastructure): `worms devbox provision` (`manage.py
-  provision_devboxes`) ensures a `Devbox` per team and enqueues a
-  `devbox_provision` host job (one queued job per team list); the round agent (`scripts/round_agent`,
-  handlers `devbox_provision` / `devbox_rebuild` / `devbox_reconfigure`) generates + applies the stack,
-  configures the VMs and the gateway (CA, team keys), writes the tokens and
-  publishes the source→team map. `worms build devbox-apply` / `worms build devbox-configure`
-  are the underlying targets.
-
-## Operating it
-
-```
-worms build devbox                 # devbox-apply + devbox-configure
-worms devbox provision             # teams created on the dashboard get their devbox
-worms devbox reconfigure           # every team's keys and the source->team map again; a reset of the services enqueues it
-# a team resets from its profile in the dev view (Reset devbox), or:
-#   POST https://orchestrator/devbox/<team-uuid>/reset/   (dashboard token)
-```
-
-A team connects with `ssh -A -J team@<gateway>:2222 root@<their A VM>` using a
-key they registered on the dashboard, then goes on to B and C ("From A to B and C", above).
-
-## Status / not done here
-
-Built and covered offline (`worms test`): the data model, scoring/logging
-attribution and the processor (`tests/test_devbox.py`,
-`tests/test_sandbox_api.py`), the generator (`tests/test_generate_devbox.py`),
-the agent parameter validation (`tests/test_round_agent.py`), the CLI
-provisioning trigger (`tests/test_manage_cli.py`), and the host nftables render.
-The OpenTofu (firewall + devbox stack + module) passes `tofu validate` with
-bpg/proxmox 0.118.0.
-
-**Run live on 2026-11-04** (`docs/e2e-run-2026-11-03/protocol.md`): VM creation,
-keys, the gateway's confinement, scoring and logging, apt and pip through the
-private internet, containment and a reset all work. Port 2222 is published
-(`host_publish_ssh_gateway`), but no test has connected through it from outside,
-because the node cannot reach its own port forward. Still not run live: the
-sandbox and round orchestration (`docs/testing.md`). The remaining security items
-are tracked in `docs/security-assessment.md`.
+`opentofu/stacks/devbox` with `modules/devbox_vm`; `generated_devboxes.tf` is written by
+`scripts/generate_devbox.py` (deterministic addressing from the team index). `worms devbox
+provision` enqueues a `devbox_provision` job; the agent generates and applies the stack,
+snapshots new VMs after their first boot, configures VMs and gateway, writes tokens and the map.
+Devbox traffic is not mirrored to the monitor, so a devbox progression has no network data.

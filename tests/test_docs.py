@@ -2,8 +2,8 @@
 
 The CLI replaced most of the Makefile, and the docs went on naming targets that
 were gone and arguments that were refused, because nothing checked. Dated run logs
-(docs/e2e-run-*, docs/progress-setup-infrastructure.md) are records of what was
-typed at the time, and stay as they are.
+and research notes (docs/archive/) are records of what was typed at the time, and
+stay as they are.
 """
 
 from __future__ import annotations
@@ -23,10 +23,9 @@ sys.path.insert(0, str(REPO / "src"))
 
 from worms_cli import pipeline  # noqa: E402
 
-LOGS = {"progress-setup-infrastructure.md"}
 DOCS = [
     REPO / "README.md",
-    *(path for path in sorted((REPO / "docs").glob("*.md")) if path.name not in LOGS),
+    *sorted((REPO / "docs").glob("*.md")),
     *sorted((REPO / "helpers").rglob("*.md")),
 ]
 SHELL_OPERATORS = {"<", ">", "|", "&&", ";", "2>&1"}

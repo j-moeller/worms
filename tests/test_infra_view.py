@@ -2,7 +2,7 @@
 
 A pure module, fed a snapshot shaped like the orchestrator's read-only Proxmox
 collection (tests/infra_fixture.py). Checks what the view promises
-(docs/visualization.md): VMs as first-class nodes with their status, roles that
+(docs/progression.md): VMs as first-class nodes with their status, roles that
 fix the layout, no management network ever drawn as a connection, the
 database's ingress derived from its firewall, the untrusted groups' reach
 (scoring, logging, private internet) derived from the services' firewalls, the

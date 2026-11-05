@@ -6,7 +6,7 @@ apt_cache_log_dir: /var/log/apt-cacher-ng
 # VMs cannot install anything else, so a team's `apt install` of a package not
 # listed here, and not fetched by another VM, fails. nftables: the gateways' rules.
 # jq: not on a devbox by default, so `apt install jq` shows the path works and a
-# reset removes it (tests/live). What else belongs here: docs/check-with-user.md, 3c.
+# reset removes it (tests/live). What else belongs here: docs/status.md, decisions.
 apt_cache_seed_packages:
   - ca-certificates
   - curl

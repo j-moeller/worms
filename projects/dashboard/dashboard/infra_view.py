@@ -15,7 +15,7 @@ Proxmox snapshot (orchestrator/proxmox_inventory.py, stored in
       "index":    {...},  # address -> node, role -> nodes (for the round timeline)
     }
 
-What is drawn (docs/visualization.md):
+What is drawn (docs/progression.md):
 
 * nodes carry their role (which fixes their place in the layout), their
   Proxmox status (`running` = active) and, for the hover card, every NIC with

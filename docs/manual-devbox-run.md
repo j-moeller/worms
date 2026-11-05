@@ -2,9 +2,9 @@
 
 Every step of the devbox journey by hand, with the exact command or form input and what you should see. The automated version of the same journey is `tests/live` (`docs/testing.md`).
 
-**Nothing here was executed while writing this document.** The commands come from the code and from the scripted runs on 2026-11-03 and 2026-11-04. Each step ends with **Last seen**, naming the run and stage of `docs/e2e-run-*/protocol.md` that saw that result. **Not tried yet** means the expectation comes from reading the code alone.
+**Nothing here was executed while writing this document.** The commands come from the code and from the scripted runs on 2026-11-03 and 2026-11-04. Each step ends with **Last seen**, naming the run and stage of `docs/archive/e2e-run-*/protocol.md` that saw that result. **Not tried yet** means the expectation comes from reading the code alone.
 
-It takes about an hour, most of it waiting: teardown 5 minutes, build 17, key push 3, reset 20.
+It takes about an hour, most of it waiting: teardown 5 minutes, build 17, key push 3, reset a few minutes as a rollback (20 as a replacement).
 
 ## Read this first
 
@@ -58,7 +58,7 @@ PY
 
 ### Names and addresses
 
-The dashboard is `https://worms-dev.mlsec.tu-berlin.de/` here, and `https://worms.mlsec.tu-berlin.de/` in production. Browsers warn about its certificate because it comes from the internal CA (`docs/check-with-user.md`, 4).
+The dashboard is `https://worms-dev.mlsec.tu-berlin.de/` here, and `https://worms.mlsec.tu-berlin.de/` in production. Browsers warn about its certificate because it comes from the internal CA (`docs/status.md`, decisions).
 
 | Team | Index on Staff → Teams | A, through the gateway | B, from A | C, from B | Address seen by services |
 |---|---|---|---|---|---|
@@ -423,7 +423,7 @@ pip3 install six; echo "pip exit $?"
 
 **Expect:**
 - `http=200` from devpi, the registry, man pages and cve-search.
-- No answer from Wikipedia, which holds no content yet (`docs/pi-failures.md`).
+- No answer from Wikipedia, which holds no content yet (`docs/status.md`).
 - `ntp stratum 10`.
 - `apt exit 100`, and `pip exit 1` with `No matching distribution found`.
 
@@ -505,7 +505,7 @@ sql "SELECT devbox, processed, count(*) FROM logging_attempts GROUP BY 1, 2"
 # The build and the key pushes.
 sql "SELECT left(uuid::text, 8) AS job, kind, state, started_at, finished_at FROM host_jobs ORDER BY requested_at"
 
-# Network traffic on devbox addresses. Expect 0, by design (docs/requirements.md, Monitor).
+# Network traffic on devbox addresses. Expect 0, by design (docs/monitoring.md).
 sql "SELECT count(*) FROM network_flows WHERE src_ip::inet <<= ANY (ARRAY['10.128.0.0/19','10.7.0.0/16','10.6.0.0/16','10.2.0.32/27']::inet[]) OR dst_ip::inet <<= ANY (ARRAY['10.128.0.0/19','10.7.0.0/16','10.6.0.0/16','10.2.0.32/27']::inet[])"
 
 # Zeek is alive, so that 0 means something. Expect a time under 15 minutes old.
@@ -595,7 +595,7 @@ tail -n 8 /var/log/apt/history.log
 - `version 2` and `0/3` on the panel **Team**.
 - On `/progression/`, no events yet.
 
-**Who:** root on the node. Wait for the rebuild, about 20 minutes:
+**Who:** root on the node. Wait for the reset. VMs built by step 7 have a snapshot, so the agent rolls them back to it: a few minutes (estimate, not yet measured). A VM without one is replaced instead, which took 19.5 minutes on 2026-11-04:
 
 ```sh
 tail -F /var/log/worms/jobs/latest.log   # the job's full output; Ctrl-C to leave
@@ -603,9 +603,9 @@ sql "SELECT left(uuid::text, 8) AS job, kind, state, started_at, finished_at, le
 qm list | grep devbox-t1
 ```
 
-**Finished when:** the job is `done`. SSH to the team's VMs fails until then. Only `alpha`'s three VMs are replaced, and they keep their VM IDs.
+**Finished when:** the job is `done`; its result says `rolled back to its snapshot` or `replaced and snapshotted`. SSH to the team's VMs fails until then. Only `alpha`'s three VMs are reset, and they keep their VM IDs. `qm listsnapshot <vmid>` shows the snapshot `clean`.
 
-**Last seen:** 2026-11-04, Stage 7: done in 19.5 minutes, on the first try.
+**Last seen:** 2026-11-04, Stage 7, as a replacement: done in 19.5 minutes, on the first try. **A rollback has not run on a real devbox yet.**
 
 ## Step 14: confirm that the devbox was reset
 
@@ -614,11 +614,10 @@ qm list | grep devbox-t1
 **Who:** root on the node, in the same shell as step 10, so the agent still holds the key.
 
 ```sh
-ssh-keygen -R 10.7.0.11
 ssh -F ~/.ssh/worms-anna.cfg -A -J team@10.7.0.2 root@10.7.0.11
 ```
 
-Answer `yes` to the host key question. Without `ssh-keygen -R`, SSH stops with `REMOTE HOST IDENTIFICATION HAS CHANGED`: A really is a new VM, with a new key. The gateway has not changed, so it asks nothing.
+A rolled-back VM keeps the host key it made at its first boot, before the snapshot, so SSH asks nothing. If the job replaced the VM instead, SSH stops with `REMOTE HOST IDENTIFICATION HAS CHANGED`: run `ssh-keygen -R 10.7.0.11` and answer `yes`.
 
 **Expect:** a root shell, with no need to add the key again.
 
@@ -638,7 +637,7 @@ python3 -c 'import tabulate' 2>/dev/null && echo present || echo absent
 |---|---|
 | `hostname` | The same |
 | `uptime -s` | Later |
-| Hash of the host key | Different |
+| Hash of the host key | The same after a rollback; different if the VM was replaced |
 | Hash of the token | Different |
 | `/root/manual-run.txt` | `No such file or directory` |
 | `jq` | `absent` |
@@ -716,7 +715,7 @@ To run it all again, start at step 0. Until you do, the VMs, the test accounts a
 | A job failed, and its `error` does not say why | Ansible reports failed tasks on stdout | Read the job's log: the `error` names the file, and `/var/log/worms/jobs/latest.log` is the most recent |
 | `Permission denied (publickey)` | The key has not arrived, or SSH offered another key | Check the `devbox_reconfigure` job, and that you used `-F ~/.ssh/worms-anna.cfg` |
 | `stdio forwarding failed` | The gateway allows only your team's A | Check the address against the table above |
-| `REMOTE HOST IDENTIFICATION HAS CHANGED` | The VM was rebuilt | `ssh-keygen -R <address>` |
+| `REMOTE HOST IDENTIFICATION HAS CHANGED` | The VM was replaced, not rolled back | `ssh-keygen -R <address>` |
 | Dashboard answers `400` | It was opened by IP address | Use the name: only the public name is accepted |
 | The login page refuses every attempt | Rate limit, 10 sign-ins a minute per address | Wait a minute |
 | Score or logs do not change | The background processor has not reached them yet | Wait up to 5 minutes, then check `processed` in 12b |

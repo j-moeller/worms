@@ -1,46 +1,41 @@
-# Writing a worm: the contract
+# For teams: writing a worm
 
-What a team uploads and how it runs. The platform side is `docs/rounds.md`;
-this is the part a team needs.
+What a team uploads, how it runs, and what its VMs can reach. The platform side is
+`docs/rounds.md` and `docs/devbox.md`.
 
 ## The upload
 
-A **`.zip`** with **`main.sh` at its top level** (not inside a folder), at most
-100 MiB. Where it goes depends on the view you upload it in, and the two are
-completely separate:
+A **`.zip`** with **`main.sh` at its top level** (not in a folder), at most 100 MiB, on the
+dashboard's **Upload** page. The view you upload in decides where it runs, and the two are
+separate:
 
-- **Live view:** your team's **latest upload before a round starts** is the one
-  that runs in that round.
-- **Dev view:** it **resets your devbox** at once, which rebuilds all three VMs and
-  starts your captures over, and then runs on VM A. It never enters a round
-  ([Developing against a devbox](#developing-against-a-devbox)).
+- **Live view:** your team's latest upload before a round starts is the one that runs in that
+  round.
+- **Dev view:** it **resets your devbox** at once (all three VMs back to a clean state, everything
+  on them lost, your dev score back to zero) and then runs on VM A. It never enters a round.
 
-The round agent copies the zip to a freshly built VM, unpacks it into
-`/home/debian/worm/`, and, after a short fuse, runs:
+The zip is unpacked into `/home/debian/worm/` and, after a short fuse, started:
 
 ```
-bash main.sh        # working directory /home/debian/worm, user debian (with sudo)
+bash main.sh        # working directory /home/debian/worm, user debian (passwordless sudo)
 ```
 
-So:
+- Everything else in the zip sits next to `main.sh`, which starts it (`python3 worm.py`, a binary).
+- **File modes are not kept**: run other files through their interpreter, or `chmod +x` them first.
+- The image has `bash`, `curl` and `python3` with its standard library. Vendor anything else
+  into the zip; what the package caches hold is limited (below).
+- You are `debian` and can become root. The VM is yours; the containment is the network, not
+  in-guest privilege.
+- In a round, the run ends after its configured length (the dashboard shows the countdown). On the
+  devbox, `main.sh` is stopped after an hour; what it started on B or C keeps running until the
+  next reset.
 
-- the entry point is **`main.sh`**; everything else in the zip sits next to it,
-  and `main.sh` starts whatever it needs from there (`python3 worm.py`, a binary);
-- `main.sh` needs no execute bit, because `bash` reads it. **The zip's file modes
-  are not kept**, so run anything else through its interpreter or `chmod +x` it first;
-- the Debian image has `bash`, `curl` and `python3` (the standard library). No pip
-  packages are installed for you: vendor anything else into the zip;
-- you run as **`debian`**, which has passwordless `sudo`, so you can become
-  root on your VM. The VM is yours to do with as you like; the containment is
-  the network and the firewall, not in-guest privilege (`docs/security-assessment.md`);
-- there is no time limit on `main.sh` itself; the **round** ends after its
-  configured length (staff set it; the dashboard shows the countdown).
+`worm.sh` in the repository is a working skeleton: it submits its own VM's flag, logs one line
+and exits. Rename it to `main.sh`, zip it, upload it.
 
 ## Capturing a VM
 
-Every sandbox VM holds a **flag** at **`/etc/worms/flag`** (readable by
-anyone on the VM). You capture a VM by **submitting its flag** to the scoring
-server:
+Every VM holds a **flag** at `/etc/worms/flag`, readable by anyone on it. Submit it to scoring:
 
 ```sh
 curl -X POST https://scoring.worms.internal/submit \
@@ -48,33 +43,23 @@ curl -X POST https://scoring.worms.internal/submit \
   -d "{\"vm_flag\":\"$(cat /etc/worms/flag)\"}"
 ```
 
-- **No token or team id.** Only one team runs at a time; the scoring server
-  knows which team that is from where the request comes. Just send the flag.
-- **TLS is verified** — the sandbox trusts the internal CA, so a normal HTTPS
-  request to `scoring.worms.internal` works (no `--insecure`). The name
-  resolves over the sandbox's own DNS.
-- A flag counts once per VM. Your **score in a round is the number of VMs you
-  captured**; teams are ranked per round by that (`docs/rounds.md`).
+- No token or team id: scoring knows your team from where the request comes. TLS is verified
+  against the internal CA, which your VMs trust.
+- A flag counts once per VM. **In a round, your score is the number of VMs you captured.** On the
+  devbox it is the number of your three tokens submitted since the last reset.
+- In a round, your start VM's flag exists from the start. Others appear over the round, some only
+  after a VM is switched off, so only a worm that has spread can get them (`docs/rounds.md`, game
+  plan).
 
-Your own VM's flag is there from the start — submitting it captures your start
-VM. The other VMs' flags appear over the round (some only after a VM is
-switched off), and you reach those VMs by moving through the sandbox network
-from where you are, exactly as the worm theme intends. A flag you submit that
-is not yet released, or belongs to a VM you cannot yet see, simply does not
-count; keep going.
+> **How a worm gets from one VM to the next is not settled yet.** Sandbox VMs run only SSH with
+> the operator's key, so today a worm in a round can capture only its start VM; seeded
+> vulnerabilities are planned. On your devbox, B and C accept your team's registered SSH keys as
+> root, so a worm that carries a private key you registered can log in to them.
 
-> **Reaching other VMs is up to your worm.** The VMs run only SSH (the
-> operator's key), so there is no door the platform opens for you; a round
-> with seeded services/vulnerabilities to pivot through is not built yet
-> (`TODO`, `docs/rounds.md`). Until then a worm reliably captures its own
-> start VM.
+## Logging
 
-## Logging (optional)
-
-To record anything for yourself during the round — what you found, where you
-got — POST it to the logging server; you read it back afterwards through the
-team API (`docs/team_api.md`) or replay it on the **PROGRESSION** page
-(`docs/progression.md`):
+To record anything for yourself, POST it to logging. You read it back on the **Progression** page
+or through the team API (`docs/team_api.md`):
 
 ```python
 req = urllib.request.Request(
@@ -85,67 +70,44 @@ req = urllib.request.Request(
 urllib.request.urlopen(req, timeout=10)
 ```
 
-`log_data` is any JSON object, at most 8 KiB, nesting depth 8, 256 items.
+## Limits
 
-## Limits (both servers)
+Both servers accept `POST /submit` only, a JSON object of at most 4 KiB, a flag of at most 64
+printable characters, and `log_data` of at most 8 KiB, depth 8, 256 items. About 30 requests a
+minute per team with small bursts; beyond that `429` and a short cooldown. A malformed body is
+`400`, an oversized one `413`.
 
-They serve the sandbox and assume every request is hostile, so keep it
-modest: `POST /submit` only, a JSON **object** body at most 4 KiB, a flag a
-printable string ≤ 64 characters. There is a per-team rate limit (about 30
-requests a minute, small bursts allowed); well past it you get `429` and a
-short cooldown. A malformed body is `400`, the wrong method `405`, an
-oversized body `413`.
+## What your VMs can reach
 
-## What you can and cannot reach
+| Reachable | |
+|---|---|
+| Your other VMs | In a round: the sandbox networks. On the devbox: A–B and B–C |
+| `scoring.worms.internal`, `logging.worms.internal` | Your team's own names also work: `<team>.scoring.worms.internal` |
+| DNS | Only `*.worms.internal` and the LLM endpoint's name resolve |
+| `apt-cache.worms.internal` | Debian packages: only those already cached. `apt install` of anything else fails |
+| `pypi.worms.internal` | Python packages: a small seed only |
+| `wikipedia.worms.internal`, `manpages.worms.internal`, `cve-search.worms.internal`, `docker-registry.worms.internal`, `ntp.worms.internal` | Read-only mirrors. Some are still empty or broken (`docs/status.md`) |
+| `https://teachllm.mlsec.tu-berlin.de/` | The LLM endpoint, TCP 443: the one server outside this system |
 
-From a sandbox VM: the **other sandbox VMs** (the experiment), **scoring**,
-**logging**, the **private internet** (a DNS server and read-only mirrors —
-e.g. `wikipedia.worms.internal`) and nothing else. Not the Proxmox host, the
-database, the dashboard, the orchestrator, the monitor, the real internet, or
-another team's environment. Everything you do on the sandbox network is
-recorded by a passive monitor and replayed on your PROGRESSION page.
+Nothing else: not the internet, the dashboard, the database, the Proxmox node, another team's VMs,
+or the sandbox from a devbox. Everything a round's VMs send is recorded by a passive monitor and
+shown on your Progression page; devbox traffic is not recorded.
 
-## Developing against a devbox
+Sandbox and devbox VMs have the CPU `x86-64-v3` (AVX2 and AES, no hardware virtualisation, so no
+`/dev/kvm`) and 512 MB of RAM by default.
 
-You do not have to wait for a round. Each team gets an always-on **devbox** (a
-private copy of the sandbox); it submits to the same scoring/logging servers,
-attributed to your team, without touching a running round.
+## Your devbox
 
-**Upload in the dashboard's Dev view** to try a worm the way a round runs it:
-
-1. All three VMs are rebuilt, so everything on them is lost, including anything
-   you left there over SSH, and your captures start over.
-2. Your zip is copied to **VM A** and unpacked, and `bash main.sh` starts after
-   10 seconds, as described above.
-3. It runs for up to an hour. Then `main.sh` is stopped, but anything it started on
-   B or C keeps running until the next reset. The VMs stay as they are, so you can
-   look around over SSH.
-
-Only your latest upload runs: a new one replaces the one before, and a Reset ends
-it. **It waits while a round is running**, because the platform can only do one such
-job at a time and a round's timing comes first. The Upload page shows where it is,
-and the Progression page shows what it did.
-
-You can also work on the VMs by hand over SSH. Setup, keys and how to connect:
-`docs/devbox.md` and the dashboard's Dev view.
-
-## The CPU of your VMs
-
-Sandbox and devbox VMs have the same CPU, `x86-64-v3`, which includes AVX2 and AES. It
-offers no hardware virtualisation, so there is no `/dev/kvm` and you cannot run VMs inside
-your VMs.
-
-## Reaching the LLM endpoint
-
-Your VMs can reach one server outside this system: `teachllm.mlsec.tu-berlin.de`,
-on TCP 443. Nothing else outside is reachable, and no other outside name resolves.
+Each team has three always-on VMs to develop against; they submit to the same scoring and logging,
+attributed to your team, without touching a round. Add an SSH key on your **profile**, then
+connect with the commands in the **Dev** view's **Connect** panel:
 
 ```sh
-curl https://teachllm.mlsec.tu-berlin.de/
+ssh-add -L                                  # your key must be in your SSH agent
+ssh -A -J team@<public name>:2222 root@<A>  # then on to B and C from there
 ```
 
-## A minimal worm
-
-`worm.sh` in the repository is a working skeleton: it reads its own VM's flag,
-submits it, logs one line, and exits. Rename it to `main.sh`, zip it, and
-upload it.
+**Reset devbox** on your profile, or a dev upload, returns all three VMs to a clean state. An
+upload waits while a round is running, because the platform runs one such job at a time and a
+round's timing comes first. The Upload page shows where it is; the Progression page shows what it
+did.

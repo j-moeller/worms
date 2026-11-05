@@ -168,7 +168,7 @@ class Platform:
         return bad
 
     def mirror_filters_on_devbox_ports(self) -> int:
-        """Devbox traffic is not mirrored to the monitor, by design (docs/requirements.md)."""
+        """Devbox traffic is not mirrored to the monitor, by design (docs/monitoring.md)."""
         filters = 0
         for port in Path("/sys/class/net").iterdir():
             if not re.match(r"(tap|fwpr)\d+", port.name) or not (port / "master").exists():
@@ -254,7 +254,7 @@ def _quote(text: str) -> str:
 
 
 class Report:
-    """The protocol of a run, in the same form as docs/e2e-run-*/protocol.md: written after
+    """The protocol of a run, in the same form as docs/archive/e2e-run-*/protocol.md: written after
     every row, so a run that dies still leaves everything so far."""
 
     def __init__(self, out: Path):

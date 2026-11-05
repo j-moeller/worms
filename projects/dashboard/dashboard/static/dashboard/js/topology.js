@@ -2,7 +2,7 @@
  * (a team), one script for both. It replays a round progression
  * (orchestrator/rounds/progression.py, docs/progression.md) like a video.
  *
- * Staff (data-audience="staff"; docs/visualization.md):
+ * Staff (data-audience="staff"; docs/progression.md):
  *   data-model        the live infrastructure model (dashboard/infra_view.py)
  *   data-runs         rounds of the current competition and their runs (the tabs)
  *   data-progression  one run's progression; the all-zero uuid in the URL is

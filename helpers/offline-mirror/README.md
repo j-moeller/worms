@@ -1,32 +1,23 @@
 # Offline mirror for the private internet
 
-The private internet can run fully offline, but the caches must be
-**pre-populated** while the internet is still reachable (the prep phase).
+**This workflow cannot run as written** (`docs/status.md`, private internet). It needs a helper
+client on the services bridge while the internet window is open, and none can exist: only the
+sandbox and devbox gateways and VMs may reach devpi and the registry, the window is refused while
+any of them runs, the private-internet VMs reach only the apt cache, and the node has no address
+on the services bridge. What `worms build` puts into the caches today is the apt seed
+(`apt_cache_seed_packages`) and a minimal devpi seed.
 
 ## Package lists
-- `apt-packages.txt` — everything apt-cacher-ng should hold (services, PoC build
-  deps, non-free POSIX man pages, a useful CLI/dev/net base). MongoDB packages are
-  listed but come from repo.mongodb.org (mirrored separately).
-- `docker-images.txt` — container images to mirror into the docker-registry, **derived from the PoC
-  Dockerfiles** (`grep -rhiE '^FROM ' pocs/**/Dockerfile`). Re-derive when PoCs change.
-- `pip-packages.txt` — everything devpi should hold (our apps + full cve-search
-  dependency closure + useful extras). feedformatter is a GitHub zip, handled apart.
 
-## Workflow
-1. **Population phase** — `worms build internet-allow`, then
-   `cd ansible && ansible-playbook -e @group_vars/vault.yml SetupPrivateInternet.yml`
-   (as root on the Proxmox node): the caches run in online mode and fetch upstream.
-   (A plain `make` populates them too, but denies internet access when it ends.)
-   On a helper client in the private internet, run:
-   ```
-   ./populate-caches.sh
-   ```
-   This pulls all apt packages (+deps, incl non-free) through apt-cacher-ng, all
-   pip packages through devpi, mirrors the MongoDB .debs directly, and fetches the
-   feedformatter zip.
-2. **Wire the offline sources** (see script output): point
-   `cve_search_feedformatter_src` at the local zip and `cve_search_mongodb_repo_url`
-   at the local MongoDB repo.
-3. **Go offline** — `worms build internet-deny`, then `worms build offline`:
-   Ansible flips the caches to offline mode (it follows the host state), so
-   they serve purely from their local stores.
+- `apt-packages.txt`: what apt-cacher-ng should hold (services, PoC build dependencies, non-free
+  man pages, a CLI/dev/net base). The MongoDB packages come from repo.mongodb.org.
+- `docker-images.txt`: images for the registry, derived from the PoC Dockerfiles.
+- `pip-packages.txt`: what devpi should hold (the apps, cve-search's dependencies, extras).
+
+## The intended workflow
+
+1. `worms build internet-allow`, then `SetupPrivateInternet.yml`, so the caches run online.
+2. On a helper client in the private internet: `./populate-caches.sh` (apt, pip, MongoDB `.deb`s,
+   the feedformatter zip).
+3. Point `cve_search_feedformatter_src` and `cve_search_mongodb_repo_url` at the local copies.
+4. `worms build internet-deny`, then `worms build offline`: the caches switch to offline mode.

@@ -1,206 +1,107 @@
-# Round progression: the format, the PROGRESSION page, the downloads
+# Progression: the replay format, the PROGRESSION and TOPOLOGY pages
 
-A team's **progression** through a round is everything that happened to it in
-that round, on one clock: the VMs its worm captured, the flags it submitted,
-the logs it sent and its network traffic. One format serves every use:
+A **progression** is everything that happened to a team in a round (or on its devbox) on one
+clock: the VMs its worm captured, the flags it submitted, its logs and its network traffic. One
+format serves every use:
 
-- the **PROGRESSION** page (navigation, signed-in teams) replays it like a
-  video — the team's view of the round player;
-- the staff **TOPOLOGY** page replays any run with the same player
-  (`docs/visualization.md`), from the same document with everything in it;
-- the **team API** serves it as JSON, piece by piece, and as one **zip**
-  (`docs/team_api.md`);
+- the team's **PROGRESSION** page replays it like a video;
+- the staff **TOPOLOGY** page replays any run with the same player, against the live
+  infrastructure;
+- the **team API** serves it as JSON and as a zip (`docs/team_api.md`);
 - the player opens a downloaded `.zip` or `.json` again, offline.
 
-The builder is `orchestrator/rounds/progression.py` (pure read model, writes
-nothing); the player is `dashboard/static/dashboard/js/topology.js`.
+Builder: `orchestrator/rounds/progression.py` (read-only), on `orchestrator/rounds/timeline.py`.
+Player: `dashboard/static/dashboard/js/topology.js`.
 
-## What a team sees — and never sees
+## What a team sees, and never sees
 
-A team's document (`audience: "team"`) is **built** from what the team may
-see, not filtered in the browser:
+A team's document (`audience: "team"`) is **built** from what it may see, not filtered in the
+browser:
 
 | Shown | Never shown |
 |---|---|
-| the sandbox VMs it **captured in the round** (Live), and the **entry VM** from the moment the worm starts — a VM is faint until its capture | any other sandbox VM it did not capture: not as a node, not as the far end of a connection, not in an event (an event or a flow involving one is dropped; a submitted flag's VM or an inferred sender that is not visible is blanked) |
-| every VM of its **own devbox** once it is set up (Dev), captured or not — faint until its token is submitted | other teams' devboxes, other teams' data |
-| scoring, logging, the private internet (DNS and the mirrors) — what the sandbox can reach | the database, orchestrator, dashboard, monitor, syslog, the Proxmox host, the gateways (traffic to them is dropped) |
-| its VMs' addresses and networks (by CIDR, under an opaque id: `net-1`, …) | bridge names (`vmbr…`), Proxmox VMIDs, maintenance and SSH-fabric addresses, pools |
-| run state changes (`{state}` only), worm start, secrets released and VM stops/starts **of its visible VMs**, its captures, submissions (result, hash prefix of what it submitted) and logs | firewall rules, security groups, NICs, run errors, the generator's architecture, internal ids (run uuid, attempt ids), secrets, tokens, passwords |
+| Live: the sandbox VMs it captured, and its entry VM from the worm's start | Any other sandbox VM: not as a node, a connection's far end or in an event |
+| Dev: every VM of its own devbox | Other teams' devboxes or data |
+| Scoring, logging, DNS and the private internet | Database, orchestrator, dashboard, monitor, syslog, the node, the gateways |
+| Its VMs' addresses and networks (by CIDR, under an opaque id) | Bridge names, VMIDs, maintenance and SSH-fabric addresses, pools |
+| State changes, worm start, secrets and stops of its visible VMs, its captures, submissions (result and hash prefix) and logs | Firewall rules, NICs, run errors, the generator's architecture, internal ids, secrets |
 
-Staff documents (`audience: "staff"`) carry the run's whole timeline; the
-staff page draws it against the live infrastructure model.
-
-## Live and Dev
-
-- **Live** (the competition): one run per round and team (`round_runs`).
-  The document is that run's timeline (`orchestrator/rounds/timeline.py`):
-  run events, submissions and logs within the run's window, the monitor's
-  connections. Its clock's zero is the worm's start.
-- **Dev** (the devbox): there are no runs and no rounds. The devbox is always on,
-  so there is one document, `round: null`: what the team's devbox submitted and
-  logged since its current version began (its last reset, or its creation), up to
-  now. It is never finished (`clock.finished: false`, `round_start` and `round_end`
-  null) and it grows until a reset starts it over. Its clock's zero is just before
-  the first activity. A devbox VM counts as captured when a submission in the window
-  carried its token (scored, or already scored at this devbox version). The monitor
-  records the sandbox only, so **it has no network data** (`network.available: false`).
-
-A round of the team's development competition (staff can still create them) is
-served by the API like any round, as the devbox within that round's window. The
-PROGRESSION page does not use them: in the Dev view it shows the document above,
-and in the Live view the competition's rounds.
+**Live:** one document per round and team, from that run's timeline; zero is the worm's start.
+**Dev:** the devbox has no rounds, so there is one document (`round: null`) from the last reset up
+to now, never finished, with no network data (devbox traffic is not recorded). Rounds of a
+development competition are still served by the API as a window on the devbox, but the page
+does not use them.
 
 ## The document (`worms-progression`, version 1)
 
 ```json
 {
-  "format": "worms-progression",
-  "version": 1,
-  "generated_at": "2026-10-24T12:00:00+00:00",
-  "audience": "team",
-  "environment": "live",
-  "round":    {"id": 3, "name": "R1", "competition": "main", "start": "…", "end": "…"},
-  "team":     {"uuid": "…", "name": "team-a"},
-  "clock":    {"t0": "2026-10-24T10:05:00+00:00", "round_start": -300.0, "round_end": 28500.0,
-               "now": 900.0, "finished": false, "t_min": -60.0, "t_max": 640.0},
-  "scene":    {"host": {}, "nodes": […], "groups": […], "networks": […], "edges": […]},
-  "timeline": {"run": {…} | null, "nodes": […], "networks": […], "edges": […],
-               "vm_status": {…}, "events": […], "captures": […], "truncated": {…}},
-  "logs":     {"count": 12, "truncated": false, "included": false, "path": null,
-               "url": "/api/v1/rounds/3/progression/logs/{ref}/"},
-  "network":  {"available": true, "reason": null, "count": 4210, "truncated": false,
-               "included": false, "path": null, "url": "/api/v1/rounds/3/progression/flows/"}
+  "format": "worms-progression", "version": 1, "audience": "team", "environment": "live",
+  "round": {"id": 3, "name": "R1", "competition": "main", "start": "…", "end": "…"},
+  "team":  {"uuid": "…", "name": "team-a"},
+  "clock": {"t0": "…", "round_start": -300.0, "round_end": 28500.0, "now": 900.0, "finished": false, "t_min": -60.0, "t_max": 640.0},
+  "scene": {"host": {}, "nodes": […], "groups": […], "networks": […], "edges": […]},
+  "timeline": {"run": {…}, "nodes": […], "networks": […], "edges": […], "vm_status": {…}, "events": […], "captures": […], "truncated": {…}},
+  "logs":    {"count": 12, "included": false, "url": "/api/v1/rounds/3/progression/logs/{ref}/"},
+  "network": {"available": true, "count": 4210, "included": false, "url": "/api/v1/rounds/3/progression/flows/"}
 }
 ```
 
-**clock** — every `t` in the document is seconds from `t0`.
-`round_start` / `round_end` are the round's bounds on that axis; `now` is set
-while the round is **not finished** (`finished: false`) — the round can be
-downloaded while it runs, and a running run plays up to now; `[t_min, t_max]`
-is the span to play.
+- Every `t` is seconds from `clock.t0`; `now` is set while the round is not finished.
+- `timeline.events`: `state`, `worm_deployed`, `worm_started`, `secret_released`, `vm_stopped`,
+  `vm_started`, `captured`, `flag_submitted` (result captured / duplicate / not_counted / invalid
+  / pending), `log_received` (a **reference** `{ref, size}` to the record).
+- Scoring and logging only see the gateway's address, so the VM shown as a submission's sender is
+  **inferred** from the monitor: the VM whose connection to that server was open at the time.
+- `flows` are optional: inline in a single JSON, in the zip's `network/flows.jsonl`, or fetched
+  from `network.url`.
 
-**scene** — what is drawn around the timeline, in the shape of the
-infrastructure model (`dashboard/infra_view.py`): for a team, scoring
-(`role:scoring`), logging (`role:logging`), the private internet
-(`pi:<name>`) and one group (`group:sandbox`, or `group:devbox:own` with its
-devbox VMs and their A–B / B–C links). `null` in a staff document
-served to the page (the page has the live model); a staff download embeds the
-model it was viewed against.
+**The zip** (`…/progression.zip?logs=0|1&network=0|1`): `progression.json`, `README.txt`,
+`logs/<ref>.json`, `network/flows.jsonl`.
 
-**timeline** — `orchestrator/rounds/timeline.py`'s shape:
-
-- `run` — the team's run (state, position, worm start, end, start VM,
-  duration), `null` without one (a Dev round, a run not planned yet);
-- `nodes` — the VMs shown (`group`: `sandbox` / `devbox`, addresses,
-  networks, start VM, `captured_at`), `networks`, `edges` (VM → network),
-  `vm_status` (power state over time);
-- `events` — each `{id, t, kind, node, vm, data}`: `state`,
-  `worm_deployed`, `worm_started`, `secret_released`, `vm_stopped`,
-  `vm_started`, `captured`, `flag_submitted` (on scoring: `result`
-  captured / duplicate / not_counted / invalid / pending, `flag_of`,
-  `hash_prefix`, the sender `source_vm` inferred from the monitor),
-  `log_received` (on logging: `stored`, the inferred sender, and the
-  **reference** `log: {ref, size}`);
-- `flows` — **optional** (see below): each connection `{t, d, src, dst,
-  src_role, dst_role, src_name, dst_name, kind, src_port, dst_port,
-  transport, service, conn_state, bytes, pkts, uid}`;
-- `truncated` — whether a limit cut flows, submissions or logs.
-
-### Log records: by reference
-
-A worm can log a lot, so the document carries only each log's time and a
-reference: `data.log = {"ref": "<uuid>", "size": <characters>}`. The record
-itself — `{"ref", "received_at", "data"}`, `data` being the JSON the worm
-sent — is
-
-- fetched on demand from `logs.url` (with `{ref}` replaced): the player does
-  this when a log event is opened;
-- or, in a zip, the member `logs.path` (`logs/{ref}.json`) when
-  `logs.included` is true — leave the records out for a lean zip.
-
-### Network traffic: optional
-
-`network.available` says whether traffic is recorded at all (not for Dev:
-`reason` says why). The connections are
-
-- inline in `timeline.flows` (a single JSON file), or
-- in the zip's `network.path` (`network/flows.jsonl`, one JSON object per
-  line) when `network.included` is true, or
-- fetched from `network.url` (`{count, truncated, available, reason, flows}`):
-  the player draws the picture at once and adds the dots when they arrive.
-
-`network.count` always gives their number.
-
-## The zip
-
-`GET …/progression.zip?logs=0|1&network=0|1` (both default to 1):
-
-```
-progression.json        the document (flows not inline; logs/network say what is included)
-README.txt              what is in the zip
-logs/<ref>.json         one log record per file            (logs=1)
-network/flows.jsonl     the connections, one per line      (network=1)
-```
-
-Name: `worms-<round>-<team>-<live|dev>.zip` (`worms-devbox-<team>-dev.zip` for the devbox). Open it on the PROGRESSION (or
-TOPOLOGY) page with **Open file…**: it is read in the browser (nothing is
-uploaded); the log records are read from the zip when opened.
+**Limits:** 20 000 connections, 5 000 submissions, 5 000 logs, a log record at most 4 KiB, so a
+document is a few MiB at most. The team API's rate limits and 3 s statement timeout apply.
 
 ## Endpoints
 
-| | Team API (bearer token) | PROGRESSION page (signed in) | Staff (TOPOLOGY) |
+| | Team API (bearer token) | PROGRESSION page | Staff (TOPOLOGY) |
 |---|---|---|---|
 | rounds | `/api/v1/rounds/` | `/progression/rounds/` | `/topology/runs/` |
 | document | `/api/v1/rounds/<id>/progression/` | `/progression/rounds/<id>/` | `/rounds/<run>/progression/` |
-| connections | `…/progression/flows/` | `…/flows/` | `…/flows/` |
-| one log record | `…/progression/logs/<ref>/` | `…/logs/<ref>/` | `…/logs/<ref>/` |
+| connections / one log | `…/flows/` / `…/logs/<ref>/` | the same | the same |
 | zip | `/api/v1/rounds/<id>/progression.zip` | `…/download/` | `…/download/` |
+| devbox | `/api/v1/devbox/progression/` (`.zip`) | `/progression/devbox/` | |
 
-The devbox has its own, with no round: `/api/v1/devbox/progression/` (and
-`…/logs/<ref>/`, `/api/v1/devbox/progression.zip`) for a token, and
-`/progression/devbox/` (and `…/logs/<ref>/`, `…/download/`) for the page.
+## The TOPOLOGY page (staff)
 
-The page's endpoints serve the rounds of the environment switched on (Live:
-the competition, Dev: the development competition); another round is a 404.
-A log record is served only if it is the team's and part of the round's
-progression (the run's window, or the Dev round's window). The documents link
-to their own connections and log records (`network.url`, `logs.url`).
+`/topology/` shows the infrastructure as configured now, in a fixed layout: the node, orchestrator
+and dashboard on top, the database, scoring and logging, then the devboxes, the sandbox and the
+private internet. VMs carry their Proxmox status. Only operational connections are drawn:
+database ingress as its firewall allows it, sandbox and devbox → scoring, logging and the private
+internet (verified against the firewall), the sandbox networks and the devbox links. Hovering a
+VM shows its NICs, bridges, security groups and rules.
 
-## Limits
+Tabs pick a round, then a team, to **replay that run**: connections as dots along the edges,
+events as icons on the VMs (click to pause and see details), a seekable timeline,
+`#run=<uuid>&t=<s>` in the URL. **Download** saves the run as a zip or what is shown as one JSON;
+**Open file…** views either again, offline.
 
-The builder caps what it reads (`timeline.py`): 20 000 connections, 5 000
-submissions, 5 000 logs; a log record is at most 4 KiB (the logging server).
-A document is therefore a few MiB at most; the zip, deflated, much less. The
-team API's limits apply (rate limits per address and token, a 3 s statement
-timeout; `docs/team_api.md`).
-
-## The page
-
-Without JavaScript the PROGRESSION page lists the rounds (links), the selected
-round's captured VMs and counts, and the downloads. With it, the player
-replaces that part: the rounds as tabs, the scene, the timeline with the
-round's start / end / now marks, playback, event details (a log record is
-fetched when opened), **Download** (the round as a zip, with or without log
-records and traffic; or what is shown as one JSON) and **Open file…**. A
-round that is still running is reloaded every minute, keeping the view and
-the selection; a player sitting at the end follows "now".
-
-Switching Live / Dev reloads the page (its player is a script of its own).
+Data: the orchestrator runs `manage.py collect_topology` every 2 minutes with the read-only
+Proxmox token (GET only, config fields whitelisted, no cloud-init secrets) and upserts one row in
+`topology_snapshots`; the dashboard analyses it (`dashboard/infra_view.py`) and serves it at
+`/topology/data/`. Staff only, because addresses and firewall rules are sensitive.
 
 ## Security
 
-- What a team sees is decided on the server (above), for every endpoint and
-  the zip alike; the player only draws what it is given.
-- Log records, flows and submitted hashes are attacker-controlled (the
-  worm's output). The player renders every value as text; files and
-  responses pass the same sanitizer (`cleanProgression` / `cleanModel` /
-  `cleanTimeline`): known fields only, coerced types, capped sizes. A zip is
-  parsed in the browser with caps on members and sizes (a member that
-  inflates beyond what it claims is refused). A file's URLs are never
-  fetched.
-- Tests: `tests/test_progression.py` (the builder's visibility rules for
-  each "never shown" item, Dev windows, the clock, log scoping, the zip, the
-  team API, the page's endpoints, the staff endpoints) and
-  `tests/test_topology_page.py` (both pages in Chromium, zips and hostile
-  files).
+- What a team sees is decided on the server, for every endpoint and the zip.
+- Log records, flows and submitted hashes are attacker-controlled. The player renders every value
+  as text, and every file and response passes the same sanitizer (`cleanProgression`,
+  `cleanModel`, `cleanTimeline`): known fields only, coerced types, capped sizes and counts,
+  `__proto__` keys ignored, a zip member that inflates beyond its claim refused, a file's URLs
+  never fetched.
+- A staff download holds staff-only data (addresses, rules, traffic).
+
+Tests: `tests/test_progression.py` (visibility rules, Dev windows, the clock, the zip, every
+endpoint), `tests/test_infra_view.py` (the infrastructure model), `tests/test_topology_page.py`
+(both pages in Chromium, with hostile files). Not covered: a real Proxmox snapshot and a real
+round's traffic.

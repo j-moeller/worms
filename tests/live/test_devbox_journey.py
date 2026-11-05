@@ -226,7 +226,7 @@ def test_04_admin_builds_devboxes(journey):
         job = wait_for("the devbox build", finished, BUILD_TIMEOUT)
         if job["state"] == "done" or "got timeout" not in (job["error"] or ""):
             break
-        # A known fault on this disk (F5 in docs/e2e-run-2026-11-03/protocol.md), for which the
+        # A known fault on this disk (F5 in docs/archive/e2e-run-2026-11-03/protocol.md), for which the
         # documented answer is to run it again. Reported, but it does not fail the journey.
         journey.report.row(f"Attempt {attempt} hit the `zfs create` timeout", "Known fault, F5: retry", (job["error"] or "")[-160:], True)
     check("The build job", "Done", f"{job['state']} on attempt {attempt}, from {job['started_at']} to {job['finished_at']} {job['error'] or ''}", job["state"] == "done")
@@ -383,7 +383,7 @@ def test_10_database_holds_what_an_administrator_expects(journey):
         check(f"Database: `{team}`", "3 keys, 3 captures and 3 logs at version 1", f"keys {t['ssh_keys']}, captures {t['captures']}, logs {t['logs']}", t["ssh_keys"] == 3 and t["captures"] == {"1": 3} and t["logs"] == {"1": 3})
     jobs = {j["kind"] for j in db["jobs"]}
     check("Database: host jobs", "The build and the key pushes", sorted(jobs), {"devbox_provision", "devbox_reconfigure"} <= jobs)
-    # Devbox bridges are not mirrored, by design (docs/requirements.md, Monitor).
+    # Devbox bridges are not mirrored, by design (docs/monitoring.md).
     check("Database: `network_flows` on devbox addresses", "None, by design", db["flows_touching_devboxes"], db["flows_touching_devboxes"] == 0)
     check("Node: mirror filters on devbox ports", "None, by design", p.mirror_filters_on_devbox_ports(), p.mirror_filters_on_devbox_ports() == 0)
     heartbeat = db["zeek_heartbeat"]
@@ -431,8 +431,10 @@ def test_12_everything_the_user_changed_is_gone(journey):
         check(f"{who}: the file", "Gone", state.get("file"), state.get("file") == "absent")
         check(f"{who}: `{APT_PACKAGE}`", "Gone", state.get("apt"), state.get("apt") == "absent")
         check(f"{who}: `{PIP_PACKAGE}`", "Gone", state.get("pip"), state.get("pip") == "absent")
-        check(f"{who}: a new VM", "New boot, host key and token", f"boot {before[role].get('boot')} → {state.get('boot')}", state.get("boot") != before[role].get("boot") and state.get("host_key") != before[role].get("host_key") and state.get("token") != before[role].get("token"))
-    check("Firewall on every devbox VM", "All on, including the replaced VMs", p.vms_without_firewall() or "all on", not p.vms_without_firewall())
+        # A reset rolls the VM back to the snapshot taken after its first boot, so the host key,
+        # made at that boot, stays; only a VM without a snapshot is replaced and gets a new one.
+        check(f"{who}: back to its clean state", "New boot and token", f"boot {before[role].get('boot')} → {state.get('boot')}", state.get("boot") != before[role].get("boot") and state.get("token") != before[role].get("token"))
+    check("Firewall on every devbox VM", "All on, including the reset VMs", p.vms_without_firewall() or "all on", not p.vms_without_firewall())
     check("Firewall watchdog", "No VM stopped", p.watchdog_stops(), p.watchdog_stops() == 0)
     r = p.browser("dev_view", user=member.email, password=member.password, shot="14-after-reset")
     check("The page", "Score 0/3, no log entries, the SSH command", f"{r['version']}, {r['score']}, {len(r['logs'])} entries", r["score"].replace(" ", "") == "0/3" and not r["logs"] and bool(r["ssh_command"]))

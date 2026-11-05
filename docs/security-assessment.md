@@ -67,6 +67,32 @@ it on. The shared SSH gateway is intentionally **not** given the hookscript: its
 vmbr7 port must stay non-isolated so it can reach the (isolated) devbox VMs; the
 devbox VMs are the ones isolated from each other.
 
+## LLM endpoint
+
+Every sandbox and devbox VM may send to one external address: `141.23.117.34`, TCP 443 (`teachllm.mlsec.tu-berlin.de`). It is one rule in the `llm-access` security group, on those VMs and on no gateway. The address is `llm_access_ip` in `ansible/group_vars/all.yml`, which `worms` passes to the firewall stack.
+
+**A connection does not complete yet.** The rule only lets the packet leave the VM. Each layer below is independent, so all of them would have to allow it:
+
+| Layer | Today | Where |
+|---|---|---|
+| The VM's Proxmox firewall | **Allows it** | `llm-access` |
+| Bridge table on the node | Drops it: only sandbox, devbox and services addresses may pass | `worms.nft.j2`, chains `sandbox` and `devbox` |
+| The gateway's Proxmox firewall | No rule for it, and the gateway's source filter would refuse the replies | `sandbox_gw`, `devbox_gw` and the gateways' IP sets |
+| The gateway's nftables | Forwards only to the services bridge | `sandbox-gw.tftpl`, `devbox-gw.tftpl` |
+| A way out | None: the node has no address on the services bridge, forwards nothing from it, and does not route the management bridges to the WAN | `worms.nft.j2`, chain `forward` |
+
+Checked on 2026-11-05 on all 9 devbox VMs, using the drop counter of the `devbox` bridge chain, which comes after the VM's firewall:
+
+| From a devbox VM to | Connects | Bridge drop counter | So it stopped at |
+|---|---|---|---|
+| `141.23.117.34`, TCP 443, before the rule | No | No change | The VM's firewall |
+| `141.23.117.34`, TCP 443, after the rule | No | Rises on all 9 VMs | The bridge table |
+| `141.23.117.34`, TCP 80 | No | No change | The VM's firewall |
+| `141.23.117.34`, UDP 443 | No reply expected | No change | The VM's firewall |
+| `141.23.117.35`, `1.1.1.1` and the node's own `141.23.117.61`, TCP 443 | No | No change | The VM's firewall |
+
+No sandbox existed at the time, so the rule has not been seen on a sandbox VM. A test checks that the sandbox stack attaches the group.
+
 ## Findings in full
 
 Severity reflects impact under the stated threat model. "CONFIRMED" = the code

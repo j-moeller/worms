@@ -13,6 +13,8 @@ Times are host time (CET); the VMs log in UTC (CET - 1h).
 
 **View as, 2026-11-05:** the admin can view the dashboard as another user, read only, from `/staff/users/` (`docs/accounts.md`, "View as"). Staff and students cannot.
 
+**LLM endpoint, 2026-11-05:** every sandbox and devbox VM may now send to `141.23.117.34`, TCP 443. The rule is live, but the bridge table, gateways and node still drop the packet, so no connection completes (`docs/security-assessment.md`, "LLM endpoint"; decision 3h in `docs/check-with-user.md`).
+
 **Password resets, 2026-11-05:** staff keep the one-time password button, and each reset now adds a row to the new `password_resets` table in the same transaction. The dashboard's role may add and read rows but not change or remove them (`docs/accounts.md`, "Password resets are recorded"). This is the first migration after `0001_initial`, and it needs the grants applied too (`docs/management.md`).
 
 Checked on the live database as the dashboard's role, in a transaction that was rolled back, with a throwaway account: the row is written, and update, delete and truncate are refused. No real reset was made, so the table is still empty. During this check a slip of mine briefly started a second gunicorn on the dashboard VM. It failed to boot and exited within a second. The real service listens on a Unix socket, so it got no traffic and did not restart. Its empty `/root/.gunicorn` is removed.

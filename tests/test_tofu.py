@@ -87,6 +87,31 @@ def test_untrusted_egress_is_scoped_to_the_service_hosts():
         assert "dest    = local.networks.services" not in group, f"{name}: still targets the whole services subnet"
 
 
+def test_the_llm_endpoint_is_the_only_external_destination_of_untrusted_vms():
+    """Every sandbox and devbox VM may send to one address on TCP 443, and no
+    gateway has that group. The address is tracked, so a rebuild keeps it."""
+    firewall_dir = OPENTOFU / "stacks" / "firewall"
+    settings = (firewall_dir / "llm.auto.tfvars").read_text()
+    assert re.findall(r'^llm_access_ip\s*=\s*"([^"]+)"', settings, re.M) == ["141.23.117.34"]
+    tracked = subprocess.run(["git", "ls-files", "--error-unmatch", str(firewall_dir / "llm.auto.tfvars")],
+                             cwd=REPO, capture_output=True, check=False)  # fmt: skip
+    assert tracked.returncode == 0, "llm.auto.tfvars is not tracked: a fresh checkout would fall back to 127.0.0.1"
+
+    group = _security_group((firewall_dir / "main.tf").read_text(), "llm_access")
+    assert group.count("rule {") == 1 and 'type    = "out"' in group and 'action  = "ACCEPT"' in group
+    assert 'proto   = "tcp"' in group and 'dport   = "443"' in group and "dest    = var.llm_access_ip" in group
+
+    sandbox = (OPENTOFU / "stacks" / "sandbox" / "main.tf").read_text()
+    rules = re.search(r'firewall_rules" "(?P<name>vm)".*?\n}\n', sandbox, re.S).group(0)
+    assert "local.sg.llm_access" in rules
+    gateway = re.search(r'firewall_rules" "gw".*?\n}\n', sandbox, re.S).group(0)
+    assert "llm_access" not in gateway
+
+    devbox = (OPENTOFU / "stacks" / "devbox" / "main.tf").read_text()
+    assert devbox.count("local.sg.llm_access") == 1, "only the devbox VMs get the group, not their gateways"
+    assert re.search(r"devbox\s+= local\.sg\.devbox\n.*?llm_access\s+= local\.sg\.llm_access", devbox, re.S)
+
+
 def test_database_clients_are_allowed_everywhere(infrastructure):
     """A VM with a database role must be allowed by the Proxmox `database`
     security group, by pg_hba (its /32) and, if routed, by the host."""

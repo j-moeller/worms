@@ -18,6 +18,15 @@ const input = JSON.parse(fs.readFileSync(0, 'utf8'));
             const url = new URL(route.request().url());
             return url.origin === input.base ? route.continue() : route.abort();
         });
+        // Deliver the background flow response between pointer-down and
+        // pointer-up. Replacing the event list here used to swallow the click.
+        let releaseFlows;
+        const flowsReleased = new Promise(resolve => { releaseFlows = resolve; });
+        await context.route('**/progression/rounds/*/flows/', async route => {
+            if (new URL(route.request().url()).origin !== input.base) return route.abort();
+            await flowsReleased;
+            await route.continue();
+        });
         const page = await context.newPage();
         page.on('pageerror', error => errors.push(error.message));
         page.on('response', response => {
@@ -39,7 +48,11 @@ const input = JSON.parse(fs.readFileSync(0, 'utf8'));
         await login(input.student, input.password, '/progression/');
         await page.waitForFunction(() => document.getElementById('topo')?.topoState?.timeline);
         assert(await page.locator('#topo').isVisible());
-        await page.locator('#topo-feed li', { hasText: 'log received' }).first().click();
+        await page.locator('#topo-feed li', { hasText: 'log received' }).first().hover();
+        await page.mouse.down();
+        releaseFlows();
+        await page.waitForFunction(() => document.getElementById('topo').topoState.timeline.flowsLoaded);
+        await page.mouse.up();
         await page.waitForFunction(() => document.querySelector('#topo-side pre.log-record')?.textContent.includes('local log')).catch(async error => {
             console.error(JSON.stringify({ phase: 'read-log', errors,
                 side: await page.locator('#topo-side').innerText(),

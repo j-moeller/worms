@@ -70,3 +70,21 @@ archives with only `main.py` will need to be replaced or an explicit compatibili
 policy chosen before they are run by the new launcher. Commit the intended
 feature changes separately from the hostname/RAM overrides so the tested revision
 can be identified and deployed without overwriting other work on the node.
+
+
+## Latest-main update during validation
+
+Jonas published the reviewed source patch as `abcde6a` and then `211d6ac` while
+validation was running. Both official commits are now included. The separate
+preview is retained as evidence of the review; no private snapshot files or
+node-specific overrides were added to this branch.
+
+A final read-only check of the node at `211d6ac` found only the hostname and
+cve-search RAM overrides remaining tracked but uncommitted, plus `docs/IMPORTANT`
+and the empty `tile`. Those remain untouched.
+
+The combined browser rehearsal reproduced a lost-click bug: loading network
+connections rebuilt the sidebar between pointer-down and pointer-up on a log
+entry. The connections count now updates in place, preserving the event row.
+The browser driver deliberately delivers that response during the click rather
+than masking the failure with a retry or a longer timeout.

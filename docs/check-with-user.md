@@ -108,18 +108,6 @@ On 2026-11-05 that warning appeared for the database, dashboard and orchestrator
 
 The risk is low while the traffic stays on local bridges, and rebuilds change the keys on purpose. Recommended before going live: turn checking on, with each build recording the new VMs' keys.
 
-### 3h. Should sandbox and devbox VMs really reach the LLM endpoint?
-
-- [ ] **Decide:** open the rest of the path to `141.23.117.34:443`, or leave it at the VM rule?
-
-The rule you asked for is in place on 2026-11-05, but a connection does not complete, because the bridge table, the gateways and the node all still drop it. See `docs/security-assessment.md`, "LLM endpoint".
-
-Opening the path means, each limited to this address and port: the bridge table, the gateways' firewall and source filter, their nftables and NAT, and for the first time a route through the node from a gateway's management network to the WAN. Running devbox gateways need their new nftables rules re-applied. Things to weigh:
-
-- It is the one exception to `docs/IMPORTANT`, and worms run as root, so any code on those VMs could then reach that server directly.
-- `teachllm` is a real server outside this system, and nothing here would limit how hard a worm uses it beyond the VM's existing rate limits.
-- `teachllm` would see the node's address for every team, so it could not tell teams apart.
-
 ### 4. Public certificate for the dashboard
 
 - [ ] Choose one.

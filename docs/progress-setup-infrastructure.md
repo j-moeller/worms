@@ -15,7 +15,9 @@ Times are host time (CET); the VMs log in UTC (CET - 1h).
 
 **Progression VMs and uploads, 2026-11-05:** a team's progression now shows every VM of its own devbox once it is set up (dev), and the VMs it captured plus the entry VM from the worm's start on (live). No round has run since, so the live rule has only been checked with test data. Separately, a check found that an upload does not run on the devbox, and that one made in the dev view would run in the next live round (`docs/todos/dev-rounds.md`).
 
-**LLM endpoint, 2026-11-05:** every sandbox and devbox VM may now send to `141.23.117.34`, TCP 443. The rule is live, but the bridge table, gateways and node still drop the packet, so no connection completes (`docs/security-assessment.md`, "LLM endpoint"; decision 3h in `docs/check-with-user.md`).
+**LLM endpoint, 2026-11-05:** `teachllm` is reachable from the sandbox and devbox VMs, as the one exception to "no internet". All 9 devbox VMs connect with TLS verified, and attempts to get anywhere else from a VM or a gateway, or to bypass the gateway, are blocked (`docs/security-assessment.md`, "LLM endpoint"). The three devbox gateways were rebuilt for it; the VMs were not. Not yet seen on a real sandbox.
+
+**VM settings, 2026-11-05:** the operator set the devbox VMs to `cpu: host` and `balloon: 512` by hand. The devbox stack now says so too, because a reset rebuilds the VMs from it. Sandbox VMs and gateways still use `qemu64` and ballooning.
 
 **Password resets, 2026-11-05:** staff keep the one-time password button, and each reset now adds a row to the new `password_resets` table in the same transaction. The dashboard's role may add and read rows but not change or remove them (`docs/accounts.md`, "Password resets are recorded"). This is the first migration after `0001_initial`, and it needs the grants applied too (`docs/management.md`).
 

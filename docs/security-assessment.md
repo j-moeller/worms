@@ -69,29 +69,36 @@ devbox VMs are the ones isolated from each other.
 
 ## LLM endpoint
 
-Every sandbox and devbox VM may send to one external address: `141.23.117.34`, TCP 443 (`teachllm.mlsec.tu-berlin.de`). It is one rule in the `llm-access` security group, on those VMs and on no gateway. The address is `llm_access_ip` in `ansible/group_vars/all.yml`, which `worms` passes to the firewall stack.
+`teachllm.mlsec.tu-berlin.de` (`141.23.117.34`, TCP 443) is **the only exception** to "neither sandbox nor devbox may have internet access". It is a server on the local network, which still needs egress from this system. It is assumed robust against attacks, since any code on these VMs can reach it directly. Nothing else may be added this way.
 
-**A connection does not complete yet.** The rule only lets the packet leave the VM. Each layer below is independent, so all of them would have to allow it:
+The address is `llm_access_ip` in `ansible/group_vars/all.yml`. `worms` passes it to the firewall stack, whose output gives it to the sandbox and devbox stacks, so one value drives every layer. Without `worms`, the stacks fall back to `127.0.0.1`, which gives no access.
 
-| Layer | Today | Where |
+Each layer is independent and allows only this address and port:
+
+| Layer | What it allows | Where |
 |---|---|---|
-| The VM's Proxmox firewall | **Allows it** | `llm-access` |
-| Bridge table on the node | Drops it: only sandbox, devbox and services addresses may pass | `worms.nft.j2`, chains `sandbox` and `devbox` |
-| The gateway's Proxmox firewall | No rule for it, and the gateway's source filter would refuse the replies | `sandbox_gw`, `devbox_gw` and the gateways' IP sets |
-| The gateway's nftables | Forwards only to the services bridge | `sandbox-gw.tftpl`, `devbox-gw.tftpl` |
-| A way out | None: the node has no address on the services bridge, forwards nothing from it, and does not route the management bridges to the WAN | `worms.nft.j2`, chain `forward` |
+| The VM's Proxmox firewall | Out to it | `llm-access`, on sandbox and devbox VMs |
+| Bridge table on the node | Both directions, under the VM's usual SYN limit | `worms.nft.j2`, chains `sandbox` and `devbox` |
+| The gateway's Proxmox firewall | In from its VMs; out on the management NIC only | `sandbox_gw`, `devbox_gw`, `llm-egress` |
+| The gateway's nftables | Forward and SNAT to its management address, and a `/32` route via the node. It still has no default route | `sandbox-gw.tftpl`, `devbox-gw.tftpl` |
+| The node | Forward from the gateways' management addresses only, then masquerade. The internet window's gate does not apply | `worms.nft.j2`, chains `forward` and `postrouting` |
 
-Checked on 2026-11-05 on all 9 devbox VMs, using the drop counter of the `devbox` bridge chain, which comes after the VM's firewall:
+`teachllm` sees the node's address for every team. `worms status` still says `internet access denied`, because that reports the internet window, which is closed.
 
-| From a devbox VM to | Connects | Bridge drop counter | So it stopped at |
-|---|---|---|---|
-| `141.23.117.34`, TCP 443, before the rule | No | No change | The VM's firewall |
-| `141.23.117.34`, TCP 443, after the rule | No | Rises on all 9 VMs | The bridge table |
-| `141.23.117.34`, TCP 80 | No | No change | The VM's firewall |
-| `141.23.117.34`, UDP 443 | No reply expected | No change | The VM's firewall |
-| `141.23.117.35`, `1.1.1.1` and the node's own `141.23.117.61`, TCP 443 | No | No change | The VM's firewall |
+Checked on 2026-11-05 on the devbox, acting as root on `devbox-t1-a` and on `devbox-t1-gw`:
 
-No sandbox existed at the time, so the rule has not been seen on a sandbox VM. A test checks that the sandbox stack attaches the group.
+| From | To | Result |
+|---|---|---|
+| All 9 devbox VMs | `teachllm`, TCP 443, TLS verified | Connects. `/` answers 403, which is the server's own answer |
+| VM | `teachllm` on ports 80 and 22 | Blocked |
+| VM | `141.23.117.35`, `.33`, the node's `.61`, `1.1.1.1`, all TCP 443; `8.8.8.8:53` | Blocked |
+| VM, route added through its maintenance NIC | `teachllm:443`, `1.1.1.1:443` | Blocked: the node only allows the gateways' addresses |
+| VM, route added through its SSH-fabric NIC | `teachllm:443` | Blocked |
+| VM, using its gateway's address | `teachllm:443` | Blocked: Proxmox pins each NIC to its own address |
+| Gateway | `teachllm:443` | Connects: this is its path |
+| Gateway | `teachllm:80`; `1.1.1.1:443` and `.35:443`, route added via the node; the node's SSH | Blocked |
+
+**Not seen yet:** a real sandbox. No round has run since this change, so the sandbox gateway's rules are only checked by tests (`test_every_layer_on_the_way_to_the_llm_endpoint_allows_only_it`).
 
 ## Findings in full
 

@@ -198,6 +198,8 @@ class Session:
         env["TF_VAR_proxmox_api_token"] = token
         env["TF_VAR_proxmox_api_url"] = self.proxmox_api_url()
         env["TF_VAR_ssh_public_key"] = str(self.public_key_file())
+        # Not a secret. The stack's own default is the safe one (no access).
+        env["TF_VAR_llm_access_ip"] = group_var(self.config.repo_root, "llm_access_ip", "127.0.0.1")
         return env
 
     # -- the node ----------------------------------------------------------------

@@ -89,13 +89,12 @@ def test_untrusted_egress_is_scoped_to_the_service_hosts():
 
 def test_the_llm_endpoint_is_the_only_external_destination_of_untrusted_vms():
     """Every sandbox and devbox VM may send to one address on TCP 443, and no
-    gateway has that group. The address is tracked, so a rebuild keeps it."""
+    gateway has that group. The address is tracked, so a rebuild keeps it, and
+    not in a *.auto.tfvars: `worms` refuses those to protect the vault's token."""
     firewall_dir = OPENTOFU / "stacks" / "firewall"
-    settings = (firewall_dir / "llm.auto.tfvars").read_text()
-    assert re.findall(r'^llm_access_ip\s*=\s*"([^"]+)"', settings, re.M) == ["141.23.117.34"]
-    tracked = subprocess.run(["git", "ls-files", "--error-unmatch", str(firewall_dir / "llm.auto.tfvars")],
-                             cwd=REPO, capture_output=True, check=False)  # fmt: skip
-    assert tracked.returncode == 0, "llm.auto.tfvars is not tracked: a fresh checkout would fall back to 127.0.0.1"
+    settings = yaml.safe_load((REPO / "ansible" / "group_vars" / "all.yml").read_text())
+    assert settings["llm_access_ip"] == "141.23.117.34"
+    assert [p for p in OPENTOFU.rglob("*.auto.tfvars") if ".terraform" not in p.parts] == []
 
     group = _security_group((firewall_dir / "main.tf").read_text(), "llm_access")
     assert group.count("rule {") == 1 and 'type    = "out"' in group and 'action  = "ACCEPT"' in group

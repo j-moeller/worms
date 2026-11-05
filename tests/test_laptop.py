@@ -40,6 +40,7 @@ def checkout(tmp_path, monkeypatch):
     vault = Vault(tmp_path)
     vault.ensure()
     vault.set("proxmox-token", "root@pam!worms=prov-secret")
+    (tmp_path / "ansible" / "group_vars" / "all.yml").write_text("llm_access_ip: 192.0.2.34\n")
     # An inventory written from a laptop (scripts/generate_inventory.py).
     (tmp_path / "ansible" / "inventory.generated.yml").write_text(
         "all:\n  children:\n    proxmox_host:\n      hosts:\n        proxmox.local:\n          ansible_host: pve.example\n"
@@ -89,6 +90,7 @@ def test_laptop_runs_tofu_here_with_the_vaults_inputs(checkout, recorded):
     assert argv[:2] == ["sh", "-c"] and argv[2].endswith("opentofu/stacks/platform && tofu apply -auto-approve")
     assert env["TF_VAR_proxmox_api_token"] == "root@pam!worms=prov-secret"
     assert env["TF_VAR_proxmox_api_url"] == "https://pve.example:8006/"
+    assert env["TF_VAR_llm_access_ip"] == "192.0.2.34"
     assert Path(env["TF_VAR_ssh_public_key"]).read_text().strip() == Vault(checkout).load()[SSH_PUBLIC_KEY].strip()
     assert env["WORMS_SSH"] == NODE
 

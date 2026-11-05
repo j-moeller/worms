@@ -600,7 +600,8 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "devbox_s
 
 # Egress to the external LLM endpoint. Attached to every sandbox and devbox VM
 # so a worm may reach the configured LLM API on 443 and nothing else. Egress
-# only; the destination is a single operator-set address (llm.auto.tfvars).
+# only; the destination is a single operator-set address (llm_access_ip in
+# ansible/group_vars/all.yml, passed in by `worms`: worms_cli/session.py).
 # Routing/NAT for this traffic (the gateways, the host) is a separate concern:
 # this group only permits the packet to leave the VM, and those layers still
 # drop it (docs/security-assessment.md, "LLM endpoint").

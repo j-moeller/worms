@@ -7,6 +7,11 @@
 # vault (src/worms_cli/secrets.py; docs/accounts.md section 4).
 # -----------------------------------------------------------------------------
 
+# The one external address sandbox and devbox VMs may send to, on TCP 443: the LLM
+# endpoint, teachllm.mlsec.tu-berlin.de (security group llm-access,
+# docs/security-assessment.md). `worms` passes it to OpenTofu as TF_VAR_llm_access_ip.
+llm_access_ip: 141.23.117.34
+
 # Addressing is the OpenTofu ground truth. `infrastructure_ips`,
 # `private_internet_ips`, `networks` and `proxmox` are provided by
 # inventory.generated.yml (written by scripts/generate_inventory.py from

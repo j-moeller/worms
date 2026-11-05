@@ -85,6 +85,12 @@ cd /root/app/ansible
 ssh-agent sh -c 'ssh-add -q /etc/worms/ssh/worms && WORMS_SSH_AUTH_SOCK="$SSH_AUTH_SOCK" exec ansible-playbook -e @group_vars/vault.yml SetupDbAndDashboard.yml --limit database_hosts --start-at-task "List the tables in the public schema"'
 ```
 
+Then check the grant itself, on the database VM, because the play's `changed` count is not reliable. On 2026-11-05 it reported `changed=0` while adding the grants for `password_resets`. The cause is unknown; nothing else on the system grants table rights.
+
+```sh
+sudo -u postgres psql -d mydb -c "SELECT grantee, privilege_type FROM information_schema.role_table_grants WHERE table_name = 'password_resets'"
+```
+
 Afterwards, check with:
 
 ```sh

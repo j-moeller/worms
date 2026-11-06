@@ -11,7 +11,7 @@ images/debian-13-generic-amd64.qcow2: images
 	test -e $@ || curl https://gemmei.ftp.acc.umu.se/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2 --output $@
 
 images/resolute-server-cloudimg-amd64.qcow2: images
-	test -e $@ || curl https://cloud-images.ubuntu.com/resolute/current/resolute-server-cloudimg-amd64.qcow2 --output $@
+	test -e $@ || curl https://cloud-images.ubuntu.com/resolute/current/resolute-server-cloudimg-amd64.img --output $@
 
 images/generic_alpine-3.24.1-x86_64-bios-cloudinit-r0.qcow2: images
 	test -e $@ || curl https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/cloud/generic_alpine-3.24.1-x86_64-bios-cloudinit-r0.qcow2 --output $@

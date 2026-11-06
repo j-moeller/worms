@@ -8,6 +8,7 @@ refuses every write while it lasts.
 
 from __future__ import annotations
 
+from core import events
 from core.models.user import User
 from dashboard.middleware import VIEW_AS_SESSION_KEY, is_admin, view_as_log
 from dashboard.views.decorators import refuse
@@ -34,6 +35,7 @@ def start(request: HttpRequest, uuid):
     # Each side starts in the live view: the dev view chosen while viewing is the student's.
     request.session.pop(ENVIRONMENT_SESSION_KEY, None)
     view_as_log.warning("view-as started: admin=%r viewed=%r", request.user.username, target.username)
+    events.impersonation("started", request=request, admin=request.user, target=target)
     return redirect("index")
 
 
@@ -46,4 +48,5 @@ def stop(request: HttpRequest):
     request.session.pop(ENVIRONMENT_SESSION_KEY, None)
     request.session.cycle_key()
     view_as_log.warning("view-as stopped: admin=%r viewed=%r", request.real_user.username, target.username)
+    events.impersonation("ended", request=request, admin=request.real_user, target=target)
     return redirect("staff_user", uuid=target.uuid)

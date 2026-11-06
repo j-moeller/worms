@@ -24,6 +24,42 @@
   notify: Restart round agent
   tags: [agent-sync]
 
+# The node's event tables (docs/monitoring.md, "Event tables").
+- name: Install the node's events account
+  ansible.builtin.template:
+    src: events.env.j2
+    dest: "{{ round_agent_events_env_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: "{{ hide_secrets }}"
+  tags: [agent-sync]
+
+- name: Install worms-audit (records the node's events)
+  ansible.builtin.template:
+    src: worms-audit.j2
+    dest: "{{ round_agent_audit_command }}"
+    owner: root
+    group: root
+    mode: "0750"
+  tags: [agent-sync]
+
+- name: Install the SSH gateway login collector
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    mode: "0644"
+  loop: [worms-audit-gateway.service, worms-audit-gateway.timer]
+  tags: [agent-sync]
+
+- name: Start the SSH gateway login collector
+  ansible.builtin.systemd:
+    name: worms-audit-gateway.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  tags: [agent-sync]
+
 # --- Proxmox ACL: power control of the sandbox pool only --------------------
 # The orchestrator's token (proxmox_api_user!proxmox_api_token_name) does VM
 # power for the game plan. It gets exactly VM.PowerMgmt + VM.Audit, and only on

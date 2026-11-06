@@ -1,3 +1,4 @@
+from core import events
 from dashboard.views.navigation import safe_next
 from dashboard.views.util import render_with_base_info
 from django.contrib.auth import authenticate, login, logout
@@ -28,7 +29,10 @@ def login_view(request: HttpRequest):
 
         if user is not None:
             login(request, user)
+            events.login(request, "ok", user=user)
             return _next_or_profile(request)
+
+        events.login_failed(request, username)
 
         return render_with_base_info(
             request,
@@ -46,5 +50,7 @@ def login_view(request: HttpRequest):
 @require_POST
 def logout_view(request):
     """POST only: a GET (a link, an <img>, a crawler) must not end a session."""
+    if request.user.is_authenticated:
+        events.login(request, "logout", user=getattr(request, "real_user", None) or request.user)
     logout(request)
     return redirect("login")

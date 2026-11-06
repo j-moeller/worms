@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 
+from core import events
 from core.models.devbox import Devbox, DevboxCapture, DevboxSSHKey, DevboxVM
 from core.models.team import Team
 from dashboard.views.decorators import user_in_team_required
@@ -147,6 +148,7 @@ def devbox_reset(request: HttpRequest, team: Team):
         return redirect("profile")
 
     if result.get("rebuild_enqueued", True):
+        events.team("devbox_reset", request=request, team=team)
         messages.success(request, "Reset requested: your devbox VMs are being rebuilt and the score starts over.")
     else:
         messages.info(request, "A rebuild of your devbox is already in progress.")
@@ -204,6 +206,7 @@ def devbox_add_ssh_key(request: HttpRequest, team: Team):
     try:
         with transaction.atomic():
             DevboxSSHKey.objects.create(team=team, name=name, public_key=public_key, created_by=request.user)
+            events.credential("ssh_key_added", request=request, team=team, name=name, public_key=public_key)
     except IntegrityError:
         # Lost a race against a simultaneous add of the same key (another team,
         # or a double submit): the UNIQUE constraint held.
@@ -217,8 +220,10 @@ def devbox_add_ssh_key(request: HttpRequest, team: Team):
 @require_POST
 @user_in_team_required
 def devbox_delete_ssh_key(request: HttpRequest, team: Team, key_id: int):
+    key = DevboxSSHKey.objects.filter(id=key_id, team=team).first()
     deleted, _ = DevboxSSHKey.objects.filter(id=key_id, team=team).delete()
     if deleted:
+        events.credential("ssh_key_removed", request=request, team=team, name=key.name, public_key=key.public_key)
         _reconfigure_devbox(request, team, "removed")
     return redirect("profile")
 

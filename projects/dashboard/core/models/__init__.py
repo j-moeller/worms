@@ -13,3 +13,5 @@ from .topology import TopologySnapshot
 from .monitoring import NetworkEvent, NetworkFlow
 from .rounds import GamePlanStep, HostJob, RoundRun, RunEvent
 from .devbox import Devbox, DevboxVM, DevboxSSHKey, DevboxCapture, DevboxLog, DevboxRun
+from .events import (AccountEvent, CompetitionEvent, CredentialEvent, ImpersonationEvent, LoginEvent,
+                     PasswordEvent, PlatformEvent, SSHGatewayLogin, TeamEvent)

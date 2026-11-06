@@ -56,6 +56,8 @@ GENERATED = {
     "vault_dbuser_network_monitor_password": 24,
     "vault_dbuser_scoring_password": 24,
     "vault_round_agent_db_password": 24,
+    "vault_dbuser_events_dashboard_password": 24,  # the event tables (core/events.py)
+    "vault_dbuser_events_node_password": 24,
     "vault_pki_ca_passphrase": 24,
     "vault_dashboard_secret_key": 64,  # Django SECRET_KEY
     "vault_orchestrator_secret_key": 64,

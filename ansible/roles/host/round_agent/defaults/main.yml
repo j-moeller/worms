@@ -69,6 +69,18 @@ round_agent_tofu_api_token: "{{ vault_tofu_proxmox_api_token | default('') }}"
 round_agent_tofu_node: "{{ proxmox.node | default('worms-pve') }}"
 round_agent_ssh_key: /etc/worms/ssh/worms
 
+# The node's event tables (scripts/round_agent/events.py, docs/monitoring.md):
+# `worms-audit event ...` for the internet window and the firewall watchdog, and
+# a timer that records the SSH gateway's team logins, as the node's own events
+# account (not the agent's role), from its own 0600 file. The gateway's address
+# and login account; empty without a published gateway.
+round_agent_audit_command: /usr/local/sbin/worms-audit
+round_agent_events_env_file: /etc/worms/events.env
+round_agent_events_db_user: dbuser_events_node
+round_agent_events_db_password: "{{ vault_dbuser_events_node_password | default('') }}"
+round_agent_ssh_gateway_host: "{{ ssh_gateway_ips.maintenance | default('') }}"
+round_agent_ssh_gateway_user: team
+
 # Least-privilege Proxmox role for the orchestrator's power token: start/stop
 # of sandbox VMs only. Granted on the sandbox pool.
 round_agent_power_role: WormsSandboxPower

@@ -8,6 +8,8 @@ able to append to exactly one table each and read nothing they wrote.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 psycopg2 = pytest.importorskip("psycopg2")
@@ -324,3 +326,70 @@ def test_orchestrator_processes_attempts(database):
     run(database, "django_orchestrator", "UPDATE flag_capture_attempts SET processed = processed, processed_at = processed_at WHERE false")
     denied(database, "django_orchestrator", "UPDATE flag_capture_attempts SET vm_flag_hash = 'x'")
     denied(database, "django_orchestrator", "DELETE FROM flag_capture_attempts")
+
+
+# --- the event tables (core/models/events.py, docs/monitoring.md) ---------------------------
+
+DASHBOARD_EVENTS = {
+    "login_events": ("outcome, username, client_ip", ("ok", "someone", "192.0.2.7")),
+    "password_events": ("kind, actor_username, target_username", ("reset", "admin", "sam")),
+    "impersonation_events": ("kind, actor_username, target_username", ("started", "admin", "sam")),
+    "account_events": ("kind, actor_username, detail", ("created", "admin", "{}")),
+    "team_events": ("kind, actor_username, team_name", ("joined", "sam", "red")),
+    "credential_events": ("kind, actor_username, ssh_fingerprint", ("ssh_key_added", "sam", "SHA256:x")),
+    "competition_events": ("kind, actor_username, detail", ("round_created", "admin", "{}")),
+}
+NODE_EVENTS = {
+    "ssh_gateway_logins": ("logged_in_at, gateway_user, key_type, ssh_fingerprint, gateway_peer_port",
+                           ("2026-11-06T10:00:00Z", "team", "ED25519", "SHA256:x", 4000)),
+    "platform_events": ("kind, actor, detail", ("internet_allowed", "Internet.yml", "{}")),
+}
+SERVICES = ["django_dashboard", "django_orchestrator", "dbuser_scoring", "dbuser_logging", "dbuser_network_monitor",
+            "round_agent", "dbuser_events_dashboard", "dbuser_events_node"]  # fmt: skip
+
+
+def insert_event(database, role, table, events):
+    columns, values = events[table]
+    marks = ", ".join(["%s"] * len(values))
+    return run(database, role, f"INSERT INTO {table} ({columns}) VALUES ({marks})", values)
+
+
+@pytest.mark.parametrize("role, tables", [("dbuser_events_dashboard", DASHBOARD_EVENTS), ("dbuser_events_node", NODE_EVENTS)])
+def test_each_events_account_appends_to_its_own_tables_only(database, role, tables):
+    others = {**DASHBOARD_EVENTS, **NODE_EVENTS}
+    for table in others:
+        if table in tables:
+            before = count(database, table)
+            insert_event(database, role, table, tables)
+            assert count(database, table) == before + 1
+            # The database names the writer and stamps the time; nobody may supply either.
+            [(writer, recent)] = run(database, "postgres",
+                                     f"SELECT written_by, created_at > now() - interval '1 minute' FROM {table} ORDER BY id DESC LIMIT 1")  # fmt: skip
+            assert (writer, recent) == (role, True)
+            denied(database, role, f"INSERT INTO {table} (written_by) VALUES ('admin')")
+            denied(database, role, f"INSERT INTO {table} (created_at) VALUES (now() - interval '1 day')")
+        else:
+            denied(database, role, f"INSERT INTO {table} ({others[table][0]}) VALUES ({', '.join(['%s'] * len(others[table][1]))})",
+                   others[table][1])  # fmt: skip
+
+
+@pytest.mark.parametrize("role", SERVICES)
+@pytest.mark.parametrize("table", [*DASHBOARD_EVENTS, *NODE_EVENTS])
+def test_no_service_reads_changes_or_removes_events(database, role, table):
+    for sql in (f"SELECT * FROM {table}", f"UPDATE {table} SET written_by = 'x'", f"DELETE FROM {table}", f"TRUNCATE {table}"):
+        denied(database, role, sql)
+
+
+@pytest.mark.parametrize("role", ["django_dashboard", "django_orchestrator", "round_agent", "dbuser_scoring"])
+def test_the_main_roles_cannot_write_events(database, role):
+    for table, events in [*[(t, DASHBOARD_EVENTS) for t in DASHBOARD_EVENTS], *[(t, NODE_EVENTS) for t in NODE_EVENTS]]:
+        columns, values = events[table]
+        denied(database, role, f"INSERT INTO {table} ({columns}) VALUES ({', '.join(['%s'] * len(values))})", values)
+
+
+def test_events_stay_small(database):
+    with pytest.raises(psycopg2.errors.CheckViolation):
+        run(database, "dbuser_events_dashboard", "INSERT INTO account_events (kind, detail) VALUES ('created', %s)",
+            (json.dumps({"big": "x" * 5000}),))  # fmt: skip
+    with pytest.raises(psycopg2.errors.CheckViolation):
+        run(database, "dbuser_events_dashboard", "INSERT INTO login_events (outcome) VALUES ('anything')")

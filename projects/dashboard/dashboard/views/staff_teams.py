@@ -10,6 +10,7 @@ delete`, which removes it with everything it owns.
 
 from __future__ import annotations
 
+from core import events
 from core.models.devbox import Devbox, DevboxSSHKey
 from core.models.rounds import RoundRun
 from core.models.team import AccessTokens, Team, TeamMembership
@@ -52,6 +53,7 @@ def teams(request: HttpRequest):
                 max_members=form.cleaned_data["max_members"],
                 competition=competition,
             )
+            events.team("created", request=request, team=team)
             messages.success(request, f"Team {team.name} created. {DEVBOX_HINT}")
             return redirect("staff_team", uuid=team.uuid)
 
@@ -129,6 +131,7 @@ def team_add_member(request: HttpRequest, uuid):
         messages.error(request, f"{team.name} is full ({team.max_members} members); raise its limit first.")
     else:
         TeamMembership.objects.create(team=team, user=form.cleaned_data["user"])
+        events.team("member_added", request=request, team=team, member=form.cleaned_data["user"])
         messages.success(request, f"{form.cleaned_data['user'].username} joined {team.name}.")
     return redirect("staff_team", uuid=team.uuid)
 
@@ -139,6 +142,7 @@ def team_remove_member(request: HttpRequest, uuid, user_uuid):
     team = _team(request, uuid)
     user = get_object_or_404(User, uuid=user_uuid, team_memberships__team=team)
     remove_member(team, user)
+    events.team("member_removed", request=request, team=team, member=user)
     messages.success(request, f"{user.username} left {team.name}; their devbox keys are removed.")
     return redirect("staff_team", uuid=team.uuid)
 
@@ -162,5 +166,6 @@ def team_delete(request: HttpRequest, uuid):
             f"worms teams delete {team.name!r} (console).",
         )
         return redirect("staff_team", uuid=team.uuid)
+    events.team("deleted", request=request, team=team)
     messages.success(request, f"Team {team.name} deleted; its members have no team now.")
     return redirect("staff_teams")

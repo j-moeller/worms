@@ -25,6 +25,9 @@ django_extra_env:
   ORCHESTRATOR_URL: "https://{{ infrastructure_ips.orchestrator }}"
   ORCHESTRATOR_TLS_NAME: orchestrator.worms.internal
   ORCHESTRATOR_API_TOKEN: "{{ vault_orchestrator_dashboard_token }}"
+  # The event tables' own account (core/events.py): INSERT into them, nothing else.
+  EVENTS_DB_USER: dbuser_events_dashboard
+  EVENTS_DB_PASSWORD: "{{ vault_dbuser_events_dashboard_password }}"
 # The admin account (is_staff + superuser) and the default competition are
 # created by the orchestrator's `manage.py init` after the migrations (the
 # dashboard holds no migrator credentials). See group_vars/orchestrator.yml.

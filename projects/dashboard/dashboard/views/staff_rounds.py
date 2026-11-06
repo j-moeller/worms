@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from core import clock, schedule
+from core import clock, events, schedule
 from core.models.competition import Round
 from core.models.rounds import HostJob, RoundRun
 from core.models.scoring import FlagCapture
@@ -92,6 +92,7 @@ def rounds(request: HttpRequest):
                     competition=comp, name=data["name"], seed=form.chosen_seed(),
                     round_start=start, round_end=end, sandbox_params=params,
                 )  # fmt: skip
+                events.competition("round_created", request=request, round_id=created.pk, detail={"name": created.name})
                 messages.success(request, f"Round {created.name} created. Its runs are planned when it starts.")
                 return redirect("staff_round", round_id=created.pk)
 
@@ -164,6 +165,7 @@ def round_detail(request: HttpRequest, round_id):
                         round_obj.name, round_obj.round_start, round_obj.round_end = data["name"], start, end
                         round_obj.seed, round_obj.sandbox_params = form.chosen_seed(), params
                         round_obj.save(update_fields=["name", "seed", "round_start", "round_end", "sandbox_params"])
+                    events.competition("round_updated", request=request, round_id=round_obj.pk, detail={"name": round_obj.name})
                     messages.success(request, f"Saved {round_obj.name}.")
                     return redirect("staff_round", round_id=round_obj.pk)
     elif request.method == "POST":
@@ -192,5 +194,6 @@ def round_delete(request: HttpRequest, round_id):
     if RoundRun.objects.filter(round=round_obj).exists() or not delete_unreferenced(Round, round_obj.pk):
         messages.error(request, f"{round_obj.name} has runs and is kept.")
         return redirect("staff_round", round_id=round_obj.pk)
+    events.competition("round_deleted", request=request, round_id=round_id, detail={"name": round_obj.name})
     messages.success(request, f"Round {round_obj.name} deleted.")
     return redirect("staff_rounds")

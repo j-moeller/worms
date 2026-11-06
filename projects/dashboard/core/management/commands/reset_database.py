@@ -17,10 +17,14 @@ from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connections
 
+from core.models.events import EVENT_TABLES
+
 # Tables we never truncate: Django's own migration bookkeeping and content
 # types / permissions (recreated lazily, and TRUNCATE CASCADE from them would
-# wipe auth needlessly).
-KEEP = {"django_migrations", "django_content_type", "django_admin_log", "auth_permission"}
+# wipe auth needlessly), and the event tables, which outlive a wipe: they are
+# what an investigation needs (core/events.py). Nothing refers to them, so
+# CASCADE leaves them alone.
+KEEP = {"django_migrations", "django_content_type", "django_admin_log", "auth_permission", *EVENT_TABLES}
 
 
 def _write_db():
@@ -51,6 +55,9 @@ class Command(BaseCommand):
                 # handles FK order.
                 cur.execute(f"TRUNCATE {quoted} RESTART IDENTITY CASCADE")
         self.stdout.write(f"truncated {len(tables)} table(s)")
+        from core import events
+
+        events.platform("database_reset", actor="reset_database", detail={"tables": len(tables)}, using=using)
 
         if not no_init:
             call_command("init")

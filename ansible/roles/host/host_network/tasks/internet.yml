@@ -15,6 +15,11 @@
     fail_msg: "Pass -e internet=allowed or -e internet=denied"
     quiet: true
 
+- name: Is internet access allowed now (for the event tables)
+  ansible.builtin.stat:
+    path: "{{ host_internet_flag }}"
+  register: internet_flag_before
+
 - name: Read the provisioning group rules
   ansible.builtin.command: pvesh get {{ host_internet_group }} --output-format json
   register: internet_group_rules
@@ -82,6 +87,14 @@
       ansible.builtin.command: nft add element inet worms internet_wan '{ "{{ host_wan_interface }}" }'
       changed_when: true
 
+    # Best effort: missing before the round agent is installed, or without the database.
+    - name: Record the opening (platform_events)
+      ansible.builtin.command:
+        argv: ["{{ host_audit_command }}", event, internet_allowed, --data, '{"by": "Internet.yml"}']
+      when: not internet_flag_before.stat.exists
+      changed_when: false
+      failed_when: false
+
 # ---- deny ----------------------------------------------------------------------
 # Host side first (cuts access immediately); the flag is removed only after
 # both layers are verified closed.
@@ -117,3 +130,10 @@
       ansible.builtin.file:
         path: "{{ host_internet_flag }}"
         state: absent
+
+    - name: Record the closing (platform_events)
+      ansible.builtin.command:
+        argv: ["{{ host_audit_command }}", event, internet_denied, --data, '{"by": "Internet.yml"}']
+      when: internet_flag_before.stat.exists
+      changed_when: false
+      failed_when: false

@@ -196,3 +196,60 @@ def leaderboard() -> dict:
     add_round_winners(teams, rounds, captures)
 
     return {"competition": competition, "current_round": current_round, "teams": teams}
+
+
+def event_rows(hours: int = 24, kind: str | None = None, limit: int = 200) -> list[list[str]]:
+    """The event tables (core/models/events.py) as one timeline, newest first, for `worms
+    audit`. Each row is named `<table>.<kind>` (login.ok, password.reset, ...). An SSH
+    gateway login is matched by its key's fingerprint to who registered the key."""
+    import json
+    from datetime import timedelta
+
+    from core import clock
+    from core.models import events as m
+
+    since = clock.now() - timedelta(hours=max(1, hours))
+    limit = max(1, min(limit, 5000))
+    keys = {}
+    for added in m.CredentialEvent.objects.filter(kind="ssh_key_added").order_by("created_at"):
+        if added.ssh_fingerprint:
+            keys[added.ssh_fingerprint] = (added.actor_username, added.team_name)
+
+    def row(e, name, actor="", target="", team="", details=None):
+        details = json.dumps(details or {}, ensure_ascii=False, sort_keys=True, default=str) if details else ""
+        return (e.created_at, [
+            e.created_at.strftime("%Y-%m-%d %H:%M:%S"), name, e.written_by, actor or "", target or "", team or "",
+            getattr(e, "client_ip", None) or "", details if len(details) <= 100 else details[:97] + "...",
+        ])  # fmt: skip
+
+    def recent(model):
+        return model.objects.filter(created_at__gte=since).order_by("-created_at", "-id")[:limit]
+
+    rows = []
+    for e in recent(m.LoginEvent):
+        extra = {"not_recorded_before": e.not_recorded_before} if e.not_recorded_before else None
+        rows.append(row(e, f"login.{e.outcome}", actor=e.username, details=extra))
+    for e in recent(m.PasswordEvent):
+        extra = {"one_time_password_replaced": e.one_time_password_replaced} if e.one_time_password_replaced is not None else None
+        rows.append(row(e, f"password.{e.kind}", e.actor_username, f"{e.target_username} ({e.target_role})", details=extra))
+    for e in recent(m.ImpersonationEvent):
+        rows.append(row(e, f"view_as.{e.kind}", e.actor_username, e.target_username))
+    for e in recent(m.AccountEvent):
+        rows.append(row(e, f"account.{e.kind}", e.actor_username, e.target_username, details=e.detail))
+    for e in recent(m.TeamEvent):
+        rows.append(row(e, f"team.{e.kind}", e.actor_username, e.target_username, e.team_name))
+    for e in recent(m.CredentialEvent):
+        extra = {"name": e.name, **({"fingerprint": e.ssh_fingerprint} if e.ssh_fingerprint else {})}
+        rows.append(row(e, f"credential.{e.kind}", e.actor_username, team=e.team_name, details=extra))
+    for e in recent(m.CompetitionEvent):
+        rows.append(row(e, f"competition.{e.kind}", e.actor_username, details={"round": e.round_id, **(e.detail or {})}))
+    for e in recent(m.SSHGatewayLogin):
+        owner, owner_team = keys.get(e.ssh_fingerprint, (None, None))
+        rows.append(row(e, "ssh_gateway.login", f"key of {owner}" if owner else "unknown key", team=owner_team,
+                        details={"fingerprint": e.ssh_fingerprint, "at": e.logged_in_at.isoformat()}))  # fmt: skip
+    for e in recent(m.PlatformEvent):
+        rows.append(row(e, f"platform.{e.kind}", e.actor, details=e.detail))
+    if kind:
+        rows = [r for r in rows if r[1][1].startswith(kind)]
+    rows.sort(key=lambda r: r[0], reverse=True)
+    return [r[1] for r in rows[:limit]]

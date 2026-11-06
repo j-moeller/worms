@@ -7,6 +7,7 @@ to this view for everything until they set their own password; on success the
 flag is cleared and the session is kept alive.
 """
 
+from core import events
 from dashboard.views.util import render_with_base_info
 from django.contrib import messages
 from django.contrib.auth import update_session_auth_hash
@@ -26,8 +27,10 @@ def change_password(request: HttpRequest):
             # Only these two columns: the dashboard's database role may not
             # update the rest of the row (form.save() would save it all).
             form.save(commit=False)
+            first = user.must_change_password
             user.must_change_password = False
             user.save(update_fields=["password", "must_change_password"])
+            events.password("changed", request=request, target=user, one_time_password_replaced=first)
             # Keep the user logged in after the password hash changes.
             update_session_auth_hash(request, form.user)
             messages.success(request, "Password saved.")

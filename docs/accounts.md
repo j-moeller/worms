@@ -39,11 +39,13 @@ TLS only (`hostssl`, `scram-sha-256`); each role connects only from its own VM's
 |---|---|---|
 | `admin` | superuser; the `worms` CLI and manual work | the node |
 | `django_migrator` | owns the tables, runs migrations | orchestrator |
-| `django_orchestrator` | reads all; writes its result tables (runs, game plan, VMs, topology, devboxes), inserts host jobs, events, captures, logs; bumps `teams.devbox_version` | orchestrator |
-| `django_dashboard` | reads all; inserts uploads, tokens, SSH keys, memberships, password-reset rows; staff pages: student rows only (a trigger refuses staff/superuser rows), named columns of users, teams, competitions, rounds. Never `username`, `is_staff`, `is_superuser` | dashboard |
+| `django_orchestrator` | reads all but the event tables; writes its result tables (runs, game plan, VMs, topology, devboxes), inserts host jobs, events, captures, logs; bumps `teams.devbox_version` | orchestrator |
+| `django_dashboard` | reads all but the event tables; inserts uploads, tokens, SSH keys, memberships, password-reset rows; staff pages: student rows only (a trigger refuses staff/superuser rows), named columns of users, teams, competitions, rounds. Never `username`, `is_staff`, `is_superuser` | dashboard |
 | `dbuser_scoring` / `dbuser_logging` | INSERT into `flag_capture_attempts` / `logging_attempts` only, 8 connections | scoring / logging |
 | `dbuser_network_monitor` | INSERT into `network_flows`/`network_events` only, 4 connections | monitor |
 | `round_agent` | read `host_jobs`, update their state and result, 4 connections | the node |
+| `dbuser_events_dashboard` | INSERT into the dashboard's event tables (login, password, impersonation, account, team, credential, competition), named columns only; reads nothing; 8 connections | dashboard |
+| `dbuser_events_node` | INSERT into `ssh_gateway_logins` and `platform_events`, named columns only; reads nothing; 2 connections | the node |
 
 ### 1.3 Dashboard accounts
 

@@ -146,6 +146,11 @@ table inet worms {
     iifname "{{ host_wan_interface }}" fib daddr type local tcp dport 443 dnat ip to {{ infrastructure_ips.dashboard }}:443 comment "publish dashboard"
 {% endif %}
 {% if host_publish_ssh_gateway | default(false) and ssh_gateway_ips.devbox_ssh is defined %}
+    # The client's address of each new connection, to the node's journal: the gateway sees
+    # only the node (masquerade, below), and ssh_gateway_logins matches a login to its
+    # client by source port (scripts/round_agent/events.py). Rate-limited, so a scan cannot flood
+    # the journal; no verdict, the next rule still forwards the connection.
+    iifname "{{ host_wan_interface }}" fib daddr type local tcp dport {{ ssh_gateway_public_port | default(2222) }} limit rate 60/minute burst 120 packets log prefix "worms-ssh-gw: " level info comment "audit: devbox SSH client address"
     iifname "{{ host_wan_interface }}" fib daddr type local tcp dport {{ ssh_gateway_public_port | default(2222) }} dnat ip to {{ ssh_gateway_ips.devbox_ssh }}:22 comment "publish devbox SSH gateway"
 {% endif %}
   }

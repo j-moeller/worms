@@ -1,6 +1,7 @@
 import hashlib
 import secrets
 
+from core import events
 from core.models.competition import Competition
 from core.models.team import AccessTokens, Team
 from dashboard.views.decorators import (
@@ -44,6 +45,7 @@ def create_access_token(request: HttpRequest, team: Team, *, competition: Compet
         team=team,
         created_by=request.user,
     )
+    events.credential("access_token_created", request=request, team=team, name=name)
 
     # Store the raw token only temporarily so it can be displayed once.
     request.session["created_access_token"] = raw_token
@@ -68,6 +70,7 @@ def revoke_access_token(
         access_token.revoked = True
         access_token.revoked_at = request.time_now
         access_token.save(update_fields=["revoked", "revoked_at"])
+        events.credential("access_token_revoked", request=request, team=team, name=access_token.name)
         messages.success(request, f"Access token “{access_token.name}” revoked.")
 
     return redirect("profile")

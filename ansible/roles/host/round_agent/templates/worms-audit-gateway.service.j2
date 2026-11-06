@@ -1,0 +1,11 @@
+# Managed by Ansible (role round_agent). DO NOT EDIT.
+# Records the devbox SSH gateway's new team logins as audit events
+# (scripts/round_agent/events.py). Started by worms-audit-gateway.timer.
+[Unit]
+Description=worms audit: SSH gateway logins into the database
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart={{ round_agent_audit_command }} collect-gateway
+TimeoutStartSec=120

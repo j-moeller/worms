@@ -135,6 +135,52 @@ postgresql_table_privileges:
     - privs: UPDATE (state, started_at, heartbeat_at, finished_at, result, error)
       tables: [host_jobs]
 
+  # The event tables (core/models/events.py, docs/monitoring.md): each writing
+  # component has an account of its own, used for nothing else. It may INSERT
+  # only into its component's tables and only the columns it fills: created_at
+  # and written_by (current_user) are the database's, so no row is backdated or
+  # claims another writer. Nobody reads them but the admin (`worms audit`).
+  dbuser_events_dashboard:
+    - privs: INSERT (outcome, user_uuid, username, client_ip, not_recorded_before)
+      tables: [login_events]
+    - privs: >-
+        INSERT (kind, actor_uuid, actor_username, client_ip, target_uuid,
+        target_username, target_role, one_time_password_replaced)
+      tables: [password_events]
+    - privs: INSERT (kind, actor_uuid, actor_username, client_ip, target_uuid, target_username)
+      tables: [impersonation_events]
+    - privs: INSERT (kind, actor_uuid, actor_username, client_ip, target_uuid, target_username, detail)
+      tables: [account_events]
+    - privs: >-
+        INSERT (kind, actor_uuid, actor_username, client_ip, team_uuid, team_name,
+        target_uuid, target_username)
+      tables: [team_events]
+    - privs: >-
+        INSERT (kind, actor_uuid, actor_username, client_ip, team_uuid, team_name,
+        name, ssh_fingerprint)
+      tables: [credential_events]
+    - privs: INSERT (kind, actor_uuid, actor_username, client_ip, round_id, detail)
+      tables: [competition_events]
+
+  dbuser_events_node:
+    - privs: INSERT (logged_in_at, gateway_user, key_type, ssh_fingerprint, client_ip, gateway_peer_port)
+      tables: [ssh_gateway_logins]
+    - privs: INSERT (kind, actor, detail)
+      tables: [platform_events]
+
+# Append only for every service: whatever `tables: ALL` gave, no role reads,
+# changes or removes a row of these (the event tables).
+postgresql_append_only_tables:
+  - login_events
+  - password_events
+  - impersonation_events
+  - account_events
+  - team_events
+  - credential_events
+  - competition_events
+  - ssh_gateway_logins
+  - platform_events
+
 # Roles whose INSERT into users is refused when the row is staff or superuser
 # (a trigger, privileges.sql.j2): the public dashboard creates student
 # accounts only, even if it is compromised.

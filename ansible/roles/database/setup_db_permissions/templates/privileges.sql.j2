@@ -10,6 +10,10 @@ GRANT {{ grant.privs }} ON ALL TABLES IN SCHEMA public TO "{{ role }}";
 GRANT {{ grant.privs }} ON {{ grant.tables | map('regex_replace', '^(.*)$', 'public."\\1"') | join(', ') }} TO "{{ role }}";
 {% endif %}
 {% endfor %}
+{% for table in postgresql_append_only_tables | default([]) %}
+{# Append only: whatever `tables: ALL` gave, no role reads, changes or removes a row. #}
+REVOKE SELECT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON public."{{ table }}" FROM "{{ role }}";
+{% endfor %}
 {% endfor %}
 {# Sequences behind the id columns of tables with INSERT (serial or identity). #}
 DO $$

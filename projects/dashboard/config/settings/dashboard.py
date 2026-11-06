@@ -17,6 +17,10 @@ if not DEBUG:
             env("DB_PASSWORD", required=True),
         ),
     }
+    # The event tables (core/events.py): their own account, which may only INSERT into
+    # them; the main role cannot write them at all. Without it, events are not recorded.
+    if env("EVENTS_DB_USER"):
+        DATABASES["events"] = postgres_database(env("EVENTS_DB_USER"), env("EVENTS_DB_PASSWORD", required=True))
 
 # Orchestrator REST API (dashboard -> orchestrator:443, bearer token).
 # Connect by IP (no DNS on the infrastructure side) and verify the certificate

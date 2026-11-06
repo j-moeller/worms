@@ -173,6 +173,7 @@ To make a new snapshot outside a build:
 |---|---|
 | Teams, members, sign-ins / all users | `worms teams` / `worms users` |
 | The leaderboard | `worms leaderboard` |
+| Who signed in, changed a password, viewed as someone, logged in through the SSH gateway | `worms audit` (`docs/monitoring.md`, "Event tables") |
 | Host jobs and the active run | `/staff/rounds/`, **Right now** |
 | What the round agent is doing | `tail -F /var/log/worms/jobs/latest.log`; `journalctl -u worms-round-agent` |
 | VMs stopped by the firewall watchdog | `journalctl -t worms-firewall-watchdog --since today` |

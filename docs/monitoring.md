@@ -1,4 +1,4 @@
-# Monitoring: network flows and audit logs
+# Monitoring: network flows, audit logs and event tables
 
 ## Network monitor
 
@@ -72,6 +72,55 @@ ssh -i /etc/worms/ssh/worms debian@10.5.0.30
 sudo ls /var/log/remote/
 sudo grep 'key="exec"' /var/log/remote/10.11.0.16/audit.log     # every command on the database
 ```
+
+## Event tables in the database
+
+For a forensic investigation: who did what, when, and from where. One table per kind of event,
+each with the columns that kind needs, and only the important events, so they stay small: tens
+to a few hundred rows a day. Read them together on the console:
+
+```sh
+worms audit                            # all tables as one timeline, the last 24 hours, newest first
+worms audit --hours 168 --kind login   # a week of sign-ins (a prefix: login, password.reset, team.joined, ...)
+```
+
+| Table | Written by | Holds |
+|---|---|---|
+| `login_events` | dashboard | Sign-ins (`ok`, `failed`) and sign-outs, with the client's address. A failed attempt keeps the name tried only if that account exists, so a password typed into the name field is never stored; at most 30 failures a minute per dashboard process, the rest counted (`not_recorded_before`) |
+| `password_events` | dashboard, console | A user set their own password (`changed`, and whether it replaced a one-time password); staff, the admin or `worms admin reset-password` issued a one-time password (`reset`, with the target's role). `password_resets` keeps its own row of a reset too |
+| `impersonation_events` | dashboard | The admin viewed the dashboard as a user (`started`, `ended`) |
+| `account_events` | dashboard, console | Accounts made or changed by staff (`created`, `imported`, `updated`, `activated`, `deactivated`), staff accounts from the console (`staff_created`) |
+| `team_events` | dashboard, console | `created`, `deleted`, `member_added`, `member_removed` (staff), `joined`, `left` (the user), `devbox_reset` |
+| `credential_events` | dashboard | Devbox SSH keys (`ssh_key_added`, `ssh_key_removed`, with sshd's `SHA256:` fingerprint) and team API tokens (`access_token_created`, `access_token_revoked`; never the token) |
+| `competition_events` | dashboard | Staff changes to the competition and its rounds |
+| `ssh_gateway_logins` | node | A team's SSH login through the devbox gateway: when, the key's fingerprint (`worms audit` names who registered it) and the client's public address |
+| `platform_events` | node, console | The internet window (`internet_allowed`, `internet_denied`), the firewall watchdog stopping team VMs (`watchdog_stopped`, with the reason), `database_reset` (`worms reset-database` keeps every event table) |
+
+Not recorded, on purpose: page views, API reads, uploads (the `uploads` table has them), the
+platform's own SSH logins to VMs, unauthenticated SSH attempts on port 2222.
+
+**Accounts:** each writing component has a database account of its own, used for nothing else:
+`dbuser_events_dashboard` (the dashboard's `events` connection; its main role cannot write these
+tables) and `dbuser_events_node` (`/etc/worms/events.env` on the node; not the round agent's
+role). The console writes as the admin. An account may only `INSERT`, only into its component's
+tables, only the columns it fills, from its own VM's address, over TLS. The firewall is unchanged:
+both VMs already reach the database on 5432.
+
+**What the database guarantees:** it fills `created_at` (now) and `written_by` (the inserting
+account), which no writer may supply, so no row is backdated or claims another writer. No service
+may read, change or delete a row; only the admin reads them. Rows are size-bounded, and hold names
+and addresses, never a password, hash or token. A compromised dashboard can therefore add false
+rows to its own tables, but can neither read nor rewrite the trail, nor write the node's.
+
+**The SSH gateway:** it sees only the node, which masquerades every team. So the node logs each
+new connection to port 2222 (`worms-ssh-gw:` in its kernel log, rate-limited), and
+`worms-audit-gateway.timer` (every minute) reads the gateway's sshd journal, records each accepted
+team login, and finds its client by the source port, which masquerading keeps. When it cannot,
+`client_ip` is empty.
+
+Code: `core/models/events.py`, `core/events.py` (dashboard and console), `scripts/round_agent/events.py`
+and `/usr/local/sbin/worms-audit` (node), `queries.event_rows` (`worms audit`), the grants in
+`setup_db_permissions`. Tests: `tests/test_events.py`, `tests/test_database.py`.
 
 ## Operations
 

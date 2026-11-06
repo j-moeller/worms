@@ -204,6 +204,9 @@ def cmd_teams(config, args) -> int:
         if not build.confirm(f"Delete team {args.name!r} (users are kept)?", getattr(args, "yes", False)):
             return 1
         print(queries.delete_team(args.name))
+        from core import events
+
+        events.team("deleted", actor=_console(), team_name=args.name)
         return 0
 
     rows = queries.team_rows()
@@ -297,6 +300,28 @@ def cmd_users(config, args) -> int:
     return 0
 
 
+def _console() -> str:
+    """Who ran a console command, for the event tables: `console:<user>@<host>`."""
+    import getpass
+    import socket
+
+    return f"console:{getpass.getuser()}@{socket.gethostname()}"
+
+
+def cmd_audit(config, args) -> int:
+    """`worms audit`: the event tables as one timeline, newest first. Only the admin reads
+    them: the dashboard's and the node's accounts may only append (docs/monitoring.md)."""
+    _with_db(config)
+    from worms_cli import queries
+
+    rows = queries.event_rows(hours=args.hours, kind=args.kind, limit=args.limit)
+    if not rows:
+        print(f"No audit events in the last {args.hours} hour(s).")
+        return 0
+    print(output.table(rows, headers=["Time (UTC)", "Event", "Written by", "Actor", "Target", "Team", "Client", "Details"]))
+    return 0
+
+
 def cmd_admin(config, args) -> int:
     """`worms admin reset-password`: a new one-time password for the dashboard
     admin, printed once here (stdout), never stored (manage.py
@@ -315,6 +340,9 @@ def cmd_admin(config, args) -> int:
         if created is None:
             output.error(f"an account {args.email!r} already exists")
             return 1
+        from core import events
+
+        events.account("staff_created", actor=_console(), target=created.user)
         print(f"staff: created {created.user.username!r}; one-time password below (shown once):", file=sys.stderr)
         print(created.password)
         return 0
@@ -328,6 +356,9 @@ def cmd_admin(config, args) -> int:
     except CommandError as exc:
         output.error(str(exc))
         return 1
+    from core import events
+
+    events.password("reset", actor=_console(), target=User.objects.filter(username=args.username).first())
     return 0
 
 
@@ -603,6 +634,7 @@ SECTIONS = (
             ("teams", "teams, their members, who has signed in (create and edit them on the dashboard: Staff → Teams)"),
             ("users", "all users: team, login status, one-time password"),
             ("leaderboard", "the production leaderboard, in the console"),
+            ("audit", "the event tables: sign-ins, passwords, view-as, SSH gateway logins, ... (newest first)"),
             ("secrets", "the vault: what is set, never a value (creates the vault and missing generated secrets)"),
             ("secrets check", "ask Proxmox whether the stored tokens work, with exactly their rights"),
         ),
@@ -736,6 +768,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     _add(sub, "users")
     _add(sub, "leaderboard")
+    p_audit = _add(sub, "audit")
+    p_audit.add_argument("--hours", type=int, default=24, help="how far back (default 24)")
+    p_audit.add_argument("--kind", default=None, help="only events starting with this: login, password, team.joined, ...")
+    p_audit.add_argument("--limit", type=int, default=200, help="at most this many rows (default 200)")
 
     p_admin = sub.add_parser("admin", description="the dashboard admin account, and staff accounts")
     admin_sub = p_admin.add_subparsers(dest="admin_action", required=True)
@@ -802,6 +838,8 @@ def main(argv=None) -> int:
         return cmd_users(config, args)
     if args.command == "leaderboard":
         return cmd_leaderboard(config, args)
+    if args.command == "audit":
+        return cmd_audit(config, args)
     if args.command == "admin":
         return cmd_admin(config, args)
     if args.command == "secrets":

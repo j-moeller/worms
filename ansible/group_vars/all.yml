@@ -78,6 +78,17 @@ postgresql_users:
     password: "{{ vault_round_agent_db_password }}"
     cidr: "{{ proxmox.host }}/32"
     conn_limit: 4
+  # The event tables (core/models/events.py, docs/monitoring.md): one account per
+  # writing component, used for nothing else, INSERT only. The console writes as
+  # the admin.
+  - name: dbuser_events_dashboard
+    password: "{{ vault_dbuser_events_dashboard_password }}"
+    cidr: "{{ infrastructure_ips.dashboard }}/32"
+    conn_limit: 8   # one per gunicorn worker at most
+  - name: dbuser_events_node
+    password: "{{ vault_dbuser_events_node_password }}"
+    cidr: "{{ proxmox.host }}/32"
+    conn_limit: 2
 
 # --- PKI / internal CA ------------------------------------------------------
 pki_domain: worms.internal

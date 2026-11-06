@@ -19,6 +19,9 @@ host_nft_file: /etc/worms/worms.nft
 # Internet access for the VMs (tasks/internet.yml, playbook Internet.yml).
 # The flag exists while access is allowed (tmpfs); the sandbox stack checks it.
 host_internet_flag: /run/worms/internet-allowed
+# Records the node's events (role round_agent installs it; docs/monitoring.md).
+# Missing before the first SetupRoundAgent.yml: then nothing is recorded.
+host_audit_command: /usr/local/sbin/worms-audit
 host_internet_group: /cluster/firewall/groups/provisioning
 host_internet_rules:
   - {proto: tcp, dport: "80,443", comment: "internet allowed: HTTP(S)"}

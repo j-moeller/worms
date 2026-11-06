@@ -1,0 +1,11 @@
+# Managed by Ansible (role round_agent). DO NOT EDIT.
+[Unit]
+Description=worms audit: SSH gateway logins, every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=60s
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

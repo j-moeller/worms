@@ -1,5 +1,6 @@
 import uuid
 
+from core import events
 from core.models.competition import Competition
 from core.models.team import Team, TeamMembership
 from core.models.user import User
@@ -53,6 +54,7 @@ def join_team(request: HttpRequest, uuid: uuid.UUID, competition: Competition):
             messages.error(request, "You are already in a team.")
         elif team.users.count() < team.max_members:
             TeamMembership.objects.create(user=request.user, team=team)
+            events.team("joined", request=request, team=team)
             messages.success(request, f"You joined {team.name}.")
         else:
             messages.error(request, f"{team.name} is full.")
@@ -73,5 +75,6 @@ def leave_team(request: HttpRequest, uuid, competition: Competition):
     # Removes the keys this member registered and re-pushes the rest, so the
     # departing member loses devbox access (docs/security-assessment.md).
     remove_member(team, request.user)
+    events.team("left", request=request, team=team)
     messages.success(request, f"You left {team.name}.")
     return redirect("team_registration")

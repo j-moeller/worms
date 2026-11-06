@@ -14,7 +14,7 @@ deactivation); nobody manages the admin here (`worms admin reset-password`).
 
 from __future__ import annotations
 
-from core import accounts
+from core import accounts, events
 from core.models.team import TeamMembership
 from core.models.user import User
 from dashboard.forms import UserCreateForm, UserEditForm, UserImportForm, UserTeamForm
@@ -81,6 +81,9 @@ def users(request: HttpRequest):
             if created is None:
                 create_form.add_error("email", "An account with this email already exists.")
             else:
+                membership = TeamMembership.objects.filter(user=created.user).select_related("team").first()
+                events.account("created", request=request, target=created.user,
+                               detail={"team": membership.team.name if membership else None})  # fmt: skip
                 return _credentials(request, [created], "Account created")
 
     selected = request.GET.get("show", "all")
@@ -125,6 +128,9 @@ def import_users(request: HttpRequest):
         messages.error(request, str(exc))
         return redirect("staff_users")
     created, problems = accounts.import_rows(parsed.rows, competition=request.competition)
+    if created:
+        events.account("imported", request=request,
+                       detail={"accounts": [c.user.username for c in created][:50], "count": len(created)})  # fmt: skip
     return _credentials(request, created, "Accounts imported", [*parsed.problems, *problems])
 
 
@@ -151,6 +157,7 @@ def user_detail(request: HttpRequest, uuid):
             for key in ("first_name", "last_name", "email"):
                 setattr(user, key, edit_form.cleaned_data[key])
             user.save(update_fields=["first_name", "last_name", "email"])
+            events.account("updated", request=request, target=user, detail={"email": user.email})
             messages.success(request, f"Saved {user.username}.")
             return redirect("staff_user", uuid=user.uuid)
     return render_with_base_info(request, "staff/user.html", {
@@ -169,6 +176,7 @@ def user_detail(request: HttpRequest, uuid):
 def user_password(request: HttpRequest, uuid):
     user = _managed_user(request, uuid)
     password = accounts.reset_password(user, by=request.user)
+    events.password("reset", request=request, target=user)
     return _credentials(request, [accounts.Created(user, password)], "New one-time password")
 
 
@@ -180,6 +188,7 @@ def user_active(request: HttpRequest, uuid):
     user = _managed_user(request, uuid)
     user.is_active = request.POST.get("active") == "1"
     user.save(update_fields=["is_active"])
+    events.account("activated" if user.is_active else "deactivated", request=request, target=user)
     messages.success(request, f"{user.username} is now {'active' if user.is_active else 'deactivated'}.")
     return redirect("staff_user", uuid=user.uuid)
 
@@ -204,8 +213,10 @@ def user_team(request: HttpRequest, uuid):
         return redirect("staff_user", uuid=user.uuid)
     if old is not None:
         remove_member(old, user)
+        events.team("member_removed", request=request, team=old, member=user)
     if new is not None:
         TeamMembership.objects.create(user=user, team=new)
+        events.team("member_added", request=request, team=new, member=user)
         messages.success(request, f"{user.username} is now in {new.name}.")
     else:
         messages.success(request, f"{user.username} has no team now.")

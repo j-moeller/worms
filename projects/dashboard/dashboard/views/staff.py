@@ -12,7 +12,7 @@ from the console (`worms devbox provision`), and the platform itself with
 
 from __future__ import annotations
 
-from core import clock
+from core import clock, events
 from core.models.competition import Round
 from core.models.team import Team, TeamMembership
 from core.models.user import User
@@ -78,6 +78,10 @@ def competition(request: HttpRequest):
             comp.registration_starts_at = form.cleaned_data["registration_starts_at"]
             comp.registration_ends_at = form.cleaned_data["registration_ends_at"]
             comp.save(update_fields=["name", "registration_starts_at", "registration_ends_at"])
+            events.competition("competition_updated", request=request, detail={
+                "name": comp.name, "registration_starts_at": comp.registration_starts_at,
+                "registration_ends_at": comp.registration_ends_at,
+            })  # fmt: skip
             messages.success(request, "Competition saved.")
             return redirect("staff_competition")
     else:

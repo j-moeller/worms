@@ -1,7 +1,7 @@
 variable "proxmox_instance" {
   description = "Name of the proxmox instance"
   type        = string
-  default     = "worms-pve"
+  default     = "worms"
 }
 
 variable "proxmox_api_url" {

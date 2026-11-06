@@ -30,7 +30,7 @@ hide_secrets: true
 # SSH gateway under it.
 dashboard_public_names:
   worms-dev: worms-dev.mlsec.tu-berlin.de
-  worms-pve: worms.mlsec.tu-berlin.de
+  worms: worms.mlsec.tu-berlin.de
 
 # --- PostgreSQL -------------------------------------------------------------
 postgres_db: mydb

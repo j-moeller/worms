@@ -102,6 +102,10 @@ def lab(tmp_path, render):
             sh("ip", "link", "set", "lo", "up", ns=ns)
             for addr in addrs:
                 sh("ip", "addr", "add", addr, "dev", "eth0", ns=ns)
+        for vm in ("a", "b"):
+            # With rp_filter enabled, an off-subnet service's ARP reply needs
+            # a return route. Real sandbox VMs have this default gateway too.
+            sh("ip", "route", "add", "default", "via", "10.64.0.1", "dev", "eth0", ns=names[vm])
         sh("ip", "link", "set", "eth0", "promisc", "on", ns=names["mon"])
 
         # A stand-in for Proxmox' rate-limit filter (pref 50) on a VM port.
@@ -195,6 +199,8 @@ def test_monitor_port_is_receive_only(lab):
     line = lab["mirror"]("status", check=False).stdout.split("tap960i2", 1)[1].splitlines()[0]
     if line.split()[-1] != "drop":
         pytest.skip("tc action 'gact' (drop) not available in this kernel")
+    # IPv6 link-local/DAD may have incremented RX before the drop was installed.
+    before = sh("cat", "/sys/class/net/wtmir/statistics/rx_packets", ns=lab["host"]).stdout.strip()
     # The monitor tries to talk (ARP + UDP) on its capture NIC.
     sh("ip", "addr", "add", "10.99.0.1/24", "dev", "eth0", ns=lab["ns"]["mon"])
     udp(lab["ns"]["mon"], "10.99.0.1", "10.99.0.2", count=5)
@@ -203,7 +209,7 @@ def test_monitor_port_is_receive_only(lab):
     assert "Sent" in out and "Sent 0 bytes" not in out, out
     # ... and nothing reached the mirror bridge.
     rx = sh("cat", "/sys/class/net/wtmir/statistics/rx_packets", ns=lab["host"]).stdout.strip()
-    assert rx == "0", rx
+    assert rx == before, (before, rx)
 
 
 def test_clear_removes_everything(lab):

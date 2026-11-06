@@ -1,3 +1,5 @@
+import ssl
+
 from config.settings.base import *  # noqa: F401,F403
 from config.settings.base import DEBUG, LOG_LEVEL, LOGGING, ROUND_TIMING, env, postgres_database
 
@@ -31,10 +33,13 @@ PROXMOX = {
     "user": env("PROXMOX_USER", required=not DEBUG),
     "token_name": env("PROXMOX_TOKEN_NAME", required=not DEBUG),
     "token_value": env("PROXMOX_TOKEN_VALUE", required=not DEBUG),
-    # Verify the Proxmox API certificate. PROXMOX_CA_BUNDLE is a copy of PVE's
-    # CA certificate (group_vars/orchestrator.yml) and takes precedence. Set
-    # PROXMOX_VERIFY_SSL=0 only for local experimentation.
-    "verify_ssl": env("PROXMOX_CA_BUNDLE") or env("PROXMOX_VERIFY_SSL", "1") == "1",
+    # Requests otherwise uses certifi, which lacks the cluster CA installed
+    # by Ansible. Both power control and topology collection use this trust.
+    "verify_ssl": env("PROXMOX_CA_BUNDLE") or (
+        (env("REQUESTS_CA_BUNDLE") or env("CURL_CA_BUNDLE")
+         or ssl.get_default_verify_paths().cafile or True)
+        if env("PROXMOX_VERIFY_SSL", "1") == "1" else False
+    ),
 }
 
 # Separate, READ-ONLY Proxmox API token used only to collect the topology (VMs,

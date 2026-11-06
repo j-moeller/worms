@@ -1999,7 +1999,7 @@
                 ["VMs", d && d.audience === "team"
                     ? (d.environment === "dev" ? `${captured} of ${tl.nodes.length} captured` : `${captured} captured`)
                     : `${tl.nodes.length} (${captured} captured)`],
-                ["connections", connectionsText(tl)],
+                ["connections", el("span", { id: "topo-connection-count" }, connectionsText(tl))],
                 ["flags submitted", `${kinds.flag_submitted || 0}${tl.truncated && tl.truncated.flag_submissions ? " (truncated)" : ""}`],
                 ["logs sent", `${kinds.log_received || 0}${tl.truncated && tl.truncated.logs ? " (truncated)" : ""}`],
             ]),
@@ -2614,7 +2614,11 @@
         }
         routeCache.clear();
         setupPlayer();
-        renderSide();
+        // The background response must not replace an event row between
+        // pointer-down and pointer-up, which swallows the user's click.
+        // Only this summary value depends on the newly loaded connections.
+        const count = $("topo-connection-count");
+        if (count) count.textContent = connectionsText(tl);
         renderLegend();
         render();
     }

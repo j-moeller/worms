@@ -16,7 +16,8 @@ import re
 
 from core import events
 from core.models.devbox import Devbox, DevboxCapture, DevboxSSHKey, DevboxVM
-from core.models.team import Team
+from core.membership import membership_change
+from core.models.team import Team, TeamMembership
 from dashboard.views.decorators import user_in_team_required
 from dashboard.views.leaderboard import leaderboard
 from dashboard.views.util import render_with_base_info
@@ -187,32 +188,34 @@ def devbox_add_ssh_key(request: HttpRequest, team: Team):
     if not _valid_ssh_key(public_key):
         messages.error(request, "That is not a single-line OpenSSH public key (ssh-ed25519, ssh-rsa, ecdsa, sk-…), or it contains characters that are not allowed.")
         return redirect("profile")
-    # A key may belong to only one team: sshd matches a key to the first
-    # authorized_keys line, so a shared key would let another team inherit this
-    # team's gateway forward and log in to its devbox VMs
-    # (docs/security-assessment.md, D7). The DB UNIQUE constraint on the
-    # fingerprint is the race-proof guard; this check is for a clear message
-    # and to tell "another team's" from "already yours".
-    fingerprint = DevboxSSHKey.fingerprint(public_key)
-    existing = DevboxSSHKey.objects.filter(key_fingerprint=fingerprint).first()
-    if existing is not None:
-        if existing.team_id == team.id:
-            # Not a no-op: a failed install tells the user to retry, which lands here.
+    retry = False
+    # Membership can change after middleware resolved request.team. The team
+    # lock also makes the key-count limit atomic across its members.
+    with membership_change(request.user, team):
+        if not TeamMembership.objects.filter(user=request.user, team=team).exists():
+            messages.error(request, "You are no longer a member of this team.")
+            return redirect("profile")
+        fingerprint = DevboxSSHKey.fingerprint(public_key)
+        existing = DevboxSSHKey.objects.filter(key_fingerprint=fingerprint).first()
+        if existing is not None:
+            if existing.team_id != team.id:
+                messages.error(request, "That public key is already registered by another team. Use a different key.")
+                return redirect("profile")
             messages.info(request, "Your team already has that key.")
-            _reconfigure_devbox(request, team, "pushed again")
+            retry = True
         else:
-            messages.error(request, "That public key is already registered by another team. Use a different key.")
-        return redirect("profile")
-    try:
-        with transaction.atomic():
-            DevboxSSHKey.objects.create(team=team, name=name, public_key=public_key, created_by=request.user)
-            events.credential("ssh_key_added", request=request, team=team, name=name, public_key=public_key)
-    except IntegrityError:
-        # Lost a race against a simultaneous add of the same key (another team,
-        # or a double submit): the UNIQUE constraint held.
-        messages.error(request, "That public key is already registered. Use a different key.")
-        return redirect("profile")
-    _reconfigure_devbox(request, team, "added")
+            if DevboxSSHKey.objects.filter(team=team).count() >= 64:
+                messages.error(request, "Your team already has 64 SSH keys; remove an unused key first.")
+                return redirect("profile")
+            try:
+                with transaction.atomic():
+                    DevboxSSHKey.objects.create(team=team, name=name, public_key=public_key, created_by=request.user)
+                    events.credential("ssh_key_added", request=request, team=team, name=name, public_key=public_key)
+            except IntegrityError:
+                messages.error(request, "That public key is already registered. Use a different key.")
+                return redirect("profile")
+    # Network calls happen after releasing membership and team locks.
+    _reconfigure_devbox(request, team, "pushed again" if retry else "added")
     return redirect("profile")
 
 
@@ -254,7 +257,7 @@ def _valid_ssh_key(value: str) -> bool:
         return False
     parts = value.split(" ")
     # type + base64 blob, then at most a one-token comment (no spaces).
-    if len(parts) < 2 or len(parts) > 3 or parts[0] not in _SSH_TYPES:
+    if len(parts) < 2 or len(parts) > 3 or parts[0] not in _SSH_TYPES or len(parts[1]) < 20:
         return False
     import base64
 

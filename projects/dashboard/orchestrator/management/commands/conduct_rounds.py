@@ -15,6 +15,7 @@ import time
 from core.models.competition import ApplicationSetting
 from core.models.rounds import RoundRun
 from django.core.management.base import BaseCommand
+from django.db import close_old_connections
 from django.utils import timezone
 
 from orchestrator.rounds.conductor import Conductor
@@ -42,8 +43,8 @@ class Command(BaseCommand):
                 self.stdout.write(f"planned {len(runs)} run(s) for round {round.name}")
 
     def handle(self, once, plan_only, interval, **options):
-        self.plan_due_rounds()
         if plan_only:
+            self.plan_due_rounds()
             return
         conductor = Conductor()
         if once:
@@ -52,9 +53,10 @@ class Command(BaseCommand):
             return
         self.stdout.write("conductor started")
         while True:
-            self.plan_due_rounds()
+            close_old_connections()
             busy = False
             try:
+                self.plan_due_rounds()
                 busy = conductor.tick()
             except Exception:  # a bad run must not kill the loop
                 import logging

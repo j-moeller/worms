@@ -17,8 +17,9 @@ network_monitor_zeek_prefix: /opt/zeek
 network_monitor_zeek_user: zeek
 network_monitor_shipper_user: zeek-shipper
 network_monitor_config_dir: /etc/zeek-worms
-network_monitor_log_dir: /var/lib/zeek/logs           # current logs (Zeek's working directory)
-network_monitor_archive_dir: /var/lib/zeek/archive    # rotated logs
+network_monitor_data_dir: /var/lib/zeek
+network_monitor_log_dir: "{{ network_monitor_data_dir }}/logs"       # current logs
+network_monitor_archive_dir: "{{ network_monitor_data_dir }}/archive" # rotated logs
 network_monitor_shipper_dir: /opt/zeek-shipper
 network_monitor_shipper_state_dir: /var/lib/zeek-shipper
 network_monitor_shipper_env_file: /etc/zeek-shipper/zeek-shipper.env

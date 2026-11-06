@@ -22,37 +22,6 @@
     - setup_db_base
 
 
-# The orchestrator verifies the Proxmox API (VM power, topology). PVE's certificate
-# is issued by PVE's own CA for the node's name, so it gets that CA, and the node's
-# name for the address it reaches the API on.
-- name: Let the orchestrator verify the Proxmox API
-  hosts: orchestrator
-  become: true
-  any_errors_fatal: true
-
-  tasks:
-    - name: Read PVE's CA certificate
-      ansible.builtin.slurp:
-        src: /etc/pve/pve-root-ca.pem
-      delegate_to: "{{ groups['proxmox_host'][0] }}"
-      become: false
-      register: pve_root_ca
-
-    - name: Install PVE's CA certificate
-      ansible.builtin.copy:
-        content: "{{ pve_root_ca.content | b64decode }}"
-        dest: "{{ proxmox_ca_bundle }}"
-        owner: root
-        group: root
-        mode: '0644'
-
-    - name: Name the node at the address the orchestrator reaches it on
-      ansible.builtin.lineinfile:
-        path: /etc/hosts
-        regexp: '\s{{ proxmox.node }}$'
-        line: "{{ proxmox.host }} {{ proxmox.node }}"
-
-
 - name: Configure Django application servers (dashboard + orchestrator)
   hosts: django_hosts
   become: true

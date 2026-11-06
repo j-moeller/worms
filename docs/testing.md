@@ -18,8 +18,9 @@ conductor, team API, staff and progression tests ran only on a SQLite harness. E
 PostgreSQL (2026-11-04): 655 passed. Known failures, none a product bug:
 `test_playbook_syntax[inventory.generated.yml]` (treats a generated file as a playbook),
 `test_fixture_matches_shared_variables` (this node's local name `worms-dev`),
-`test_monitor_port_is_receive_only` (fails on clean `HEAD` too; the live check passes), and
-`test_two_teams_run_one_after_another` (its fake agent reuses flag hashes).
+and `test_monitor_port_is_receive_only` (fails on clean `HEAD` too; the live check passes).
+`test_two_teams_run_one_after_another` (its fake agent reused flag hashes) is fixed by the merge
+of `end-to-end-tests`, which passed 807 tests with PostgreSQL in its container.
 
 | Area | Files |
 |---|---|
@@ -94,3 +95,58 @@ only its own INSERT, tested from its VM). **Without a sandbox**, the sandbox par
 - Whether the audit logs arrive at the syslog VM (only that the daemons run).
 - Load: flooding the APIs, the monitor or the dashboard's uploads.
 - The private-internet services from a sandbox.
+
+## Rehearsals without the node (from `end-to-end-tests`, Fabian)
+
+These need no Proxmox, vault or production data. They passed 807 tests in their container on
+2026-11-05, before the merge into `main`; they have not run on this node, which lacks
+PostgreSQL and Docker.
+
+**The isolated dashboard rehearsal** starts the dashboard against a throwaway PostgreSQL with the
+production middleware, secure cookies, the restricted `django_dashboard` role and the real grants,
+on loopback only (HTTP on localhost:28180 for a browser, HTTPS on :28181). It prints the URL and a
+generated admin password; Ctrl-C removes the database. Needs Python 3.12+, PostgreSQL server
+binaries and OpenSSL on `PATH`:
+
+```sh
+PATH="$PWD/.venv-test/bin:$PATH" .venv-test/bin/python scripts/dashboard_e2e.py
+PATH="$PWD/.venv-test/bin:$PATH" .venv-test/bin/python -m pytest -q tests/test_dashboard_e2e.py tests/test_enrollment_concurrency.py
+```
+
+They cover staff and CSV accounts, first sign-in and password change, joining, leaving and staff
+assignments, uploads, rounds, scoring and logging as the INSERT-only roles, processing as the
+orchestrator role, replays and zips, cross-team refusals, CSRF and origin checks, deactivation
+and resets; with Node Playwright also the browser replay and download.
+
+**Races** (`test_dashboard_races.py`, `test_enrollment_concurrency.py`, `test_round_planning_races.py`,
+`test_staff_configuration_races.py`, `test_orchestrator_api.py`): real concurrent PostgreSQL
+requests for duplicate accounts and team names (now case-insensitive), the last place in a team,
+simultaneous assignments, identical uploads from two teams, missing or corrupt media, simultaneous
+key registration, round planning against staff edits, and devbox jobs: every producer of a job
+carrying the teams' keys (reset, reconfigure, provision) takes one lock, and a queued key update
+is never reused across a later rebuild or provision, which would reinstall a revoked key.
+
+**The Linux stack** (`tests/docker/Dockerfile`, `test_linux_stack.py`, `scripts/dashboard_linux.py`):
+the rendered nginx, three gunicorn workers, the orchestrator API and the attempt processor against
+a disposable PostgreSQL in a container; three browsers, twelve students signing in at once for three
+team places, a worker killed and replaced, PostgreSQL stopped and restarted under load. The
+concurrent tests use a higher test-only sign-in rate; production keeps 10 a minute per address.
+
+```sh
+docker build -f tests/docker/Dockerfile -t worms-dashboard-e2e:local tests
+docker run --rm --privileged --shm-size=1g --memory=3g --mount "type=bind,source=$PWD,target=/repo,readonly" worms-dashboard-e2e:local
+```
+
+**Deployment regressions** (`test_deployment_connectivity.py`, privileged container only): the
+Django role's connectivity tasks against fixtures (service names in a managed `/etc/hosts` block,
+the Proxmox CA into the system trust store, idempotent), and Zeek's log rotation across one
+writable data directory.
+
+**Migrations 0005 and 0006** make account and team names case-insensitive and SSH key fingerprints
+canonical. They refuse, and change nothing, when existing data collides. Before upgrading a
+populated database, look for collisions:
+
+```sql
+SELECT lower(username), count(*) FROM users GROUP BY lower(username) HAVING count(*) > 1;
+SELECT competition_id, lower(name), count(*) FROM teams GROUP BY competition_id, lower(name) HAVING count(*) > 1;
+```

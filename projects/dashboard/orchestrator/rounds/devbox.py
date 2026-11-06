@@ -17,12 +17,13 @@ host_jobs.
 
 from __future__ import annotations
 
+from core.locking import serialized_resource
 from core.models.devbox import Devbox, DevboxSSHKey, DevboxVM
 from core.models.rounds import HostJob
 from core.models.team import Team
 from django.conf import settings
 from django.db import transaction
-from django.db.models import F
+from django.db.models import F, Max
 
 MAX_TEAMS = 32  # the services block 10.2.0.32/27
 
@@ -63,8 +64,11 @@ def request_rebuild(team):
     rewrites their tokens. Returns (job, enqueued). Rebuilds never pile up: if one is queued or
     running, that one comes back with enqueued False and the version stays
     (docs/security-assessment.md, D2). Without a devbox there is nothing to rebuild: (None,
-    False), with the version bumped all the same, as a reset always did."""
-    with transaction.atomic():
+    False), with the version bumped all the same, as a reset always did.
+
+    A rebuild carries every team's keys, so it takes the devbox-job queue lock that key
+    updates take too: a later rebuild cannot undo a revocation."""
+    with serialized_resource("devbox-jobs", "queue"):
         Team.objects.select_for_update().get(pk=team.pk)
         existing = HostJob.objects.filter(
             kind=HostJob.Kind.DEVBOX_REBUILD,
@@ -109,10 +113,15 @@ def request_reconfigure(competition):
     map off scoring and logging. Touches no VM's disk and no token.
 
     Returns the job, or None when no devbox is provisioned or a queued job
-    already carries exactly this."""
-    with transaction.atomic():
+    already carries exactly this, after any queued rebuild or provision (whose older
+    key snapshot would otherwise come last)."""
+    with serialized_resource("devbox-jobs", "queue"):
         teams = provisioned_team_specs(competition)
-        queued = HostJob.objects.filter(kind=HostJob.Kind.DEVBOX_RECONFIGURE, state=HostJob.State.QUEUED)
+        barrier = HostJob.objects.filter(
+            kind__in=[HostJob.Kind.DEVBOX_REBUILD, HostJob.Kind.DEVBOX_PROVISION],
+            state__in=[HostJob.State.QUEUED, HostJob.State.RUNNING],
+        ).aggregate(latest=Max("id"))["latest"] or 0
+        queued = HostJob.objects.filter(id__gt=barrier, kind=HostJob.Kind.DEVBOX_RECONFIGURE, state=HostJob.State.QUEUED)
         if not teams or any(job.params.get("teams") == teams for job in queued):
             return None
         # The agent requires a team_uuid, though only for its log; no team asked for this one.
@@ -131,6 +140,11 @@ def provision(competition):
 
     Returns (spec, job): job is None when a queued provision job already
     carries exactly this spec (nothing new to build)."""
+    with serialized_resource("devbox-jobs", "queue"):
+        return _provision(competition)
+
+
+def _provision(competition):
     teams = list(Team.objects.filter(competition=competition).order_by("id"))
     if len(teams) > MAX_TEAMS:
         raise ProvisionError(f"{len(teams)} teams exceeds the devbox maximum of {MAX_TEAMS}")

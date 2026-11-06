@@ -43,6 +43,12 @@ django_db_sslrootcert: "/etc/ssl/certs/ca-certificates.crt"
 
 django_extra_pip_packages: []
 django_extra_env: {}
+django_host_aliases: []
+# Read the public cluster CA through the authenticated Proxmox SSH connection,
+# never by accepting an unverified certificate from the HTTPS endpoint.
+django_trust_proxmox_ca: false
+django_proxmox_ca_source: /etc/pve/pve-root-ca.pem
+django_proxmox_ca_dest: /usr/local/share/ca-certificates/worms-proxmox-ca.crt
 # Management commands run once after the migrations (idempotent), e.g. the
 # orchestrator's `init` (admin account + default competition).
 django_post_migrate_commands: []

@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
-from django.db import transaction
+from django.db import IntegrityError, transaction
 
 # Unambiguous alphabet for a password a person may have to type once (no
 # O/0, l/1/I): still 59^len, ~5.9 bits/char.
@@ -39,6 +39,7 @@ FIELD_ALIASES = {
 
 MAX_IMPORT_ROWS = 2000
 MAX_NAME = 150
+MAX_USERNAME_LENGTH = 150
 
 
 class CsvError(ValueError):
@@ -77,6 +78,14 @@ def normalise_email(value: str) -> str:
 
 
 def parse_csv(text: str) -> Parsed:
+    """Report malformed CSV as a user-facing validation error."""
+    try:
+        return _parse_csv(text)
+    except csv.Error as exc:
+        raise CsvError(f"The CSV cannot be read: {exc}.") from exc
+
+
+def _parse_csv(text: str) -> Parsed:
     """Parse a student list: a header row, then one student per row (email
     required; first name, surname and team optional)."""
     reader = csv.DictReader(io.StringIO(text.lstrip("﻿")))
@@ -112,6 +121,9 @@ def parse_csv(text: str) -> Parsed:
         except ValidationError:
             parsed.problems.append(f"row {number}: {email!r} is not an email address, skipped")
             continue
+        if len(email) > MAX_USERNAME_LENGTH:
+            parsed.problems.append(f"row {number}: email exceeds {MAX_USERNAME_LENGTH} characters, skipped")
+            continue
         if email.casefold() in seen:
             parsed.problems.append(f"row {number}: {email} appears twice, skipped")
             continue
@@ -143,7 +155,14 @@ def create_account(email, first_name="", last_name="", *, staff=False, using="de
         must_change_password=True,
     )
     user.set_password(password)
-    user.save(using=using)
+    try:
+        # A savepoint keeps an enclosing import transaction usable on duplicates.
+        with transaction.atomic(using=using):
+            user.save(using=using)
+    except IntegrityError:
+        if User.objects.using(using).filter(username__iexact=email).exists():
+            return None
+        raise
     return Created(user, password)
 
 
@@ -152,13 +171,15 @@ def import_rows(rows, *, staff=False, competition=None, using="default"):
     With a competition, a row's team (by name) is joined -- an unknown or full
     team is reported, never created. Returns (created, problems)."""
     from core.models.team import Team, TeamMembership
+    from core.membership import membership_change
 
     created, problems = [], []
     teams = {}
     if competition is not None:
         teams = {team.name.casefold(): team for team in Team.objects.using(using).filter(competition=competition)}
-    with transaction.atomic(using=using):
-        for row in rows:
+    for row in rows:
+        # Commit each student independently; do not retain locks across teams.
+        with transaction.atomic(using=using):
             result = create_account(row.email, row.first_name, row.last_name, staff=staff, using=using)
             if result is None:
                 problems.append(f"row {row.line}: {row.email} already has an account (unchanged)")
@@ -169,10 +190,12 @@ def import_rows(rows, *, staff=False, competition=None, using="default"):
             team = teams.get(row.team.casefold())
             if team is None:
                 problems.append(f"row {row.line}: no team named {row.team!r}; {row.email} has no team")
-            elif TeamMembership.objects.using(using).filter(team=team).count() >= team.max_members:
-                problems.append(f"row {row.line}: {team.name} is full; {row.email} has no team")
             else:
-                TeamMembership.objects.using(using).create(user=result.user, team=team)
+                with membership_change(result.user, team, using=using) as team:
+                    if TeamMembership.objects.using(using).filter(team=team).count() >= team.max_members:
+                        problems.append(f"row {row.line}: {team.name} is full; {row.email} has no team")
+                    else:
+                        TeamMembership.objects.using(using).create(user=result.user, team=team)
     return created, problems
 
 

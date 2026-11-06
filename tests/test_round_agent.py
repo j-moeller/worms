@@ -98,7 +98,7 @@ def test_validate_deploy_rejects_bad_team_uuid():
 
 # --- devbox (docs/devbox.md) --------------------------------------------------
 
-GOOD_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabcdefghijklmnopqrstuvwxyz0123456789AB alice@team"
+GOOD_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILx5kgdiAiIfKABbQ2D4tT9hgQ2Km8WiYll6Ji5CdEXD alice@team"
 
 
 def test_validate_devbox_provision_accepts_good_input():
@@ -139,7 +139,7 @@ def test_validate_devbox_rebuild():
     assert clean["devbox_version"] == 3
 
 
-BLOB = "AAAAC3NzaC1lZDI1NTE5AAAAIabcdefghijklmnopqrstuvwxyz0123456789AB"
+BLOB = "AAAAC3NzaC1lZDI1NTE5AAAAILx5kgdiAiIfKABbQ2D4tT9hgQ2Km8WiYll6Ji5CdEXD"
 
 
 @pytest.mark.parametrize("comment", [
@@ -1388,3 +1388,19 @@ def test_teardown_clears_the_running_team(keep):
     handlers.teardown(ex, CFG, {"keep": keep})
     cleared = [c for c in ex.ssh_calls if c["argv"] == ["sudo", "rm", "-f", "/etc/sandbox-api/current-team"]]
     assert {c["host"] for c in cleared} == {"10.5.0.14", "10.5.0.15"}
+
+
+def test_base64_aliases_cannot_map_one_ssh_key_to_two_teams():
+    import base64
+
+    canonical = base64.b64encode(b"x" * 40).decode()
+    alternate = canonical[:-3] + "B=="
+    assert base64.b64decode(canonical) == base64.b64decode(alternate)
+    params = {"teams": [
+        {"slug": "t1", "index": 0, "team_uuid": "11111111-2222-3333-4444-555555555555",
+         "authorized_keys": [f"ssh-ed25519 {canonical} first"]},
+        {"slug": "t2", "index": 1, "team_uuid": "22222222-2222-3333-4444-555555555555",
+         "authorized_keys": [f"ssh-ed25519 {alternate} second"]},
+    ]}
+    with pytest.raises(validation.Invalid, match="more than one team"):
+        validation.validate("devbox_provision", params)

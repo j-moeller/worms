@@ -70,7 +70,7 @@ are dev teams.
 | D-18 | Trim the disk monthly | `zfs set org.debian:periodic-trim=enable rpool`. **Recommended yes**: the one-off TRIM cut the slowest writes from 1.5 s to 11 ms |
 | D-19 | Where the code goes | **Decided:** `github` (`j-moeller/worms`) is private; push to both remotes |
 | D-20 | Upload limits | **Done:** 100 MiB per zip, at most 30 uploads an hour and 2 GiB stored per team (`UPLOAD_TEAM_PER_HOUR`, `UPLOAD_TEAM_QUOTA`), on a 20 GB dashboard disk |
-| D-21 | The rest of `end-to-end-tests` | Fabian's race fixes, migrations 0002/0003 and test suites are not on `main` (`docs/merge-end-to-end-tests.md`). Merge them, after the first product? |
+| D-21 | The rest of `end-to-end-tests` | **Done** on 2026-11-06: merged into `main` (`docs/merge-end-to-end-tests.md`); its migrations are `0005` and `0006` |
 
 ## 4. Security: a rogue program on a devbox
 

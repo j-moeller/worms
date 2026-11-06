@@ -124,25 +124,29 @@ def test_devbox_reconfigure_never_loses_a_key_added_behind_a_job(api, team):
 
     user = User.objects.create(username="keys@example.org", email="keys@example.org")
 
-    def add_key(blob):
-        DevboxSSHKey.objects.create(team=team, name=blob, public_key=f"ssh-ed25519 {blob}", created_by=user)
+    import base64
+    def key_for(label):
+        return "ssh-ed25519 " + base64.b64encode((label * 40).encode()).decode()
+
+    def add_key(label):
+        DevboxSSHKey.objects.create(team=team, name=label, public_key=key_for(label), created_by=user)
 
     def keys_of(job):
         return [key for spec in job.params["teams"] for key in spec["authorized_keys"]]
 
-    add_key("AAAAfirst")
+    add_key("first")
     assert reconfigure(api, team).json()["reconfigure_enqueued"] is True
-    add_key("AAAAsecond")  # the first job is still queued, and does not have this key
+    add_key("second")  # the first job is still queued, and does not have this key
     assert reconfigure(api, team).json()["reconfigure_enqueued"] is True
 
     first = HostJob.objects.filter(kind=HostJob.Kind.DEVBOX_RECONFIGURE).order_by("id").first()
     first.state = HostJob.State.RUNNING
     first.save(update_fields=["state"])
-    add_key("AAAAthird")  # a running job does not have it either
+    add_key("third")  # a running job does not have it either
     assert reconfigure(api, team).json()["reconfigure_enqueued"] is True
 
     newest = HostJob.objects.filter(kind=HostJob.Kind.DEVBOX_RECONFIGURE).order_by("-id").first()
-    assert {f"ssh-ed25519 AAAA{name}" for name in ("first", "second", "third")} <= set(keys_of(newest))
+    assert {key_for(name) for name in ("first", "second", "third")} <= set(keys_of(newest))
 
 
 def test_devbox_reconfigure_needs_the_token(api, team):
@@ -186,3 +190,159 @@ def test_devbox_reset_is_post_only_and_for_known_teams(api, team):
     assert api.get(f"/devbox/{team.uuid}/reset/", HTTP_AUTHORIZATION=f"Bearer {TOKEN}").status_code == 405
     unknown = api.post(f"/devbox/{uuid.uuid4()}/reset/", HTTP_AUTHORIZATION=f"Bearer {TOKEN}")
     assert unknown.status_code == 404
+
+
+def test_queued_reconfigure_refreshes_the_keys_after_a_removal(api, team, app_roles):
+    from conftest import as_role
+    from core.models.devbox import DevboxSSHKey
+    from core.models.rounds import HostJob
+
+    with as_role("django_orchestrator"):
+        assert reconfigure(api, team).status_code == 200
+    DevboxSSHKey.objects.filter(team=team).delete()
+    with as_role("django_orchestrator"):
+        assert reconfigure(api, team).status_code == 200
+    job = HostJob.objects.filter(kind=HostJob.Kind.DEVBOX_RECONFIGURE).order_by("-id").first()
+    red = next(t for t in job.params["teams"] if t["slug"] == f"t{team.pk}")
+    assert red["authorized_keys"] == []  # never re-install a revoked key
+
+
+def test_running_reconfigure_gets_a_follow_up_after_a_key_change(api, team, app_roles):
+    from conftest import as_role
+    from core.models.devbox import DevboxSSHKey
+    from core.models.rounds import HostJob
+
+    with as_role("django_orchestrator"):
+        reconfigure(api, team)
+    job = HostJob.objects.get(kind=HostJob.Kind.DEVBOX_RECONFIGURE)
+    job.state = HostJob.State.RUNNING
+    job.save(update_fields=["state"])
+    DevboxSSHKey.objects.filter(team=team).delete()
+    with as_role("django_orchestrator"):
+        response = reconfigure(api, team)
+    assert response.json()["reconfigure_enqueued"] is True
+    next_job = HostJob.objects.get(kind=HostJob.Kind.DEVBOX_RECONFIGURE, state=HostJob.State.QUEUED)
+    red = next(t for t in next_job.params["teams"] if t["slug"] == f"t{team.pk}")
+    assert red["authorized_keys"] == []
+
+
+@pytest.mark.parametrize('kind', ['devbox_rebuild', 'devbox_provision'])
+def test_key_revocation_must_follow_later_full_stack_jobs(api, team, app_roles, kind):
+    from conftest import as_role
+    from core.models.devbox import DevboxSSHKey
+    from core.models.rounds import HostJob
+    from orchestrator.rounds.devbox import provisioned_team_specs
+
+    with as_role('django_orchestrator'):
+        assert reconfigure(api, team).status_code == 200
+        stale = provisioned_team_specs(team.competition)
+        rebuild = HostJob.objects.create(kind=kind,
+            params={'team_uuid': str(team.uuid), 'teams': stale})
+    DevboxSSHKey.objects.filter(team=team).delete()
+    with as_role('django_orchestrator'):
+        assert reconfigure(api, team).status_code == 200
+    # The last snapshot the agent applies must revoke the key. Updating the
+    # earlier reconfigure alone would let the later rebuild restore it.
+    last = HostJob.objects.order_by('-id').first()
+    assert last.id > rebuild.id
+    assert last.kind == HostJob.Kind.DEVBOX_RECONFIGURE
+    spec = next(t for t in last.params['teams'] if t['team_uuid'] == str(team.uuid))
+    assert spec['authorized_keys'] == []
+
+
+@pytest.mark.parametrize('producer', ['reset', 'provision'])
+def test_full_snapshot_creation_is_ordered_with_key_revocation(api, team, app_roles, django_env, monkeypatch, producer):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    import time
+    from conftest import as_role
+    from core.models.rounds import HostJob
+    from django.db import connection
+    from orchestrator import api as views
+    from orchestrator.rounds import devbox
+
+    entered, release = threading.Event(), threading.Event()
+    # A reset builds its snapshot in request_rebuild (orchestrator/rounds/devbox.py), as dev uploads do.
+    module, name = (devbox, 'provisioned_team_specs') if producer == 'reset' else (devbox, 'team_spec')
+    original = getattr(module, name)
+
+    def pause_snapshot(*args, **kwargs):
+        result = original(*args, **kwargs)
+        if threading.current_thread().name.startswith('full-snapshot') and not entered.is_set():
+            entered.set()
+            assert release.wait(15)
+        return result
+
+    monkeypatch.setattr(module, name, pause_snapshot)
+
+    def full_job():
+        try:
+            if producer == 'reset':
+                assert reset(api, team).status_code == 200
+            else:
+                assert devbox.provision(team.competition)[1] is not None
+        finally:
+            connection.close()
+
+    def revoke():
+        try:
+            assert reconfigure(api, team).status_code == 200
+        finally:
+            connection.close()
+
+    with as_role('django_orchestrator'), ThreadPoolExecutor(max_workers=1, thread_name_prefix='full-snapshot') as full_pool, ThreadPoolExecutor(max_workers=1) as key_pool:
+        pending = full_pool.submit(full_job)
+        try:
+            assert entered.wait(10)
+            admin = django_env.connect()
+            try:
+                with admin.cursor() as cur:
+                    cur.execute('DELETE FROM devbox_ssh_keys WHERE team_id=%s', [team.pk])
+                follow_up = key_pool.submit(revoke)
+                deadline = time.monotonic() + 10
+                while True:
+                    with admin.cursor() as cur:
+                        cur.execute("SELECT count(*) FROM pg_stat_activity WHERE usename='django_orchestrator' AND wait_event='advisory'")
+                        if cur.fetchone()[0]:
+                            break
+                    assert not follow_up.done(), 'key update passed an unfinished full snapshot'
+                    assert time.monotonic() < deadline
+                    time.sleep(0.02)
+            finally:
+                admin.close()
+        finally:
+            release.set()
+        pending.result(timeout=15)
+        follow_up.result(timeout=15)
+    last = HostJob.objects.order_by('-id').first()
+    assert last.kind == HostJob.Kind.DEVBOX_RECONFIGURE
+    spec = next(t for t in last.params['teams'] if t['team_uuid'] == str(team.uuid))
+    assert spec['authorized_keys'] == []
+
+
+@pytest.mark.parametrize('producer', ['reset', 'provision'])
+def test_identical_old_key_snapshot_cannot_skip_a_later_rebuild(api, team, app_roles, producer):
+    from conftest import as_role
+    from core.models.devbox import DevboxSSHKey
+    from core.models.rounds import HostJob
+    from orchestrator.rounds.devbox import provision
+
+    key = DevboxSSHKey.objects.get(team=team)
+    fields = {name: getattr(key, name) for name in ('team', 'created_by', 'name', 'public_key')}
+    with as_role('django_orchestrator'):
+        assert reconfigure(api, team).status_code == 200
+    original = HostJob.objects.get()
+    key.delete()
+    with as_role('django_orchestrator'):
+        if producer == 'reset':
+            assert reset(api, team).status_code == 200
+        else:
+            assert provision(team.competition)[1] is not None
+    barrier = HostJob.objects.order_by('-id').first()
+    DevboxSSHKey.objects.create(**fields)
+    with as_role('django_orchestrator'):
+        response = reconfigure(api, team)
+    latest = HostJob.objects.order_by('-id').first()
+    assert response.json()['reconfigure_enqueued'] is True
+    assert latest.pk > barrier.pk
+    assert latest.params['teams'] == original.params['teams']

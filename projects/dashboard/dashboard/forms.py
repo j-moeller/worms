@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import random
 
-from core import clock, schedule
+from core import accounts, clock, schedule
 from core.models.competition import Round
 from core.models.team import Team
 from django import forms
@@ -67,7 +67,7 @@ class TeamChoice(forms.ModelChoiceField):
 
 
 class UserCreateForm(StyledForm):
-    email = forms.EmailField(label="Email (the username)", max_length=150)
+    email = forms.EmailField(label="Email (the username)", max_length=accounts.MAX_USERNAME_LENGTH)
     first_name = forms.CharField(max_length=150, required=False)
     last_name = forms.CharField(label="Surname", max_length=150, required=False)
     team = TeamChoice(queryset=Team.objects.none(), required=False, empty_label="— no team —")
@@ -98,6 +98,8 @@ class UserImportForm(StyledForm):
                 text = upload.read().decode("utf-8-sig")
             except UnicodeDecodeError:
                 raise ValidationError("The CSV must be UTF-8 text.")
+        if len(text.encode("utf-8")) > self.MAX_BYTES:
+            raise ValidationError("The CSV is too large (at most 512 KiB).")
         data["text"] = text
         return data
 

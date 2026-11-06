@@ -4,8 +4,9 @@
 changes to the private internet stack if `main` does not have them, document the merge and what
 is new, and re-provision what they affect.
 
-**Result:** `main` already had every private-internet change of the branch, so no code was merged.
-What the branch adds is information: a live check of the private internet from all three teams'
+**Result:** `main` already had every private-internet change of the branch, so none was needed.
+The rest of the branch was merged afterwards (the end of this document). The private internet
+part adds information: a live check of the private internet from all three teams'
 devboxes. It is kept unchanged in `docs/archive/private-internet-test-2026-11-05.md`, with the
 branch's own merge notes in `docs/archive/reconciliation-2026-11-05.md`, and its findings are below
 and in `docs/status.md`. The rest of the branch is outside the private internet and was **not**
@@ -74,21 +75,30 @@ merge itself. The private-internet VMs were re-provisioned anyway, with everythi
 ran online and again offline, exit 0. The service VMs still have no snapshot (`worms build
 rebuild-services` makes one).
 
-## The rest of the branch, not merged
+## The rest of the branch, merged on 2026-11-06
 
-Outside the private internet, the branch carries Fabian's reconciliation and test work. None of
-it is on `main`, and merging it now would conflict with `main`'s work since the split in at least
-`dashboard/views/{devbox,uploads,staff_rounds}.py`, `orchestrator/api.py`, `topology.js`,
-`docs/testing.md` and `tests/test_round_agent.py`:
+Asked the same day, after the private internet. A real merge of `https/end-to-end-tests` at
+`69ee3b0`: its 30 commits are in `main`'s history. Twelve files conflicted; how each was
+resolved:
 
-| Area | Commits | What |
+| Area | Kept | Changed in the merge |
 |---|---|---|
-| Accounts and teams | `20b9295`, `dea0958`, `f96add2`, `849170b` | Enrollment and CSV-import races, upload recovery, concurrent key updates, serialized round planning and staff edits |
-| Migrations | in `9308a2f` | `0002_case_insensitive_accounts_and_teams`, `0003_canonical_ssh_key_fingerprints`; they stop on collisions instead of merging records |
-| Orchestrator | `7423263`, `711fe95`, `451c77e` | Daemons reconnect after a database outage; HTTPS through the service trust store; CA bundle overrides |
-| Deployment | `aa16e69`, `111a3d9`, `9308a2f` | collectstatic's environment, TLS trust and host aliases in role `django_app` (a different way to what `main` does), a Zeek rotation fix (`main` has its own, G5) |
-| Dashboard | `291e8e8`, `db9be86` | SSH key revocations across rebuilds, a lost click in the replay |
-| Tests | `e879f8d`, `6707251`, `8c9c397`, `f6cc9e8` | Isolated dashboard rehearsals, a full Linux-stack test in a container, Chromium/Firefox/WebKit journeys; 807 tests passed in their container |
+| Migrations | Both chains | The branch's `0002`/`0003` became `0005_case_insensitive_accounts_and_teams` and `0006_canonical_ssh_key_fingerprints`, after `main`'s `0004_event_tables`. Their tests now start from `0004` (main's later columns would break seeds made on `0001`) |
+| `core/models/user.py` | The case-insensitive username and `PasswordReset` | |
+| Staff pages (`staff_rounds.py`, `staff_teams.py`, `staff_users.py`, `staff.py`) | The branch's locking (competition row, `round-plan` advisory lock, `membership_change`), `main`'s removal of dev rounds and its event records | The branch's hardened `development_competition` view and its two race tests are dropped with dev rounds |
+| Uploads (`uploads.py`) | The branch's atomic store-and-repair under an advisory lock; `main`'s per-team quota and Dev uploads | The branch's code dropped `devbox=dev` on the upload, which would have sent dev uploads into rounds: put back |
+| SSH keys (`devbox.py`) | The branch's membership recheck and 64-key limit; `main`'s `credential_events` | |
+| Devbox jobs (`orchestrator/api.py`, `rounds/devbox.py`) | `main`'s `request_rebuild`, shared by resets and dev uploads | The branch's queue lock moved into `request_rebuild`, `request_reconfigure` and `provision`, so every producer of a job carrying the teams' keys takes it; `request_reconfigure` also respects the branch's barrier (no reuse of a key update queued before a rebuild or provision) |
+| The replay (`topology.js`) | `main`'s Dev wording, the branch's in-place connection count (the lost-click fix) | |
+| `docs/testing.md` | `main`'s condensed text | The branch's new layers summarised: the isolated rehearsal, races, the Linux-stack container, deployment regressions, the collision check before migrating |
+| The branch's tests | All but the two above | Uploads in `test_dashboard_e2e.py` and `test_dashboard_races.py` now say which view they come from, as `main`'s upload form does |
 
-Worth deciding soon, since some of it fixes races real users can hit. Its own notes add that
-uploads made for `python3 main.py` need replacing, because worms now start as `bash main.sh`.
+Taken as merged without conflict: the deployment changes in role `django_app` (service names in a
+managed `/etc/hosts` block, the Proxmox CA in the orchestrator's system trust store instead of
+`main`'s separate play, the dashboard reaching the orchestrator by name, daemons restarted with
+the app), the Zeek data directory, case-insensitive accounts and teams in the forms, enrollment and
+membership locks, daemon reconnection, round-planning serialisation, and the fix of
+`test_two_teams_run_one_after_another`.
+
+Its own notes add that uploads made for `python3 main.py` need replacing, because worms now
+start as `bash main.sh`.

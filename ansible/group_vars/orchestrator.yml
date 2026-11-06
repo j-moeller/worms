@@ -9,12 +9,17 @@ django_db_password: "{{ vault_django_orchestrator_password }}"
 django_secret_key: "{{ vault_orchestrator_secret_key }}"
 django_allowed_hosts: "orchestrator.worms.internal,{{ infrastructure_ips.orchestrator }}"
 django_run_migrations: true
+django_trust_proxmox_ca: true
+# The PVE certificate includes the node name, not the management-bridge IP.
+django_host_aliases:
+  - name: "{{ proxmox.node }}"
+    address: "{{ proxmox.host }}"
 django_extra_pip_packages:
   - proxmoxer
   - requests
-# A copy of PVE's CA certificate (SetupDbAndDashboard.yml). Not secret, and the
+# A copy of PVE's CA certificate (django_app connectivity tasks). Not secret, and the
 # application user must be able to read it.
-proxmox_ca_bundle: /etc/ssl/pve-root-ca.pem
+proxmox_ca_bundle: "{{ django_proxmox_ca_dest }}"
 # Proxmox credentials delivered securely into the env file (0600 root).
 # The host is the node's name, not proxmox.host: PVE's certificate names the node
 # but not its address on the core bridge. /etc/hosts maps the one to the other.

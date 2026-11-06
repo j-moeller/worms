@@ -21,6 +21,7 @@ Design points reflected here:
   separately, by the current-team file). See docs/devbox.md.
 """
 
+import base64
 import hashlib
 import uuid
 
@@ -138,7 +139,9 @@ class DevboxSSHKey(models.Model):
     def fingerprint(public_key: str) -> str:
         """The key's identity: SHA-256 of `type base64blob` (the comment, which
         the team controls freely, is not part of it)."""
-        return hashlib.sha256(" ".join((public_key or "").split()[:2]).encode()).hexdigest()
+        key_type, encoded = public_key.split()[:2]
+        canonical = base64.b64encode(base64.b64decode(encoded, validate=True)).decode("ascii")
+        return hashlib.sha256(f"{key_type} {canonical}".encode()).hexdigest()
 
     def save(self, *args, **kwargs):
         self.key_fingerprint = self.fingerprint(self.public_key)

@@ -1,6 +1,6 @@
 # Feature audit for the first product (2026-11-09)
 
-On 2026-11-06, 11:48–12:20, before the first production deploy on `worms-pve`. The four
+On 2026-11-06, 11:48–12:00, before the first production deploy on `worms-pve`. The four
 journeys of the first product, against the bar the user set: each one **feature complete**, that
 is, **explainable** (a student, or an admin, can learn from the dashboard, CLI and docs what to do
 and what happened) and **traceable** (for every action and outcome, both sides can see what

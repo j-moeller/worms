@@ -235,9 +235,9 @@ class Ledger:
 
     # --- a devbox -------------------------------------------------------------------
     def devbox(self, team, index, others, start):
-        """The team's devbox (A, B, C) and what it submitted and logged, in and
-        before the Dev round that starts at `start`; `others`: other teams'
-        tokens it also submits."""
+        """The team's devbox (A, B, C) and what it submitted and logged, after and
+        before `start`; `others`: other teams' tokens it also submits. None of it
+        belongs to a round."""
         from core.models.devbox import Devbox, DevboxCapture, DevboxVM
 
         rng = self.rng
@@ -280,8 +280,8 @@ class Ledger:
 
 @pytest.fixture(params=[1, 2, 3], ids=lambda seed: f"seed{seed}")
 def world(request, site):  # noqa: F811
-    """Three teams: alpha and bravo in the competition (and its Dev
-    competition), charlie in another one; tokens for each."""
+    """Three teams: alpha and bravo in the competition, charlie in another
+    one; tokens for each."""
     import hashlib
 
     import infra_fixture
@@ -296,12 +296,11 @@ def world(request, site):  # noqa: F811
     now = timezone.now().replace(microsecond=0) - timedelta(seconds=5)
     hours = lambda h: timedelta(hours=h)  # noqa: E731
     comp = ApplicationSetting.get_current_competition()
-    dev = Competition.objects.create(name="dev", is_dev_competition=True)
     other = Competition.objects.create(name="elsewhere")
     staff = User.objects.get(username="admin")
     teams, tokens = {}, {}
-    for name, competition, dev_competition in [("alpha", comp, dev), ("bravo", comp, dev), ("charlie", other, None)]:
-        team = Team.objects.create(name=name, competition=competition, development_competition=dev_competition)
+    for name, competition in [("alpha", comp), ("bravo", comp), ("charlie", other)]:
+        team = Team.objects.create(name=name, competition=competition)
         user = User.objects.create(username=f"{name}-member")
         TeamMembership.objects.create(user=user, team=team)
         tokens[name] = f"tok-{name}-" + "x" * 30
@@ -311,7 +310,6 @@ def world(request, site):  # noqa: F811
     rounds = {
         "R1": Round.objects.create(competition=comp, name="R1", seed=1, round_start=now - hours(8), round_end=now - hours(2)),
         "R2": Round.objects.create(competition=comp, name="R2", seed=2, round_start=now - hours(1), round_end=now + hours(3)),
-        "RD": Round.objects.create(competition=dev, name="Dev week", seed=3, round_start=now - hours(72), round_end=now + hours(96)),
         "RX": Round.objects.create(competition=other, name="X1", seed=4, round_start=now - hours(8), round_end=now - hours(2)),
     }
     ledger = Ledger(rng, now)
@@ -321,8 +319,9 @@ def world(request, site):  # noqa: F811
     ledger.run(bravo, rounds["R1"], now - hours(5.8), position=1)
     # A run in progress: started four minutes ago.
     ledger.run(alpha, rounds["R2"], now - timedelta(minutes=4), position=0, state="running", until=235)
-    alpha_box = ledger.devbox(alpha, 1, [], rounds["RD"].round_start)
-    ledger.devbox(bravo, 2, [vm["hash"] for vm in alpha_box], rounds["RD"].round_start)
+    devbox_start = now - hours(72)
+    alpha_box = ledger.devbox(alpha, 1, [], devbox_start)
+    ledger.devbox(bravo, 2, [vm["hash"] for vm in alpha_box], devbox_start)
 
     TopologySnapshot.objects.create(source="proxmox", data=infra_fixture.snapshot(), collected_at=timezone.now())
     topology_views._cache.clear()
@@ -388,8 +387,7 @@ def live_logs(world, team, rnd):
 
 
 def expected_rounds(world, team):
-    comps = {team.competition_id, team.development_competition_id} - {None}
-    rounds = sorted((r for r in world["rounds"].values() if r.competition_id in comps), key=lambda r: (r.round_start, r.id))
+    rounds = sorted((r for r in world["rounds"].values() if r.competition_id == team.competition_id), key=lambda r: (r.round_start, r.id))
     out = []
     for rnd in rounds:
         run = run_of(world, team, rnd)
@@ -399,7 +397,7 @@ def expected_rounds(world, team):
                     "ends_at": iso(run["zero"] + timedelta(seconds=600))}  # fmt: skip
         out.append({
             "id": rnd.id, "name": rnd.name,
-            "competition": "development" if rnd.competition_id == team.development_competition_id else "main",
+            "competition": "main",
             "start": iso(rnd.round_start), "end": iso(rnd.round_end), "run": info,
             "scoring": f"/api/v1/rounds/{rnd.id}/scoring/", "logging": f"/api/v1/rounds/{rnd.id}/logging/",
             "progression": f"/api/v1/rounds/{rnd.id}/progression/", "download": f"/api/v1/rounds/{rnd.id}/progression.zip",
@@ -515,48 +513,6 @@ def expected_live(world, team, rnd):
     }
 
 
-def expected_dev(world, team, rnd):
-    """The team's devbox in the Dev round's window."""
-    ledger = world["ledger"]
-    zero = rnd.round_start
-    bounds = (rnd.round_start, ledger.now + timedelta(minutes=10))  # everything written is before the request
-    vms = ledger.devbox_vms.get(team.id, [])
-    by_hash = {vm["hash"]: vm for vm in vms}
-    found, submissions = {}, []
-    for a in sorted(ledger.attempts, key=lambda a: (a["ts"], a["obj"].id)):
-        if a["team"] != team.id or not a["devbox"] or not in_window(a["ts"], bounds):
-            continue
-        vm = by_hash.get(a["hash"])
-        if a["dev_capture"]:
-            result = "captured"
-        elif not a["processed"]:
-            result = "pending"
-        elif vm is not None:
-            result = "duplicate"
-        else:
-            result = "invalid"
-        if result in ("captured", "duplicate"):
-            found.setdefault(vm["uuid"], seconds(a["ts"], zero))
-        submissions.append((a, result, vm))
-    label = {vm["uuid"]: vm["label"] for vm in vms if vm["uuid"] in found}
-    unknown = {"source_vm": None, "source_label": None, "source_inferred": False}
-    events = [{"t": t, "kind": "captured", "node": u, "vm": u, "data": {}} for u, t in found.items()]
-    for a, result, vm in submissions:
-        target = vm["uuid"] if vm is not None and vm["uuid"] in found else None
-        events.append({"t": seconds(a["ts"], zero), "kind": "flag_submitted", "node": "role:scoring", "vm": None, "data": {
-            "result": result, "flag_of": target, "flag_of_label": label.get(target), "hash_prefix": a["hash"][:16],
-            "processed": a["processed"], **unknown}})  # fmt: skip
-    logs = sorted((g for g in ledger.logs if g["team"] == team.id and g["devbox"] and in_window(g["ts"], bounds)),
-                  key=lambda g: (g["ts"], g["obj"].id))  # fmt: skip
-    for g in logs:
-        events.append({"t": seconds(g["ts"], zero), "kind": "log_received", "node": "role:logging", "vm": None, "data": {
-            "stored": g["devbox_log"], "processed": True, "log": {"ref": g["uuid"], "size": db_size(g["uuid"])}, **unknown}})
-    nodes = [{"id": vm["uuid"], "label": vm["label"], "group": "devbox", "devbox_role": vm["role"], "addresses": [], "networks": [],
-              "start_vm": False, "captured": True, "captured_at": found[vm["uuid"]]} for vm in vms if vm["uuid"] in found]  # fmt: skip
-    return {"events": events, "nodes": nodes, "logs": logs, "hidden": [vm for vm in vms if vm["uuid"] not in found],
-            "others": [vm for tid, box in ledger.devbox_vms.items() if tid != team.id for vm in box]}  # fmt: skip
-
-
 # --- reading through the API -------------------------------------------------------------
 
 
@@ -617,7 +573,7 @@ def test_rounds_listing_is_exactly_the_teams_rounds(world):
 def test_scoring_is_exactly_what_was_submitted(world):
     for name in TEAMS:
         team = world["teams"][name]
-        for key in LIVE_ROUNDS + ("RD",):
+        for key in LIVE_ROUNDS:
             rnd = world["rounds"][key]
             items, summary = expected_scoring(world, team, rnd)
             path = f"/api/v1/rounds/{rnd.id}/scoring/"
@@ -634,7 +590,7 @@ def test_scoring_is_exactly_what_was_submitted(world):
 def test_logging_is_exactly_what_was_logged(world):
     for name in TEAMS:
         team = world["teams"][name]
-        for key in LIVE_ROUNDS + ("RD",):
+        for key in LIVE_ROUNDS:
             rnd = world["rounds"][key]
             items = expected_logging(world, team, rnd)
             path = f"/api/v1/rounds/{rnd.id}/logging/"
@@ -703,9 +659,9 @@ def test_log_records_are_exactly_the_teams_and_nothing_else(world):
     ledger = world["ledger"]
     for name in TEAMS:
         team = world["teams"][name]
-        for key in LIVE_ROUNDS + ("RD",):
+        for key in LIVE_ROUNDS:
             rnd = world["rounds"][key]
-            want = expected_dev(world, team, rnd) if key == "RD" else expected_live(world, team, rnd)
+            want = expected_live(world, team, rnd)
             mine = {g["uuid"] for g in want["logs"]}
             for g in ledger.logs:
                 response, body = get(world, f"/api/v1/rounds/{rnd.id}/progression/logs/{g['uuid']}/", name)
@@ -716,34 +672,12 @@ def test_log_records_are_exactly_the_teams_and_nothing_else(world):
                     assert response.status_code == 404 and body["error"]["code"] == "not_found", (name, key, g["team"], g["devbox"])
 
 
-def test_dev_progression_is_exactly_the_teams_devbox(world):
-    rnd = world["rounds"]["RD"]
-    for name in TEAMS:
-        team = world["teams"][name]
-        want = expected_dev(world, team, rnd)
-        response, doc = get(world, f"/api/v1/rounds/{rnd.id}/progression/", name)
-        assert response.status_code == 200 and doc["environment"] == "dev"
-        tl = doc["timeline"]
-        assert events_key(strip_ids(tl["events"])) == events_key(want["events"]), name
-        assert tl["nodes"] == want["nodes"] and tl["run"] is None
-        assert doc["network"]["available"] is False and doc["network"]["url"] is None and doc["network"]["count"] == 0
-        assert doc["logs"]["count"] == len(want["logs"])
-        group = doc["scene"]["groups"]
-        assert len(group) == 1 and group[0]["members"] == [n["id"] for n in want["nodes"]]
-        scene_vms = [n for n in doc["scene"]["nodes"] if n["role"] == "devbox"]
-        assert [n["id"] for n in scene_vms] == [n["id"] for n in want["nodes"]]
-        _, flows = get(world, f"/api/v1/rounds/{rnd.id}/progression/flows/", name)
-        assert flows["flows"] == [] and flows["available"] is False
-        hidden = want["hidden"] + want["others"]
-        assert_nothing_of_others(world, json.dumps(doc, ensure_ascii=False), name, hidden)
-
-
 def test_zip_holds_exactly_the_progression(world):
     for name in TEAMS:
         team = world["teams"][name]
-        for key in ("R1", "RD"):
+        for key in ("R1",):
             rnd = world["rounds"][key]
-            want = expected_dev(world, team, rnd) if key == "RD" else expected_live(world, team, rnd)
+            want = expected_live(world, team, rnd)
             _, doc = get(world, f"/api/v1/rounds/{rnd.id}/progression/", name)
             response, _ = get(world, f"/api/v1/rounds/{rnd.id}/progression.zip", name)
             assert response.status_code == 200 and response["Content-Type"] == "application/zip"

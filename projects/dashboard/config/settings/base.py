@@ -40,6 +40,11 @@ def postgres_database(user, password):
 
 
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 MiB
+# Per team, so one team cannot fill the dashboard VM's disk (docs/security-assessment.md, D11):
+# what its uploads keep stored (an artifact counts once, however often it is uploaded),
+# and how many uploads it may make in an hour.
+UPLOAD_TEAM_QUOTA = 2 * 1024 * 1024 * 1024  # 2 GiB
+UPLOAD_TEAM_PER_HOUR = 30
 CHUNK_SIZE = 1024 * 1024  # 1 MiB
 
 # The default timing of one team's run in a round, in seconds (core/schedule.py).

@@ -17,6 +17,7 @@ class Team(models.Model):
         on_delete=models.CASCADE,
         related_name="teams",
     )
+    # Unused since dev rounds were removed; kept to avoid a migration.
     development_competition = models.ForeignKey(
         Competition,
         on_delete=models.CASCADE,

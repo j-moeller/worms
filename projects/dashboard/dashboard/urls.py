@@ -89,7 +89,6 @@ urlpatterns = [
     # Staff administration (dashboard/views/staff*.py): database records only;
     # infrastructure is built from the console and the round agent.
     path("staff/", staff.competition, name="staff_competition"),
-    path("staff/competition/development/", staff.development_competition, name="staff_dev_competition"),
     path("staff/users/", staff_users.users, name="staff_users"),
     path("staff/users/import/", staff_users.import_users, name="staff_users_import"),
     path("staff/users/<uuid:uuid>/", staff_users.user_detail, name="staff_user"),

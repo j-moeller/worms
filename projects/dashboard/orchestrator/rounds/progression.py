@@ -36,15 +36,15 @@ serves it, as JSON and as a zip (`package`).
   (`network.url`).
 
 Live (the competition): the team's run in the round (one RoundRun per round
-and team). Dev (the team's development competition): there are no runs --
-the devbox is always on -- so the progression is what the team's devbox
-submitted and logged during the round's window. The monitor does not record
-devbox traffic, so a dev document has no network data (`available: false`).
+and team). Dev (`build_devbox`): the devbox has no rounds and no runs -- it is
+always on -- so its one document is what the team's devbox submitted and logged
+since its last reset, up to now. The monitor does not record devbox traffic, so
+a dev document has no network data (`available: false`).
 
 What a team sees (audience "team") is built, not hidden. Live: only the sandbox
 VMs whose flag it scored in the round, and the entry VM from the worm's start on.
 Dev: every VM of its own devbox once it is set up, marked captured when its token
-was submitted in the window. Never another team's devbox; no infrastructure the
+was submitted since the last reset. Never another team's devbox; no infrastructure the
 sandbox cannot reach (database, orchestrator, dashboard,
 Proxmox host, monitor, gateways); no firewall rules or security groups, no
 Proxmox VMIDs, bridge names or internal ids; no secrets. An event or a flow
@@ -113,27 +113,14 @@ def _sec(ts, zero):
     return timeline._seconds(ts, zero) if ts is not None and zero is not None else None
 
 
-def environment_of(team, rnd) -> str:
-    """"dev" for a round of the team's development competition, else "live"."""
-    if rnd.competition.is_dev_competition:
-        return "dev"
-    if rnd.competition_id == team.development_competition_id and rnd.competition_id != team.competition_id:
-        return "dev"
-    return "live"
-
-
-def window(team, rnd, now, environment=None, run=None):
-    """(start, end) of what the progression covers, (None, None) before it
-    began: the run's activity (live), the round up to now (dev)."""
-    if (environment or environment_of(team, rnd)) == "dev":
-        if rnd.round_start is None or now < rnd.round_start:
-            return None, None
-        return rnd.round_start, min(now, rnd.round_end) if rnd.round_end else now
+def window(team, rnd, now, run=None):
+    """(start, end) of what the progression covers: the team's run in the round,
+    (None, None) before it began. The devbox has no rounds (build_devbox)."""
     run = run or RoundRun.objects.filter(round=rnd, team=team).first()
     return timeline.run_window(run) if run is not None else (None, None)
 
 
-def build(team, rnd, *, now, audience="team", environment=None, infra=None, flows=False, flow_limit=FLOW_LIMIT):
+def build(team, rnd, *, now, audience="team", infra=None, flows=False, flow_limit=FLOW_LIMIT):
     """The progression of `team` in `rnd` at `now` (core.clock.now()).
 
     audience: "team" (only what the team may see, see above) or "staff"
@@ -143,12 +130,7 @@ def build(team, rnd, *, now, audience="team", environment=None, infra=None, flow
     (timeline.flows); otherwise they are only counted (network.count)."""
     if audience not in ("team", "staff"):
         raise ValueError(f"unknown audience {audience!r}")
-    environment = environment or environment_of(team, rnd)
-    infra = infra or {}
-    if environment == "dev":
-        doc = _dev(team, rnd, now, infra)
-    else:
-        doc = _live(team, rnd, now, audience, infra, flow_limit)
+    doc = _live(team, rnd, now, audience, infra or {}, flow_limit)
     doc["audience"] = audience
     if not flows:
         doc["timeline"].pop("flows", None)
@@ -169,7 +151,7 @@ def _document(team, rnd, now, environment, clock, scene, tl, network):
         else {
             "id": rnd.id,
             "name": rnd.name,
-            "competition": "development" if environment == "dev" else "main",
+            "competition": "main",
             "start": _iso(rnd.round_start),
             "end": _iso(rnd.round_end),
         },
@@ -431,14 +413,7 @@ def team_scene(environment, team, infra, devbox_nodes=()):
     return {"host": {}, "nodes": nodes, "groups": [group], "networks": [], "edges": edges}
 
 
-# --- dev: the team's devbox during the round's window -----------------------------
-
-
-def _dev(team, rnd, now, infra):
-    zero = rnd.round_start or now
-    start, end = window(team, rnd, now, "dev")
-    tl, scene, network, t_min, t_max = _devbox_activity(team, start, end, zero, infra)
-    return _document(team, rnd, now, "dev", _clock(rnd, zero, now, t_min, t_max), scene, tl, network)
+# --- dev: the team's devbox, which has no rounds -------------------------------------
 
 
 def devbox_start(team):
@@ -628,16 +603,15 @@ def _log_file(attempt):
     return {"ref": str(attempt.uuid), "received_at": _iso(attempt.created_at), "data": attempt.log_data}
 
 
-def log_record(team, rnd, ref, *, now, environment=None):
+def log_record(team, rnd, ref, *, now):
     """One log record of the progression ({ref, received_at, data}; ref is
-    the attempt's uuid), or None when it is not the team's or not part of the
-    round's progression."""
-    environment = environment or environment_of(team, rnd)
-    start, end = window(team, rnd, now, environment)
+    the attempt's uuid), or None when it is not the team's or not part of its
+    run in the round."""
+    start, end = window(team, rnd, now)
     if start is None:
         return None
     attempt = LoggingAttempt.objects.filter(
-        uuid=ref, team_uuid=str(team.uuid), devbox=environment == "dev", created_at__gte=start, created_at__lte=end
+        uuid=ref, team_uuid=str(team.uuid), devbox=False, created_at__gte=start, created_at__lte=end
     ).first()
     return _log_file(attempt) if attempt is not None else None
 

@@ -51,7 +51,6 @@ def teams(request: HttpRequest):
                 name=form.cleaned_data["name"],
                 max_members=form.cleaned_data["max_members"],
                 competition=competition,
-                development_competition=competition.development_competition,
             )
             messages.success(request, f"Team {team.name} created. {DEVBOX_HINT}")
             return redirect("staff_team", uuid=team.uuid)

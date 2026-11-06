@@ -2,17 +2,15 @@
 {% block title %}{{ round.name }}{% endblock %}
 {% block content %}
 <header class="page-head">
-    <p class="page-head__kicker">Staff · Rounds · {% if is_dev %}Dev{% else %}Live{% endif %}</p>
+    <p class="page-head__kicker">Staff · Rounds</p>
     <h1 class="page-head__title">{{ round.name }} <span class="badge{% if status == 'active' %} badge--accent{% endif %}">{{ status }}</span></h1>
     <p class="page-head__lead">{{ round.round_start|date:"Y-m-d H:i" }} – {{ round.round_end|date:"Y-m-d H:i" }} UTC.
-        {% if is_dev %}A window for the devbox progression; nothing is built.
-        {% elif runs %}The runs are planned; the round can no longer change.
+        {% if runs %}The runs are planned; the round can no longer change.
         {% elif started %}Started: the conductor plans its runs at its next tick. Only its end can still move.
         {% else %}Nothing is built until it starts.{% endif %}</p>
 </header>
 {% include "staff/_tabs.html" with section="rounds" %}
 
-{% if not is_dev %}
 <div class="grid grid--2">
     <section class="panel" aria-labelledby="params-title">
         <header class="panel__head"><h2 class="panel__title" id="params-title">Every team's run</h2><p class="panel__meta">seed {{ round.seed }}</p></header>
@@ -82,7 +80,6 @@
         </table>
     </div>
 </section>
-{% endif %}
 
 {% if form %}
 <section class="panel" aria-labelledby="edit-title">
@@ -99,7 +96,6 @@
             {% include "staff/_field.html" with field=form.round_end %}
             {% include "staff/_field.html" with field=form.seed %}
         </div>
-        {% if not is_dev %}
         <fieldset class="fieldset"><legend>Each team's sandbox</legend><div class="fields">
             {% include "staff/_field.html" with field=form.vms %}
             {% include "staff/_field.html" with field=form.networks %}
@@ -118,7 +114,6 @@
             {% include "staff/_field.html" with field=form.min_alive %}
             {% include "staff/_field.html" with field=form.restart_after %}
         </div></fieldset>
-        {% endif %}
         {% endif %}
         <div class="form__actions"><button type="submit" class="btn btn--primary">Save</button></div>
     </form>

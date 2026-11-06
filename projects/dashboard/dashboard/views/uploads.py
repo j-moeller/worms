@@ -13,7 +13,9 @@ a round. Only the orchestrator acts on it: this view only stores it.
 
 import hashlib
 import zipfile
+from datetime import timedelta
 
+from core import clock
 from core.models.devbox import DevboxRun, DevboxVM
 from core.models.team import Team
 from core.models.worms import MalwareArtifact, Upload
@@ -114,6 +116,32 @@ def _check_zip(uploaded) -> str | None:
     return None
 
 
+def _stored_bytes(team: Team) -> int:
+    """What the team's uploads keep on the disk: each artifact once."""
+    total = 0
+    for key in MalwareArtifact.objects.filter(uploads__team=team).values_list("storage_key", flat=True).distinct():
+        try:
+            total += default_storage.size(key)
+        except OSError:  # gone from the disk: it takes no space
+            pass
+    return total
+
+
+def _over_quota(team: Team, size: int, content_hash: str) -> str | None:
+    """Why this upload would put the team over its quota, or None."""
+    since = clock.now() - timedelta(hours=1)
+    if Upload.objects.filter(team=team, created_at__gte=since).count() >= settings.UPLOAD_TEAM_PER_HOUR:
+        return f"Your team has made {settings.UPLOAD_TEAM_PER_HOUR} uploads in the last hour, the most allowed. Try again later."
+    if MalwareArtifact.objects.filter(content_hash=content_hash, uploads__team=team).exists():
+        return None  # already stored for this team: it adds nothing
+    if _stored_bytes(team) + size > settings.UPLOAD_TEAM_QUOTA:
+        return (
+            f"Your team's uploads would take more than {filesizeformat(settings.UPLOAD_TEAM_QUOTA)}, "
+            "the most stored per team. Ask an organiser."
+        )
+    return None
+
+
 def _receive(request: HttpRequest, team: Team):
     limit = settings.MAX_UPLOAD_SIZE
     # Refuse an oversized body before reading it (nginx caps it, too).
@@ -157,6 +185,10 @@ def _receive(request: HttpRequest, team: Team):
     for chunk in uploaded.chunks(settings.CHUNK_SIZE):
         digest.update(chunk)
     content_hash = digest.hexdigest()
+    problem = _over_quota(team, uploaded.size, content_hash)
+    if problem:
+        messages.error(request, problem)
+        return redirect("upload")
     # Content-addressed: the key is fixed by the hash, and the round agent
     # accepts exactly this shape (scripts/round_agent/validation.py).
     storage_key = f"malware-artifacts/{content_hash[:2]}/{content_hash[2:4]}/{content_hash}.zip"

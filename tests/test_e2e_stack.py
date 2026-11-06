@@ -140,7 +140,7 @@ def _round_form(**overrides):
 
     start = clock.now() + timedelta(days=1)
     data = {
-        "environment": "live", "name": "R1",
+        "name": "R1",
         "round_start": start.strftime("%Y-%m-%dT%H:%M"),
         "round_end": (start + timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M"),
         "seed": "", "vms": 8, "networks": 4, "sites": 1, "max_interfaces": 3, "vm_ram": 512,
@@ -178,14 +178,9 @@ def test_end_to_end_competition_journey(site, monkeypatch):  # noqa: F811
 
     # ---- STEP 1: an administrator initializes users and assigns teams ----------
     assert login(site, HOST, f"https://{HOST}").status_code == 302  # the admin signs in
-    # A development competition (the devbox lives there) + an open registration window.
-    assert _post(site, "/staff/competition/development/", page="/staff/").status_code == 302
-    comp.refresh_from_db()
-    assert comp.development_competition is not None and comp.development_competition.is_dev_competition
-
     assert _post(site, "/staff/teams/", {"name": "alpha", "max_members": 2}, page="/staff/teams/").status_code == 302
     alpha = Team.objects.get(name="alpha")
-    assert alpha.competition == comp and alpha.development_competition == comp.development_competition
+    assert alpha.competition == comp
 
     created = _post(site, "/staff/users/", {"email": "ada@uni.example", "first_name": "Ada", "last_name": "L", "team": alpha.pk}, page="/staff/users/")
     assert created.status_code == 200 and "no-store" in created["Cache-Control"]

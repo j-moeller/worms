@@ -4,7 +4,7 @@
 <header class="page-head">
     <p class="page-head__kicker">Staff · Teams</p>
     <h1 class="page-head__title">{{ team.name }}</h1>
-    <p class="page-head__lead">{{ members|length }} of {{ team.max_members }} members{% if team.development_competition %} · Dev: {{ team.development_competition.name }}{% endif %}</p>
+    <p class="page-head__lead">{{ members|length }} of {{ team.max_members }} members</p>
 </header>
 {% include "staff/_tabs.html" with section="teams" %}
 

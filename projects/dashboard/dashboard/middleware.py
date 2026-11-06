@@ -14,10 +14,12 @@ from django.urls import reverse
 
 # Before competition (now < registration_start)
 # Registration open (registration_start <= now < registration_end)
+# No round yet (no rounds defined)
 # Before first round (registration_end <= now < rounds[0].start)
 # During round (rounds[i].start <= now < rounds[i].end)
 # Between round (rounds[i].end <= now < rounds[i+1].end)
 # After last round / after competition (rounds[-1].end <= now)
+# The Dev view is the team's devbox, which has no rounds: "devbox".
 
 
 @dataclass
@@ -38,17 +40,18 @@ def get_competition_state(
     if competition is None:
         return CompetitionState("invalid")
 
-    if (
-        competition.registration_starts_at is None
-        or competition.registration_ends_at is None
-    ):
-        return CompetitionState("dev_round")
+    # Without a registration window (the competition `manage.py init` creates)
+    # there is no registration phase: only the rounds count.
+    if competition.registration_starts_at is not None and competition.registration_ends_at is not None:
+        if now < competition.registration_starts_at:
+            return CompetitionState("pre_registration")
 
-    if now < competition.registration_starts_at:
-        return CompetitionState("pre_registration")
+        if competition.is_registration_period():
+            return CompetitionState("registration")
 
-    if competition.is_registration_period():
-        return CompetitionState("registration")
+    rounds = list(rounds)
+    if not rounds:
+        return CompetitionState("no_rounds")
 
     for round_id, round in enumerate(rounds):
         # A round without dates is always active (Round.is_active).
@@ -157,6 +160,7 @@ class UserMetadataMiddleware:
         request.time_now = clock.now()
 
         request.competition = ApplicationSetting.get_current_competition()
+        request.active_competition = request.competition
         request.team = TeamMembership.get_users_team(request.user, request.competition)
 
         # The dev view is a team's devbox, and only a team member is offered the switch back. So
@@ -167,21 +171,11 @@ class UserMetadataMiddleware:
         # a session (docs/security-assessment.md, D1).
         request.is_dev_environment = bool(request.session.get("is_dev_environment", False)) and request.team is not None
 
-        if request.team is None:
-            request.dev_competition = None
-        else:
-            request.dev_competition = request.team.development_competition
-
         if request.is_dev_environment:
-            request.active_competition = request.dev_competition
-            request.rounds = Round.objects.filter(
-                competition=request.dev_competition
-            ).order_by("round_start")
-            request.competition_state = get_competition_state(
-                request.time_now, request.dev_competition, request.rounds
-            )
+            # The team's devbox: always on, reset by the team, no rounds (docs/devbox.md).
+            request.rounds = Round.objects.none()
+            request.competition_state = CompetitionState("devbox")
         else:
-            request.active_competition = request.competition
             request.rounds = Round.objects.filter(
                 competition=request.competition
             ).order_by("round_start")

@@ -97,7 +97,7 @@ def test_every_staff_page_renders(staff_site):
 # --- the competition -------------------------------------------------------------
 
 
-def test_registration_window_and_development_competition(staff_site):
+def test_registration_window(staff_site):
     from core.models.team import Team
 
     comp = competition()
@@ -110,15 +110,9 @@ def test_registration_window_and_development_competition(staff_site):
     assert ok.status_code == 302
     comp.refresh_from_db()
     assert comp.name == "WORMS 2030" and comp.registration_ends_at.day == 8
-
-    assert post(staff_site, "/staff/competition/development/").status_code == 302
-    comp.refresh_from_db()
-    dev = comp.development_competition
-    assert dev is not None and dev.is_dev_competition
-    # Existing teams are linked to it; teams created later get it.
-    assert Team.objects.get(name="early").development_competition == dev
-    assert post(staff_site, "/staff/teams/", {"name": "late", "max_members": 2}, page="/staff/teams/").status_code == 302
-    assert Team.objects.get(name="late").development_competition == dev
+    # Dev rounds are gone, and so is the page that made their competition.
+    assert "Development competition" not in text(get(staff_site, "/staff/"))
+    assert post(staff_site, "/staff/competition/development/", page="/staff/").status_code == 404
 
 
 # --- accounts --------------------------------------------------------------------
@@ -328,7 +322,7 @@ def round_data(**overrides):
 
     start = clock.now() + timedelta(days=1)
     data = {
-        "environment": "live", "name": "R1",
+        "name": "R1",
         "round_start": start.strftime("%Y-%m-%dT%H:%M"),
         "round_end": (start + timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M"),
         "seed": "", "vms": 8, "networks": 4, "sites": 1, "max_interfaces": 3, "vm_ram": 512,
@@ -392,18 +386,22 @@ def test_a_round_must_fit_every_team(staff_site):
     assert post(staff_site, "/staff/rounds/", {**short, "run_duration": 45}, page="/staff/rounds/").status_code == 302
 
 
-def test_rounds_do_not_overlap_and_dev_rounds_need_the_dev_competition(staff_site):
+def test_rounds_do_not_overlap_and_there_are_no_dev_rounds(staff_site):
     from core.models.competition import Round
 
     assert post(staff_site, "/staff/rounds/", round_data(), page="/staff/rounds/").status_code == 302
     clash = post(staff_site, "/staff/rounds/", round_data(name="R2"), page="/staff/rounds/")
     assert "Overlaps R1" in text(clash)
-    dev = post(staff_site, "/staff/rounds/", round_data(name="D1", environment="dev"), page="/staff/rounds/")
-    assert "Create the development competition first" in text(dev)
-    post(staff_site, "/staff/competition/development/")
-    assert post(staff_site, "/staff/rounds/", round_data(name="D1", environment="dev"), page="/staff/rounds/").status_code == 302
+    # The form has no environment any more: a round asked to be "dev" is an ordinary round.
+    page = text(get(staff_site, "/staff/rounds/"))
+    assert "Dev round" not in page and 'name="environment"' not in page
+    from core import clock
+
+    start = clock.now() + timedelta(days=3)
+    later = {"round_start": start.strftime("%Y-%m-%dT%H:%M"), "round_end": (start + timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M")}
+    assert post(staff_site, "/staff/rounds/", round_data(name="D1", environment="dev", **later), page="/staff/rounds/").status_code == 302
     d1 = Round.objects.get(name="D1")
-    assert d1.competition.is_dev_competition and d1.sandbox_params == {}
+    assert not d1.competition.is_dev_competition and d1.sandbox_params["vms"] == 8
 
 
 def test_edit_and_delete_before_the_runs_exist(staff_site):

@@ -305,7 +305,7 @@
     // One round's timeline (orchestrator/rounds/timeline.py's shape, as a
     // progression carries it), sorted, with event ids and the time range
     // recomputed. `doc` (the progression around it) gives the clock and the
-    // labels when there is no run (a dev round, a run not planned yet).
+    // labels when there is no run (the devbox, a run not planned yet).
     function cleanFlow(f) {
         const t = isObj(f) ? time(f.t) : null;
         return t === null ? null : {

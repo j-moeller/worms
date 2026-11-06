@@ -34,7 +34,6 @@
                 {% if not summary.teams %}<li><span class="badge badge--warn">to do</span> <a href="{% url 'staff_teams' %}">Create the teams.</a></li>{% endif %}
                 {% if not summary.students %}<li><span class="badge badge--warn">to do</span> <a href="{% url 'staff_users' %}">Create the student accounts</a> (one by one or from a CSV).</li>{% endif %}
                 {% if summary.without_team %}<li><span class="badge">open</span> <a href="{% url 'staff_users' %}?show=no-team">{{ summary.without_team }} student{{ summary.without_team|pluralize }} without a team.</a></li>{% endif %}
-                {% if not dev_competition %}<li><span class="badge">optional</span> Create the development competition below (the Dev environment's rounds).</li>{% endif %}
                 {% if not summary.upcoming and not summary.active %}<li><span class="badge badge--warn">to do</span> <a href="{% url 'staff_rounds' %}">Create a round.</a></li>{% endif %}
                 {% if summary.teams and summary.students and comp.registration_starts_at and summary.upcoming %}<li><span class="badge badge--ok">ready</span> Teams, accounts and a round are in place.</li>{% endif %}
             </ul>
@@ -61,22 +60,6 @@
 </section>
 
 <div class="grid grid--2">
-    <section class="panel" aria-labelledby="dev-title">
-        <header class="panel__head"><h2 class="panel__title" id="dev-title">Development competition</h2></header>
-        <div class="panel__body prose">
-            {% if dev_competition %}
-            <p><strong>{{ dev_competition.name }}</strong> — the Dev environment of this competition's teams. Its rounds are only time windows for a team's devbox progression; nothing is built for them.</p>
-            {% if teams_without_dev %}
-            <p>{{ teams_without_dev }} team{{ teams_without_dev|pluralize }} {{ teams_without_dev|pluralize:"is,are" }} not linked to it yet.</p>
-            <form method="post" action="{% url 'staff_dev_competition' %}">{% csrf_token %}<button type="submit" class="btn btn--sm">Link every team</button></form>
-            {% endif %}
-            {% else %}
-            <p>None yet. The Dev environment (each team's devbox) shows its rounds' progression once there is one.</p>
-            <form method="post" action="{% url 'staff_dev_competition' %}">{% csrf_token %}<button type="submit" class="btn btn--primary btn--sm">Create it</button></form>
-            {% endif %}
-        </div>
-    </section>
-
     <section class="panel" aria-labelledby="console-title">
         <header class="panel__head"><h2 class="panel__title" id="console-title">On the console</h2></header>
         <div class="panel__body prose">

@@ -107,6 +107,34 @@ def test_what_cannot_run_is_refused(team_site, data, message):
     assert not Upload.objects.exists()
 
 
+def test_a_team_cannot_store_more_than_its_quota(team_site, monkeypatch):
+    """One team cannot fill the dashboard's disk (docs/security-assessment.md, D11):
+    what its uploads keep stored is capped, and the same bytes again cost nothing."""
+    from django.conf import settings
+
+    from core.models.worms import Upload
+
+    first = _zip({"main.sh": "echo 1\n" + "#" * 4000})
+    monkeypatch.setattr(settings, "UPLOAD_TEAM_QUOTA", len(first) + 100)
+    assert "Uploaded worm.zip" in upload(team_site, first)
+    assert "Uploaded worm.zip" in upload(team_site, first)  # already stored: within the quota
+    second = _zip({"main.sh": "echo 2\n" + "#" * 4000})
+    assert "the most stored per team" in upload(team_site, second)
+    assert Upload.objects.count() == 2
+
+
+def test_a_team_may_upload_only_so_often(team_site, monkeypatch):
+    from django.conf import settings
+
+    from core.models.worms import Upload
+
+    monkeypatch.setattr(settings, "UPLOAD_TEAM_PER_HOUR", 2)
+    for n in range(2):
+        assert "Uploaded worm.zip" in upload(team_site, _zip({"main.sh": f"echo {n}\n"}))
+    assert "uploads in the last hour" in upload(team_site, _zip({"main.sh": "echo 3\n"}))
+    assert Upload.objects.count() == 2
+
+
 # --- one directory for the dashboard and the agent (Ansible) ------------------------
 
 

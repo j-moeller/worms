@@ -100,16 +100,17 @@ def _environment(request: HttpRequest) -> str:
 
 
 def _rounds(request: HttpRequest):
-    competition = request.active_competition
-    if competition is None:
+    """The competition's rounds. None in the Dev view: the devbox has no rounds."""
+    competition = request.competition
+    if competition is None or request.is_dev_environment:
         return []
     return list(Round.objects.filter(competition=competition).order_by("round_start", "id"))
 
 
 def _team_round(request: HttpRequest, round_id: int) -> Round:
-    if request.active_competition is None:
+    if request.competition is None or request.is_dev_environment:
         raise Http404("No such round.")
-    return get_object_or_404(Round.objects.select_related("competition"), id=round_id, competition=request.active_competition)
+    return get_object_or_404(Round.objects.select_related("competition"), id=round_id, competition=request.competition)
 
 
 def round_state(rnd: Round, now) -> str:
@@ -149,7 +150,7 @@ def summary(team: Team, rnd: Round, now) -> dict:
         .select_related("vm", "flag_capture_attempt")
         .order_by("flag_capture_attempt__created_at", "id")
     )
-    start, end = progression.window(team, rnd, now, "live", run)
+    start, end = progression.window(team, rnd, now, run)
     counts = {"submissions": 0, "logs": 0}
     if start is not None:
         scope = {"team_uuid": str(team.uuid), "devbox": False, "created_at__gte": start, "created_at__lte": end}
@@ -222,7 +223,7 @@ def team_rounds(request: HttpRequest, team: Team):
     now = clock.now()
     rounds = _rounds(request)
     runs = {}
-    if _environment(request) == "live":
+    if rounds:
         runs = {run.round_id: run.state for run in RoundRun.objects.filter(team=team, round__in=rounds)}
     default = default_round(rounds, now)
     return _json(
@@ -248,8 +249,7 @@ def team_rounds(request: HttpRequest, team: Team):
 def _team_document(request, team, round_id, flows=False):
     rnd = _team_round(request, round_id)
     doc = progression.build(
-        team, rnd, now=clock.now(), audience="team", environment=_environment(request),
-        infra=live_address_index(), flows=flows,
+        team, rnd, now=clock.now(), audience="team", infra=live_address_index(), flows=flows,
     )  # fmt: skip
     log_url = reverse("progression_log", args=[rnd.id, ZERO_UUID]).replace(ZERO_UUID, "{ref}")
     return rnd, with_links(doc, reverse("progression_flows", args=[rnd.id]), log_url)
@@ -311,7 +311,7 @@ def team_flows(request: HttpRequest, round_id: int, team: Team):
 @user_in_team_required
 def team_log(request: HttpRequest, round_id: int, ref, team: Team):
     rnd = _team_round(request, round_id)
-    record = progression.log_record(team, rnd, ref, now=clock.now(), environment=_environment(request))
+    record = progression.log_record(team, rnd, ref, now=clock.now())
     if record is None:
         return _json({"error": "No such log in this round."}, status=404)
     return _json(record)
@@ -340,7 +340,7 @@ def _staff_run(request, uuid):
 
 def _staff_document(run, flows=False):
     doc = progression.build(
-        run.team, run.round, now=clock.now(), audience="staff", environment="live",
+        run.team, run.round, now=clock.now(), audience="staff",
         infra=live_address_index(), flows=flows,
     )  # fmt: skip
     log_url = reverse("run_progression_log", args=[run.uuid, ZERO_UUID]).replace(ZERO_UUID, "{ref}")
@@ -374,7 +374,7 @@ def run_log(request: HttpRequest, uuid, ref):
     run = _staff_run(request, uuid)
     if run is None:
         return _json(FORBIDDEN, status=403)
-    record = progression.log_record(run.team, run.round, ref, now=clock.now(), environment="live")
+    record = progression.log_record(run.team, run.round, ref, now=clock.now())
     if record is None:
         return _json({"error": "No such log in this run."}, status=404)
     return _json(record)

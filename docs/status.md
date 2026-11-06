@@ -4,7 +4,9 @@ As of 2026-11-06, on `worms-dev`. This replaces `requirements.md`, `check-with-u
 `todos/dev-rounds.md`, `TODO` and the status part of the progress log (now in `docs/archive/`).
 
 **The goal for 2026-11-10, the first product:** users sign in, reach their devboxes, develop
-and upload their worms, and get a feeling for the environment. Rounds are not part of it.
+and upload their worms, and get a feeling for the environment. Exactly three teams. Rounds are
+not part of it: they get a new design next week (§3, D-2). **It is tested on `worms-pve` on
+2026-11-07, from a fresh install:** `docs/fresh-install.md`.
 
 ## 1. The first product, step by step
 
@@ -13,41 +15,29 @@ and upload their worms, and get a feeling for the environment. Rounds are not pa
 | Staff create teams and students (CSV), hand out one-time passwords | **Works live** | Passwords are shown once on the page; nothing emails them |
 | A student signs in and sets a password | **Works live** | Sign-in is rate-limited per address; no per-account lockout |
 | Adds an SSH key on the profile | **Works live** | Installed by a job in about 3 minutes |
-| Reaches the devbox: `ssh -A -J team@<name>:2222 root@<A>`, then B and C | **Works from the node.** **Not tried from outside** | Port 2222 and the dashboard's name must be tried from a laptop |
+| Reaches the devbox: `ssh -A -J team@<name>:2222 root@<A>`, then B and C | **Works**, also from outside (checked by the user on 2026-11-06) | |
 | Works on the VMs: files, `apt`, `pip`, scoring, logging, the LLM endpoint | **Works live** | `apt` only has the ~150 cached packages plus the seed; `pip` a minimal seed |
-| Uploads a worm in the Dev view: the devbox resets and `main.sh` runs on A | **Worked live once** (8 min 36 s) | Uploads from several teams queue: one job at a time |
-| Sees the dev score, logs and the replay | **Works live** | The replay has no network traffic: devbox traffic is not recorded |
+| Uploads a worm in the Dev view: the devbox resets and `main.sh` runs on A | **Worked live once** (8 min 36 s) | Uploads from several teams queue: one job at a time. At most 30 uploads an hour and 2 GiB stored per team |
+| Sees the dev score, logs and the replay | **Works live** | No round banner in the Dev view any more. The replay has no network traffic: devbox traffic is not recorded |
 | Resets the devbox | **Worked live, by replacing the VMs** (8–20 min) | The faster rollback is **not deployed and never ran** |
-| Reads the rules: what to upload, what is reachable | **Only in this repository** | `docs/worm-contract.md`; the dashboard shows only the `curl` commands for scoring and logging |
+| Reads the rules: what to upload, what is reachable | **Only in this repository** | `docs/worm-contract.md`. The dashboard gets a redesign soon |
 
 ## 2. Before users arrive
 
-In order. Items 1–4 are blocking.
+Done on 2026-11-06: the current code is deployed (`worms build`); dev rounds and the
+round banner of the Dev view are gone; the dashboard disk is 20 GB and uploads have a per-team
+quota; the outside checks of port 443 and 2222 passed (the user's). The test data stays: these
+are dev teams.
 
-1. **Decide where it runs.** `worms-dev` works today. `worms-pve` needs a DNS record for
-   `worms.mlsec.tu-berlin.de`, a rename of the node (the OpenTofu state and VMs are tied to the
-   name; `make destroy_all` before and `make` after, never tried), a first build from nothing
-   (never tried either), and hardware checks: AVX2 (team VMs do not start without it), nesting
-   `N`, `SMT vulnerable`, enough RAM for the number of teams (§5).
-2. **Deploy the current code and test the snapshots** (they have never run). `worms build`
-   (stops the devboxes for its length), `worms build rebuild-services` (20–60 min, the service
-   VMs have run without a snapshot), `time worms build round-reset-services`, `worms simulate`,
-   then reset one devbox twice: the first reset replaces and snapshots its VMs, the second
-   should roll them back. Check `/etc/sandbox-api/devbox-teams` on scoring and logging afterwards.
-3. **Fix the devbox security items marked "before users" in §4.**
-4. **From a laptop:** `curl -vk https://worms-dev.mlsec.tu-berlin.de/` (expect 200) and
-   `ssh -p 2222 team@worms-dev.mlsec.tu-berlin.de` (expect `Permission denied (publickey)`).
-   A timeout means the network in front of the node blocks the port.
-5. **Clean up the test data:** the 9 test accounts, teams `alpha`, `bravo`, `charlie`, their
-   devboxes and `WORMS 2026 · dev` (`docs/management.md`, "Clean the database"). Then set the
-   admin password: `worms admin reset-password` (nobody knows the current one).
-6. **The header says `ROUND IN PROGRESS (DEV)`** with no round, for every team: a competition
-   without registration dates counts as a dev round (`dashboard/middleware.py`,
-   `get_competition_state`). Setting a registration window on `/staff/` hides it; the code
-   should not need that.
-7. **Give teams the rules:** hand out `docs/worm-contract.md`, or put it on a dashboard page.
-8. **Back up the database.** Nothing does today. A nightly `pg_dump` to the node is the minimum.
-9. **Retire the old Proxmox token** `terraform-prov@pve` (it still has `Administrator`) and
+1. **The fresh install on `worms-pve`**, tomorrow: `docs/fresh-install.md`.
+2. **Test the snapshots** (they have never run): `worms build rebuild-services` (20–60 min; the
+   service VMs here ran without a snapshot), `time worms build round-reset-services`, `worms
+   simulate`, then reset one devbox twice: the first reset replaces and snapshots its VMs, the
+   second should roll them back. On `worms-pve`, new VMs get their snapshots from the start.
+3. **The devbox security items in §4.** The user plans to fix security soon.
+4. **Backups:** a first version is drafted and off (`docs/backup.md`). Turn it on and decide where
+   copies off the node go.
+5. **Retire the old Proxmox token** `terraform-prov@pve` (it still has `Administrator`) and
    delete the old credential copies: `find opentofu -name 'credentials.auto.tfvars.disabled'
    -not -path '*/.terraform/*' -delete; rm .env`.
 
@@ -55,9 +45,9 @@ In order. Items 1–4 are blocking.
 
 | # | Question | Options, and a recommendation |
 |---|---|---|
-| D-1 | Where does the first product run? | `worms-dev` now and move later (works today), or `worms-pve` now (untested rename and fresh build). **Recommended: `worms-dev`** |
-| D-2 | **How does a worm get from one VM to the next?** The core of the game is not designed | Sandbox VMs run only SSH with the operator's key, so a worm can capture only its start VM. On a devbox, B and C accept the team's own keys, so a worm carrying a registered private key spreads there, but that path does not exist in a round. Seeded vulnerable services, weak credentials, or a planted key per round are the candidates. Until decided, teams develop against a devbox that does not behave like a round |
-| D-3 | Remove dev rounds? | The dev view no longer uses them; staff pages, API and middleware still carry them. **Recommended: remove**, together with fixing the header (§2.6) |
+| D-1 | Where does the first product run? | **Decided:** `worms-pve`, tested from a fresh install on 2026-11-07 |
+| D-2 | **How does a worm get from one VM to the next?** | **Decided, design next week:** rounds and the game plan are redesigned from the ground up. VMs will hold information that opens others, such as the password of another VM or the SSH key of the next one. Today a sandbox VM runs only SSH with the operator's key, and on a devbox B and C accept the team's own keys |
+| D-3 | Remove dev rounds? | **Done** on 2026-11-06: the staff pages, the round form, the team API and the progression serve rounds of the competition only; the Dev view shows no round banner. The unused columns (`competitions.is_dev_competition`, `development_competition_id`) stay, so no migration or grant changed |
 | D-4 | May a manual devbox reset delay a round? | Leave it (up to 8 min per round job), wait for the whole round (82 min per team), or wait only near timed jobs. Dev uploads already wait |
 | D-5 | Profile lists the whole team's SSH keys, or only your own? | Whole team (a teammate can revoke a lost key; today) or own only |
 | D-6 | What the apt cache and devpi hold | A longer seed list, a large Debian mirror, or keep it minimal and tell teams to vendor |
@@ -73,8 +63,9 @@ In order. Items 1–4 are blocking.
 | D-16 | KSM off | It is on under memory pressure (2.2 GB shared on 2026-11-06), a cross-VM side channel. Off costs that memory |
 | D-17 | `cve-search` to `x86-64-v3` | It still has `cpu: host` and `/dev/kvm`, and team VMs reach its port 5000 |
 | D-18 | Trim the disk monthly | `zfs set org.debian:periodic-trim=enable rpool`. **Recommended yes**: the one-off TRIM cut the slowest writes from 1.5 s to 11 ms |
-| D-19 | The public repository | `github` (`j-moeller/worms`) is public, findings included. Move some to `https` only? |
-| D-20 | Upload limits | 100 MiB per zip, no per-team quota or rate, on a dashboard disk with 2.4 GB free |
+| D-19 | Where the code goes | **Decided:** `github` (`j-moeller/worms`) is private; push to both remotes |
+| D-20 | Upload limits | **Done:** 100 MiB per zip, at most 30 uploads an hour and 2 GiB stored per team (`UPLOAD_TEAM_PER_HOUR`, `UPLOAD_TEAM_QUOTA`), on a 20 GB dashboard disk |
+| D-21 | The rest of `end-to-end-tests` | Fabian's race fixes, migrations 0002/0003 and test suites are not on `main` (`docs/merge-end-to-end-tests.md`). Merge them, after the first product? |
 
 ## 4. Security: a rogue program on a devbox
 
@@ -101,9 +92,9 @@ endpoint as a channel out: whatever `teachllm` does with requests is part of the
 
 ## 5. Capacity
 
-- **RAM:** 32 GB here; 24 GB in use with 3 teams (13 devbox VMs). A team costs about 2 GB, a
-  default round about 4 GB, so this node has room for about 3 more teams (`docs/resources.md`).
-  The platform caps at 32 teams. Nothing checks free RAM before a build.
+- **Three teams, exactly.** 32 GB here; 24 GB in use with the 3 teams (13 devbox VMs). A team
+  costs about 2 GB, a default round about 4 GB (`docs/resources.md`). Nothing checks free RAM
+  before a build.
 - **Time:** a devbox build took 17 minutes for 3 teams; how it scales with more teams is
   unmeasured. The disk timed out (`zfs create`, F5) in 4 of 7 builds before the TRIM and in none
   of the 2 since.
@@ -121,7 +112,7 @@ endpoint as a channel out: whatever `teachllm` does with requests is part of the
 - A GPU or inference service for jailbreaking scenarios (planned in the old `TODO`).
 
 **Dashboard**
-- A rules page for teams (§2.7); a design pass.
+- A rules page for teams; the redesign is planned.
 - A failed devbox reset looks like a success: the score is reset, the VMs are not, and the page
   keeps saying "being rebuilt" (F25).
 - A user created for a full or unknown team gets an account without a team, and there is no
@@ -131,7 +122,7 @@ endpoint as a channel out: whatever `teachllm` does with requests is part of the
   password on a voluntary change (D5), a Content-Security-Policy (D8).
 
 **Operations**
-- Database backups (§2.8) and retention for `network_flows`.
+- Database backups (drafted, off: `docs/backup.md`) and retention for `network_flows`.
 - Health monitoring of the services (the "heartbeat" in the old `TODO`).
 - An interrupted build leaves VMs outside OpenTofu's state or an `apt` lock (F2).
 - `Update all packages` prints nothing for about 16 minutes; `no_log` hides migration errors.
@@ -139,9 +130,10 @@ endpoint as a channel out: whatever `teachllm` does with requests is part of the
 - Nothing checks that infrastructure VMs have their firewall on (F26); the watchdog covers only
   sandbox and devbox VMs.
 
-**Private internet** (`docs/archive/pi-failures.md`)
-- devpi holds a minimal seed, the registry is empty, cve-search has no data, Wikipedia is not
-  running (its 20 GB disk holds only the mini dump), man pages answer 503 (D-6 to D-8).
+**Private internet** (`docs/archive/pi-failures.md`, `docs/merge-end-to-end-tests.md`)
+- devpi holds a minimal seed (`tqdm` is missing), the registry is empty, cve-search has no data,
+  Wikipedia is not running (its 20 GB disk holds only the mini dump), man pages answer 503, and
+  their browse and search pages 403 to clients (`Require local` in `man2html.conf`) (D-6 to D-8).
 - NTP has no upstream (UDP 123 is never allowed), so clients get an uncorrected clock.
 - The private-internet VMs never get package upgrades (60 behind).
 - The apt-cacher-ng report page and the cve-search UI need no login (S13).
@@ -176,7 +168,6 @@ kept. Keep the full output of the next run.
 
 ## 9. Local settings, not committed
 
-`opentofu/shared/shared-variables.tf` (node name `worms-dev`), `opentofu/stacks/private_internet/main.tf`
-(`cve_search` RAM 1024 MB, untested with its data load) and `docs/IMPORTANT` differ from the
-repository on purpose. Both settings reached `main` once (`52fc7a1`) and were reverted
-(`e6e5b33`); removing them from history would need a force-push.
+`opentofu/shared/shared-variables.tf` (node name `worms-dev`) and `docs/IMPORTANT` differ from the
+repository on purpose. `cve_search` runs with the repository's 4096 MB again. The node name
+reached `main` once (`52fc7a1`) and was reverted (`e6e5b33`).

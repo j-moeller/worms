@@ -155,12 +155,8 @@ def _team_info(team):
     return {"uuid": str(team.uuid), "name": team.name}
 
 
-def _competitions(team):
-    return [cid for cid in (team.competition_id, team.development_competition_id) if cid]
-
-
 def _round(team, round_id) -> Round:
-    rnd = Round.objects.filter(id=round_id, competition_id__in=_competitions(team)).first()
+    rnd = Round.objects.filter(id=round_id, competition_id=team.competition_id).first()
     if rnd is None:
         raise ApiError(404, "not_found", "No such round for your team.")
     return rnd
@@ -174,7 +170,7 @@ def _round_info(rnd, team):
     return {
         "id": rnd.id,
         "name": rnd.name,
-        "competition": "development" if rnd.competition_id == team.development_competition_id else "main",
+        "competition": "main",  # kept in the format; the devbox has no rounds
         "start": _iso(rnd.round_start),
         "end": _iso(rnd.round_end),
     }
@@ -250,7 +246,7 @@ def _page_info(name, rnd, limit, items, next_cursor):
 
 @api_view
 def rounds(request, team):
-    qs = Round.objects.filter(competition_id__in=_competitions(team)).order_by("round_start", "id")[:MAX_ROUNDS]
+    qs = Round.objects.filter(competition_id=team.competition_id).order_by("round_start", "id")[:MAX_ROUNDS]
     rounds_ = list(qs)
     runs = {run.round_id: run for run in RoundRun.objects.filter(team=team, round__in=rounds_)}
     return {

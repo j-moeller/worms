@@ -11,6 +11,9 @@ terraform {
   required_providers {
     proxmox = {
       source = "bpg/proxmox"
+      # The version each stack has run with on worms-dev; a fresh `tofu init`
+      # would otherwise take the newest (docs/fresh-install.md).
+      version = "0.116.0"
     }
   }
 }

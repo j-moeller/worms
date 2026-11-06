@@ -13,7 +13,7 @@ from the console (`worms devbox provision`), and the platform itself with
 from __future__ import annotations
 
 from core import clock
-from core.models.competition import Competition, Round
+from core.models.competition import Round
 from core.models.team import Team, TeamMembership
 from core.models.user import User
 from dashboard.forms import CompetitionForm
@@ -23,7 +23,6 @@ from django.contrib import messages
 from django.db import IntegrityError, connection, transaction
 from django.http import HttpRequest
 from django.shortcuts import redirect
-from django.views.decorators.http import require_POST
 
 
 def delete_unreferenced(model, pk) -> bool:
@@ -67,8 +66,8 @@ def competition_summary(competition) -> dict:
 
 @staff_required
 def competition(request: HttpRequest):
-    """The current competition: its name and registration window, its
-    development competition, and what still needs doing."""
+    """The current competition: its name and registration window, and what
+    still needs doing."""
     comp = request.competition
     if comp is None:
         return refuse(request, "No current competition (manage.py init creates one).", 500)
@@ -88,34 +87,9 @@ def competition(request: HttpRequest):
             "registration_ends_at": comp.registration_ends_at,
         })  # fmt: skip
     summary = competition_summary(comp)
-    dev = comp.development_competition
     return render_with_base_info(request, "staff/competition.html", {
         "form": form,
         "comp": comp,
-        "dev_competition": dev,
-        "teams_without_dev": Team.objects.filter(competition=comp, development_competition__isnull=True).count(),
         "summary": summary,
         "registration_open": comp.is_registration_period(),
     })  # fmt: skip
-
-
-@staff_required
-@require_POST
-def development_competition(request: HttpRequest):
-    """Create the competition's development competition (the Dev environment:
-    devbox progression windows) if it has none, and give it to every team of
-    the competition that has none."""
-    comp = request.competition
-    if comp is None:
-        return refuse(request, "No current competition.", 500)
-    with transaction.atomic():
-        dev = comp.development_competition
-        if dev is None:
-            dev = Competition.objects.create(name=f"{comp.name} · dev", is_dev_competition=True)
-            comp.development_competition = dev
-            comp.save(update_fields=["development_competition"])
-        updated = Team.objects.filter(competition=comp, development_competition__isnull=True).update(
-            development_competition=dev
-        )
-    messages.success(request, f"Development competition {dev.name!r}; {updated} team(s) linked to it.")
-    return redirect("staff_competition")

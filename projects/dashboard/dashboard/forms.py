@@ -163,9 +163,6 @@ class AddMemberForm(StyledForm):
 
 # -- rounds ----------------------------------------------------------------------
 
-LIVE, DEV = "live", "dev"
-
-
 def _minutes(label, default, low, high, required=True, help_text=""):
     return forms.IntegerField(
         label=label, initial=default, min_value=low, max_value=high, required=required, help_text=help_text
@@ -173,15 +170,8 @@ def _minutes(label, default, low, high, required=True, help_text=""):
 
 
 class RoundForm(StyledForm):
-    """A round of the competition (Live: every team's worm runs, one team
-    after another) or of its development competition (Dev: only a time
-    window for the devbox progression; nothing is built)."""
+    """A round of the competition: every team's worm runs, one team after another."""
 
-    environment = forms.ChoiceField(
-        choices=[(LIVE, "Live — every team's worm runs in its own sandbox"),
-                 (DEV, "Dev — a window for the devbox progression only")],
-        initial=LIVE,
-    )  # fmt: skip
     name = forms.CharField(max_length=100)
     round_start = _datetime("Starts", help_text="UTC. The upload deadline: each team's latest upload before it runs.")
     round_end = _datetime("Ends", help_text="UTC. Runs that cannot finish before it are skipped.")
@@ -223,26 +213,14 @@ class RoundForm(StyledForm):
     restart_after = _minutes("Restart a stopped VM after (min)", None, 1, 1440, required=False,
                              help_text="Empty: stopped VMs stay off.")  # fmt: skip
 
-    LIVE_ONLY = ("seed", "vms", "networks", "sites", "max_interfaces", "vm_ram", "worm_start_delay", "run_duration",
-                 "initial_fraction", "first_stop_after", "stop_interval", "min_alive", "restart_after")  # fmt: skip
-
     def __init__(self, *args, competition=None, instance=None, started=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.competition, self.instance, self.started = competition, instance, started
-        if instance is not None:
-            # The environment of an existing round is fixed.
-            del self.fields["environment"]
         if started:
             # A round that has begun: only its end can still move.
             for name in list(self.fields):
                 if name != "round_end":
                     del self.fields[name]
-
-    @property
-    def is_dev(self) -> bool:
-        if self.instance is not None:
-            return self.instance.competition.is_dev_competition
-        return self.cleaned_data.get("environment") == DEV
 
     def clean(self):
         data = super().clean()
@@ -254,7 +232,7 @@ class RoundForm(StyledForm):
             self.add_error("round_end", "The round must end after it starts.")
         if not self.started and start is not None and start <= clock.now():
             self.add_error("round_start", "Start the round in the future (the conductor plans its runs at the start).")
-        if self.started or self.is_dev:
+        if self.started:
             return data
 
         vms, networks = data["vms"], data["networks"]
@@ -269,17 +247,10 @@ class RoundForm(StyledForm):
 
     # -- results ---------------------------------------------------------------
 
-    def target_competition(self, dev_competition):
-        if self.instance is not None:
-            return self.instance.competition
-        return dev_competition if self.is_dev else self.competition
-
     def sandbox_params(self) -> dict:
         """The round's sandbox_params (core/schedule.py) in the conductor's
         and the agent's units (seconds)."""
         data = self.cleaned_data
-        if self.is_dev:
-            return {}
         minute = 60
         game_plan = {
             "initial_fraction": float(data["initial_fraction"]),

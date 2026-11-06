@@ -108,17 +108,6 @@ def populate(request: HttpRequest):
         },
     )
 
-    # The development competition (the Dev environment), with a week-long
-    # round: what the team's devbox did in it is its Dev progression.
-    dev = Competition.objects.filter(is_dev_competition=True).first() or Competition.objects.create(
-        name=f"{competition.name} · dev", is_dev_competition=True
-    )
-    Round.objects.get_or_create(
-        competition=dev,
-        name="Dev week",
-        defaults={"seed": 2, "round_start": now - timedelta(days=1), "round_end": now + timedelta(days=6)},
-    )
-
     # Teams, each with a lead and a few members (people to switch into).
     names = ["Red Team", "Neural Net", "0xCAFE", "Null Pointer", "Segfault Collective", "rm -rf"]
     teams = []
@@ -129,12 +118,8 @@ def populate(request: HttpRequest):
             defaults={
                 "max_members": 4,
                 "devbox_version": 1,
-                "development_competition": dev,
             },
         )
-        if team.development_competition_id != dev.id:  # demo data from before the dev competition
-            team.development_competition = dev
-            team.save(update_fields=["development_competition"])
         teams.append(team)
         slug = name.split()[0].lower().lstrip("0x") or "team"
         lead, _ = User.objects.get_or_create(
@@ -215,7 +200,7 @@ def populate(request: HttpRequest):
             capture, _ = DevboxCapture.objects.get_or_create(
                 team=red, devbox_vm=devbox_vm, devbox_version=red.devbox_version
             )
-            # The submission that found it, during the dev round.
+            # The submission that found it.
             if capture.flag_capture_attempt_id is None:
                 capture.flag_capture_attempt = FlagCaptureAttempt.objects.create(
                     team_uuid=str(red.uuid), vm_flag_hash=devbox_vm.ctf_flag_hash or "", devbox=True,

@@ -36,11 +36,6 @@ from django.views.decorators.http import require_POST
 ACTIVE_STATES = [s for s in RoundRun.State.values if s not in ("pending", "finished", "failed", "skipped")]
 
 
-def _competitions(request):
-    comp = request.competition
-    return comp, (comp.development_competition if comp is not None else None)
-
-
 def _status(round_obj, now) -> str:
     if round_obj.round_start is None or round_obj.round_end is None:
         return "undated"
@@ -78,7 +73,7 @@ def _check_fit(form, start, end, params, teams):
 
 @staff_required
 def rounds(request: HttpRequest):
-    comp, dev = _competitions(request)
+    comp = request.competition
     if comp is None:
         return refuse(request, "No current competition.", 500)
     now = clock.now()
@@ -87,27 +82,20 @@ def rounds(request: HttpRequest):
     if request.method == "POST":
         form = RoundForm(request.POST, competition=comp)
         if form.is_valid():
-            target = form.target_competition(dev)
             # Read before checking: an error on a field removes it from cleaned_data.
             data = dict(form.cleaned_data)
             start, end, params = data["round_start"], data["round_end"], form.sandbox_params()
-            if target is None:
-                form.add_error("environment", "Create the development competition first (Staff → Competition).")
-            else:
-                _check_window(form, target, start, end)
-                if not form.is_dev:
-                    _check_fit(form, start, end, params, teams)
+            _check_window(form, comp, start, end)
+            _check_fit(form, start, end, params, teams)
             if not form.errors:
                 created = Round.objects.create(
-                    competition=target, name=data["name"], seed=form.chosen_seed(),
+                    competition=comp, name=data["name"], seed=form.chosen_seed(),
                     round_start=start, round_end=end, sandbox_params=params,
                 )  # fmt: skip
                 messages.success(request, f"Round {created.name} created. Its runs are planned when it starts.")
                 return redirect("staff_round", round_id=created.pk)
 
     def listing(competition):
-        if competition is None:
-            return []
         rows = []
         for r in Round.objects.filter(competition=competition).order_by("round_start"):
             states = Counter(RoundRun.objects.filter(round=r).values_list("state", flat=True))
@@ -116,7 +104,7 @@ def rounds(request: HttpRequest):
                 "status": _status(r, now),
                 "states": sorted(states.items()),
                 "captures": FlagCapture.objects.filter(round=r).count(),
-                "estimate": None if competition.is_dev_competition else _estimate(r, teams),
+                "estimate": _estimate(r, teams),
             })  # fmt: skip
         return rows
 
@@ -126,8 +114,6 @@ def rounds(request: HttpRequest):
     return render_with_base_info(request, "staff/rounds.html", {
         "form": form,
         "live_rounds": listing(comp),
-        "dev_rounds": listing(dev),
-        "dev_competition": dev,
         "teams": teams,
         "active_run": active_run,
         "jobs": HostJob.objects.filter(state__in=[HostJob.State.QUEUED, HostJob.State.RUNNING])
@@ -140,8 +126,8 @@ def rounds(request: HttpRequest):
 
 @staff_required
 def round_detail(request: HttpRequest, round_id):
-    comp, dev = _competitions(request)
-    round_obj = get_object_or_404(Round, pk=round_id, competition__in=[c for c in (comp, dev) if c is not None])
+    comp = request.competition
+    round_obj = get_object_or_404(Round, pk=round_id, competition=comp)
     now = clock.now()
     runs = list(
         RoundRun.objects.filter(round=round_obj)
@@ -169,8 +155,7 @@ def round_detail(request: HttpRequest, round_id):
                 end = data["round_end"]
                 params = round_obj.sandbox_params if started else form.sandbox_params()
                 _check_window(form, round_obj.competition, start, end, exclude=round_obj)
-                if not round_obj.competition.is_dev_competition:
-                    _check_fit(form, start, end, params, Team.objects.filter(competition=round_obj.competition).count())
+                _check_fit(form, start, end, params, Team.objects.filter(competition=round_obj.competition).count())
                 if not form.errors:
                     if started:
                         round_obj.round_end = end
@@ -185,18 +170,16 @@ def round_detail(request: HttpRequest, round_id):
         messages.error(request, "The round's runs are planned; it can no longer be changed.")
         return redirect("staff_round", round_id=round_obj.pk)
 
-    is_dev = round_obj.competition.is_dev_competition
     teams = Team.objects.filter(competition=round_obj.competition).count()
     return render_with_base_info(request, "staff/round.html", {
         "round": round_obj,
-        "is_dev": is_dev,
         "status": _status(round_obj, now),
         "runs": runs,
         "form": form,
         "started": started,
         "params": round_obj.sandbox_params or {},
         "timing": schedule.run_timing(round_obj.sandbox_params),
-        "estimate": None if is_dev else _estimate(round_obj, teams),
+        "estimate": _estimate(round_obj, teams),
         "jobs": HostJob.objects.filter(run__round=round_obj).select_related("run__team").order_by("-id")[:50],
     })  # fmt: skip
 
@@ -204,8 +187,8 @@ def round_detail(request: HttpRequest, round_id):
 @staff_required
 @require_POST
 def round_delete(request: HttpRequest, round_id):
-    comp, dev = _competitions(request)
-    round_obj = get_object_or_404(Round, pk=round_id, competition__in=[c for c in (comp, dev) if c is not None])
+    comp = request.competition
+    round_obj = get_object_or_404(Round, pk=round_id, competition=comp)
     if RoundRun.objects.filter(round=round_obj).exists() or not delete_unreferenced(Round, round_obj.pk):
         messages.error(request, f"{round_obj.name} has runs and is kept.")
         return redirect("staff_round", round_id=round_obj.pk)

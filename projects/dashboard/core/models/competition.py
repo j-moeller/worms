@@ -10,14 +10,14 @@ class Competition(models.Model):
     name = models.TextField()
     created_at = models.DateTimeField(default=clock.now)
 
+    # Unused since dev rounds were removed (2026-11-06): the devbox has no rounds. The
+    # columns stay so no migration or database grant has to change.
     is_dev_competition = models.BooleanField(default=False)
 
     registration_starts_at = models.DateTimeField(null=True, blank=True)
     registration_ends_at = models.DateTimeField(null=True, blank=True)
 
-    # The competition's development competition (is_dev_competition): the
-    # Dev environment of its teams (docs/devbox.md). Teams created in the
-    # dashboard get it as their Team.development_competition.
+    # Unused, as is_dev_competition above.
     development_competition = models.ForeignKey(
         "self",
         on_delete=models.SET_NULL,
@@ -45,8 +45,6 @@ class Competition(models.Model):
         ]
 
     def is_registration_period(self):
-        if self.is_dev_competition:
-            return False
         # No registration window set (e.g. the default competition that
         # `manage.py init` creates): there is no registration period.
         if self.registration_starts_at is None or self.registration_ends_at is None:

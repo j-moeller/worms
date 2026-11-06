@@ -2,6 +2,9 @@ terraform {
   required_providers {
     proxmox = {
       source = "bpg/proxmox"
+      # The version each stack has run with on worms-dev; a fresh `tofu init`
+      # would otherwise take the newest (docs/fresh-install.md).
+      version = "0.113.1"
     }
   }
 }
@@ -65,6 +68,10 @@ locals {
     dashboard = {
       user_data_file_id = local.platform.cloud_init.django.file_id
       ram               = 1024 # gunicorn + nginx; ballooning floor 512 (docs/resources.md)
+      # The worm uploads live here (dashboard_media_root), up to 2 GiB per team
+      # (UPLOAD_TEAM_QUOTA). A larger disk is grown in place; role django_app then grows
+      # the filesystem.
+      disk_size = 20
       nics = [
         { bridge = local.nw.dmz.name, cidr = "${local.infrastructure_ips.dashboard}/24", gateway = local.host_ips.dmz },
         { bridge = local.nw.mgmt_exposed.name, cidr = "${local.management_ips.dashboard}/24" },

@@ -31,10 +31,10 @@ def sha(text):
 @pytest.fixture
 def world(site):  # noqa: F811
     """Team A's finished run in R1 (three VMs: it captured two, never the
-    third), team B in the same round, a running round R2, a Dev round with
-    both teams' devboxes, the monitor's flows and a Proxmox snapshot."""
+    third), team B in the same round, a running round R2, both teams' devboxes,
+    the monitor's flows and a Proxmox snapshot."""
     import infra_fixture
-    from core.models.competition import ApplicationSetting, Competition, Round
+    from core.models.competition import ApplicationSetting, Round
     from core.models.devbox import Devbox, DevboxCapture, DevboxLog, DevboxVM
     from core.models.logging import Logging, LoggingAttempt
     from core.models.monitoring import NetworkFlow
@@ -51,9 +51,8 @@ def world(site):  # noqa: F811
     now = timezone.now()
     hours = lambda h: timezone.timedelta(hours=h)  # noqa: E731
     comp = ApplicationSetting.get_current_competition()
-    dev = Competition.objects.create(name="dev", is_dev_competition=True)
-    a = Team.objects.create(name="team-a", competition=comp, development_competition=dev)
-    b = Team.objects.create(name="team-b", competition=comp, development_competition=dev)
+    a = Team.objects.create(name="team-a", competition=comp)
+    b = Team.objects.create(name="team-b", competition=comp)
     staff = User.objects.get(username="admin")
     student = User.objects.create(username="student-a")
     TeamMembership.objects.create(user=student, team=a)
@@ -65,7 +64,6 @@ def world(site):  # noqa: F811
     start = now - hours(2)
     r1 = Round.objects.create(competition=comp, name="R1", seed=1, round_start=start - hours(1), round_end=now - hours(0.2))
     r2 = Round.objects.create(competition=comp, name="R2", seed=2, round_start=now - hours(0.1), round_end=now + hours(2))
-    rd = Round.objects.create(competition=dev, name="Dev week", seed=3, round_start=now - hours(24), round_end=now + hours(24 * 6))
     run = RoundRun.objects.create(
         round=r1, team=a, position=0, seed=1, state="finished", worm_start_at=start, ends_at=start + timezone.timedelta(minutes=10),
         sandbox_params={"start_vm": "vm-start"}, topology={"secret_architecture": "ARCH-SECRET"},
@@ -131,8 +129,8 @@ def world(site):  # noqa: F811
         NetworkFlow.objects.create(uid=uid, ts=at(s), duration=0.5, src_ip=src, dst_ip=dst, src_port=40000, dst_port=port,
                                    transport=transport, conn_state="SF")  # fmt: skip
 
-    # Devboxes: team A's A was found in the Dev round (and again: a duplicate);
-    # its B only before the round; its C is pending. Team B's token
+    # Devboxes: team A's A was found (and again: a duplicate); its B long ago,
+    # before its devbox's current version; its C is pending. Team B's token
     # submitted by A is not A's. Team B's own activity is B's.
     devbox_vms = {}
     for team, slug, index in [(a, "t1", 1), (b, "t2", 2)]:
@@ -151,7 +149,7 @@ def world(site):  # noqa: F811
 
     found = dev_attempt(a, "token-t1-a", 20)
     DevboxCapture.objects.create(team=a, devbox_vm=devbox_vms["t1-a"], devbox_version=1, flag_capture_attempt=found)
-    before = dev_attempt(a, "token-t1-b", 48)  # before the Dev round
+    before = dev_attempt(a, "token-t1-b", 48)  # long ago
     DevboxCapture.objects.create(team=a, devbox_vm=devbox_vms["t1-b"], devbox_version=1, flag_capture_attempt=before)
     dev_attempt(a, "token-t2-a", 10)  # team B's token
     dev_attempt(a, "token-t1-a", 5)  # duplicate
@@ -166,12 +164,12 @@ def world(site):  # noqa: F811
 
     dev_log_a = dev_log(a, 4, {"dev": "a-log"})
     dev_log_b = dev_log(b, 4, {"dev": "b-log"})
-    dev_log(a, 72, {"dev": "before the round"})
+    dev_log(a, 72, {"dev": "long ago"})
 
     TopologySnapshot.objects.create(source="proxmox", data=infra_fixture.snapshot(), collected_at=now)
     topology_views._cache.clear()
     return {
-        "now": now, "a": a, "b": b, "r1": r1, "r2": r2, "rd": rd, "run": run, "vm": vm, "devbox_vms": devbox_vms,
+        "now": now, "a": a, "b": b, "r1": r1, "r2": r2, "run": run, "vm": vm, "devbox_vms": devbox_vms,
         "staff": staff, "student": student, "other": other, "client": site,
         "logs": {"a": log_a, "hidden": log_hidden, "b": log_b, "dev_a": dev_log_a, "dev_b": dev_log_b},
         "infra": address_index(analyze(infra_fixture.snapshot())),
@@ -366,34 +364,6 @@ def test_another_team_sees_nothing_of_it(world):
     text = json.dumps(doc)
     for word in ("vm-start", "vm-pivot", str(world["a"].uuid), "team-a", "first"):
         assert word not in text
-
-
-def test_dev_round_is_the_devbox_in_the_window(world):
-    doc = build(world, rnd="rd", audience="team", flows=True)
-    tl = doc["timeline"]
-    a_vm = world["devbox_vms"]["t1-a"]
-    assert doc["environment"] == "dev" and doc["round"]["competition"] == "development"
-    assert doc["network"] == {"available": False, "reason": doc["network"]["reason"], "count": 0, "truncated": False,
-                              "included": False, "path": None, "url": None}
-    assert "not recorded" in doc["network"]["reason"]
-    assert tl.get("flows", []) == []
-    # Every VM of its own devbox. Only A is captured: B was found before the round, C is
-    # pending, team B's token is not team A's.
-    assert [n["label"] for n in tl["nodes"]] == ["devbox-t1-a", "devbox-t1-b", "devbox-t1-c"]
-    assert [n["captured"] for n in tl["nodes"]] == [True, False, False] and {n["group"] for n in tl["nodes"]} == {"devbox"}
-    submissions = [e["data"] for e in tl["events"] if e["kind"] == "flag_submitted"]
-    assert [s["result"] for s in submissions] == ["captured", "invalid", "duplicate", "pending"]
-    assert submissions[0]["flag_of"] == str(a_vm.uuid) and submissions[3]["flag_of"] is None
-    captured = [e for e in tl["events"] if e["kind"] == "captured"]
-    assert len(captured) == 1 and captured[0]["vm"] == str(a_vm.uuid)
-    logs = [e for e in tl["events"] if e["kind"] == "log_received"]
-    assert [e["data"]["log"]["ref"] for e in logs] == [str(world["logs"]["dev_a"].uuid)]
-    # The scene: the team's own devbox, no other team, no addresses.
-    groups = doc["scene"]["groups"]
-    assert len(groups) == 1 and groups[0]["kind"] == "devbox" and groups[0]["members"] == [n["id"] for n in tl["nodes"]]
-    text = "\n".join(walk(doc))
-    for word in ("devbox-t2", "team-b", "10.6.", "10.7.", "9888", "10.2.0.3"):
-        assert word not in text, word
 
 
 def _devbox_since(world, team="a", hours_ago=30):
@@ -618,10 +588,6 @@ def test_clock(world):
     running = build(world, rnd="r2", audience="team")
     assert running["clock"]["t_max"] == running["clock"]["now"] == 180.0
 
-    dev = build(world, rnd="rd", audience="team")
-    assert dev["clock"]["t0"] == world["rd"].round_start.isoformat() and dev["clock"]["t_min"] == 0.0
-    assert dev["clock"]["now"] == dev["clock"]["t_max"] == 24 * 3600.0
-
 
 def test_log_records_are_only_the_teams_own_in_the_round(world):
     from orchestrator.rounds import progression
@@ -633,9 +599,6 @@ def test_log_records_are_only_the_teams_own_in_the_round(world):
     assert record("a", "r1", logs["b"]) is None  # another team's
     assert record("b", "r1", logs["a"]) is None
     assert record("a", "r1", logs["dev_a"]) is None  # a devbox log is not the round's
-    assert record("a", "rd", logs["a"]) is None  # nor a run's the Dev round's
-    assert record("a", "rd", logs["dev_a"])["data"] == {"dev": "a-log"}
-    assert record("a", "rd", logs["dev_b"]) is None
     assert record("a", "r2", logs["a"]) is None  # no run there
 
 
@@ -689,7 +652,11 @@ def test_fixtures_match_the_builder(world):
             assert set(real["scene"]["groups"][0]) == set(fake["scene"]["groups"][0])
 
     same_shape(build(world, audience="team"), topology_fixtures.team_progression(1))
-    same_shape(build(world, rnd="rd", audience="team"), topology_fixtures.team_progression(3))
+    _devbox_since(world)
+    real, fake = _devbox_doc(world), topology_fixtures.devbox_progression()
+    assert set(real) == set(fake) and real["round"] is None and fake["round"] is None
+    assert set(real["clock"]) == set(fake["clock"]) and set(real["timeline"]) == set(fake["timeline"])
+    assert set(real["timeline"]["nodes"][0]) == set(fake["timeline"]["nodes"][0])
     same_shape(build(world, audience="staff"), topology_fixtures.progression())
 
 
@@ -735,9 +702,9 @@ def test_api_progression(world):
     response, body = api_get(world, f"/api/v1/rounds/{r1}/progression.zip?logs=maybe")
     assert response.status_code == 400 and body["error"]["code"] == "bad_flag"
 
-    # The Dev round, through the API: the devbox.
-    _, dev = api_get(world, f"/api/v1/rounds/{world['rd'].id}/progression/")
-    assert dev["environment"] == "dev" and dev["network"]["url"] is None
+    # The rounds are the competition's only: the devbox has its own endpoint.
+    assert [r["name"] for r in rounds["rounds"]] == ["R1", "R2"]
+    assert all(r["competition"] == "main" for r in rounds["rounds"])
 
 
 def test_api_progression_scope(world):
@@ -776,7 +743,6 @@ def test_progression_page_and_navigation(world):
     assert "/captures/" not in page and "/logs/" not in page
     # Without JavaScript: the round links, the captured VMs, the downloads.
     assert f'href="?round={world["r1"].id}"' in page and f'href="?round={world["r2"].id}"' in page
-    assert "Dev week" not in page  # the Dev round belongs to the Dev environment
     selected = get(f"/progression/?round={world['r1'].id}").content.decode()
     assert "vm-start" in selected and "vm-pivot" in selected and "vm-hidden" not in selected
     assert f'/progression/rounds/{world["r1"].id}/download/' in selected
@@ -786,14 +752,14 @@ def test_progression_page_and_navigation(world):
 
     # The Dev view has no rounds: the devbox so far, whatever the address says.
     _devbox_since(world)
-    dev_page = as_user(world, world["student"], dev=True)(f"/progression/?round={world['rd'].id}").content.decode()
-    assert "Dev week" not in dev_page and "Your devbox so far" in dev_page
+    dev_page = as_user(world, world["student"], dev=True)(f"/progression/?round={world['r1'].id}").content.decode()
+    assert f'href="?round={world["r1"].id}"' not in dev_page and "Your devbox so far" in dev_page
     assert "devbox-t1-a" in dev_page and "devbox-t1-b" not in dev_page
 
 
 def test_progression_data_for_the_team(world):
     get = as_user(world, world["student"])
-    r1, rd = world["r1"].id, world["rd"].id
+    r1 = world["r1"].id
     rounds = json.loads(get("/progression/rounds/").content)
     assert rounds["environment"] == "live" and [r["name"] for r in rounds["rounds"]] == ["R1", "R2"]
     assert rounds["rounds"][0]["run"] == "finished" and rounds["default"] == world["r2"].id
@@ -808,12 +774,11 @@ def test_progression_data_for_the_team(world):
     assert response["Content-Type"] == "application/zip"
     assert "network/flows.jsonl" not in zipfile.ZipFile(io.BytesIO(response.content)).namelist()
     assert get(f"/progression/rounds/{r1}/download/?logs=x").status_code == 400
-    # The Dev round is not the Live environment's (and the other way round).
-    assert get(f"/progression/rounds/{rd}/").status_code == 404
+    # The Dev view has no rounds: the devbox has its own document.
     dev = as_user(world, world["student"], dev=True)
-    assert json.loads(dev(f"/progression/rounds/{rd}/").content)["environment"] == "dev"
     assert dev(f"/progression/rounds/{r1}/").status_code == 404
-    assert json.loads(dev("/progression/rounds/").content)["environment"] == "dev"
+    dev_rounds = json.loads(dev("/progression/rounds/").content)
+    assert dev_rounds["environment"] == "dev" and dev_rounds["rounds"] == [] and dev_rounds["default"] is None
 
     # Team B sees its own (empty) run, nothing of team A's.
     other = as_user(world, world["other"])

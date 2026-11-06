@@ -13,6 +13,21 @@
       django_db_password, django_secret_key and django_allowed_hosts (set them in
       inventory host_vars and the vault).
 
+# OpenTofu grows a VM's disk in place (disk_size), but the partition and the
+# filesystem follow only at the next boot (cloud-init). The dashboard keeps the
+# uploads on its root filesystem, so grow it now. growpart says NOCHANGE (exit 1)
+# when there is nothing to grow.
+- name: Grow the root partition to the size of its disk
+  ansible.builtin.command: growpart /dev/vda 1
+  register: django_growpart
+  changed_when: django_growpart.rc == 0
+  failed_when: django_growpart.rc not in [0, 1] or (django_growpart.rc == 1 and 'NOCHANGE' not in django_growpart.stdout)
+  when: (ansible_mounts | default([]) | selectattr('mount', 'equalto', '/') | map(attribute='device') | first | default('')) == '/dev/vda1'
+
+- name: Grow the root filesystem to the size of its partition
+  ansible.builtin.command: resize2fs /dev/vda1
+  when: django_growpart is changed
+
 - name: Install system packages
   ansible.builtin.apt:
     name: "{{ required_packages }}"

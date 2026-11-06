@@ -59,10 +59,7 @@ def get_teams(
     else:
         is_user_team = Value(False, output_field=BooleanField())
 
-    if request.is_dev_environment:
-        team_filter = Team.objects.filter(development_competition=competition)
-    else:
-        team_filter = Team.objects.filter(competition=competition)
+    team_filter = Team.objects.filter(competition=competition)
 
     return list(
         team_filter.annotate(
@@ -106,11 +103,12 @@ def get_competition_state_presentation(
             warning=False,
         )
 
-    elif state.state == "dev_round":
+    elif state.state in ("devbox", "no_rounds"):
+        # The Dev view (the devbox has no rounds), or no round defined yet: no banner.
         return CompetitionPresentation(
-            key="round",
-            label=f"ROUND IN PROGRESS (DEV)",
-            detail="Competition round currently running",
+            key=state.state,
+            label="",
+            detail="",
             target=None,
             warning=False,
         )

@@ -16,9 +16,16 @@ provider "proxmox" {
 
   ssh {
     agent    = true
-    username = "root"
+    username    = "root"
+
+    node {
+      name    = "worms"
+      address = "worms.mlsec.tu-berlin.de"
+      port    = 2222
+    }
   }
 }
+
 
 module "os_images" {
   source = "../../modules/os_images"

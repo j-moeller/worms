@@ -2,7 +2,7 @@
 - name: Reload host firewall
   ansible.builtin.systemd:
     name: worms-host-firewall
-    state: restarted
+    state: reloaded
     daemon_reload: true
 
 - name: Restart traffic mirror

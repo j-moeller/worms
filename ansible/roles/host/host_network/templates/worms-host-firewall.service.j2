@@ -9,6 +9,9 @@ Wants=network-pre.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/sbin/nft -f {{ host_nft_file }}
+ExecReload=/usr/sbin/nft -f {{ host_nft_file }}
+ExecStop=/usr/sbin/nft delete table inet worms
+ExecStop=/usr/sbin/nft delete table bridge worms_bridge
 
 [Install]
 WantedBy=multi-user.target

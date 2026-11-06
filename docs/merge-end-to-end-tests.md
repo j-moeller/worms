@@ -100,5 +100,13 @@ the app), the Zeek data directory, case-insensitive accounts and teams in the fo
 membership locks, daemon reconnection, round-planning serialisation, and the fix of
 `test_two_teams_run_one_after_another`.
 
+**Deployed on worms-dev, 2026-11-06**, without the internet window (`SetupDbAndDashboard.yml` and
+`SetupNetworkMonitor.yml`, `--skip-tags packages`, both exit 0), and checked live: migrations `0005`
+and `0006` applied (no case collisions or duplicate keys existed); the orchestrator reaches the
+Proxmox API with the CA from its system trust store (a topology snapshot without error); the
+dashboard reaches the orchestrator by name over verified TLS; Zeek and its shipper run (a
+heartbeat under a minute old); the dashboard answers. The concurrency tests themselves need
+PostgreSQL and did not run here.
+
 Its own notes add that uploads made for `python3 main.py` need replacing, because worms now
 start as `bash main.sh`.

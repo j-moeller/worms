@@ -1,6 +1,6 @@
 # Fresh install on `worms-pve`
 
-From "Proxmox VE is installed and root has a password" to a running platform with devboxes for three teams. Everything runs on the node as root; the node is also the controller (the vault, the CA and the OpenTofu state live in `/root/app`). Written on 2026-11-06 from the code and from `worms-dev`, which was set up by hand. **A build on an empty node has never run** (`docs/status.md` §2). *Not verified* marks what comes from reading the code only.
+From "Proxmox VE is installed and root has a password" to a running platform with devboxes for three teams. Everything runs on the node as root; the node is also the controller (the vault, the CA and the OpenTofu state live in `/root/app`). Written on 2026-11-06 from the code and from `worms-dev`, which was set up by hand. **A build on an empty node has never run** (`docs/status.md` §2). *Not verified* marks what comes from reading the code only. Updated the same day for the event tables and the merge of `end-to-end-tests` (`docs/merge-end-to-end-tests.md`): nothing new to do by hand, only new things to check (§4, §5) and one more pitfall (§6).
 
 ## 1. Before you start
 
@@ -44,6 +44,8 @@ The network in front of the node must let these through (a timeout from outside 
 | 443/tcp | everyone | host DNAT to the dashboard |
 | 2222/tcp | the teams | host DNAT to the devbox SSH gateway |
 | 22/tcp, 8006/tcp | operators | the node: SSH, Proxmox web UI |
+
+**Optional, before the build, on a laptop with Docker:** Fabian's rehearsal of the dashboard stack (nginx, gunicorn, the orchestrator, real grants, concurrent sign-ins) in a container, `docs/testing.md`, "Rehearsals without the node". It has not run on the merged `main`; this node has no Docker.
 
 ## 2. Prepare the node
 
@@ -184,6 +186,8 @@ cd /root/app && worms build; echo "exit $?"
 
 It runs init, secrets, platform (bridges, images, snippets, pools, hookscript), firewall and host network, then the infrastructure and the 14 configure playbooks under the internet window, offline mode, and the `clean` snapshot of the 11 service VMs. **About an hour** (an estimate: never run on an empty node). `Update all packages` prints nothing for about 16 minutes. Success: the last lines are the host summary and `== setup complete (internet access denied) ==`, exit 0. It is safe to repeat after any failure, and the internet window closes by itself.
 
+On the way it migrates the empty database through `core` 0001–0006 and then applies the grants, the event tables' included. That chain was run from an empty schema on worms-dev's PostgreSQL on 2026-11-06 (a throwaway schema, dropped afterwards): every migration applied, the event tables got their `written_by` default and CHECK constraints, and the models match the migrations. The collision queries in `docs/testing.md` are for upgrading a database with data, not for this. The orchestrator gets the Proxmox CA from `/etc/pve/pve-root-ca.pem` over the build's SSH connection and the node's name in its `/etc/hosts` (role `django_app`, `tasks/connectivity.yml`); the dashboard reaches the orchestrator as `orchestrator.worms.internal` the same way. Neither needs DNS.
+
 | Symptom | Do |
 |---|---|
 | `cannot log in ... OpenTofu's Proxmox provider`, or tofu fails with an SSH authentication error | Step 2.9 in this shell |
@@ -198,6 +202,9 @@ It runs init, secrets, platform (bridges, images, snippets, pools, hookscript), 
 | `!!! INTERNET ACCESS IS STILL ALLOWED` | `worms build internet-deny` |
 | `warning: no snapshot of ...` on a rerun | VMs from an earlier, failed run. Before any devbox has existed: `worms build snapshot-services`; later: `worms build rebuild-services` |
 | `Kernel network settings` fails on `net.netfilter.*` (not verified) | `modprobe nf_conntrack`, then build again |
+| `worms-audit-gateway.service` fails every minute (`systemctl --failed`, `ssh exited 255`) | Expected until `worms devbox provision`: there is no SSH gateway to read logins from yet |
+| Rerunning a single playbook later waits for minutes on `apt` or `pip` | The internet window is closed: add `--skip-tags packages -e internet_enabled=false` (`docs/management.md`, "Build and deploy") |
+| The orchestrator cannot reach Proxmox (topology empty, `CERTIFICATE_VERIFY_FAILED` or a name mismatch in its journal) | The web UI's certificate was replaced (§6). Put Proxmox's own back: `pvenode cert delete`, then `systemctl restart pveproxy` (not verified) |
 
 **Afterwards**, in this order:
 
@@ -209,9 +216,11 @@ worms simulate              # all PASS but one FAIL, "sandbox deployed (client V
 worms admin reset-password  # one-time password for "admin", printed once
 ```
 
-**Back up**, off the node: the vault, `ansible/.vault_pass`, `ansible/pki/worms/` and `opentofu/stacks/*/terraform.tfstate` (`docs/accounts.md` §4.1). Nothing backs up the database.
+**Back up**, off the node: the vault, `ansible/.vault_pass`, `ansible/pki/worms/` and `opentofu/stacks/*/terraform.tfstate` (`docs/accounts.md` §4.1). Nothing backs up the database yet: a nightly Proxmox backup job is drafted and off (`backup_storage`, `docs/backup.md`).
 
-**On the dashboard**, from outside the node: open `https://worms.mlsec.tu-berlin.de/`, sign in as `admin`, set a password. Create the teams on `/staff/teams/`, then the users on `/staff/users/` (one by one or as a CSV), and copy the one-time passwords from the page that follows (`docs/management.md`, "Accounts and teams").
+**On the dashboard**, from outside the node: open `https://worms.mlsec.tu-berlin.de/`, sign in as `admin`, set a password. Create the three teams on `/staff/teams/`, then the users on `/staff/users/` (one by one or as a CSV), and copy the one-time passwords from the page that follows (`docs/management.md`, "Accounts and teams"). Names of accounts and teams are case-insensitive since the merge: `Alice@x` and `alice@x` are one account.
+
+`worms audit --hours 1` should now list, written by `dbuser_events_dashboard`: the admin's sign-in (`login.ok`), the password change (`password.changed`), each team and account created (`team.created`, `account.created`/`account.imported`), and nothing written by any other role. An empty list means the dashboard's events account does not work: the dashboard keeps running (events are best effort) and logs `event not recorded` in its journal.
 
 **Devboxes:**
 
@@ -221,7 +230,7 @@ tail -F /var/log/worms/jobs/latest.log     # about 17 minutes for 3 teams on wor
 worms status                               # devbox VMs 13/13 running
 ```
 
-On `got timeout`, run it again (F5). Keys, connecting, uploads and resets: `docs/management.md`, "Devboxes", and steps 8–12 of `docs/manual-devbox-run.md`.
+On `got timeout`, run it again (F5). Keys, connecting, uploads and resets: `docs/management.md`, "Devboxes", and steps 8–12 of `docs/manual-devbox-run.md`. Tell the teams what a worm is (`docs/worm-contract.md`): a zip with `main.sh` at its top level, started as `bash main.sh`. Zips made for the old `python3 main.py` do not run.
 
 ## 5. Checks after the build
 
@@ -235,7 +244,8 @@ ssh root@worms.mlsec.tu-berlin.de true && curl -sk -o /dev/null -w '%{http_code}
 test -e /run/worms/internet-allowed && echo OPEN || echo denied                   # denied
 ssh -i /etc/worms/ssh/worms -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null debian@10.5.0.14 \
   'curl -sS -m 5 -o /dev/null https://deb.debian.org/ && echo OPEN || echo closed'  # curl: (28) Resolving timed out ..., closed
-systemctl is-active proxmox-firewall worms-host-firewall worms-firewall-watchdog.timer worms-mirror worms-round-agent   # 5 x active
+systemctl is-active proxmox-firewall worms-host-firewall worms-firewall-watchdog.timer worms-mirror worms-round-agent worms-audit-gateway.timer   # 6 x active
+test -s /etc/worms/events.env && echo present                                    # the node's events account (worms-audit)
 journalctl -t worms-firewall-watchdog --since today                              # -- No entries --
 pvesh get /cluster/firewall/options --output-format json                         # "enable":1, "policy_in":"DROP"
 cat /sys/module/kvm_intel/parameters/nested                                      # N
@@ -243,6 +253,14 @@ for id in $(qm list | awk 'NR>1 {print $1}'); do echo "$id $(qm listsnapshot $id
 #   1 for scoring, logging, monitor, dns and the 7 private-internet VMs; 0 for database, orchestrator, dashboard, syslog.
 #   After `devbox provision`, each team's A, B and C show 1 too (never run live)
 ```
+
+**The first product, once, with one student account of one team** (about 30 minutes; it resets that team's devbox):
+
+1. Sign in with the one-time password, set a password, add an SSH key on the profile. The key job takes about 3 minutes (`tail -F /var/log/worms/jobs/latest.log` on the node).
+2. From a laptop outside TU Berlin's network: the command on the Dev view (`ssh -A -J team@worms.mlsec.tu-berlin.de:2222 root@<A>`), then on to B and C.
+3. Upload a zip whose `main.sh` is `echo hello; sleep 60` in the Dev view. The devbox resets and runs it (about 9 minutes on worms-dev); its output appears on the progression page.
+4. `worms audit --hours 1` lists the sign-in, the password change, the key (`credential.ssh_key_added`), the gateway login (`ssh_gateway.login`, with the key's owner and the laptop's public address in `Client`), and the reset (`team.devbox_reset`). Run the gateway check after a minute: the collector runs once a minute.
+
 
 ## 6. Differences from worms-dev, and pitfalls
 
@@ -257,6 +275,8 @@ for id in $(qm list | awk 'NR>1 {print $1}'); do echo "$id $(qm listsnapshot $id
 | `bpg/proxmox` provider | 0.113.1 (platform, private internet, infrastructure), 0.116.0 (firewall), 0.118.0 (devbox, sandbox) | The same: each stack pins its version since 2026-11-06 (`version =` in its `required_providers`). The lock files stay git-ignored |
 | Vault, CA, state, data | Its own | New (§3) |
 | `terraform-prov@pve` | Still there, with `Administrator` | Never created |
+| The web UI's certificate (8006) | Proxmox's own, from its cluster CA | Keep it. The orchestrator trusts only `/etc/pve/pve-root-ca.pem` and connects by the node's name; a custom or ACME certificate for the web UI stops VM power and the topology |
+| Event tables | Added to a running database on 2026-11-06; 46 earlier gateway logins imported | Created empty by the build; the gateway collector starts with the first login after `devbox provision` |
 
 **Never tried:** a build from nothing, and with it the provider's first SSH login to a new node (its host-key handling is not verified) and the first `clean` snapshot of the service VMs (`docs/status.md` §2.2). No snapshot or rollback has run live, a devbox reset by rollback included. Expect first-run failures; each build continues where the last one stopped.
 

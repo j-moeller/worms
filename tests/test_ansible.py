@@ -380,7 +380,13 @@ def test_the_watchdog_stops_team_vms_while_internet_access_is_allowed(render, tm
     if flag:
         flag_file.write_text("allowed\n")
     script = tmp_path / "watchdog.sh"
-    script.write_text(render("ansible/roles/host/host_network", "worms-firewall-watchdog.sh.j2", host_internet_flag=str(flag_file)))
+    # A stub for worms-audit: run on the node, the real one would record this fake stop in the
+    # live event tables (it did once, on 2026-11-06).
+    audit = tmp_path / "worms-audit"
+    audit.write_text(f'#!/bin/sh\necho "$@" >> {tmp_path}/audit.log\n')
+    audit.chmod(0o755)
+    script.write_text(render("ansible/roles/host/host_network", "worms-firewall-watchdog.sh.j2",
+                             host_internet_flag=str(flag_file), host_audit_command=str(audit)))  # fmt: skip
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     vms = '[{"vmid": 116, "pool": "devbox", "status": "running"}, {"vmid": 111, "pool": "ephemeral", "status": "running"}]'
@@ -398,6 +404,8 @@ def test_the_watchdog_stops_team_vms_while_internet_access_is_allowed(render, tm
     assert proc.returncode == expected, proc.stderr
     stopped = (tmp_path / "qm.log").read_text().split("\n") if (tmp_path / "qm.log").exists() else []
     assert [line for line in stopped if line] == (["stop 116 --skiplock 1"] if flag else [])
+    recorded = (tmp_path / "audit.log").read_text() if (tmp_path / "audit.log").exists() else ""
+    assert recorded.startswith("event watchdog_stopped") if flag else recorded == ""
 
 
 @pytest.mark.parametrize(

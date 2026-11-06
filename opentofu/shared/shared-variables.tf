@@ -203,7 +203,7 @@ locals {
     maintenance = "10.5.0.40" # mgmt-exposed (Ansible)
   }
   # TCP port teams connect to on the host WAN; DNATed to the gateway:22.
-  ssh_gateway_public_port = 2222
+  ssh_gateway_public_port = 22
 
   # Services-bridge addresses reserved for per-team devbox gateways (their SNAT
   # source, which the scoring/logging servers map to the team). The generated

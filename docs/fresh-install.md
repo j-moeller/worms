@@ -227,7 +227,7 @@ worms admin reset-password  # one-time password for "admin", printed once
 ```sh
 worms devbox provision
 tail -F /var/log/worms/jobs/latest.log     # about 17 minutes for 3 teams on worms-dev
-worms status                               # devbox VMs 13/13 running
+worms status                               # devbox VMs 12/12 running (as on worms-dev; the shared SSH gateway is not among them)
 ```
 
 On `got timeout`, run it again (F5). Keys, connecting, uploads and resets: `docs/management.md`, "Devboxes", and steps 8–12 of `docs/manual-devbox-run.md`. Tell the teams what a worm is (`docs/worm-contract.md`): a zip with `main.sh` at its top level, started as `bash main.sh`. Zips made for the old `python3 main.py` do not run.
@@ -258,8 +258,8 @@ for id in $(qm list | awk 'NR>1 {print $1}'); do echo "$id $(qm listsnapshot $id
 
 1. Sign in with the one-time password, set a password, add an SSH key on the profile. The key job takes about 3 minutes (`tail -F /var/log/worms/jobs/latest.log` on the node).
 2. From a laptop outside TU Berlin's network: the command on the Dev view (`ssh -A -J team@worms.mlsec.tu-berlin.de:2222 root@<A>`), then on to B and C.
-3. Upload a zip whose `main.sh` is `echo hello; sleep 60` in the Dev view. The devbox resets and runs it (about 9 minutes on worms-dev); its output appears on the progression page.
-4. `worms audit --hours 1` lists the sign-in, the password change, the key (`credential.ssh_key_added`), the gateway login (`ssh_gateway.login`, with the key's owner and the laptop's public address in `Client`), and the reset (`team.devbox_reset`). Run the gateway check after a minute: the collector runs once a minute.
+3. Upload a zip whose `main.sh` is `echo hello; sleep 60` in the Dev view. The devbox resets and runs it (about 9 minutes on worms-dev): the upload page goes from "Resetting your VMs" to "Running". What the worm sends to the logging API and the tokens it captures appear on the progression page; `main.sh`'s own output does not: on A, `sudo journalctl -u worms-start`. On worms-pve the provisioned VMs already have their `clean` snapshot, so this reset is a rollback (`scripts/round_agent/handlers.py:545`), the first that has ever run anywhere (`docs/status.md` §2). If it fails, the upload page says only "Could not be started"; the reason is in the job log on the node.
+4. `worms audit --hours 1` lists the sign-in, the password change, the key (`credential.ssh_key_added`), the gateway login (`ssh_gateway.login`, with the key's owner and the laptop's public address in `Client`), and, if you also press Reset on the profile, `team.devbox_reset`. Uploads and their runs leave no event (`docs/feature-audit.md`). Run the gateway check after a minute: the collector runs once a minute.
 
 
 ## 6. Differences from worms-dev, and pitfalls

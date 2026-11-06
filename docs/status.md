@@ -22,6 +22,11 @@ not part of it: they get a new design next week (§3, D-2). **It is tested on `w
 | Resets the devbox | **Worked live, by replacing the VMs** (8–20 min) | The faster rollback is **not deployed and never ran** |
 | Reads the rules: what to upload, what is reachable | **Only in this repository** | `docs/worm-contract.md`. The dashboard gets a redesign soon |
 
+**Feature audit of these steps, 2026-11-06** (`docs/feature-audit.md`): the mechanics work; five
+blockers for Monday are about what students and organisers see: a deactivated student keeps SSH
+access (B1), students land in the Live view (B2), the environment and the contract are not on the
+dashboard (B3), failures tell nobody why (B4), and `main.sh`'s output goes nowhere (B5).
+
 ## 2. Before users arrive
 
 **New on 2026-11-06: event tables for forensics** (`docs/monitoring.md`, "Event tables"): one

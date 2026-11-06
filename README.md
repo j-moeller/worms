@@ -82,7 +82,7 @@ Risk zones, each on its own bridge:
 Allowed flows. Everything else is dropped by the per-VM Proxmox firewall (policy DROP both ways,
 `ipfilter`) and, for routed traffic, by the host's nftables:
 
-- internet → dashboard:443 and → SSH gateway:2222 (host DNAT)
+- internet → dashboard:443 and → SSH gateway:22 (host DNAT; operators reach the node itself on 2222)
 - dashboard → database:5432, orchestrator:443; orchestrator → database, Proxmox API:8006
 - scoring, logging, monitor → database:5432, each INSERT-only into its own table
 - every infrastructure VM → syslog:514
@@ -124,7 +124,7 @@ then the VM stacks. The sandbox and devbox stacks live in the round agent's work
   change, teams, a Live view (leaderboard, upload, progression) and a Dev view (the devbox, its
   score, logs and replay). Staff pages manage students, teams and rounds; the admin can view the
   dashboard as another user, read only (`docs/accounts.md`).
-- **Devbox:** three VMs per team (A–B–C), reached over `ssh -A -J team@<host>:2222 root@<A>`. A
+- **Devbox:** three VMs per team (A–B–C), reached over `ssh -A -J team@<host> root@<A>`. A
   dev upload resets them and runs the worm on A; a reset rolls them back to a snapshot
   (`docs/devbox.md`).
 - **Rounds:** the conductor on the orchestrator plans and drives every team's run; the round

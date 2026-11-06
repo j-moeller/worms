@@ -83,7 +83,7 @@ ROUND_CONDUCTOR = {
 # the team's Devbox record when a devbox job completes (orchestrator/rounds/devbox.py).
 DEVBOX = {
     "ssh_gateway_host": env("DEVBOX_SSH_GATEWAY_HOST", ""),
-    "ssh_gateway_port": int(env("DEVBOX_SSH_GATEWAY_PORT", "2222")),
+    "ssh_gateway_port": int(env("DEVBOX_SSH_GATEWAY_PORT", "22")),
     "ssh_gateway_user": env("DEVBOX_SSH_GATEWAY_USER", "team"),
 }
 

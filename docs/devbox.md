@@ -15,7 +15,7 @@ sandbox's disk and NIC limits. Each VM holds a **token** in `/etc/worms/flag`; t
 score is the number of distinct tokens submitted to scoring at the current devbox version.
 
 ```
- team's laptop ── ssh -A -J team@<public name>:2222 root@<A> ──▶ SSH gateway (trusted, vmbr7)
+ team's laptop ── ssh -A -J team@<public name> root@<A> ──▶ SSH gateway (trusted, vmbr7)
                                                                      │ TCP to the team's A:22 only
    A ─────── B ─────── C        (A on vmbr9xx0, B on both, C on vmbr9xx1)
     \        │        /
@@ -26,7 +26,7 @@ score is the number of distinct tokens submitted to scoring at the current devbo
 ## SSH access through one gateway
 
 Teams never reach a devbox VM directly. A shared, hardened **SSH gateway** (published by host
-DNAT on port 2222) is the only way in. For every registered key, its `team` account's
+DNAT on port 22; the node's own sshd is on 2222) is the only way in. For every registered key, its `team` account's
 `authorized_keys` holds:
 
 ```
@@ -40,7 +40,7 @@ forwarded agent; the VMs hold the team's public keys and no private key. The das
 `ssh-add -L`.
 
 ```sh
-ssh -A -J team@<public name>:2222 root@<A>   # on the laptop
+ssh -A -J team@<public name> root@<A>   # on the laptop
 ssh -A root@<B on the A-B link>              # on A
 ssh root@<C on the B-C link>                 # on B
 ```

@@ -44,7 +44,7 @@ class Devbox(models.Model):
     team = models.OneToOneField(Team, on_delete=models.CASCADE, related_name="devbox")
     uuid = models.UUIDField(default=uuid.uuid4, unique=True)
 
-    # Stable index (0..31) that fixes this team's devbox addressing
+    # Stable index (0..15: scripts/generate_devbox.py) that fixes this team's devbox addressing
     # (scripts/generate_devbox.py). Assigned once at provision time and kept, so
     # adding or removing another team never re-addresses this one.
     index = models.PositiveIntegerField(null=True, blank=True, unique=True)

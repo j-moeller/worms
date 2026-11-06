@@ -511,7 +511,9 @@ def cmd_build(config, args) -> int:
     try:
         getattr(pipe, method_name)()
     except build.BuildError as exc:
-        output.error(str(exc))
+        # Nothing ran after the failed step but the internet window's close and
+        # the devbox VMs' start (tests/test_pipeline.py).
+        output.error(f"build aborted: {exc}")
         code = 1
     # Also after a failure: a rollback that happened is not undone by one.
     if pipe.services_rolled_back and pipe.devboxes_exist():

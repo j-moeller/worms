@@ -75,7 +75,7 @@ GROUPS = {
     ],
     "devbox_gw": [{"type": "in", "action": "ACCEPT", "source": DEVBOX_NET, "dest": DEVBOX_NET, "enable": 1}],
     "devbox_ssh_target": [_in("22", "10.7.0.2")],
-    "devbox_ssh_gateway": [_in("22", "", comment="Teams (host DNAT :2222)")],
+    "devbox_ssh_gateway": [_in("22", "", comment="Teams (host DNAT :22)")],
     "ssh": [_in("22", "10.3.0.1,10.5.0.1,10.4.0.1,10.6.0.1", comment="SSH from the Proxmox host")],
     "provisioning": [_out("3142", "10.11.0.1")],
     "log_client": [_out("514", "10.13.0.30")],

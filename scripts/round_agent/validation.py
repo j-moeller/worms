@@ -153,7 +153,7 @@ def devbox_team(value):
         raise Invalid("team must be an object")
     return {
         "slug": team_slug(value.get("slug")),
-        "index": integer(value.get("index", 0), "index", 0, 31),
+        "index": integer(value.get("index", 0), "index", 0, 15),
         "team_uuid": team_uuid(value.get("team_uuid")),
         "authorized_keys": ssh_keys(value.get("authorized_keys", [])),
     }
@@ -175,8 +175,8 @@ def _key_blob(key: str) -> str:
 def devbox_teams(value):
     if not isinstance(value, list) or not value:
         raise Invalid("teams must be a non-empty list")
-    if len(value) > 32:
-        raise Invalid("too many devbox teams (max 32)")
+    if len(value) > 16:  # the link networks 10.128.0.0/19 (scripts/generate_devbox.py)
+        raise Invalid("too many devbox teams (max 16)")
     teams = [devbox_team(t) for t in value]
     if len({t["slug"] for t in teams}) != len(teams):
         raise Invalid("duplicate team slug")

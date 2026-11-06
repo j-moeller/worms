@@ -94,10 +94,8 @@ def devbox_home(request: HttpRequest, team: Team):
     main_vm = next((vm for vm in vms if vm.role == "a"), vms[0] if vms else None)
     ssh_command = None
     if devbox and main_vm and devbox.ssh_gateway_host and main_vm.ssh_fabric_ip:
-        ssh_command = (
-            f"ssh -A -J {devbox.ssh_gateway_user}@{devbox.ssh_gateway_host}"
-            f":{devbox.ssh_gateway_port} root@{main_vm.ssh_fabric_ip}"
-        )
+        port = "" if devbox.ssh_gateway_port == 22 else f":{devbox.ssh_gateway_port}"
+        ssh_command = f"ssh -A -J {devbox.ssh_gateway_user}@{devbox.ssh_gateway_host}{port} root@{main_vm.ssh_fabric_ip}"
 
     context = {
         "devbox": devbox,

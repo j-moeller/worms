@@ -11,7 +11,7 @@ operator runs it (`worms devbox provision`).
     manage.py provision_devboxes            # enqueue a provision job
 
 Indices are assigned once and kept (a deleted team frees its index for a new
-one); at most 32 teams (the services block 10.2.0.32/27).
+one); at most 16 teams (the link networks 10.128.0.0/19).
 """
 
 from core.models.competition import ApplicationSetting

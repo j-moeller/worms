@@ -13,6 +13,9 @@ host_publish_dashboard: false
 # reach the gateway and jump into their devbox VMs (docs/devbox.md). Off by
 # default; turn on where the devbox is deployed.
 host_publish_ssh_gateway: false
+# The node's own sshd for operators. When the gateway takes port 22, the play refuses to
+# publish it unless sshd already listens here (docs/fresh-install.md, 2.5).
+host_operator_ssh_port: 2222
 
 host_nft_file: /etc/worms/worms.nft
 

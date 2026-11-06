@@ -65,9 +65,15 @@ def node_output(target: str, stack: str) -> dict:
         ["ssh", "-o", "BatchMode=yes", target, f"{NODE_RUN} opentofu/stacks/{stack} 'tofu output -json'"],
         capture_output=True, text=True,
     )  # fmt: skip
-    if proc.returncode != 0:
-        print(f"warning: stack {stack} on {target}: {proc.stderr.strip()[:200]}", file=sys.stderr)
+    if proc.returncode == 127 and NODE_RUN in proc.stderr:
+        # A fresh node: the round agent (and its wrapper) comes later in the build.
+        print(f"note: stack {stack} on {target}: no round agent yet, so not applied", file=sys.stderr)
         return {}
+    if proc.returncode != 0:
+        # Anything else is a failure (SSH, tofu, the state): an inventory without
+        # these VMs would let the playbooks after it run against the wrong hosts.
+        sys.exit(f"error: 'tofu output' of stack {stack} on {target} failed (exit {proc.returncode}):\n"
+                 f"{proc.stderr.strip()[:500]}")  # fmt: skip
     return json.loads(proc.stdout or "{}")
 
 
@@ -162,7 +168,7 @@ def build_inventory(infrastructure: dict, stacks: dict, sandbox: dict, controlle
         # block reserved for the per-team devbox gateways. Defaulted so an older
         # platform output (without them) still produces a usable inventory.
         "ssh_gateway_ips": infrastructure.get("ssh_gateway_ips", {}),
-        "ssh_gateway_public_port": infrastructure.get("ssh_gateway_public_port", 2222),
+        "ssh_gateway_public_port": infrastructure.get("ssh_gateway_public_port", 22),
         "devbox_services_block": infrastructure.get("devbox_services_block", ""),
         "proxmox": proxmox,
     }

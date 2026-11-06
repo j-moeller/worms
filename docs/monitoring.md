@@ -97,7 +97,7 @@ worms audit --hours 168 --kind login   # a week of sign-ins (a prefix: login, pa
 | `platform_events` | node, console | The internet window (`internet_allowed`, `internet_denied`), the firewall watchdog stopping team VMs (`watchdog_stopped`, with the reason), `database_reset` (`worms reset-database` keeps every event table) |
 
 Not recorded, on purpose: page views, API reads, uploads (the `uploads` table has them), the
-platform's own SSH logins to VMs, unauthenticated SSH attempts on port 2222.
+platform's own SSH logins to VMs, unauthenticated SSH attempts on the gateway port (22).
 
 **Accounts:** each writing component has a database account of its own, used for nothing else:
 `dbuser_events_dashboard` (the dashboard's `events` connection; its main role cannot write these
@@ -113,7 +113,7 @@ and addresses, never a password, hash or token. A compromised dashboard can ther
 rows to its own tables, but can neither read nor rewrite the trail, nor write the node's.
 
 **The SSH gateway:** it sees only the node, which masquerades every team. So the node logs each
-new connection to port 2222 (`worms-ssh-gw:` in its kernel log, rate-limited), and
+new connection to the gateway port, 22 (`worms-ssh-gw:` in its kernel log, rate-limited), and
 `worms-audit-gateway.timer` (every minute) reads the gateway's sshd journal, records each accepted
 team login, and finds its client by the source port, which masquerading keeps. When it cannot,
 `client_ip` is empty.

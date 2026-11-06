@@ -629,6 +629,10 @@ def _configure_devbox(ex, teams):
         # to B/C directly (docs/devbox.md; docs/security-assessment.md).
         entry = f"devbox-{t['slug']}-a"
         targets = [f"{vm['ssh_fabric_ip']}:22" for vm in vms if vm["name"] == entry]
+        if not targets:
+            # No VM A (yet): no line at all. Without permitopen the key could forward
+            # anywhere the gateway reaches (sshd has AllowTcpForwarding local).
+            continue
         for key in t["authorized_keys"]:
             gateway_keys.append({"public_key": _Unsafe(key), "comment": f"team={t['slug']}", "permitopen": targets})
     extra = {"devbox_team_keys": team_keys, "ssh_gateway_authorized_keys": gateway_keys}

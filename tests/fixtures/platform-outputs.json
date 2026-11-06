@@ -246,7 +246,7 @@
    "proxmox": {
     "api_port": 8006,
     "host": "10.11.0.1",
-    "node": "worms-pve"
+    "node": "worms"
    },
    "services_ips": {
     "dns": "10.2.0.11",
@@ -262,7 +262,7 @@
     "devbox_ssh": "10.7.0.2",
     "maintenance": "10.5.0.40"
    },
-   "ssh_gateway_public_port": 2222
+   "ssh_gateway_public_port": 22
   }
  }
 }

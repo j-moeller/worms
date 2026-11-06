@@ -25,8 +25,9 @@ working set, not the sum of ceilings. The floor defaults to half the ceiling (`r
 keep their whole 512 MB); a default round's 8 sandbox VMs about 4 GB. **Nothing checks free RAM
 before a round or a devbox build**: with 13 devbox VMs up and about 7 GB free, 8 sandbox VMs fit
 and 16 do not. Each additional team costs about 2 GB, so this node has room for about 3 more
-teams, or 1 while a default round runs. `Devbox.index` (0–31, one services address each) caps
-the platform at 32 teams.
+teams, or 1 while a default round runs. The devbox addressing caps the platform at **16 teams**: the
+teams' link networks (10.128.0.0/19, `scripts/generate_devbox.py`) end at index 15, although the
+services block would have 32 addresses. `worms devbox provision` refuses a 17th team.
 
 **ZFS ARC** is capped at 3.2 GB (`zfs_arc_max`, the Proxmox installer's 10 % default).
 

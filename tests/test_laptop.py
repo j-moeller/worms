@@ -309,6 +309,31 @@ def test_inventory_from_a_laptop(tmp_path):
     assert vm["ansible_ssh_common_args"] == f"-o ProxyJump={NODE} -o IdentityAgent=${{WORMS_SSH_AUTH_SOCK}}"
 
 
+@pytest.mark.parametrize("ssh_script, ok", [
+    # A fresh node: no round agent yet, so its stacks cannot have state.
+    (f"echo 'bash: line 1: {NODE_RUN}: No such file or directory' >&2; exit 127", True),
+    ("echo 'Error: Failed to load state' >&2; exit 1", False),  # tofu failed
+    ("echo 'Connection refused' >&2; exit 255", False),  # ssh failed
+])  # fmt: skip
+def test_a_failed_read_of_the_nodes_stacks_aborts(tmp_path, ssh_script, ok):
+    """No inventory without the node's VMs: the playbooks after it would run
+    against the wrong hosts. Only a node without the round agent counts as
+    'not applied'."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "ssh").write_text(f"#!/bin/sh\n{ssh_script}\n")
+    (bin_dir / "ssh").chmod(0o755)
+    out = tmp_path / "inventory.generated.yml"
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "WORMS_SSH": NODE, "WORMS_SSH_AUTH_SOCK": WORMS_AGENT}
+    proc = subprocess.run([sys.executable, str(REPO / "scripts" / "generate_inventory.py"), "--repo-root", str(tmp_path),
+                           "--platform-json", str(FIXTURES / "platform-outputs.json"), "--output", str(out), "--quiet"],
+                          env=env, capture_output=True, text=True)  # fmt: skip
+    assert (proc.returncode == 0) == ok, proc.stderr
+    assert out.exists() == ok
+    if not ok:
+        assert "error: 'tofu output' of stack" in proc.stderr
+
+
 def test_inventory_on_the_node(generated_inventory):
     children = yaml.safe_load(generated_inventory.read_text())["all"]["children"]
     assert children["proxmox_host"]["hosts"]["proxmox.local"] == {"ansible_host": "127.0.0.1", "ansible_connection": "local"}

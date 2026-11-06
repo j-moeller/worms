@@ -27,6 +27,25 @@
     state: directory
     mode: "0755"
 
+# Port 22 on the WAN goes to the devbox SSH gateway: without sshd on another port the
+# operators would lose SSH to the node with this ruleset.
+- name: Check that operators keep SSH to the node
+  when: host_publish_ssh_gateway | bool and (ssh_gateway_public_port | default(2222) | int) == 22
+  block:
+    - name: Read sshd's listening ports
+      ansible.builtin.command: ss -Htln "sport = :{{ host_operator_ssh_port }}"
+      register: host_operator_sshd
+      changed_when: false
+
+    - name: Refuse to forward port 22 while sshd is not on the operators' port
+      ansible.builtin.assert:
+        that: host_operator_sshd.stdout | length > 0
+        fail_msg: >-
+          Nothing listens on port {{ host_operator_ssh_port }} on this node, and this ruleset
+          forwards port 22 from {{ host_wan_interface }} to the devbox SSH gateway: operators
+          would lose SSH. Add "Port 22" and "Port {{ host_operator_ssh_port }}" to sshd and allow
+          {{ host_operator_ssh_port }} in the Proxmox firewall first (docs/fresh-install.md, 2.5).
+
 - name: Install nftables ruleset
   ansible.builtin.template:
     src: worms.nft.j2

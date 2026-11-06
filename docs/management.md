@@ -105,7 +105,7 @@ Teams do the rest in the dashboard's **Dev** view:
 | Action | Where | Then |
 |---|---|---|
 | Add an SSH key | `/profile/`, **SSH keys** | A `devbox_reconfigure` job installs it, in about 3 minutes |
-| Connect | Panel **Connect**: `ssh -A -J team@<public name>:2222 root@<A>`, then the hops to B and C | On the node itself: `ssh -A -J team@10.7.0.2 root@<A>` |
+| Connect | Panel **Connect**: `ssh -A -J team@<public name> root@<A>`, then the hops to B and C | On the node itself: `ssh -A -J team@10.7.0.2 root@<A>` |
 | Reset | **Reset devbox**, **Yes, rebuild my devbox** | A `devbox_rebuild` job rolls the team's 3 VMs back to their snapshot and writes the keys and new tokens. Replacing them took 8 minutes; the rollback should save about 3.5 (estimate). VMs built before snapshots are replaced once more, then snapshotted |
 | Upload a worm | `/upload/` in the Dev view | Resets the devbox, then runs `main.sh` on A for up to an hour (`docs/devbox.md`) |
 

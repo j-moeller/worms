@@ -163,7 +163,7 @@ def measured(site, team_upload, tmp_path):  # noqa: F811
         pytest.skip("Node.js Playwright not available")
     html = tmp_path / "page.html"
     # The highest index has the longest addresses, so the least room.
-    html.write_text(_page(site, team_upload[0], index=31, captured={"a", "c"}))
+    html.write_text(_page(site, team_upload[0], index=15, captured={"a", "c"}))
     profile = tmp_path / "profile.html"
     profile.write_text(_profile(site))
     shots = os.environ.get("WORMS_SCREENSHOTS", "")

@@ -136,6 +136,22 @@ def test_failed_step_still_closes_the_window(monkeypatch):
         Recorder.fail_on = None
 
 
+@pytest.mark.parametrize("failing", [("tofu", "platform"), ("tofu", "firewall"), ("ansible", "SetupHostNetwork.yml"),
+                                     ("tofu", "private_internet"), ("tofu", "infrastructure/ephemeral")])  # fmt: skip
+def test_a_failed_step_aborts_the_build(monkeypatch, failing):
+    """Nothing after a failed step, except closing the internet window if it
+    was opened (docs/IMPORTANT)."""
+    monkeypatch.setattr(pipeline, "Runner", Recorder)
+    monkeypatch.setattr(Recorder, "fail_on", failing)
+    pipe = pipeline.Pipeline(config=None)
+    with pytest.raises(BuildError):
+        pipe.build_all()
+    steps = [c for c in pipe.runner.calls if c[0] in ("tofu", "ansible")]
+    at = next(i for i, step in enumerate(steps) if step[:2] == failing)
+    assert steps[at + 1:] in ([], [DENY])
+    assert (DENY in steps) == (ALLOW in steps)
+
+
 def test_a_limit_never_skips_the_internet_window(monkeypatch):
     """Internet.yml runs on the node, so `--limit <vm>` would silently skip it:
     the window would not open, and an open one would not close."""

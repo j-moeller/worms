@@ -155,11 +155,11 @@ def _dashboard_vars(tmp_path, node):
 
 @pytest.mark.parametrize(
     "node, public_name",
-    [("worms-dev", "worms-dev.mlsec.tu-berlin.de"), ("worms-pve", "worms.mlsec.tu-berlin.de")],
+    [("worms-dev", "worms-dev.mlsec.tu-berlin.de"), ("worms", "worms.mlsec.tu-berlin.de")],
 )
 def test_dashboard_has_one_public_name_per_node(tmp_path, node, public_name):
     """The name on the certificate and the only name it answers to. Live, it is
-    not the node's own: worms-pve serves worms.mlsec.tu-berlin.de."""
+    not the node's own: worms serves worms.mlsec.tu-berlin.de."""
     require("ansible-playbook")
     proc, out = _dashboard_vars(tmp_path, node)
     assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -339,8 +339,8 @@ def test_host_firewall_publishes_the_devbox_ssh_gateway(render, tmp_path):
     assert inventory["all"]["children"]["proxmox_host"]["hosts"]["proxmox.local"]["host_publish_ssh_gateway"] is True
     path = tmp_path / "worms.nft"
     text = render("ansible/roles/host/host_network", "worms.nft.j2", host_publish_ssh_gateway=True)
-    # From the WAN, only 2222 is forwarded, and only to the gateway's SSH port.
-    assert 'iifname "vmbr0" fib daddr type local tcp dport 2222 dnat ip to 10.7.0.2:22' in text
+    # From the WAN, only 22 is forwarded (the node's own sshd is on 2222), and only to the gateway's SSH port.
+    assert 'iifname "vmbr0" fib daddr type local tcp dport 22 dnat ip to 10.7.0.2:22' in text
     from_wan = [line for line in text.splitlines() if "10.7.0.2" in line and 'iifname "vmbr0"' in line]
     assert len(from_wan) == 2 and 'oifname "vmbr7" ip daddr 10.7.0.2 tcp dport 22 ct status dnat accept' in from_wan[0]
     path.write_text(text)
@@ -650,6 +650,18 @@ def test_untrusted_vms_use_the_private_internet_for_packages():
     assert settings["apt_client_cache_host"] == "apt-cache.worms.internal"
     # The cache does not hold the backports index: fatal for Ansible's apt module.
     assert "backports" not in settings["apt_client_suites"]
+
+
+def test_clients_of_the_offline_cache_accept_an_index_older_than_its_valid_until():
+    """trixie-updates and -security expire 7 days after the last internet window;
+    the offline cache cannot refresh them, so without this every devbox build,
+    reset and key change fails from day 8 (`apt update`: "Release file ... is expired")."""
+    tasks = yaml.safe_load((ANSIBLE / "roles" / "private_internet" / "apt_client" / "tasks" / "main.yml").read_text())
+    names = [t["name"] for t in tasks]
+    conf = next(t for t in tasks if t.get("ansible.builtin.copy", {}).get("dest") == "/etc/apt/apt.conf.d/99worms-offline-cache")
+    assert 'Acquire::Check-Valid-Until "false";' in conf["ansible.builtin.copy"]["content"]
+    assert conf["when"] == "apt_client_use_cache | bool"
+    assert names.index(conf["name"]) < names.index("Refresh the package index from the new sources")
 
 
 def test_the_apt_cache_has_a_name_and_private_internet_vms_keep_its_address():

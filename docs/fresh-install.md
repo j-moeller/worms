@@ -1,4 +1,4 @@
-# Fresh install on `worms-pve`
+# Fresh install on `worms`
 
 From "Proxmox VE is installed and root has a password" to a running platform with devboxes for three teams. Everything runs on the node as root; the node is also the controller (the vault, the CA and the OpenTofu state live in `/root/app`). Written on 2026-11-06 from the code and from `worms-dev`, which was set up by hand. **A build on an empty node has never run** (`docs/status.md` §2). *Not verified* marks what comes from reading the code only. Updated the same day for the event tables and the merge of `end-to-end-tests` (`docs/merge-end-to-end-tests.md`): nothing new to do by hand, only new things to check (§4, §5) and one more pitfall (§6).
 
@@ -31,7 +31,7 @@ Ballooning reclaims unused guest memory, so worms-dev runs all of this, without 
 
 | What | Required | Check |
 |---|---|---|
-| Name | The node is called `worms-pve`. The OpenTofu default (`opentofu/shared/shared-variables.tf:4`) and `dashboard_public_names` (`ansible/group_vars/all.yml:31`) depend on it | `hostname; ls /etc/pve/nodes`: `worms-pve` only |
+| Name | The node is called `worms` (it was planned as `worms-pve`; renamed on 2026-11-06). The OpenTofu default (`opentofu/shared/shared-variables.tf:4`) and `dashboard_public_names` (`ansible/group_vars/all.yml:31`) depend on it | `hostname; ls /etc/pve/nodes`: `worms` only |
 | Public bridge | `vmbr0` holds the public address and the default route, as the installer sets it up. The name is hardcoded (`host_wan_interface`, `ansible/roles/host/host_network/defaults/main.yml:7`) | `ip -br addr show vmbr0; ip route show default` |
 | DNS | `worms.mlsec.tu-berlin.de` points to the node. On 2026-11-06 it resolved to `141.23.117.59`, which answered on 22 and 8006 | `getent hosts worms.mlsec.tu-berlin.de`, on the node and a laptop |
 | Free ranges | Nothing on the node or its networks uses 10.2.0.0–10.13.255.255, 10.64.0.0/10 or 10.128.0.0/10 (`opentofu/shared/shared-variables.tf`) | `ip -br addr; ip route` |
@@ -42,8 +42,8 @@ The network in front of the node must let these through (a timeout from outside 
 | Inbound port | From | Goes to |
 |---|---|---|
 | 443/tcp | everyone | host DNAT to the dashboard |
-| 2222/tcp | the teams | host DNAT to the devbox SSH gateway |
-| 22/tcp, 8006/tcp | operators | the node: SSH, Proxmox web UI |
+| 22/tcp | the teams | host DNAT to the devbox SSH gateway (`ssh_gateway_public_port`) |
+| 2222/tcp, 8006/tcp | operators | the node: its own sshd (2.5), the Proxmox web UI. OpenTofu's provider, and the round agent's, log in on 2222 too: the `node` block in each stack's `main.tf` (`worms.mlsec.tu-berlin.de`, 2222). The agent has only the WORMS key: `SetupRoundAgent.yml` authorizes it for root |
 
 **Optional, before the build, on a laptop with Docker:** Fabian's rehearsal of the dashboard stack (nginx, gunicorn, the orchestrator, real grants, concurrent sign-ins) in a container, `docs/testing.md`, "Rehearsals without the node". It has not run on the merged `main`; this node has no Docker.
 
@@ -107,16 +107,32 @@ pvesm status                    # local, local-zfs, local-zfs-sandbox: active
 
 Nothing in the code creates these; worms-dev has them by hand. `snippets` holds the cloud-init files and the hookscript (`opentofu/modules/cloud_init/main.tf:40`, `opentofu/stacks/platform/main.tf:51`), `import` the OS images (`opentofu/modules/os_images/main.tf:2`). `local-zfs-sandbox` holds the devbox and sandbox disks, thick (`opentofu/stacks/devbox/main.tf:62`, `opentofu/stacks/sandbox/main.tf:63`). On worms-dev it is `zfspool`, pool `rpool`, `content rootdir,images`, `sparse 0`, `mountpoint /rpool` (Proxmox adds the last line itself).
 
-### 2.5 Keep SSH and the web UI reachable
+### 2.5 SSH on 2222 for operators, and the web UI
 
-The build turns on the Proxmox firewall with input policy DROP (`opentofu/stacks/firewall/main.tf:29-50`). From then on only the node's own subnet (`pve-firewall localnet`; on worms-dev 141.23.117.32/27) may open new connections to 22 and 8006; open sessions survive. worms-dev has two rules for this, added by hand. To close finding S22, add `--source <your networks>` to both; a wrong source locks you out once the build has run.
+Port 22 on the node's public address belongs to the teams: the build forwards it to the devbox SSH gateway (`ansible/roles/host/host_network/templates/worms.nft.j2`). The node's own sshd therefore listens on 2222 as well, for operators and OpenTofu; it keeps 22 for connections that do not come in on `vmbr0` (the node to itself, the VMs' networks). The build refuses to forward 22 while nothing listens on 2222 (role `host_network`, "Check that operators keep SSH to the node").
+
+The build also turns on the Proxmox firewall with input policy DROP (`opentofu/stacks/firewall/main.tf`). From then on only the node's own subnet (`pve-firewall localnet`) may open new connections to it, plus the two rules below; open sessions survive. To close finding S22, add `--source <your networks>` to both; a wrong source locks you out once the build has run.
 
 ```sh
+printf 'Port 22\nPort 2222\n' > /etc/ssh/sshd_config.d/worms-ports.conf
+grep -nE '^\s*Port' /etc/ssh/sshd_config      # nothing: a Port line there as well would bind twice
+sshd -t && systemctl reload ssh
+ss -Htln 'sport = :2222'                        # one line per address family
 pve-firewall localnet
-pvesh create /nodes/$(hostname)/firewall/rules --type in --action ACCEPT --macro SSH --enable 1 --comment "operators: SSH"
+pvesh create /nodes/$(hostname)/firewall/rules --type in --action ACCEPT --proto tcp --dport 2222 --enable 1 --comment "operators: SSH"
 pvesh create /nodes/$(hostname)/firewall/rules --type in --action ACCEPT --proto tcp --dport 8006 --enable 1 --comment "operators: web UI"
 pvesh get /nodes/$(hostname)/firewall/rules
 ```
+
+From a laptop, from now on: `ssh -p 2222 root@worms.mlsec.tu-berlin.de`, or once in `~/.ssh/config`:
+
+```
+Host worms.mlsec.tu-berlin.de
+    User root
+    Port 2222
+```
+
+The `worms` CLI in laptop mode (`WORMS_SSH`) and plain `ssh`/`scp` then use 2222 too. Teams never need it: their command names no port.
 
 ### 2.6 The repository
 
@@ -126,7 +142,7 @@ Both remotes are private. Over HTTPS git asks for a user and an access token; do
 git clone --branch main https://git.tu-berlin.de/mlsec/teach/winter-2026/worms/worms-platform.git /root/app
 # or: git clone --branch main git@github.com:j-moeller/worms.git /root/app   (needs a key GitHub accepts)
 cd /root/app && git log -1 --oneline
-grep -A3 'variable "proxmox_instance"' opentofu/shared/shared-variables.tf   # default = "worms-pve"
+grep -A3 'variable "proxmox_instance"' opentofu/shared/shared-variables.tf   # default = "worms"
 find opentofu -name '*.auto.tfvars'                                         # prints nothing
 ```
 
@@ -202,6 +218,9 @@ On the way it migrates the empty database through `core` 0001–0006 and then ap
 | `!!! INTERNET ACCESS IS STILL ALLOWED` | `worms build internet-deny` |
 | `warning: no snapshot of ...` on a rerun | VMs from an earlier, failed run. Before any devbox has existed: `worms build snapshot-services`; later: `worms build rebuild-services` |
 | `Kernel network settings` fails on `net.netfilter.*` (not verified) | `modprobe nf_conntrack`, then build again |
+| From a laptop: `stack sandbox` / `stack devbox ... worms-node-run: No such file or directory`, then `NOT APPLIED` (now: `no round agent yet`) | Expected until the build has installed the round agent (`SetupRoundAgent.yml`): the two stacks live in its workspace `/opt/worms` and do not exist yet. The inventory is still written. If it persists after a full build: `ls -l /usr/local/sbin/worms-node-run` on the node. Any other failure to read them (SSH, tofu) aborts the build with `error: 'tofu output' of stack ...` |
+| A devbox job fails at once: `build devbox-apply` ... `error: no ansible/inventory.generated.yml` in `/var/log/worms/jobs/<id>.log` | A `/root/.worms/config` on the node with `WORMS_SSH` (laptop mode) that the agent read. Remove that line on the node (the node needs no config, §2.8); `SetupRoundAgent.yml` now also empties it in the agent's environment |
+| What runs after a failure | Nothing but closing the internet window (`Internet.yml -e internet=denied`) and starting the devbox VMs it shut down; the last line is `build aborted: ...`, exit 1 |
 | `worms-audit-gateway.service` fails every minute (`systemctl --failed`, `ssh exited 255`) | Expected until `worms devbox provision`: there is no SSH gateway to read logins from yet |
 | Rerunning a single playbook later waits for minutes on `apt` or `pip` | The internet window is closed: add `--skip-tags packages -e internet_enabled=false` (`docs/management.md`, "Build and deploy") |
 | The orchestrator cannot reach Proxmox (topology empty, `CERTIFICATE_VERIFY_FAILED` or a name mismatch in its journal) | The web UI's certificate was replaced (§6). Put Proxmox's own back: `pvenode cert delete`, then `systemctl restart pveproxy` (not verified) |
@@ -237,8 +256,8 @@ On `got timeout`, run it again (F5). Keys, connecting, uploads and resets: `docs
 ```sh
 # From a laptop
 curl -sk -o /dev/null -w '%{http_code}\n' https://worms.mlsec.tu-berlin.de/      # 200 (by IP: 400; the internal CA's certificate, browsers warn)
-ssh -p 2222 -o BatchMode=yes -o StrictHostKeyChecking=accept-new team@worms.mlsec.tu-berlin.de true   # after `devbox provision`: Permission denied (publickey)
-ssh root@worms.mlsec.tu-berlin.de true && curl -sk -o /dev/null -w '%{http_code}\n' https://worms.mlsec.tu-berlin.de:8006/   # logs in, then 200
+ssh -p 22 -o BatchMode=yes -o StrictHostKeyChecking=accept-new team@worms.mlsec.tu-berlin.de true   # after `devbox provision`: Permission denied (publickey), from the gateway
+ssh -p 2222 root@worms.mlsec.tu-berlin.de true && curl -sk -o /dev/null -w '%{http_code}\n' https://worms.mlsec.tu-berlin.de:8006/   # logs in, then 200
 
 # On the node
 test -e /run/worms/internet-allowed && echo OPEN || echo denied                   # denied
@@ -257,16 +276,17 @@ for id in $(qm list | awk 'NR>1 {print $1}'); do echo "$id $(qm listsnapshot $id
 **The first product, once, with one student account of one team** (about 30 minutes; it resets that team's devbox):
 
 1. Sign in with the one-time password, set a password, add an SSH key on the profile. The key job takes about 3 minutes (`tail -F /var/log/worms/jobs/latest.log` on the node).
-2. From a laptop outside TU Berlin's network: the command on the Dev view (`ssh -A -J team@worms.mlsec.tu-berlin.de:2222 root@<A>`), then on to B and C.
-3. Upload a zip whose `main.sh` is `echo hello; sleep 60` in the Dev view. The devbox resets and runs it (about 9 minutes on worms-dev): the upload page goes from "Resetting your VMs" to "Running". What the worm sends to the logging API and the tokens it captures appear on the progression page; `main.sh`'s own output does not: on A, `sudo journalctl -u worms-start`. On worms-pve the provisioned VMs already have their `clean` snapshot, so this reset is a rollback (`scripts/round_agent/handlers.py:545`), the first that has ever run anywhere (`docs/status.md` §2). If it fails, the upload page says only "Could not be started"; the reason is in the job log on the node.
+2. From a laptop outside TU Berlin's network: the command on the Dev view (`ssh -A -J team@worms.mlsec.tu-berlin.de root@<A>`), then on to B and C.
+3. Upload a zip whose `main.sh` is `echo hello; sleep 60` in the Dev view. The devbox resets and runs it (about 9 minutes on worms-dev): the upload page goes from "Resetting your VMs" to "Running". What the worm sends to the logging API and the tokens it captures appear on the progression page; `main.sh`'s own output does not: on A, `sudo journalctl -u worms-start`. On worms the provisioned VMs already have their `clean` snapshot, so this reset is a rollback (`scripts/round_agent/handlers.py:545`), the first that has ever run anywhere (`docs/status.md` §2). If it fails, the upload page says only "Could not be started"; the reason is in the job log on the node.
 4. `worms audit --hours 1` lists the sign-in, the password change, the key (`credential.ssh_key_added`), the gateway login (`ssh_gateway.login`, with the key's owner and the laptop's public address in `Client`), and, if you also press Reset on the profile, `team.devbox_reset`. Uploads and their runs leave no event (`docs/feature-audit.md`). Run the gateway check after a minute: the collector runs once a minute.
 
 
 ## 6. Differences from worms-dev, and pitfalls
 
-| | worms-dev | Fresh worms-pve |
+| | worms-dev | Fresh worms |
 |---|---|---|
-| `proxmox_instance` in `shared-variables.tf` | Local change to `worms-dev`, never to be committed | The repository's `worms-pve`. Copy nothing |
+| `proxmox_instance` in `shared-variables.tf` | Local change to `worms-dev`, never to be committed | The repository's `worms`. Copy nothing |
+| SSH ports | Node on 22, teams on 2222, as before (until worms-dev is redeployed: then its sshd needs 2222 first, 2.5) | Node on 2222 (and 22 from inside), teams on 22. The stacks' `node` block names `worms`, so on worms-dev the provider finds the node through the API (port 22) |
 | `TF_VAR_proxmox_instance` | Not set | Do not set it. The round agent gets the name from `proxmox.node` |
 | `cve_search` RAM | The repository's 4096 MB (VM 103) | The same |
 | Dashboard name | `worms-dev.mlsec.tu-berlin.de` | `worms.mlsec.tu-berlin.de`, from `dashboard_public_names`. An unlisted node name fails the dashboard play |

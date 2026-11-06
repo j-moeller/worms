@@ -105,7 +105,7 @@ connect with the commands in the **Dev** view's **Connect** panel:
 
 ```sh
 ssh-add -L                                  # your key must be in your SSH agent
-ssh -A -J team@<public name>:2222 root@<A>  # then on to B and C from there
+ssh -A -J team@<public name> root@<A>  # then on to B and C from there
 ```
 
 **Reset devbox** on your profile, or a dev upload, returns all three VMs to a clean state. An

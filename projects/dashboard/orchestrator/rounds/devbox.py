@@ -25,7 +25,9 @@ from django.conf import settings
 from django.db import transaction
 from django.db.models import F, Max
 
-MAX_TEAMS = 32  # the services block 10.2.0.32/27
+# The services block 10.2.0.32/27 has 32 addresses, but the teams' link networks
+# (10.128.0.0/19, scripts/generate_devbox.py) hold 16 teams: index 16 fails the job.
+MAX_TEAMS = 16
 
 
 def team_slug(team) -> str:
@@ -170,7 +172,7 @@ def _provision(competition):
 
 def _gateway_defaults():
     cfg = getattr(settings, "DEVBOX", {}) or {}
-    return cfg.get("ssh_gateway_host", ""), int(cfg.get("ssh_gateway_port", 2222)), cfg.get("ssh_gateway_user", "team")
+    return cfg.get("ssh_gateway_host", ""), int(cfg.get("ssh_gateway_port", 22)), cfg.get("ssh_gateway_user", "team")
 
 
 def _role_of(name: str) -> str:
@@ -202,8 +204,10 @@ def apply_devbox_jobs() -> int:
                 if src and devbox.services_source_ip != src:
                     devbox.services_source_ip = src
                     changed.append("services_source_ip")
-                if gw_host and devbox.ssh_gateway_host != gw_host:
-                    devbox.ssh_gateway_host, devbox.ssh_gateway_port, devbox.ssh_gateway_user = gw_host, gw_port, gw_user
+                # All three: a changed port alone (2222 -> 22 in production) must reach the rows too.
+                gateway = (gw_host, gw_port, gw_user)
+                if gw_host and (devbox.ssh_gateway_host, devbox.ssh_gateway_port, devbox.ssh_gateway_user) != gateway:
+                    devbox.ssh_gateway_host, devbox.ssh_gateway_port, devbox.ssh_gateway_user = gateway
                     changed += ["ssh_gateway_host", "ssh_gateway_port", "ssh_gateway_user"]
                 if changed:
                     devbox.save(update_fields=changed)

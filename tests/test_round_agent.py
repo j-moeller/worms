@@ -666,6 +666,14 @@ def test_devbox_gateway_permitopen_is_only_the_entry_vm():
     # The VMs themselves still authorize every registered key.
     assert extra["devbox_team_keys"]["t1"] == teams[0]["authorized_keys"]
 
+    # A team without a VM A (its Devbox row exists, its VMs do not: a failed
+    # provision) gets no gateway line: one without permitopen could forward anywhere.
+    teams.append({"slug": "t2", "authorized_keys": ["ssh-ed25519 CCCC key-three"]})
+    handlers._configure_devbox(ex, teams)
+    gateway_keys = _load_varfile(ex.args.split("@", 1)[1])["ssh_gateway_authorized_keys"]
+    assert [entry["comment"] for entry in gateway_keys] == ["team=t1", "team=t1"]
+    assert all(entry["permitopen"] for entry in gateway_keys)
+
 
 @pytest.mark.parametrize("job", ["devbox_provision", "devbox_rebuild", "devbox_reconfigure"])
 def test_every_devbox_job_reports_where_the_vms_are(job, tmp_path):
@@ -987,6 +995,31 @@ def test_round_agent_env_renders(render):
     assert "TF_VAR_proxmox_api_token=" not in env and "worms secrets set proxmox-token" in env
     assert "TF_VAR_ssh_public_key=/etc/worms/ssh/worms.pub" in env  # the WORMS key, from the vault
     assert "REPO_ROOT=/opt/worms" in env and "DB_SSLROOTCERT=/opt/worms/ansible/pki/worms/ca.crt" in env
+
+
+def test_the_agent_is_the_node_whatever_roots_worms_config_says(render, tmp_path, monkeypatch):
+    """A /root/.worms/config with WORMS_SSH on the node (laptop mode) made the
+    agent's `worms build devbox-apply` fail with "no ansible/inventory.generated.yml"
+    (2026-11-06, production). The agent's environment empties it."""
+    env = render(
+        "ansible/roles/host/round_agent", "round-agent.env.j2",
+        infrastructure_ips={"database": "10.11.0.16"},
+        management_ips={"dashboard": "10.5.0.18", "scoring": "10.5.0.14", "logging": "10.5.0.15"},
+        postgres_db="mydb", pki_ca_cert_path="/etc/worms/ca.crt", vault_round_agent_db_password="secret",
+        dashboard_media_root="/opt/dashboard/media",
+    )  # fmt: skip
+    sys.path.insert(0, str(REPO / "src"))
+    from worms_cli import config
+
+    roots_config = tmp_path / "config"
+    roots_config.write_text("WORMS_SSH=root@worms.example\n")
+    monkeypatch.setattr(config, "DEFAULT_CONFIG_FILE", roots_config)
+    assert config.Config.load().ssh == "root@worms.example"  # the file alone: laptop mode
+    for line in env.splitlines():
+        if line.startswith("WORMS_"):
+            key, _, value = line.partition("=")
+            monkeypatch.setenv(key, value)
+    assert config.Config.load().ssh == ""  # with the agent's environment: the node
 
 
 def test_round_agent_env_names_every_service_vm_it_waits_for(render):

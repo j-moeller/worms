@@ -15,7 +15,7 @@ not part of it: they get a new design next week (§3, D-2). **It is tested on `w
 | Staff create teams and students (CSV), hand out one-time passwords | **Works live** | Passwords are shown once on the page; nothing emails them |
 | A student signs in and sets a password | **Works live** | Sign-in is rate-limited per address; no per-account lockout |
 | Adds an SSH key on the profile | **Works live** | Installed by a job in about 3 minutes |
-| Reaches the devbox: `ssh -A -J team@<name>:2222 root@<A>`, then B and C | **Works**, also from outside (checked by the user on 2026-11-06) | |
+| Reaches the devbox: `ssh -A -J team@<name> root@<A>` (port 22 since 2026-11-06; before: 2222), then B and C | **Works**, also from outside (checked by the user on 2026-11-06) | |
 | Works on the VMs: files, `apt`, `pip`, scoring, logging, the LLM endpoint | **Works live** | `apt` only has the ~150 cached packages plus the seed; `pip` a minimal seed |
 | Uploads a worm in the Dev view: the devbox resets and `main.sh` runs on A | **Worked live once** (8 min 36 s) | Uploads from several teams queue: one job at a time. At most 30 uploads an hour and 2 GiB stored per team |
 | Sees the dev score, logs and the replay | **Works live** | No round banner in the Dev view any more. The replay has no network traffic: devbox traffic is not recorded |

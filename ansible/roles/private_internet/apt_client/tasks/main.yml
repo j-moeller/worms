@@ -13,6 +13,21 @@
     path: /etc/apt/apt.conf.d/01proxy
     state: absent
 
+# Offline the cache serves the index it fetched in the last internet window, and
+# trixie-updates/-security expire 7 days after their Date (Valid-Until): from then
+# on `apt update` fails on every VM, and with it every devbox build, reset and key
+# change. Signatures are still checked; only the age limit is lifted.
+- name: Accept the cache's index however old it is (offline, the cache cannot refresh it)
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/99worms-offline-cache
+    content: |
+      // Managed by Ansible (role apt_client): the private apt cache is offline.
+      Acquire::Check-Valid-Until "false";
+    owner: root
+    group: root
+    mode: '0644'
+  when: apt_client_use_cache | bool
+
 # The apt tasks after this use cache_valid_time, which looks only at the age of
 # the index, not at whether the sources changed. The apt-cache VM refreshed its
 # index minutes ago, before this role rewrote its sources, so without a refresh

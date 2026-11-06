@@ -16,7 +16,7 @@ provider "proxmox" {
 
   ssh {
     agent    = true
-    username    = "root"
+    username = "root"
 
     node {
       name    = "worms"

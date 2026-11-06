@@ -124,7 +124,7 @@ every view and API endpoint, autoescaping is on, the JavaScript builds the DOM w
 | D8 | Open | No Content-Security-Policy (no XSS sink found) |
 | D9 | Fixed | Joining, leaving and the first password change failed under the real grants |
 | D10 | Design | Staff pages on the public dashboard. The role cannot mint staff (a trigger) or delete what a team or round owns; a stolen staff session can still create rounds and accounts |
-| D11 | **Open** | **Uploads have no quota or rate**: 100 MiB each, stored on the dashboard VM, whose disk has 2.4 GB free. One member can fill it with about 25 distinct zips and stop the dashboard (`docs/status.md`, D-20) |
+| D11 | Fixed (2026-11-06) | Uploads had no quota or rate, on a dashboard disk with 2.4 GB free: one member could fill it with about 25 distinct zips. Now at most 30 uploads an hour and 2 GiB stored per team (`UPLOAD_TEAM_PER_HOUR`, `UPLOAD_TEAM_QUOTA`), on a 20 GB disk |
 | — | Fixed | View as: admin only, session-bound, read-only, ends on any account change (`docs/accounts.md`); the admin could be left in a Dev view without a team (2026-11-05) |
 
 ## Cross-cutting

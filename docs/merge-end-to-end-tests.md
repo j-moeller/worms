@@ -70,7 +70,9 @@ its window); the same checks from a real sandbox (open: none has been built).
 
 Since nothing in the private internet stack changed, nothing there needed re-provisioning for the
 merge itself. The private-internet VMs were re-provisioned anyway, with everything else, by the
-`worms build` that deployed the current `main` on 2026-11-06 (`docs/status.md`).
+`worms build` that deployed `main` at `8c60532` on 2026-11-06, 01:58–02:30: `SetupPrivateInternet.yml`
+ran online and again offline, exit 0. The service VMs still have no snapshot (`worms build
+rebuild-services` makes one).
 
 ## The rest of the branch, not merged
 

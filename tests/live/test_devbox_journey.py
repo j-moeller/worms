@@ -180,11 +180,11 @@ def test_01_admin_signs_in(journey):
     journey.passed("admin signed in")
 
 
-def test_02_admin_creates_competition_and_teams(journey):
+def test_02_admin_creates_teams(journey):
     journey.need("admin signed in")
     p, check = journey.platform, journey.check
-    r = p.browser("admin_create_competition_and_teams", password=journey.admin_password, teams=TEAMS, max_members=3)
-    check("Staff → Competition → Create it", "Dev competition exists", r["competition"], any("Development competition" in m for m in r["competition"]))
+    r = p.browser("admin_create_teams", password=journey.admin_password, teams=TEAMS, max_members=3)
+    check("Staff → Competition", "No development competition to create", r["devPanel"], r["devPanel"] == 0)
     for team, messages in r["teams"].items():
         check(f"Staff → Teams → `{team}`", "Created", messages, any(f"Team {team} created" in m for m in messages))
     db = p.database()

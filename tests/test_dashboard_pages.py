@@ -138,3 +138,27 @@ def test_anonymous_requests_create_no_session(site):  # noqa: F811
     # A real login still gets a session (and the dev/prod flag).
     assert login(site, HOST, f"https://{HOST}").status_code == 302
     assert Session.objects.count() == 1
+
+
+def test_no_round_banner_without_a_round_or_in_the_dev_view(django_env):
+    """A competition without a registration window and without rounds is not a running
+    round (it used to show "ROUND IN PROGRESS (DEV)"), and the Dev view, the devbox, has
+    no rounds at all: neither gets a banner."""
+    from datetime import timedelta
+
+    from core import clock
+    from core.models.competition import Competition, Round
+    from dashboard.middleware import CompetitionState, get_competition_state
+    from dashboard.views.util import get_competition_state_presentation
+
+    now = clock.now()
+    comp = Competition(name="WORMS")  # not saved: the state is a pure function
+    state = get_competition_state(now, comp, [])
+    assert state.state == "no_rounds"
+    assert get_competition_state_presentation(state, comp).label == ""
+    assert get_competition_state_presentation(CompetitionState("devbox"), comp).label == ""
+
+    running = Round(competition=comp, name="R1", round_start=now - timedelta(hours=1), round_end=now + timedelta(hours=1))
+    state = get_competition_state(now, comp, [running])
+    assert state.state == "round"
+    assert get_competition_state_presentation(state, comp).label == "ROUND IN PROGRESS (R1)"

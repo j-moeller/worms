@@ -137,12 +137,11 @@ const actions = {
     return { wrong, wrongPath, wrongMessages, status, firstPath, beforeChangePath, afterPath, pages };
   },
 
-  async admin_create_competition_and_teams(s, r) {
+  async admin_create_teams(s, r) {
+    // No development competition to create any more: the devbox has no rounds.
     await s.login("admin", r.password);
     await s.page.goto(`${s.base}/staff/`);
-    await s.submit('main button:has-text("Create it")');
-    const competition = await s.messages();
-    await s.shot("02-dev-competition-created");
+    const devPanel = await s.page.locator("text=Development competition").count();
     const teams = {};
     for (const team of r.teams) {
       await s.page.goto(`${s.base}/staff/teams/`);
@@ -153,7 +152,7 @@ const actions = {
     }
     await s.page.goto(`${s.base}/staff/teams/`);
     await s.shot("03-teams-created");
-    return { competition, teams };
+    return { devPanel, teams };
   },
 
   // The first user through the form, the rest through the CSV import. Returns the one-time passwords.

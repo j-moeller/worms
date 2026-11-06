@@ -87,8 +87,6 @@ Anna,Alpha,anna.alpha@example.org,alpha
 
 The team must exist and have room; an existing email is left unchanged. **Copy the one-time passwords from the page that follows**: they are not shown again, and nothing emails them. Hand each over a secure channel. Optional: a registration window on `/staff/` lets students join teams themselves.
 
-The **development competition** (`/staff/`, **Create it**) is still offered but no longer needed: the dev view has no rounds (`docs/status.md`, decisions).
-
 Later changes are on the user's page from `/staff/users/`: **New one-time password**, **Set team**, **Deactivate**. Accounts are deactivated, not deleted. Check with `worms teams` and `worms users`. To remove a team with everything it owns: `worms teams delete "Neural Net"` (its users stay, without a team).
 
 ## Devboxes
@@ -119,7 +117,6 @@ On `/staff/rounds/`, fill in **New round**. Nothing is built until it starts.
 
 | Field | Default | Allowed | Meaning |
 |---|---|---|---|
-| Environment | Live | Live, Dev | Dev is only a time window for the devbox progression and builds nothing |
 | Starts / Ends | | Future / after Starts | UTC. **Starts** is also the upload deadline |
 | Seed | Random | 0 or more | The sandbox and each team's game plan derive from it |
 | VMs / Networks / Sites / Interfaces per VM | 8 / 4 / 1 / 3 | 1–250 / 1–30 / 1–8 / 1–8 | The round's sandbox |

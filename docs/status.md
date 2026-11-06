@@ -24,8 +24,8 @@ not part of it: they get a new design next week (§3, D-2). **It is tested on `w
 
 ## 2. Before users arrive
 
-Done on 2026-11-06: the current code is deployed (`worms build`); dev rounds and the
-round banner of the Dev view are gone; the dashboard disk is 20 GB and uploads have a per-team
+Done on 2026-11-06: the current code is deployed (`worms build`, 01:58–02:30, exit 0; the
+devboxes were off for about 30 minutes of it); dev rounds and the round banner of the Dev view are gone; the dashboard disk is 20 GB and uploads have a per-team
 quota; the outside checks of port 443 and 2222 passed (the user's). The test data stays: these
 are dev teams.
 

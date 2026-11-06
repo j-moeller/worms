@@ -6,7 +6,8 @@ What a team uploads, how it runs, and what its VMs can reach. The platform side 
 ## The upload
 
 A **`.zip`** with **`main.sh` at its top level** (not in a folder), at most 100 MiB, on the
-dashboard's **Upload** page. The view you upload in decides where it runs, and the two are
+dashboard's **Upload** page. Your team may upload at most 30 times an hour and keep at most 2 GiB
+of uploads (the same zip twice counts once). The view you upload in decides where it runs, and the two are
 separate:
 
 - **Live view:** your team's latest upload before a round starts is the one that runs in that

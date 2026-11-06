@@ -162,17 +162,10 @@ The new password needs at least 8 characters, not all digits, not a common one, 
 
 **Last seen:** 2026-11-04, Stage 1.
 
-## Step 4: create the development competition
+## Step 4: no development competition any more
 
-**Who:** admin, in a browser.
-
-| Page | Input |
-|---|---|
-| `/staff/`, panel **Development competition** | Press **Create it** |
-
-The page calls this optional. Every earlier run did it, so this one does too.
-
-**Last seen:** 2026-11-04, Stage 1.
+Earlier runs created a development competition here. Dev rounds were removed on 2026-11-06, and
+the staff page no longer offers it: go on with step 5.
 
 ## Step 5: create the teams
 

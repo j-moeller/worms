@@ -28,9 +28,8 @@ browser:
 
 **Live:** one document per round and team, from that run's timeline; zero is the worm's start.
 **Dev:** the devbox has no rounds, so there is one document (`round: null`) from the last reset up
-to now, never finished, with no network data (devbox traffic is not recorded). Rounds of a
-development competition are still served by the API as a window on the devbox, but the page
-does not use them.
+to now, never finished, with no network data (devbox traffic is not recorded). Dev rounds,
+windows on the devbox within a round, were removed on 2026-11-06.
 
 ## The document (`worms-progression`, version 1)
 

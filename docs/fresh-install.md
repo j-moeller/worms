@@ -170,7 +170,7 @@ cd /root/app
 worms secrets issue proxmox-token        # role WormsProvision, user worms-provision@pve, token on /
 worms secrets issue orchestrator-token   # WormsSandboxPower on /pool/sandbox (Proxmox accepts the path before the pool exists)
 worms secrets issue topology-token       # WormsTopology on /
-worms secrets                            # the three tokens and ssh-key "set", (generated) 13/13 present
+worms secrets                            # the three tokens and ssh-key "set", (generated) 15/15 present
 head -c 14 ansible/group_vars/vault.yml; echo    # $ANSIBLE_VAULT
 ```
 

@@ -60,12 +60,14 @@ cd /root/app/ansible
 ssh-agent sh -c 'ssh-add -q /etc/worms/ssh/worms && WORMS_SSH_AUTH_SOCK="$SSH_AUTH_SOCK" exec ansible-playbook -e @group_vars/vault.yml SetupDbAndDashboard.yml --limit orchestrator,dashboard --skip-tags packages'
 ```
 
-Keep `--skip-tags packages`: without internet, `pip` hangs for minutes. If the change adds a table or a grant, apply the grants too, then check the grant itself on the database VM (the play's `changed` count has been wrong):
+Keep `--skip-tags packages`: without internet, `pip` hangs for minutes. **If the change adds a table, a database role or a grant,** leave out `--limit`: the same playbook then also creates the roles, runs the migrations and applies the grants, still without the internet window (about 10 minutes; first run `worms secrets`, which generates a new role's password). Then check the grant itself on the database VM, because the play's `changed` count has been wrong:
 
 ```sh
-ssh-agent sh -c 'ssh-add -q /etc/worms/ssh/worms && WORMS_SSH_AUTH_SOCK="$SSH_AUTH_SOCK" exec ansible-playbook -e @group_vars/vault.yml SetupDbAndDashboard.yml --limit database_hosts --start-at-task "List the tables in the public schema"'
+ssh-agent sh -c 'ssh-add -q /etc/worms/ssh/worms && WORMS_SSH_AUTH_SOCK="$SSH_AUTH_SOCK" exec ansible-playbook -e @group_vars/vault.yml -e internet_enabled=false SetupDbAndDashboard.yml --skip-tags packages'
 sudo -u postgres psql -d mydb -c "SELECT grantee, privilege_type FROM information_schema.role_table_grants WHERE table_name = '<table>'"
 ```
+
+The node's own parts deploy the same way, without the window: `SetupHostNetwork.yml` (its firewall, the watchdog) and `SetupRoundAgent.yml` (the round agent, `worms-audit`), each with `-e internet_enabled=false`. `SetupRoundAgent.yml` restarts the agent when its environment changes: not while it runs a job.
 
 Afterwards: `worms status`, `worms secrets check` (do the Proxmox tokens work, with exactly their rights?), `worms build ping` (can Ansible reach every VM?).
 

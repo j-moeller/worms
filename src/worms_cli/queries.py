@@ -210,15 +210,25 @@ def event_rows(hours: int = 24, kind: str | None = None, limit: int = 200) -> li
 
     since = clock.now() - timedelta(hours=max(1, hours))
     limit = max(1, min(limit, 5000))
+    from core.events import ssh_fingerprint
+    from core.models.devbox import DevboxSSHKey
+
+    # Who registered each key: the keys registered now, then what credential_events
+    # recorded (it also knows keys removed since).
     keys = {}
+    for key in DevboxSSHKey.objects.select_related("created_by", "team"):
+        fp = ssh_fingerprint(key.public_key)
+        if fp:
+            keys[fp] = (key.created_by.username if key.created_by else None, key.team.name)
     for added in m.CredentialEvent.objects.filter(kind="ssh_key_added").order_by("created_at"):
         if added.ssh_fingerprint:
             keys[added.ssh_fingerprint] = (added.actor_username, added.team_name)
 
-    def row(e, name, actor="", target="", team="", details=None):
+    def row(e, name, actor="", target="", team="", details=None, at=None):
+        at = at or e.created_at
         details = json.dumps(details or {}, ensure_ascii=False, sort_keys=True, default=str) if details else ""
-        return (e.created_at, [
-            e.created_at.strftime("%Y-%m-%d %H:%M:%S"), name, e.written_by, actor or "", target or "", team or "",
+        return (at, [
+            at.strftime("%Y-%m-%d %H:%M:%S"), name, e.written_by, actor or "", target or "", team or "",
             getattr(e, "client_ip", None) or "", details if len(details) <= 100 else details[:97] + "...",
         ])  # fmt: skip
 
@@ -243,10 +253,12 @@ def event_rows(hours: int = 24, kind: str | None = None, limit: int = 200) -> li
         rows.append(row(e, f"credential.{e.kind}", e.actor_username, team=e.team_name, details=extra))
     for e in recent(m.CompetitionEvent):
         rows.append(row(e, f"competition.{e.kind}", e.actor_username, details={"round": e.round_id, **(e.detail or {})}))
-    for e in recent(m.SSHGatewayLogin):
+    # A login is dated by the gateway's clock (the collector reads it up to a minute later).
+    logins = m.SSHGatewayLogin.objects.filter(logged_in_at__gte=since).order_by("-logged_in_at", "-id")[:limit]
+    for e in logins:
         owner, owner_team = keys.get(e.ssh_fingerprint, (None, None))
         rows.append(row(e, "ssh_gateway.login", f"key of {owner}" if owner else "unknown key", team=owner_team,
-                        details={"fingerprint": e.ssh_fingerprint, "at": e.logged_in_at.isoformat()}))  # fmt: skip
+                        details={"fingerprint": e.ssh_fingerprint}, at=e.logged_in_at))  # fmt: skip
     for e in recent(m.PlatformEvent):
         rows.append(row(e, f"platform.{e.kind}", e.actor, details=e.detail))
     if kind:

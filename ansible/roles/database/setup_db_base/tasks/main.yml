@@ -1,10 +1,13 @@
 ---
+# Refreshes the index only while internet access is allowed: offline it would wait
+# for minutes on repositories it cannot reach (a redeploy without the internet window).
 - name: Install PostgreSQL
   ansible.builtin.apt:
     name: [postgresql, python3-psycopg2, acl]
     state: present
-    update_cache: true
-    cache_valid_time: 3600
+    update_cache: "{{ internet_enabled | default(false) | bool }}"
+    cache_valid_time: "{{ 3600 if internet_enabled | default(false) | bool else omit }}"
+  tags: [packages]
 
 #
 # Guarantee basic connections and variables

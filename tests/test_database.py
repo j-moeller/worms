@@ -331,7 +331,7 @@ def test_orchestrator_processes_attempts(database):
 # --- the event tables (core/models/events.py, docs/monitoring.md) ---------------------------
 
 DASHBOARD_EVENTS = {
-    "login_events": ("outcome, username, client_ip", ("ok", "someone", "192.0.2.7")),
+    "login_events": ("outcome, username, client_ip, not_recorded_before", ("ok", "someone", "192.0.2.7", 0)),
     "password_events": ("kind, actor_username, target_username", ("reset", "admin", "sam")),
     "impersonation_events": ("kind, actor_username, target_username", ("started", "admin", "sam")),
     "account_events": ("kind, actor_username, detail", ("created", "admin", "{}")),

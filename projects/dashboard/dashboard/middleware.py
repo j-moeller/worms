@@ -168,8 +168,9 @@ class UserMetadataMiddleware:
         # in it: the admin back from viewing as a student, or a student who left their team.
         # Default rather than require the key: EnvironmentTransitionMiddleware only sets it for
         # authenticated users, so reading it must not assume it exists and must not itself create
-        # a session (docs/security-assessment.md, D1).
-        request.is_dev_environment = bool(request.session.get("is_dev_environment", False)) and request.team is not None
+        # a session (docs/security-assessment.md, D1). The default is the dev view: a team member
+        # first sees their devbox.
+        request.is_dev_environment = bool(request.session.get("is_dev_environment", True)) and request.team is not None
 
         if request.is_dev_environment:
             # The team's devbox: always on, reset by the team, no rounds (docs/devbox.md).
@@ -200,8 +201,8 @@ class EnvironmentTransitionMiddleware:
         if request.path.startswith(API_PREFIX) or not request.user.is_authenticated:
             return self.get_response(request)
         # Switching between the two views is a POST (views/environment.py),
-        # never a side effect of a GET.
-        request.session.setdefault("is_dev_environment", False)
+        # never a side effect of a GET. A new session starts in the dev view.
+        request.session.setdefault("is_dev_environment", True)
 
         return self.get_response(request)
 

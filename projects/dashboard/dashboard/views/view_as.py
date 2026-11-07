@@ -32,7 +32,7 @@ def start(request: HttpRequest, uuid):
     # A new session key for the new state, as Django does at a login.
     request.session.cycle_key()
     request.session[VIEW_AS_SESSION_KEY] = {"by": request.user.pk, "user": target.pk}
-    # Each side starts in the live view: the dev view chosen while viewing is the student's.
+    # Each side starts in the default view: the view chosen while viewing is the student's.
     request.session.pop(ENVIRONMENT_SESSION_KEY, None)
     view_as_log.warning("view-as started: admin=%r viewed=%r", request.user.username, target.username)
     events.impersonation("started", request=request, admin=request.user, target=target)

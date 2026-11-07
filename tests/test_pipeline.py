@@ -152,6 +152,32 @@ def test_a_failed_step_aborts_the_build(monkeypatch, failing):
     assert (DENY in steps) == (ALLOW in steps)
 
 
+def test_the_cleanup_after_a_failed_step_says_the_build_is_stopping(monkeypatch, capsys):
+    """Internet.yml after a failed apply is the window closing, not the build going on."""
+    monkeypatch.setattr(pipeline, "Runner", Recorder)
+    monkeypatch.setattr(Recorder, "fail_on", ("tofu", "private_internet"))
+    pipe = pipeline.Pipeline(config=None)
+    with pytest.raises(BuildError, match="private_internet"):
+        pipe.online(pipe.infrastructure)  # build_all's window, without its `tofu init` (which fails here first)
+    assert [c for c in pipe.runner.calls if c[0] == "ansible"][-1] == DENY
+    err = capsys.readouterr().err
+    assert "stopping the build: regenerating the inventory" in err
+    assert "stopping the build: closing the internet window" in err
+
+
+def test_a_failed_inventory_after_a_failed_apply_keeps_the_applys_error(monkeypatch):
+    monkeypatch.setattr(pipeline, "Runner", Recorder)
+    monkeypatch.setattr(Recorder, "fail_on", ("tofu", "private_internet"))
+    pipe = pipeline.Pipeline(config=None)
+
+    def inventory():
+        raise BuildError("generate_inventory failed")
+
+    monkeypatch.setattr(pipe, "inventory", inventory)
+    with pytest.raises(BuildError, match="private_internet"):
+        pipe.infrastructure()
+
+
 def test_a_limit_never_skips_the_internet_window(monkeypatch):
     """Internet.yml runs on the node, so `--limit <vm>` would silently skip it:
     the window would not open, and an open one would not close."""

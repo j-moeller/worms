@@ -37,6 +37,12 @@ SERVICE_POOLS = ("ephemeral", "private_internet")
 TEAM_POOLS = ("sandbox", "devbox")
 SERVICE_SNAPSHOT = "clean"
 
+
+def _stopping(cleanup: str) -> None:
+    """Said before the cleanup that runs after a failed step, so that its commands do not
+    read as the build going on. The step's own error ends the build: `build aborted: ...`."""
+    output.error(f"a step failed, stopping the build: {cleanup} first")
+
 # Stacks that get `tofu init` (order matters only for readability).
 INIT_STACKS = [
     "platform",
@@ -143,8 +149,14 @@ class Pipeline:
             self._apply("private_internet")
             self._apply("infrastructure/persistent")
             self._apply("infrastructure/ephemeral")
-        finally:
-            self.inventory()
+        except BaseException:
+            _stopping("regenerating the inventory to match the state")
+            try:
+                self.inventory()
+            except BuildError as exc:  # the apply's error is the one to report
+                output.error(f"regenerating the inventory failed too: {exc}")
+            raise
+        self.inventory()
 
     def inventory(self):
         self.runner.python("scripts/generate_inventory.py")
@@ -178,6 +190,9 @@ class Pipeline:
         self.internet_allow()
         try:
             step()
+        except BaseException:
+            _stopping("closing the internet window")
+            raise
         finally:
             try:
                 self.internet_deny()

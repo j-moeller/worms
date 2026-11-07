@@ -18,7 +18,7 @@ import yaml
 from conftest import REPO, require
 
 ANSIBLE = REPO / "ansible"
-PLAYBOOKS = sorted(p.name for p in ANSIBLE.glob("*.yml") if p.name != "inventory.yml")
+PLAYBOOKS = sorted(p.name for p in ANSIBLE.glob("*.yml") if not p.name.startswith("inventory"))
 
 
 @pytest.fixture(scope="session")
@@ -49,6 +49,18 @@ def test_playbook_syntax(ansible_env, playbook):
         text=True,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_an_inventory_file_ansible_cannot_parse_fails_the_run(ansible_env, tmp_path):
+    """Ansible's default is a warning, after which it goes on without that file: every
+    play on one of its groups then matches no host, is skipped, and the run succeeds."""
+    broken = tmp_path / "inventory.yml"
+    broken.write_text("all:\n  children:\n    proxmox_host:\n      hosts: [proxmox.local]\n")
+    argv = ["ansible-inventory", "-i", str(broken), "--list"]
+    proc = subprocess.run(argv, cwd=ANSIBLE, env=ansible_env, capture_output=True, text=True)
+    assert proc.returncode != 0 and "Completely failed to parse inventory source" in proc.stderr, proc.stderr
+    default = dict(ansible_env, ANSIBLE_INVENTORY_ANY_UNPARSED_IS_FAILED="False")
+    assert subprocess.run(argv, cwd=ANSIBLE, env=default, capture_output=True).returncode == 0
 
 
 def test_every_vm_group_is_in_the_inventory():

@@ -1,6 +1,7 @@
 from dashboard.views.access import access, create_access_token, revoke_access_token
 from dashboard.views.auth import login_view, logout_view
 from dashboard.views.debug import debug_login_as
+from dashboard.views.favicon import favicon_ico, favicon_svg
 from dashboard.views.leaderboard import leaderboard
 from dashboard.views.logging import logging_event_data, logs
 from dashboard.views.profile import profile
@@ -16,6 +17,9 @@ from django.urls import path
 
 urlpatterns = [
     path("", leaderboard, name="index"),
+    #
+    path("favicon.svg", favicon_svg, name="favicon"),
+    path("favicon.ico", favicon_ico, name="favicon_ico"),
     #
     path("admin/", admin.site.urls),
     #

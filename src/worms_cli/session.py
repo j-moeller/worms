@@ -116,6 +116,8 @@ class Session:
         self.config = config
         self.laptop = bool(config.ssh)
         self.vault = Vault(config.repo_root)
+        # The round agent's workspace is never a controller, whatever files are in it.
+        self.workspace = Path(config.repo_root).resolve() == Path(NODE_WORKSPACE)
         self._values = None
         self._agent = None  # the WORMS key's agent: {"SSH_AUTH_SOCK": ..., "SSH_AGENT_PID": ...}
         self._tmp = None
@@ -138,8 +140,15 @@ class Session:
         return self._values
 
     def has_vault(self) -> bool:
-        # Laptop mode always works from the vault (values() says how to make one);
-        # on the node only if the operator keeps one there (the agent has none).
+        """Whether this is a controller: laptop mode always works from the vault (values()
+        says how to make one); on the node only a checkout with one. The round agent's
+        workspace never: a vault there (once made by mistake, 2026-11-06) is ignored, or
+        every job would try to sync the workspace from itself."""
+        if self.workspace:
+            if self.laptop:
+                raise SessionError(f"WORMS_SSH is set in the round agent's workspace ({NODE_WORKSPACE}), which is the node: "
+                                   "empty it (/etc/worms/round-agent.env does)")  # fmt: skip
+            return False
         return self.laptop or self.vault.exists()
 
     # -- ssh-agents ----------------------------------------------------------------

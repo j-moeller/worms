@@ -78,6 +78,14 @@
     use_ssh_args: true
     rsync_opts: "{{ round_agent_sync_rsync_opts }}"
 
+# rsync leaves excluded files alone. A vault in the workspace (made there by mistake on
+# 2026-11-06) made every job take the workspace for a controller and fail on it.
+- name: Remove any vault from the workspace
+  ansible.builtin.file:
+    path: "{{ round_agent_repo_root }}/{{ item }}"
+    state: absent
+  loop: [ansible/group_vars/vault.yml, ansible/.vault_pass]
+
 # The workspace holds no vault, by design, so it must not name the vault's key:
 # with the key missing, every playbook here would fail before it starts.
 - name: Drop the vault key from the workspace's ansible.cfg

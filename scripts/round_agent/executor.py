@@ -47,19 +47,30 @@ SSH_OPTS = [
 ]
 
 
+REASON_PREFIXES = ("fatal:", "failed:", "[ERROR]", "ERROR!", "Error:", "error:")
+
+
 class CommandError(RuntimeError):
-    def __init__(self, argv, returncode, stderr, log_path=None):
+    """The job's `error` (and the dashboard's "Recently failed"): the END of stderr,
+    where Ansible, OpenTofu and the worms CLI put the reason (its start is Ansible's
+    inventory-plugin warnings), and the last failed task, which Ansible prints on stdout."""
+
+    def __init__(self, argv, returncode, stderr, log_path=None, stdout=""):
         self.argv, self.returncode, self.stderr = argv, returncode, stderr
         where = f" (full output: {log_path})" if log_path else ""
-        super().__init__(f"{argv[0]} exited {returncode}: {stderr.strip()[:500]}{where}")
+        err = stderr.strip()
+        reason = ("..." + err[-500:]) if len(err) > 500 else err
+        failed = [line.strip() for line in (stdout or "").splitlines() if line.lstrip().startswith(REASON_PREFIXES)]
+        if failed:
+            reason += f" | last failure: {failed[-1][:300]}"
+        super().__init__(f"{argv[0]} exited {returncode}: {reason}{where}")
 
 
 class JobLog:
     """One job's commands and build output, in a root-only file per job.
 
     Written as it happens, so a long build can be followed and a failure read
-    afterwards: the job's `error` holds only the start of stderr, and Ansible reports
-    failed tasks on stdout. Ansible and OpenTofu output can be sensitive, which is why
+    afterwards: the job's `error` holds only the end of stderr and the last failed task. Ansible and OpenTofu output can be sensitive, which is why
     the directory is root-only, and why this stays on the node and out of the database.
 
     A problem with the log never fails a job. Without a file (no job is running, or it
@@ -164,7 +175,7 @@ class Executor:
             raise
         self._log.note(f"exit {returncode} after {time.monotonic() - started:.0f} s")
         if check and returncode != 0:
-            raise CommandError(argv, returncode, stderr, self._log.path)
+            raise CommandError(argv, returncode, stderr, self._log.path, stdout)
         return stdout
 
     def _stream(self, argv, cwd, timeout):

@@ -1198,8 +1198,20 @@ def test_a_failed_build_keeps_its_real_reason_in_the_log(logged):
         ex.run(["sh", "-c", "echo 'fatal: [vm]: FAILED! => the real reason'; echo warning >&2; exit 3"], stream=True)
     assert "exited 3: warning" in str(failure.value)
     assert str(job_log.path) in str(failure.value)
+    # The failed task from stdout, too: the error is what the dashboard shows.
+    assert "last failure: fatal: [vm]: FAILED! => the real reason" in str(failure.value)
     text = _log_text(job_log)
     assert "the real reason" in text and "exit 3 after" in text
+
+
+def test_a_failed_commands_error_keeps_the_end_of_stderr():
+    """Ansible starts stderr with inventory-plugin warnings; its reason comes last
+    (2026-11-07: the job's error showed only the warnings)."""
+    from round_agent.executor import CommandError
+
+    stderr = "[WARNING]: Failed to parse inventory with 'auto' plugin\n" * 40 + "[ERROR]: the real reason\n"
+    message = str(CommandError(["python3"], 1, stderr))
+    assert message.endswith("[ERROR]: the real reason") and "exited 1: ..." in message
 
 
 def test_a_timed_out_build_is_killed_and_noted(logged):

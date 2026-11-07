@@ -1,6 +1,6 @@
 from core.models.devbox import DevboxSSHKey, DevboxVM
 from core.models.team import AccessTokens, Team
-from dashboard.views.devbox import captured_vm_ids
+from dashboard.views.devbox import active_upload, captured_vm_ids
 from dashboard.views.leaderboard import add_places, leaderboard_tabs, round_result, score_teams
 from dashboard.views.util import get_current_round, get_flag_captures, get_rounds, get_teams, render_with_base_info
 from django.contrib.auth.decorators import login_required
@@ -20,6 +20,7 @@ def _dev_performance(team: Team) -> dict | None:
         "label": "tokens submitted at this version",
         "pips": [vm.id in found for vm in vms],
         "can_reset": True,
+        "running": active_upload(team),
     }
 
 

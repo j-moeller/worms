@@ -1,0 +1,10 @@
+{% comment %}The reset button, on the dev dashboard and on the profile (views/devbox.py,
+devbox_reset). `next` is the page a reset comes back to (a path on this site); `running`
+is the team's dev upload under way, which the reset stops.{% endcomment %}
+<details class="confirm">
+    <summary class="btn btn--danger">Reset devbox</summary>
+    <div class="confirm__body">
+        <p>This rebuilds all three VMs with fresh disks and new tokens; the score starts over. Earlier records are kept.{% if running %} Your running upload is stopped, too.{% endif %}</p>
+        <form method="post" action="{% url 'devbox_reset' %}">{% csrf_token %}<input type="hidden" name="next" value="{{ next }}"><button type="submit" class="btn btn--danger">Yes, rebuild my devbox</button></form>
+    </div>
+</details>

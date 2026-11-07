@@ -94,19 +94,76 @@ browser test can load it with fixture data; the endpoints come from here.{% endc
 <section class="panel" aria-labelledby="data-api-title">
     <header class="panel__head"><h2 class="panel__title" id="data-api-title">Download your results</h2></header>
     <div class="panel__body prose">
+        {% with base=request.scheme|add:"://"|add:request.get_host round_id=selected.id|default:"ID" %}
         {% if environment == "dev" %}
         <p>Use these commands to retrieve your devbox's progression so far, as JSON or as a zip with every log record. You need a token from <a href="{% url 'profile' %}">your profile</a>.</p>
-        <pre class="code" data-copy><code>TOKEN=...   # a token of your team
-curl -H "Authorization: Bearer $TOKEN" {{ request.scheme }}://{{ request.get_host }}/api/v1/devbox/progression/
-curl -H "Authorization: Bearer $TOKEN" -o progression.zip {{ request.scheme }}://{{ request.get_host }}/api/v1/devbox/progression.zip</code></pre>
         {% else %}
         <p>Use these commands to retrieve your scoring and logs for a round as JSON. Pages hold up to 500 submissions or 200 logs (1 MiB); follow <code>page.next</code> until it is null. You need a token from <a href="{% url 'profile' %}">your profile</a>. {% if selected %}These commands are for {{ selected.name }}; the first one lists all your rounds and their ids.{% else %}<code>ID</code> stands for a round's id, which the first command lists.{% endif %}</p>
-        {% with round_id=selected.id|default:"ID" %}<pre class="code" data-copy><code>TOKEN=...   # a token of your team
-curl -H "Authorization: Bearer $TOKEN" {{ request.scheme }}://{{ request.get_host }}/api/v1/rounds/
-curl -H "Authorization: Bearer $TOKEN" "{{ request.scheme }}://{{ request.get_host }}/api/v1/rounds/{{ round_id }}/scoring/?limit=500"
-curl -H "Authorization: Bearer $TOKEN" "{{ request.scheme }}://{{ request.get_host }}/api/v1/rounds/{{ round_id }}/logging/?limit=200&amp;cursor=NEXT"
-curl -H "Authorization: Bearer $TOKEN" -o progression.zip {{ request.scheme }}://{{ request.get_host }}/api/v1/rounds/{{ round_id }}/progression.zip</code></pre>{% endwith %}
         {% endif %}
+        <p class="muted"><span class="code-var">Highlighted</span> parts are yours to fill in or change.</p>
+        <div class="code-tabs">
+            <input class="code-tabs__radio" type="radio" name="download-lang" id="download-bash" checked>
+            <input class="code-tabs__radio" type="radio" name="download-lang" id="download-python">
+            <span class="code-tabs__bar"><label class="code-tabs__tab" for="download-bash">bash</label><label class="code-tabs__tab" for="download-python">python</label></span>
+            <div class="code-tabs__panel" data-lang="bash">
+                {% if environment == "dev" %}
+                <pre class="code" data-copy><code>TOKEN=<span class="code-var">...</span>   # a token of your team
+curl -H "Authorization: Bearer $TOKEN" {{ base }}/api/v1/devbox/progression/
+curl -H "Authorization: Bearer $TOKEN" -o progression.zip {{ base }}/api/v1/devbox/progression.zip</code></pre>
+                {% else %}
+                <pre class="code" data-copy><code>TOKEN=<span class="code-var">...</span>   # a token of your team
+curl -H "Authorization: Bearer $TOKEN" {{ base }}/api/v1/rounds/
+curl -H "Authorization: Bearer $TOKEN" "{{ base }}/api/v1/rounds/<span class="code-var">{{ round_id }}</span>/scoring/?limit=500"
+curl -H "Authorization: Bearer $TOKEN" "{{ base }}/api/v1/rounds/<span class="code-var">{{ round_id }}</span>/logging/?limit=200&amp;cursor=<span class="code-var">NEXT</span>"
+curl -H "Authorization: Bearer $TOKEN" -o progression.zip {{ base }}/api/v1/rounds/<span class="code-var">{{ round_id }}</span>/progression.zip</code></pre>
+                {% endif %}
+            </div>
+            <div class="code-tabs__panel" data-lang="python">
+                {% if environment == "dev" %}
+                <pre class="code" data-copy><code>import json, urllib.request
+
+TOKEN = "<span class="code-var">...</span>"   # a token of your team
+BASE = "{{ base }}"
+
+def get(path):
+    request = urllib.request.Request(BASE + path, headers={"Authorization": f"Bearer {TOKEN}"})
+    with urllib.request.urlopen(request, timeout=60) as response:
+        return response.read()
+
+progression = json.loads(get("/api/v1/devbox/progression/"))
+with open("progression.zip", "wb") as file:
+    file.write(get("/api/v1/devbox/progression.zip"))</code></pre>
+                {% else %}
+                <pre class="code" data-copy><code>import json, time, urllib.request
+
+TOKEN = "<span class="code-var">...</span>"   # a token of your team
+BASE = "{{ base }}"
+ROUND = <span class="code-var">{{ round_id }}</span>   # a round's id: get("/api/v1/rounds/") lists them
+
+def get(path):
+    request = urllib.request.Request(BASE + path, headers={"Authorization": f"Bearer {TOKEN}"})
+    with urllib.request.urlopen(request, timeout=60) as response:
+        return response.read()
+
+def every(path):
+    """Every item of a paged list: follow page.next until it is None."""
+    items = []
+    while path:
+        page = json.loads(get(path))
+        items += page["items"]
+        path = page["page"]["next"]
+        time.sleep(0.3)   # stay under the rate limit
+    return items
+
+rounds = json.loads(get("/api/v1/rounds/"))["rounds"]
+scoring = every(f"/api/v1/rounds/{ROUND}/scoring/?limit=500")
+logs = every(f"/api/v1/rounds/{ROUND}/logging/?limit=200")
+with open("progression.zip", "wb") as file:
+    file.write(get(f"/api/v1/rounds/{ROUND}/progression.zip"))</code></pre>
+                {% endif %}
+            </div>
+        </div>
+        {% endwith %}
     </div>
 </section>
 {% endif %}

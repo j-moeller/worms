@@ -39,15 +39,7 @@
             <p class="stat"><span class="stat__value">{{ performance.value }}{% if performance.of %}<span class="stat__of">/{{ performance.of }}</span>{% endif %}</span><span class="stat__label">{{ performance.label }}</span></p>
             {% if performance.pips %}<p class="pips" aria-hidden="true">{% for on in performance.pips %}<span class="pip{% if on %} is-on{% endif %}"></span>{% endfor %}</p>{% endif %}
             {% if performance.facts %}<dl class="kv">{% for fact in performance.facts %}<div><dt>{{ fact.name }}</dt><dd>{{ fact.value }}</dd></div>{% endfor %}</dl>{% endif %}
-            {% if performance.can_reset %}
-            <details class="confirm">
-                <summary class="btn btn--danger">Reset devbox</summary>
-                <div class="confirm__body">
-                    <p>This rebuilds all three VMs with fresh disks and new tokens; the score starts over. Earlier records are kept.</p>
-                    <form method="post" action="{% url 'devbox_reset' %}">{% csrf_token %}<button type="submit" class="btn btn--danger">Yes, rebuild my devbox</button></form>
-                </div>
-            </details>
-            {% endif %}
+            {% if performance.can_reset %}{% url 'profile' as here %}{% include "devbox_reset.html" with next=here running=performance.running %}{% endif %}
             {% elif request.is_dev_environment %}
             <p class="muted">Your devbox has not been built yet.</p>
             {% else %}

@@ -17,7 +17,7 @@ import pytest
 import yaml
 
 from conftest import REPO, as_role
-from test_dashboard_login import HOST, login, proxied, site  # noqa: F401 (fixture)
+from test_dashboard_login import HOST, login, proxied, site, view  # noqa: F401 (fixture)
 
 pytest.importorskip("django")
 
@@ -47,6 +47,7 @@ def team_site(site, app_roles):  # noqa: F811
     team = Team.objects.create(name="red", competition=ApplicationSetting.get_current_competition())
     TeamMembership.objects.create(user=User.objects.get(username="admin"), team=team)
     assert login(site, HOST, f"https://{HOST}").status_code == 302
+    view(site, "sandbox")  # these uploads are Live entries; the dashboard opens in Dev
     with as_role("django_dashboard"):
         yield site
 
@@ -78,6 +79,30 @@ def test_an_upload_lands_where_the_agent_reads_it(team_site):
     from pathlib import Path
 
     assert (Path(settings.MEDIA_ROOT) / artifact.storage_key).read_bytes() == data
+
+
+def test_a_team_downloads_its_own_uploads_and_nothing_else(team_site):
+    import hashlib
+
+    from core.models.team import Team
+    from core.models.user import User
+    from core.models.worms import MalwareArtifact, Upload
+
+    data = _zip({"main.sh": "echo worm\n"})
+    digest = hashlib.sha256(data).hexdigest()
+    href = f"/upload/{digest}/download/"
+    assert f'href="{href}"' in upload(team_site, data)
+    response = team_site.get(href, **proxied(HOST))
+    assert response.status_code == 200 and b"".join(response.streaming_content) == data
+    assert response["Content-Type"] == "application/zip" and response["Content-Disposition"].startswith("attachment")
+
+    # Another team's upload is not reachable by its hash, nor is anything that is not one.
+    blue = Team.objects.create(name="blue", competition=Team.objects.get(name="red").competition)
+    other = "e" * 64
+    artifact = MalwareArtifact.objects.create(content_hash=other, storage_key=f"malware-artifacts/ee/ee/{other}.zip")
+    Upload.objects.create(artifact=artifact, user=User.objects.get(username="admin"), team=blue)
+    for path in (f"/upload/{other}/download/", "/upload/x/download/", f"/upload/{digest.upper()}/download/"):
+        assert team_site.get(path, **proxied(HOST)).status_code == 404, path
 
 
 def test_the_same_bytes_again_keep_their_key(team_site):

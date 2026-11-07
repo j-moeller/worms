@@ -13,7 +13,7 @@ from dashboard.views.devbox import (
 from dashboard.views.navigation import set_environment
 from dashboard.views.profile import profile
 from dashboard.views.teams import join_team, leave_team, team_registration
-from dashboard.views.uploads import upload
+from dashboard.views.uploads import download as upload_download, upload
 from dashboard.views.todos import todos
 from dashboard import api
 from dashboard.views import progression
@@ -46,6 +46,7 @@ urlpatterns = [
     path("progression/devbox/download/", progression.devbox_download, name="progression_devbox_download"),
     #
     path("upload/", upload, name="upload"),
+    path("upload/<str:content_hash>/download/", upload_download, name="upload_download"),
     #
     path("login/", login_view, name="login"),
     path("logout/", logout_view, name="logout"),

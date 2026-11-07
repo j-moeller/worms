@@ -78,6 +78,18 @@ def login(client, host, origin, next_="/topology/", password="admin-pw"):
     )  # fmt: skip
 
 
+def view(client, environment):
+    """Switch the signed-in session to the Live ("sandbox") or the Dev ("dev") view, as the
+    toggle does. A new session starts in Dev (dashboard/middleware.py)."""
+    page = client.get("/profile/", **proxied(HOST))
+    token = re.search(rb'name="csrfmiddlewaretoken" value="([^"]+)"', page.content).group(1).decode()
+    response = client.post(
+        "/environment/", {"csrfmiddlewaretoken": token, "environment": environment},
+        HTTP_ORIGIN=f"https://{HOST}", **proxied(HOST),
+    )  # fmt: skip
+    assert response.status_code == 302
+
+
 @pytest.mark.parametrize("host", [HOST, f"{HOST}:8443", "10.10.0.18", "10.10.0.18:9443"])
 def test_login_works_on_any_port_when_the_host_keeps_it(site, host):
     response = login(site, host, f"https://{host}")

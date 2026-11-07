@@ -27,6 +27,8 @@ def student_clients():
         TeamMembership.objects.create(team=team, user=user)
         client.force_login(user)
         csrf(client, "/profile/")
+        # The dashboard opens in Dev; these uploads are Live entries.
+        assert post(client, "/environment/", {"environment": "sandbox"}).status_code == 302
         teams.append(team)
         users.append(user)
     return clients, teams, users

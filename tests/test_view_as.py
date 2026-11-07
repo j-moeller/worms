@@ -398,7 +398,7 @@ def test_the_admin_comes_back_from_the_dev_view_to_their_own(people):
     assert "is_dev_environment" not in admin.session
     assert _environment(admin) == "sandbox" and _environment(admin, "/") == "sandbox"
     _start(admin, people["student"])
-    assert _environment(admin) == "sandbox"  # and the next view starts live too
+    assert _environment(admin) == "dev"  # and the next view starts afresh, in the default (Dev)
 
 
 def test_nobody_without_a_team_is_held_in_the_dev_view(people):

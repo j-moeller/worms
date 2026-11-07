@@ -36,6 +36,7 @@
     --link: var(--accent);
     --ok: #35c48a;
     --warn: #e0a83a;
+    --warn-ink: #1b1406;
     --bad: #ef5a5a;
     --hot: #ff7a45;
     --focus: var(--accent);
@@ -361,14 +362,31 @@ pre.code[data-copy] code { flex: 1; min-width: 0; overflow-x: auto; }
 .code-label { margin: 0 0 6px; font-size: .82rem; font-weight: 600; }
 p + p { margin-top: 10px; }
 .panel__body p code { white-space: nowrap; }
-p + .code-label { margin-top: 14px; }
+p + .code-label, .code + .code-label { margin-top: 14px; }
+/* What a sample command leaves to you: the values to fill in, the data that differs. A ring,
+   not padding, so the code keeps its columns. */
+.code-var { background: color-mix(in srgb, var(--warn) 22%, transparent); border-radius: 3px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--warn) 45%, transparent); }
+/* The same samples in bash and in python: tabs made of radio buttons, so they need no
+   JavaScript. Two languages: the nth radio shows the nth panel. */
+.code-tabs { position: relative; margin: 0 0 12px; }
+.code-tabs__radio { position: absolute; top: 0; left: 0; width: 1px; height: 1px; opacity: 0; margin: 0; }
+.code-tabs__bar { display: flex; gap: 6px; margin: 0 0 12px; }
+.code-tabs__tab { padding: 5px 12px; border: var(--border-w) solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--muted); font-family: var(--font-mono); font-size: .82rem; cursor: pointer; }
+.code-tabs__tab:hover { border-color: var(--border-strong); color: var(--text); }
+.code-tabs__panel { display: none; }
+.code-tabs__radio:nth-of-type(1):checked ~ .code-tabs__panel:nth-of-type(1),
+.code-tabs__radio:nth-of-type(2):checked ~ .code-tabs__panel:nth-of-type(2) { display: block; }
+.code-tabs__radio:nth-of-type(1):checked ~ .code-tabs__bar .code-tabs__tab:nth-of-type(1),
+.code-tabs__radio:nth-of-type(2):checked ~ .code-tabs__bar .code-tabs__tab:nth-of-type(2) { border-color: var(--accent); color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+.code-tabs__radio:nth-of-type(1):focus-visible ~ .code-tabs__bar .code-tabs__tab:nth-of-type(1),
+.code-tabs__radio:nth-of-type(2):focus-visible ~ .code-tabs__bar .code-tabs__tab:nth-of-type(2) { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 /* ---- disclosures / confirm --------------------------------------------- */
 .view-as { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 16px; padding: 8px 16px; background: color-mix(in srgb, var(--warn) 22%, var(--surface)); border-bottom: var(--border-w) solid var(--warn); }
 .view-as__text { margin: 0; font-size: .88rem; overflow-wrap: anywhere; }
 .view-as form { margin: 0; }
 .disclosure, .confirm { margin: 0; }
-.stat + .confirm, .pips + .confirm, .kv + .confirm { margin-top: 18px; }
+.stat + .confirm, .pips + .confirm, .kv + .confirm, .vm-chain + .confirm { margin-top: 18px; }
 .confirm summary, .disclosure summary { display: inline-flex; list-style: none; }
 .confirm summary::-webkit-details-marker, .disclosure summary::-webkit-details-marker { display: none; }
 .confirm[open] > summary { opacity: .6; }
@@ -413,6 +431,14 @@ p + .code-label { margin-top: 14px; }
 .upload__status { color: var(--muted); font-family: var(--font-mono); font-size: .8rem; }
 .upload__status.is-busy { color: var(--accent); }
 .upload__status.is-error { color: var(--bad); }
+/* A dev upload under way, in amber: the notice, its row in the history, and the button that
+   would cancel it. */
+.run-now { display: flex; align-items: baseline; gap: 10px; margin: 0; padding: 11px 14px; border: var(--border-w) solid color-mix(in srgb, var(--warn) 55%, var(--border)); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--warn) 10%, var(--surface)); font-size: .9rem; overflow-wrap: anywhere; }
+.run-now__dot { flex: none; align-self: center; width: 9px; height: 9px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 25%, transparent); animation: run-pulse 1.6s ease-in-out infinite; }
+@keyframes run-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .run-now__dot { animation: none; } }
+.btn--primary.btn--running { background: var(--warn); border-color: var(--warn); color: var(--warn-ink); box-shadow: none; }
+.table tbody tr.is-running { background: color-mix(in srgb, var(--warn) 9%, transparent); }
 
 /* ---- occupancy meter ---------------------------------------------------- */
 .occupancy { display: flex; align-items: center; gap: 12px; }

@@ -8,13 +8,15 @@ stored once. An upload belongs to the uploader's team at the time.
 The two views are separate. Live: the team's latest upload before a round starts
 is its entry (orchestrator/rounds/planner.py). Dev: the upload resets the team's
 devbox and then runs on VM A (orchestrator/rounds/devbox_runs.py), and never enters
-a round. Only the orchestrator acts on it: this view only stores it.
+a round; a newer one cancels it. Only the orchestrator acts on it: this view only
+stores it. A team can download its own uploads again from the history.
 """
 
 from contextlib import suppress
 import hashlib
 import logging
 import os
+import re
 import uuid
 import zipfile
 from datetime import timedelta
@@ -25,14 +27,17 @@ from core.locking import serialized_resource
 from core.models.team import Team
 from core.models.worms import MalwareArtifact, Upload
 from dashboard.views.decorators import user_in_team_required
+from dashboard.views.devbox import active_upload
 from dashboard.views.util import render_with_base_info
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.files.storage import default_storage
-from django.http import HttpRequest, HttpResponseNotAllowed
+from django.http import FileResponse, Http404, HttpRequest, HttpResponseNotAllowed
 from django.shortcuts import redirect
 from django.template.defaultfilters import filesizeformat
+from django.urls import reverse
+from django.views.decorators.http import require_GET
 
 log = logging.getLogger("dashboard")
 
@@ -75,6 +80,8 @@ def _history(request: HttpRequest, team: Team):
         .prefetch_related("runs__round")
         .order_by("-created_at")
     )
+    # The dev upload under way: a new one cancels it (the page says so before it is sent).
+    running = active_upload(team) if environment == "dev" else None
     rows = []
     for upload in uploads:
         # The rounds this upload was run in (newest first).
@@ -87,24 +94,51 @@ def _history(request: HttpRequest, team: Team):
         rows.append(
             {
                 "content_hash": upload.artifact.content_hash,
+                "download": reverse("upload_download", args=[upload.artifact.content_hash]),
                 "time_date": upload.created_at,
                 "username": upload.user.username,
                 "rounds": [round.name for round in rounds],
                 "referenced": bool(rounds),
                 "status": RUN_STATUS[run.state] if run else RUN_STATUS[DevboxRun.State.PENDING],
                 "ends_at": run.ends_at if run and run.state == DevboxRun.State.RUNNING else None,
+                "running": running is not None and upload.pk == running.pk,
             }
         )
+    current = next((row for row in rows if row["running"]), None)
     return render_with_base_info(
         request,
         "uploads.html",
         {
             "uploads": rows,
+            "running": current,
             "max_size": settings.MAX_UPLOAD_SIZE,
             "environment": environment,
             "devbox_ready": environment != "dev" or DevboxVM.objects.filter(devbox__team=team).exists(),
         },
     )
+
+
+CONTENT_HASH = re.compile(r"[0-9a-f]{64}")
+
+
+@login_required
+@require_GET
+@user_in_team_required
+def download(request: HttpRequest, team: Team, content_hash: str):
+    """One of the team's own uploads, byte for byte. Only what the team uploaded itself: the
+    same bytes in another team's upload are no way into that team's history."""
+    upload = None
+    if CONTENT_HASH.fullmatch(content_hash):
+        upload = Upload.objects.filter(team=team, artifact__content_hash=content_hash).select_related("artifact").first()
+    if upload is None:
+        raise Http404("No such upload of your team.")
+    try:
+        stream = default_storage.open(upload.artifact.storage_key, "rb")
+    except OSError:
+        raise Http404("That upload is no longer stored.") from None
+    response = FileResponse(stream, as_attachment=True, filename=f"worm-{content_hash[:12]}.zip", content_type="application/zip")
+    response["Cache-Control"] = "private, no-store"
+    return response
 
 
 def _check_zip(uploaded) -> str | None:

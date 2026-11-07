@@ -15,38 +15,43 @@
     <form method="post" action="{% url 'upload' %}" enctype="multipart/form-data" class="panel__body upload" data-upload data-max="{{ max_size }}">
         {% csrf_token %}
         <input type="hidden" name="environment" value="{{ environment }}">
+        {% if running %}
+        <p class="run-now" role="status" data-running><span class="run-now__dot" aria-hidden="true"></span><span><strong>Your current upload is under way:</strong> {{ running.status }}{% if running.ends_at %}, until <time datetime="{{ running.ends_at|date:'c' }}" data-localtime>{{ running.ends_at }}</time>{% endif %}. <a class="mono" href="{{ running.download }}" download>{{ running.content_hash|truncatechars:13 }}</a></span></p>
+        {% endif %}
         <label class="dropzone" data-dropzone>
             <input class="dropzone__input" type="file" name="artifact" accept=".zip,application/zip" required data-file>
             <span class="dropzone__icon" aria-hidden="true"></span>
             <span class="dropzone__text" data-dropzone-text>Choose a .zip file<span class="dropzone__hint"> — or drag it here</span></span>
             <span class="dropzone__file" data-dropzone-file hidden></span>
         </label>
-        {% if environment == "dev" %}
+        {% if environment == "dev" and running %}
+        <p class="alert alert--warn"><strong>This cancels your current upload and resets your devbox again.</strong> All three VMs are rebuilt, so everything on them is lost and your captures start over. Then the new upload runs on VM A, for up to an hour. It does not enter any round.</p>
+        {% elif environment == "dev" %}
         <p class="alert alert--warn"><strong>This resets your devbox.</strong> All three VMs are rebuilt, so everything on them is lost and your captures start over. Then your upload runs on VM A, for up to an hour. It does not enter any round.</p>
         {% else %}
         <p class="alert alert--warn"><strong>This is your team's entry.</strong> Your latest upload before a round begins is the one that runs in that round. To try something first, switch to the Dev view.</p>
         {% endif %}
         <div class="upload__actions">
             <span class="upload__status" data-upload-status role="status"></span>
-            <button type="submit" class="btn btn--primary">{% if environment == "dev" %}Upload, reset and run{% else %}Upload{% endif %}</button>
+            <button type="submit" class="btn btn--primary{% if running %} btn--running{% endif %}">{% if environment == "dev" and running %}Cancel it, reset and run this one{% elif environment == "dev" %}Upload, reset and run{% else %}Upload{% endif %}</button>
         </div>
     </form>
     {% endif %}
 </section>
 
 <section class="panel" aria-labelledby="history-title">
-    <header class="panel__head"><h2 class="panel__title" id="history-title">History</h2><p class="panel__meta">{{ uploads|length }} upload{{ uploads|length|pluralize }}</p></header>
+    <header class="panel__head"><h2 class="panel__title" id="history-title">History</h2><p class="panel__meta">{{ uploads|length }} upload{{ uploads|length|pluralize }}{% if uploads %} · click a hash to download it{% endif %}</p></header>
     <div class="table-wrap">
         <table class="table table--uploads">
             <thead><tr><th scope="col">Content hash</th><th scope="col">Uploaded</th><th scope="col">By</th><th scope="col">{% if environment == "dev" %}On your devbox{% else %}Rounds{% endif %}</th></tr></thead>
             <tbody>
                 {% for upload in uploads %}
-                <tr{% if upload.referenced %} class="is-referenced"{% endif %}>
-                    <th scope="row" class="mono truncate" title="{{ upload.content_hash }}">{{ upload.content_hash }}</th>
+                <tr{% if upload.running %} class="is-running"{% elif upload.referenced %} class="is-referenced"{% endif %}>
+                    <th scope="row" class="mono truncate" title="{{ upload.content_hash }}"><a href="{{ upload.download }}" download>{{ upload.content_hash }}</a></th>
                     <td><time datetime="{{ upload.time_date|date:'c' }}" data-localtime>{{ upload.time_date }}</time></td>
                     <td>{{ upload.username }}</td>
                     {% if environment == "dev" %}
-                    <td>{{ upload.status }}{% if upload.ends_at %}, until <time datetime="{{ upload.ends_at|date:'c' }}" data-localtime>{{ upload.ends_at }}</time>{% endif %}</td>
+                    <td>{% if upload.running %}<span class="badge badge--warn">now</span> {% endif %}{{ upload.status }}{% if upload.ends_at %}, until <time datetime="{{ upload.ends_at|date:'c' }}" data-localtime>{{ upload.ends_at }}</time>{% endif %}</td>
                     {% else %}
                     <td>{% for round in upload.rounds %}<span class="badge badge--accent upload-round">{{ round }}</span> {% empty %}<span class="muted">—</span>{% endfor %}</td>
                     {% endif %}
@@ -62,13 +67,47 @@
 <section class="panel" aria-labelledby="submit-api-title">
     <header class="panel__head"><h2 class="panel__title" id="submit-api-title">Submit flags and logs</h2></header>
     <div class="panel__body prose">
-        <p>Make your worm use these commands to capture a VM or write logging information. Capturing a VM means submitting its flag (<code>/etc/worms/flag</code> on each VM).</p>
-        <pre class="code" data-copy><code>curl -X POST https://scoring.worms.internal/submit \
+        <p>Make your worm use these commands to capture a VM or write logging information. Capturing a VM means submitting its flag: the whole content of <code>/etc/worms/flag</code> on that VM, exactly as it is. A request is at most 4 KiB.</p>
+        <p class="muted"><span class="code-var">Highlighted</span> parts are what your worm fills in.</p>
+        <div class="code-tabs">
+            <input class="code-tabs__radio" type="radio" name="submit-lang" id="submit-bash" checked>
+            <input class="code-tabs__radio" type="radio" name="submit-lang" id="submit-python">
+            <span class="code-tabs__bar"><label class="code-tabs__tab" for="submit-bash">bash</label><label class="code-tabs__tab" for="submit-python">python</label></span>
+            <div class="code-tabs__panel" data-lang="bash">
+                <p class="code-label">Capture a VM: submit its whole flag file</p>
+                <pre class="code" data-copy><code>curl -X POST https://scoring.worms.internal/submit \
   -H "Content-Type: application/json" \
-  -d '{"vm_flag":"FLAG"}'</code></pre>
-        <pre class="code" data-copy><code>curl -X POST https://logging.worms.internal/submit \
+  -d "{\"vm_flag\":\"<span class="code-var">$(cat /etc/worms/flag)</span>\"}"</code></pre>
+                <p class="code-label">Log a JSON object</p>
+                <pre class="code" data-copy><code>curl -X POST https://logging.worms.internal/submit \
   -H "Content-Type: application/json" \
-  -d '{"log_data":{"event":"..."}}'</code></pre>
+  -d '{"log_data":<span class="code-var">{"event":"captured","vm":"B"}</span>}'</code></pre>
+                <p class="code-label">Log any output, base64-encoded: the JSON stays valid whatever it holds</p>
+                <pre class="code" data-copy><code>DATA=$(<span class="code-var">uname -a</span> | base64 -w0)
+curl -X POST https://logging.worms.internal/submit \
+  -H "Content-Type: application/json" \
+  -d "{\"log_data\":{\"b64\":\"$DATA\"}}"</code></pre>
+            </div>
+            <div class="code-tabs__panel" data-lang="python">
+                <p class="code-label">Once, at the top</p>
+                <pre class="code" data-copy><code>import base64, json, urllib.request
+
+def submit(url, body):
+    request = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
+                                     headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return response.status</code></pre>
+                <p class="code-label">Capture a VM: submit its whole flag file</p>
+                <pre class="code" data-copy><code>flag = <span class="code-var">open("/etc/worms/flag").read().strip()</span>
+submit("https://scoring.worms.internal/submit", {"vm_flag": flag})</code></pre>
+                <p class="code-label">Log a JSON object</p>
+                <pre class="code" data-copy><code>submit("https://logging.worms.internal/submit", {"log_data": <span class="code-var">{"event": "captured", "vm": "B"}</span>})</code></pre>
+                <p class="code-label">Log any bytes, base64-encoded: the JSON stays valid whatever they hold</p>
+                <pre class="code" data-copy><code>data = <span class="code-var">open("/etc/os-release", "rb").read()</span>
+submit("https://logging.worms.internal/submit", {"log_data": {"b64": base64.b64encode(data).decode()}})</code></pre>
+            </div>
+        </div>
+        <p class="muted">Base64 makes the data a third larger: about 3 KiB of output fit in one request. Split anything longer.</p>
     </div>
 </section>
 {% endblock %}

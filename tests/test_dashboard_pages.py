@@ -8,7 +8,7 @@ import re
 
 import pytest
 
-from test_dashboard_login import HOST, login, proxied, site  # noqa: F401 (fixture)
+from test_dashboard_login import HOST, login, proxied, site, view  # noqa: F401 (fixture)
 
 pytest.importorskip("django")
 
@@ -28,6 +28,8 @@ def team_upload(site):  # noqa: F811
     artifact = MalwareArtifact.objects.create(content_hash="ab" * 32, storage_key="malware-artifacts/x.zip")
     upload = Upload.objects.create(artifact=artifact, user=admin, team=team)
     assert login(site, HOST, f"https://{HOST}").status_code == 302
+    # The dashboard opens in Dev; the tests are about Live unless they switch (_dev_view).
+    view(site, "sandbox")
     return team, upload
 
 

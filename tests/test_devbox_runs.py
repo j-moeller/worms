@@ -340,6 +340,25 @@ def test_a_new_upload_replaces_a_running_one(site, team):  # noqa: F811
     assert len(_jobs("devbox_rebuild")) == 2
 
 
+def test_the_dev_page_shows_the_upload_under_way_until_it_ends(site, team):  # noqa: F811
+    from core.models.devbox import DevboxRun
+
+    _dev_view(site)
+    assert "data-running" not in _page(site) and "btn--running" not in _page(site)
+    upload = _dev_upload(team)
+    # Before the orchestrator has picked it up, too: it is about to reset the devbox.
+    for step in ("new", "running"):
+        if step == "running":
+            _to_running(upload)
+        page = _page(site)
+        assert "Your current upload is under way" in page and "This cancels your current upload" in page, step
+        assert re.search(r'class="btn btn--primary btn--running">Cancel it, reset and run this one</button>', page), step
+        assert page.count('class="is-running"') == 1, step
+    DevboxRun.objects.filter(upload=upload).update(state="finished")
+    page = _page(site)
+    assert "data-running" not in page and "btn--running" not in page and "This resets your devbox." in page
+
+
 def test_a_manual_reset_ends_a_running_upload(site, team):  # noqa: F811
     from orchestrator.rounds.devbox import request_rebuild
 

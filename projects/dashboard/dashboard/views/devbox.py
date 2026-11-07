@@ -1,10 +1,11 @@
 """The dashboard's development ("devbox") view and its actions.
 
 In the development environment (the dev/prod toggle in the nav), the home page
-shows the team's devbox instead of the leaderboard: its VMs and how to connect.
-A reset rebuilds the devbox and clears the score by bumping the team's devbox
-version (docs/devbox.md). The profile has the dev score, the reset button and the
-SSH keys (the last two are handled here), and the progression page has the logs.
+shows the team's devbox instead of the leaderboard: its VMs, how to connect and
+the reset button. A reset rebuilds the devbox and clears the score by bumping the
+team's devbox version (docs/devbox.md). The profile has the dev score, the reset
+button too and the SSH keys (the last two are handled here), and the progression
+page has the logs.
 
 Production view = the leaderboard (dashboard/views/leaderboard.py). This module
 only runs when request.is_dev_environment is set.
@@ -16,10 +17,12 @@ import re
 
 from core import events
 from core.models.devbox import Devbox, DevboxCapture, DevboxSSHKey, DevboxVM
+from core.models.worms import Upload
 from core.membership import membership_change
 from core.models.team import Team, TeamMembership
 from dashboard.views.decorators import user_in_team_required
 from dashboard.views.leaderboard import leaderboard
+from dashboard.views.navigation import safe_next
 from dashboard.views.util import render_with_base_info
 from django.conf import settings
 from django.contrib import messages
@@ -30,11 +33,22 @@ from django.http import HttpRequest
 from django.shortcuts import redirect
 from django.views.decorators.http import require_POST
 
+from orchestrator.rounds.devbox_runs import ACTIVE
+
 
 def captured_vm_ids(team: Team) -> set[int]:
     """The devbox VMs whose token the team has submitted at its current version."""
     captures = DevboxCapture.objects.filter(team=team, devbox_version=team.devbox_version)
     return set(captures.values_list("devbox_vm_id", flat=True))
+
+
+def active_upload(team: Team) -> Upload | None:
+    """The team's dev upload under way, from waiting for its reset to the end of its hour.
+    Only the newest can be (orchestrator/rounds/devbox_runs.py): a newer upload or a reset
+    replaces it. One the orchestrator has not picked up yet is about to reset the devbox."""
+    upload = Upload.objects.filter(team=team, devbox=True).select_related("devbox_run").order_by("-created_at", "-id").first()
+    run = getattr(upload, "devbox_run", None)
+    return upload if upload is not None and (run is None or run.state in ACTIVE) else None
 
 
 def home(request: HttpRequest):
@@ -105,6 +119,7 @@ def devbox_home(request: HttpRequest, team: Team):
         "ssh_command": ssh_command,
         "hops": _hops(vms),
         "chain": _chain(vms),
+        "running": active_upload(team) if devbox else None,
     }
     return render_with_base_info(request, "devbox.html", context)
 
@@ -117,13 +132,16 @@ def devbox_reset(request: HttpRequest, team: Team):
     the team's devbox version (docs/devbox.md). The reset goes through the
     orchestrator (the dashboard role may not bump the version); in DEBUG
     (sqlite, no orchestrator) it bumps locally so the flow is usable. A failure
-    is reported to the user instead of being shown as success."""
+    is reported to the user instead of being shown as success. It returns to the page
+    the button was on (the dev dashboard or the profile)."""
     from dashboard import orchestrator_client
+
+    back = safe_next(request, "profile")
 
     # You cannot reset a devbox you do not have (it is created with the team).
     if not Devbox.objects.filter(team=team).exists():
         messages.error(request, "You have no devbox to reset yet — it is created together with your team.")
-        return redirect("profile")
+        return back
 
     try:
         result = orchestrator_client.post(f"/devbox/{team.uuid}/reset/")
@@ -138,20 +156,20 @@ def devbox_reset(request: HttpRequest, team: Team):
                 "Devbox version bumped (development mode: no orchestrator, so the "
                 "VMs are not really rebuilt). The score starts over.",
             )
-            return redirect("profile")
+            return back
         messages.error(
             request,
             f"Could not reset your devbox: {error}. Please try again; if it keeps "
             "failing, contact an organiser.",
         )
-        return redirect("profile")
+        return back
 
     if result.get("rebuild_enqueued", True):
         events.team("devbox_reset", request=request, team=team)
         messages.success(request, "Reset requested: your devbox VMs are being rebuilt and the score starts over.")
     else:
         messages.info(request, "A rebuild of your devbox is already in progress.")
-    return redirect("profile")
+    return back
 
 
 def _reconfigure_devbox(request: HttpRequest, team: Team, changed: str):

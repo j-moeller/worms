@@ -188,7 +188,7 @@ def test_the_copy_button_never_covers_a_command(measured):
 
 
 def test_copy_gives_exactly_the_command(measured):
-    assert measured["copied"] == "ssh -A -J team@worms.example:2222 root@10.7.31.11"
+    assert measured["copied"] == "ssh -A -J team@worms.example:2222 root@10.7.15.11"  # VM A of devbox 15 (_page)
 
 
 def test_the_reset_button_has_room_above_it(measured):

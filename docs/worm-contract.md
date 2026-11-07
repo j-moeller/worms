@@ -71,6 +71,9 @@ req = urllib.request.Request(
 urllib.request.urlopen(req, timeout=10)
 ```
 
+`log_data` must be a JSON object. To log raw output, whatever characters it holds, base64-encode
+it: `{"log_data": {"b64": "<base64>"}}`. The Upload page has these samples in bash and in Python.
+
 ## Limits
 
 Both servers accept `POST /submit` only, a JSON object of at most 4 KiB, a flag of at most 64
@@ -108,7 +111,8 @@ ssh-add -L                                  # your key must be in your SSH agent
 ssh -A -J team@<public name> root@<A>  # then on to B and C from there
 ```
 
-**Reset devbox** on your profile, or a dev upload, returns all three VMs to a clean state. An
-upload waits while a round is running, because the platform runs one such job at a time and a
-round's timing comes first. The Upload page shows where it is; the Progression page shows what it
-did.
+**Reset devbox**, on the Dev view's home page or on your profile, or a dev upload, returns all
+three VMs to a clean state. An upload waits while a round is running, because the platform runs one
+such job at a time and a round's timing comes first. The Upload page shows where it is, in amber
+while it is under way: another upload or a reset cancels it. The Progression page shows what it
+did. Click an upload's hash in the history to download it again.

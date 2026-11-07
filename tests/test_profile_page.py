@@ -6,6 +6,7 @@ leaderboard's own numbers. The other pages took over what used to be elsewhere.
 from __future__ import annotations
 
 import json
+import re
 from datetime import timedelta
 
 import pytest
@@ -162,8 +163,10 @@ def test_the_dev_dashboard_has_vms_first_and_no_score_or_logs(site, team_upload)
     assert page.index('id="vms-title"') < page.index('id="connect-title"')
     assert "score-title" not in page and "tokens submitted" not in page and 'class="stat' not in page
     assert "logs-title" not in page
-    assert "Reset devbox" not in page and "/devbox/reset/" not in page
-    assert "version 1" in page.split('id="vms-title"', 1)[1].split("</section>", 1)[0]
+    vms = page.split('id="vms-title"', 1)[1].split("</section>", 1)[0]
+    assert "version 1" in vms
+    # The reset button is here as well as on the profile, and comes back here.
+    assert "Reset devbox" in vms and 'action="/devbox/reset/"' in vms and 'name="next" value="/"' in vms
 
 
 def test_the_reset_button_is_with_the_tokens_in_the_dev_view_only(site, rounds):  # noqa: F811
@@ -194,6 +197,12 @@ def test_a_reset_comes_back_to_the_profile(site, team_upload, monkeypatch):  # n
     assert (response.status_code, response["Location"]) == (302, "/profile/")
     assert calls == [f"/devbox/{team_upload[0].uuid}/reset/"]
     assert "Reset requested" in _get(site, "/profile/")
+    # From the dev dashboard it comes back there; anywhere else it names is not followed.
+    for back, location in (("/", "/"), ("https://evil.example/", "/profile/")):
+        response = site.post(
+            "/devbox/reset/", {"csrfmiddlewaretoken": token, "next": back}, HTTP_ORIGIN=f"https://{HOST}", **proxied(HOST)
+        )
+        assert (response.status_code, response["Location"]) == (302, location)
 
 
 def _devbox_log(team, text):
@@ -283,8 +292,13 @@ def test_downloading_is_explained_on_progression_and_not_on_the_profile(site, te
     assert "data-api-title" not in _get(site, "/profile/")
 
 
+def _code(html) -> str:
+    """The sample commands as copied: without the highlighting of what is variable."""
+    return re.sub(r'<span class="code-var">([^<]*)</span>', r"\1", html)
+
+
 def test_the_download_commands_fit_the_view(site, team_upload):  # noqa: F811
-    assert "/api/v1/rounds/ID/progression.zip" in _get(site, "/progression/")
+    assert "/api/v1/rounds/ID/progression.zip" in _code(_get(site, "/progression/"))
     _devbox(team_upload[0])
     _dev_view(site)
     page = _get(site, "/progression/")
@@ -294,13 +308,13 @@ def test_the_download_commands_fit_the_view(site, team_upload):  # noqa: F811
 def test_the_download_commands_use_the_rounds_real_id(site, rounds):  # noqa: F811
     first = rounds["first"]
     page = _get(site, f"/progression/?round={first.id}")
-    panel = page.split('id="data-api-title"', 1)[1]
+    panel = _code(page.split('id="data-api-title"', 1)[1])
     assert f"/api/v1/rounds/{first.id}/scoring/" in panel and f"/api/v1/rounds/{first.id}/progression.zip" in panel
     assert "/rounds/ID/" not in panel and "These commands are for Round 1" in panel
 
 
 def test_without_a_round_the_download_commands_say_what_id_means(site, team_upload):  # noqa: F811
-    panel = _get(site, "/progression/").split('id="data-api-title"', 1)[1]
+    panel = _code(_get(site, "/progression/").split('id="data-api-title"', 1)[1])
     assert "/api/v1/rounds/ID/progression.zip" in panel and "<code>ID</code> stands for a round's id" in panel
 
 

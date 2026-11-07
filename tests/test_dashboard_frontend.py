@@ -122,28 +122,30 @@ def test_environment_toggle_reflects_and_switches_the_session(site, team_upload)
     marks the current one and, when posted, flips the whole page (brand,
     data-env, and the value the no-JS button would submit next). The animation
     and in-place swap are JavaScript-only; the form post is the baseline."""
+    site.logout()  # a new session: the fixture chose Live
+    assert login(site, HOST, f"https://{HOST}").status_code == 302
     page = site.get("/", **proxied(HOST)).content.decode()
     assert "envtoggle" in page and "data-env-toggle" in page
     assert ">Live<" in page and ">Dev<" in page  # both labels live in the track
-    # Live is the default; the chrome says so, and the no-JS button submits dev.
-    assert 'data-env="sandbox"' in page
-    assert 'class="brand__env">LIVE<' in page
-    assert re.search(r'class="envtoggle"[^>]*aria-pressed="false"', page)
-    assert re.search(r'name="environment"\s+value="dev"', page)
-
-    # Switching is a plain form post (works without JavaScript).
-    token = _csrf(site, "/")
-    switched = site.post(
-        "/environment/", {"csrfmiddlewaretoken": token, "environment": "dev"},
-        HTTP_ORIGIN=f"https://{HOST}", **proxied(HOST),
-    )  # fmt: skip
-    assert switched.status_code == 302
-    page = site.get("/", **proxied(HOST)).content.decode()
+    # Dev is the default; the chrome says so, and the no-JS button submits Live.
     assert 'data-env="dev"' in page
     assert 'class="brand__env">DEV<' in page
     assert "WORMS//DEV" in page  # the <title>
     assert re.search(r'class="envtoggle"[^>]*aria-pressed="true"', page)
-    assert re.search(r'name="environment"\s+value="sandbox"', page)  # now submits back
+    assert re.search(r'name="environment"\s+value="sandbox"', page)
+
+    # Switching is a plain form post (works without JavaScript), both ways.
+    for environment, env, brand, pressed, other in (("sandbox", "sandbox", "LIVE", "false", "dev"), ("dev", "dev", "DEV", "true", "sandbox")):
+        token = _csrf(site, "/")
+        switched = site.post(
+            "/environment/", {"csrfmiddlewaretoken": token, "environment": environment},
+            HTTP_ORIGIN=f"https://{HOST}", **proxied(HOST),
+        )  # fmt: skip
+        assert switched.status_code == 302
+        page = site.get("/", **proxied(HOST)).content.decode()
+        assert f'data-env="{env}"' in page and f'class="brand__env">{brand}<' in page
+        assert re.search(rf'class="envtoggle"[^>]*aria-pressed="{pressed}"', page)
+        assert re.search(rf'name="environment"\s+value="{other}"', page)  # now submits back
 
 
 def test_staff_tools_are_hidden_from_non_staff(site):  # noqa: F811

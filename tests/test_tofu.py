@@ -32,7 +32,10 @@ def test_fixture_matches_shared_variables(tofu_copy, tmp_path):
     (stack / "outputs.tf").write_text(re.search(r'output "infrastructure" \{.*?\n\}\n', outputs, re.S).group(0))
     run = lambda *a: subprocess.run(["tofu", *a], cwd=stack, check=True, capture_output=True, text=True)  # noqa: E731
     run("init", "-input=false")
-    run("apply", "-auto-approve", "-input=false", "-var", "proxmox_api_url=x", "-var", "proxmox_api_token=x")
+    # The inputs without defaults (`worms` sets them); the node as in the fixture.
+    inputs = {"proxmox_api_url": "x", "proxmox_api_token": "x", "proxmox_instance": "worms", "node_ssh_address": "x",
+              "node_ssh_port": "22", "ssh_public_key": "x", "llm_access_ip": "192.0.2.34"}  # fmt: skip
+    run("apply", "-auto-approve", "-input=false", *(arg for k, v in inputs.items() for arg in ("-var", f"{k}={v}")))
     fresh = json.loads(run("output", "-json").stdout)["infrastructure"]["value"]
     committed = json.loads((FIXTURES / "platform-outputs.json").read_text())["infrastructure"]["value"]
     assert fresh == committed, "regenerate tests/fixtures/platform-outputs.json (see docs/testing.md)"

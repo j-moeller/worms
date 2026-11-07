@@ -983,6 +983,7 @@ AGENT_ENV_VARS = dict(
     postgres_db="mydb", pki_ca_cert_path="/etc/worms/ca.crt", vault_round_agent_db_password="secret",
     dashboard_media_root="/opt/dashboard/media", vault_tofu_proxmox_api_token="root@pam!worms=0000-1111",
     proxmox={"host": "10.11.0.1", "api_port": 8006, "node": "pve-lab"}, ssh_gateway_ips={"maintenance": "10.5.0.30"},
+    worms_environment={"name": "development", "operator_ssh_port": 22}, llm_access_ip="192.0.2.34",
 )  # fmt: skip
 
 

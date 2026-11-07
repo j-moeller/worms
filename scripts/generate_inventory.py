@@ -66,8 +66,8 @@ NODE_RUN = "/usr/local/sbin/worms-node-run"
 ONE_KEY = ["-o", "IdentityFile=none", "-o", "IdentityAgent=SSH_AUTH_SOCK"]
 # What the platform stack's `infrastructure` output must have.
 PLATFORM_KEYS = ("infrastructure_ips", "management_ips", "services_ips", "host_ips", "private_internet_ips",
-                 "services_ports", "networks", "bridges", "ssh_gateway_ips", "ssh_gateway_public_port",
-                 "devbox_services_block", "proxmox")  # fmt: skip
+                 "services_ports", "networks", "bridges", "ssh_gateway_ips", "devbox_services_block",
+                 "proxmox")  # fmt: skip
 
 
 def node_output(target: str, stack: str) -> dict:

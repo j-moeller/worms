@@ -93,10 +93,10 @@ class Platform:
     def __init__(self, out: Path):
         self.out = out
         self.node = socket.gethostname()
-        names = yaml.safe_load((REPO / "ansible/group_vars/all.yml").read_text())["dashboard_public_names"]
-        if self.node not in names:
-            raise NotBaseState(f"this node ({self.node}) is not in dashboard_public_names: the journey runs on a deployed Proxmox node")
-        self.public_name = names[self.node]
+        systems = yaml.safe_load((REPO / "ansible/group_vars/all.yml").read_text())["worms_environments"]
+        if self.node not in systems:
+            raise NotBaseState(f"this node ({self.node}) is not in worms_environments: the journey runs on a deployed Proxmox node")
+        self.public_name = systems[self.node]["public_name"]
         addressing = json.loads((REPO / "tests/fixtures/platform-outputs.json").read_text())["infrastructure"]["value"]
         self.dashboard_ip = addressing["infrastructure_ips"]["dashboard"]
         self.gateway_ip = addressing["ssh_gateway_ips"]["devbox_ssh"]

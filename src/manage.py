@@ -171,9 +171,20 @@ def _competition_status(config) -> list[list[str]]:
     return rows
 
 
+def _system_status(config) -> list[str]:
+    """Which system this is: the switch in ansible/group_vars/all.yml, by the node's name."""
+    from worms_cli.session import SessionError, for_config
+
+    try:
+        system = for_config(config).environment()
+    except SessionError as exc:
+        return ["system", output.status_cell("error", str(exc))]
+    return ["system", output.status_cell("ok", f"{system['name']} ({system['node']}, {system['public_name']})")]
+
+
 def cmd_status(config, args) -> int:
     print(output.heading("infrastructure"))
-    print(output.table(_infra_status(config) + [_internet_status(config)]))
+    print(output.table([_system_status(config)] + _infra_status(config) + [_internet_status(config)]))
     print()
     print(output.heading("competition (database)"))
     print(output.table(_competition_status(config)))

@@ -91,7 +91,8 @@ def platform_plan(tofu_copy, tmp_path_factory):
         pytest.skip("cannot install the providers (registry/mirror): " + init.stderr.strip().splitlines()[-1])
     plan = run("plan", "-input=false", "-no-color", "-refresh=false", "-out=plan.bin",
                "-var", "proxmox_api_url=https://127.0.0.1:1/", "-var", "proxmox_api_token=x@pam!x=x",
-               "-var", f"ssh_public_key={key}")  # fmt: skip
+               "-var", f"ssh_public_key={key}", "-var", "proxmox_instance=worms",  # what `worms` sets
+               "-var", "node_ssh_address=127.0.0.1", "-var", "node_ssh_port=2222", "-var", "llm_access_ip=192.0.2.34")  # fmt: skip
     assert plan.returncode == 0, plan.stdout + plan.stderr
     show = run("show", "-json", "plan.bin")
     assert show.returncode == 0, show.stderr

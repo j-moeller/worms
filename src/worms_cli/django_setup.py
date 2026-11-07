@@ -42,7 +42,8 @@ def setup(config) -> None:
     for key, value in db_env.items():
         os.environ.setdefault(key, value)
     os.environ["DJANGO_SETTINGS_MODULE"] = "config.settings.manage"
-    os.environ["PRODUCTION"] = "1"
+    os.environ["PRODUCTION"] = "1"  # the deployed settings, DEBUG off: on both systems
+    _name_the_system(config)
     # base.py requires these at import time under PRODUCTION; the CLI never
     # serves requests, so throwaway values are fine.
     os.environ.setdefault("DJANGO_SECRET_KEY", "worms-cli-not-a-web-process")
@@ -58,3 +59,15 @@ def setup(config) -> None:
 
     django.setup()
     _READY = True
+
+
+def _name_the_system(config) -> None:
+    """For the settings' banner: which system the database belongs to (the switch,
+    worms_environments). Display only: the database commands do not depend on it."""
+    from worms_cli.session import SessionError, for_config
+
+    try:
+        system = for_config(config).environment()
+    except SessionError:
+        return
+    os.environ["WORMS_ENVIRONMENT"] = f"{system['name']}: {system['node']}"

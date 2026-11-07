@@ -254,7 +254,7 @@ def test_the_orchestrator_is_told_where_teams_reach_the_ssh_gateway():
     """Without it, a team's dev view says "still being built" forever and never
     shows the `ssh -J` command. Found by the live end-to-end run."""
     env = yaml.safe_load((ANSIBLE / "group_vars" / "orchestrator.yml").read_text())["django_extra_env"]
-    assert env["DEVBOX_SSH_GATEWAY_HOST"] == "{{ dashboard_public_names[proxmox.node] }}"
+    assert env["DEVBOX_SSH_GATEWAY_HOST"] == "{{ worms_environment.public_name }}"
 
 
 def test_django_nginx_serves_https_only(render):
@@ -350,7 +350,8 @@ def test_host_firewall_publishes_the_devbox_ssh_gateway(render, tmp_path):
     inventory = yaml.safe_load((ANSIBLE / "inventory.yml").read_text())
     assert inventory["all"]["children"]["proxmox_host"]["hosts"]["proxmox.local"]["host_publish_ssh_gateway"] is True
     path = tmp_path / "worms.nft"
-    text = render("ansible/roles/host/host_network", "worms.nft.j2", host_publish_ssh_gateway=True)
+    # Production's ports (group_vars/all.yml, worms_environments: worms).
+    text = render("ansible/roles/host/host_network", "worms.nft.j2", host_publish_ssh_gateway=True, ssh_gateway_public_port=22)
     # From the WAN, only 22 is forwarded (the node's own sshd is on 2222), and only to the gateway's SSH port.
     assert 'iifname "vmbr0" fib daddr type local tcp dport 22 dnat ip to 10.7.0.2:22' in text
     from_wan = [line for line in text.splitlines() if "10.7.0.2" in line and 'iifname "vmbr0"' in line]

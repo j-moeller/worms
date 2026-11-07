@@ -261,8 +261,7 @@
    "ssh_gateway_ips": {
     "devbox_ssh": "10.7.0.2",
     "maintenance": "10.5.0.40"
-   },
-   "ssh_gateway_public_port": 22
+   }
   }
  }
 }

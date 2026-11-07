@@ -1,7 +1,20 @@
+# Which node, and how OpenTofu logs in to it (snippet uploads): no defaults. `worms`
+# sets them from the node's own name and the switch in ansible/group_vars/all.yml
+# (worms_environments: worms = production, worms-dev = development), the round agent
+# from its environment file; a run without them stops ("No value for required variable").
 variable "proxmox_instance" {
-  description = "Name of the proxmox instance"
+  description = "Name of the Proxmox node (its hostname): worms or worms-dev"
   type        = string
-  default     = "worms"
+}
+
+variable "node_ssh_address" {
+  description = "Address OpenTofu's provider logs in to the node at (127.0.0.1 on the node itself)"
+  type        = string
+}
+
+variable "node_ssh_port" {
+  description = "Port of the node's sshd (worms_environments: operator_ssh_port)"
+  type        = number
 }
 
 variable "proxmox_api_url" {
@@ -21,20 +34,20 @@ variable "datastore_id" {
   default     = "local"
 }
 
+# The WORMS key's public half (a file), the one key the VMs authorize: no default,
+# which would put someone's own ~/.ssh key on them.
 variable "ssh_public_key" {
-  description = "Existing public SSH key name"
+  description = "File with the WORMS SSH public key"
   type        = string
-  default     = "~/.ssh/id_rsa.pub"
 }
 
 # The one external IP the sandbox/devbox VMs may reach on TCP 443 (the
-# `llm-access` security group, egress only). shared-variables.tf is symlinked
-# into every stack, so this carries a safe placeholder default (loopback =
-# effectively no access); set the real LLM endpoint with TF_VAR_llm_access_ip.
+# `llm-access` security group, egress only). No default: a placeholder would
+# silently take the teams' LLM access away. `worms` and the round agent pass
+# group_vars/all.yml's llm_access_ip as TF_VAR_llm_access_ip.
 variable "llm_access_ip" {
   description = "IP the sandbox/devbox VMs may reach on TCP 443 for LLM access (egress only)."
   type        = string
-  default     = "127.0.0.1"
 }
 
 # =============================================================================
@@ -202,8 +215,8 @@ locals {
     devbox_ssh  = "10.7.0.2"  # on vmbr7 (reaches every devbox VM; ports isolated)
     maintenance = "10.5.0.40" # mgmt-exposed (Ansible)
   }
-  # TCP port teams connect to on the host WAN; DNATed to the gateway:22.
-  ssh_gateway_public_port = 22
+  # The TCP port teams connect to on the host WAN differs per system: Ansible's
+  # ssh_gateway_public_port (group_vars/all.yml, worms_environments).
 
   # Services-bridge addresses reserved for per-team devbox gateways (their SNAT
   # source, which the scoring/logging servers map to the team). The generated

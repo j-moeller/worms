@@ -26,7 +26,7 @@ proxmox_ca_bundle: "{{ django_proxmox_ca_dest }}"
 django_extra_env:
   # The dashboard's dev view builds its `ssh -J` command from this: without it
   # teams never see how to connect. See host_publish_ssh_gateway for the port.
-  DEVBOX_SSH_GATEWAY_HOST: "{{ dashboard_public_names[proxmox.node] }}"
+  DEVBOX_SSH_GATEWAY_HOST: "{{ worms_environment.public_name }}"
   DEVBOX_SSH_GATEWAY_PORT: "{{ ssh_gateway_public_port }}"
   PROXMOX_HOST: "{{ proxmox.node }}"
   PROXMOX_CA_BUNDLE: "{{ proxmox_ca_bundle }}"

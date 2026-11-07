@@ -2,7 +2,7 @@
 # Dashboard VM (OpenTofu: infrastructure/persistent, key dashboard).
 # The name on its certificate, and the only name it answers to (anything else
 # gets "400 Bad Request"). A node not listed in the map fails the run.
-tls_dns_name: "{{ dashboard_public_names[proxmox.node] }}"
+tls_dns_name: "{{ worms_environment.public_name }}"
 
 django_variant: dashboard
 django_settings_module: config.settings.dashboard

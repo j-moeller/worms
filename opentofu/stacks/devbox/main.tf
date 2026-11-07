@@ -39,10 +39,12 @@ provider "proxmox" {
     agent    = true
     username = "root"
 
+    # How it reaches the node, per system (worms_environments): set by `worms`
+    # and the round agent, never a default.
     node {
-      name    = "worms"
-      address = "worms.mlsec.tu-berlin.de"
-      port    = 2222
+      name    = var.proxmox_instance
+      address = var.node_ssh_address
+      port    = var.node_ssh_port
     }
   }
 }

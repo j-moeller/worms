@@ -21,17 +21,28 @@
     mode: "0644"
   tags: [kvm-nesting]
 
+# The ports come from the switch (group_vars/all.yml, worms_environments): the
+# gateway's WAN port DNATed away would cut the operators off their own sshd.
+- name: Check which system this is, and that its ports do not collide
+  ansible.builtin.assert:
+    that:
+      - proxmox.node in worms_environments
+      - (worms_environment.ssh_gateway_public_port | int) != (worms_environment.operator_ssh_port | int)
+    fail_msg: >-
+      Node {{ proxmox.node }}: not in worms_environments (group_vars/all.yml), or its
+      ssh_gateway_public_port is its operator_ssh_port. Every node is listed there, with
+      two different ports.
+    quiet: true
+
 # inventory.yml asks for it to be published: without the gateway's address the
 # ruleset would leave it out, and nothing would say so.
 - name: Check that the devbox SSH gateway can be published
   ansible.builtin.assert:
-    that:
-      - ssh_gateway_public_port is defined
-      - not (host_publish_ssh_gateway | default(false) | bool) or ssh_gateway_ips.devbox_ssh is defined
+    that: not (host_publish_ssh_gateway | default(false) | bool) or ssh_gateway_ips.devbox_ssh is defined
     fail_msg: >-
-      host_publish_ssh_gateway is set, but the inventory has no ssh_gateway_public_port or
-      ssh_gateway_ips.devbox_ssh: apply the platform stack again (`worms build platform`) and
-      regenerate the inventory (`worms build inventory`).
+      host_publish_ssh_gateway is set, but the inventory has no ssh_gateway_ips.devbox_ssh:
+      apply the platform stack again (`worms build platform`) and regenerate the inventory
+      (`worms build inventory`).
     quiet: true
 
 - name: Create configuration directory

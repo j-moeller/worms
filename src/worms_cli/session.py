@@ -68,6 +68,24 @@ def group_var(repo_root: Path, name: str) -> str:
     return match.group(1)
 
 
+def environments(repo_root: Path) -> dict:
+    """The switch between the systems (ansible/group_vars/all.yml, worms_environments):
+    node name -> {name, public_name, operator_ssh_port, ssh_gateway_public_port}."""
+    try:
+        import yaml  # ships with Ansible, which `worms` needs anyway
+    except ImportError as exc:
+        raise SessionError("PyYAML is missing (it comes with Ansible): install Ansible") from exc
+    path = Path(repo_root) / "ansible" / "group_vars" / "all.yml"
+    try:
+        table = (yaml.safe_load(path.read_text()) or {}).get("worms_environments")
+    except (OSError, yaml.YAMLError) as exc:
+        raise SessionError(f"cannot read the systems from {path}: {exc}") from exc
+    keys = {"name", "public_name", "operator_ssh_port", "ssh_gateway_public_port"}
+    if not isinstance(table, dict) or not table or any(not isinstance(e, dict) or not keys <= set(e) for e in table.values()):
+        raise SessionError(f"worms_environments in {path} is missing or incomplete (each system: {', '.join(sorted(keys))})")
+    return table
+
+
 def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -103,6 +121,7 @@ class Session:
         self._tmp = None
         self._node_ok = False
         self._node_name = None
+        self._environment = None
 
     # -- secrets ---------------------------------------------------------------
 
@@ -205,6 +224,10 @@ class Session:
         env["TF_VAR_proxmox_api_url"] = self.proxmox_api_url()
         env["TF_VAR_ssh_public_key"] = str(self.public_key_file())
         env["TF_VAR_proxmox_instance"] = self.node_name()
+        # The provider's SSH login to the node: on the node itself over loopback, from a
+        # laptop under the system's public name; the port is the system's (the switch).
+        env["TF_VAR_node_ssh_address"] = self.environment()["public_name"] if self.laptop else "127.0.0.1"
+        env["TF_VAR_node_ssh_port"] = str(self.environment()["operator_ssh_port"])
         # Not a secret, but the stacks' default (no access) would hide that it is missing.
         env["TF_VAR_llm_access_ip"] = group_var(self.config.repo_root, "llm_access_ip")
         return env
@@ -221,8 +244,21 @@ class Session:
             wanted = os.environ.get("TF_VAR_proxmox_instance")
             if wanted and wanted != name:
                 raise SessionError(f"TF_VAR_proxmox_instance={wanted} is set, but the node is {name}: unset it")
+            known = environments(self.config.repo_root)
+            if name not in known:
+                raise SessionError(
+                    f"the node is called {name}, which is none of the systems in ansible/group_vars/all.yml "
+                    f"(worms_environments: {', '.join(f'{node} = {e['name']}' for node, e in known.items())})"
+                )
             self._node_name = name
         return self._node_name
+
+    def environment(self) -> dict:
+        """Which system this is (the switch, by the node's name): production or development,
+        with its public name and ports. Django's DEBUG has nothing to do with it."""
+        if self._environment is None:
+            self._environment = {"node": self.node_name(), **environments(self.config.repo_root)[self.node_name()]}
+        return self._environment
 
     # -- the node ----------------------------------------------------------------
 
@@ -243,16 +279,17 @@ class Session:
         if self._node_ok or not self.has_vault():
             return
         if not self.laptop:
-            blob = self.values()[SSH_PUBLIC_KEY].split()[1]
-            keys = Path("/root/.ssh/authorized_keys")
-            try:
-                accepted = any(line.split()[1:2] == [blob] or f" {blob}" in line for line in keys.read_text().splitlines())
-            except OSError as exc:
-                raise SessionError(f"cannot read {keys}: {exc}") from exc
-            if not accepted:
+            # As the provider will: root@127.0.0.1 on this system's sshd port, the WORMS key alone.
+            port = str(self.environment()["operator_ssh_port"])
+            argv = ["ssh", *self.ssh_opts(), "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+                    "-o", "LogLevel=ERROR", "-p", port, "root@127.0.0.1", "true"]  # fmt: skip
+            proc = subprocess.run(argv, env=self.env(), stdin=DEVNULL, capture_output=True, text=True, timeout=30)
+            if proc.returncode != 0:
                 raise SessionError(
-                    f"root on this node does not accept the WORMS key ({keys}): OpenTofu, Ansible and the round "
-                    "agent log in with it. Let it in once: `worms node trust`"
+                    f"cannot log in to root@127.0.0.1 port {port} with the WORMS key: {proc.stderr.strip()[:200].rstrip('.')}. "
+                    "OpenTofu, Ansible and the round agent log in with it. Let it in once: `worms node trust`; "
+                    f"if it is in and this still fails, sshd does not listen on {port} "
+                    "(ansible/group_vars/all.yml, worms_environments: operator_ssh_port)"
                 )
             self._node_ok = True
             return

@@ -40,7 +40,10 @@ def checkout(tmp_path, monkeypatch):
     vault = Vault(tmp_path)
     vault.ensure()
     vault.set("proxmox-token", "root@pam!worms=prov-secret")
-    (tmp_path / "ansible" / "group_vars" / "all.yml").write_text("llm_access_ip: 192.0.2.34\n")
+    (tmp_path / "ansible" / "group_vars" / "all.yml").write_text(
+        "llm_access_ip: 192.0.2.34\nworms_environments:\n  worms: {name: production, public_name: pve.example, "
+        "operator_ssh_port: 2222, ssh_gateway_public_port: 22}\n"
+    )
     # An inventory written from a laptop (scripts/generate_inventory.py).
     (tmp_path / "ansible" / "inventory.generated.yml").write_text(
         "all:\n  children:\n    proxmox_host:\n      hosts:\n        proxmox.local:\n          ansible_host: pve.example\n"
@@ -104,6 +107,8 @@ def test_tofu_logs_in_with_the_worms_key_only(checkout, recorded):
     (_argv, env), = recorded.calls
     assert env["SSH_AUTH_SOCK"] == WORMS_AGENT == env["WORMS_SSH_AUTH_SOCK"]
     assert env["TF_VAR_proxmox_instance"] == "worms"
+    # From a laptop: the system's public name and its sshd port (the switch).
+    assert (env["TF_VAR_node_ssh_address"], env["TF_VAR_node_ssh_port"]) == ("pve.example", "2222")
 
 
 def test_preflight_logs_in_like_the_provider_and_says_what_to_do(checkout, monkeypatch):

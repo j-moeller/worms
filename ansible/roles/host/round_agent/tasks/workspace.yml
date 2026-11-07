@@ -26,6 +26,7 @@
       vault_round_agent_db_password: "{{ vault_round_agent_db_password | default('') }}"
       vault_dbuser_events_node_password: "{{ vault_dbuser_events_node_password | default('') }}"
       proxmox.node: "{{ proxmox.node | default('') }}"
+      worms_environments[proxmox.node]: "{{ 'listed' if (proxmox.node | default('')) in worms_environments else '' }}"
       proxmox.api_port: "{{ proxmox.api_port | default('') }}"
       ssh_gateway_ips.maintenance: "{{ ssh_gateway_ips.maintenance | default('') }}"
     round_agent_unset: "{{ round_agent_required | dict2items | selectattr('value', 'equalto', '') | map(attribute='key') | list }}"

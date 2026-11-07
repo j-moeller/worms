@@ -26,9 +26,8 @@ output "infrastructure" {
     services_ports       = local.private_internet_ports
     # Devbox (docs/devbox.md): the trusted SSH gateway and the services-bridge
     # block reserved for the per-team devbox gateways' SNAT source.
-    ssh_gateway_ips         = local.ssh_gateway_ips
-    ssh_gateway_public_port = local.ssh_gateway_public_port
-    devbox_services_block   = local.devbox_services_block
+    ssh_gateway_ips       = local.ssh_gateway_ips
+    devbox_services_block = local.devbox_services_block
     proxmox = {
       host     = local.proxmox_host_ip
       api_port = local.proxmox_api_port

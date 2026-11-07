@@ -26,11 +26,30 @@ llm_access_name: teachllm.mlsec.tu-berlin.de
 # (the output then contains passwords: do not paste it anywhere).
 hide_secrets: true
 
-# The public name of each node: teams reach the dashboard (HTTPS) and the devbox
-# SSH gateway under it.
-dashboard_public_names:
-  worms-dev: worms-dev.mlsec.tu-berlin.de
-  worms: worms.mlsec.tu-berlin.de
+# --- Which system this is -----------------------------------------------------
+# The switch: the Proxmox node's name (its hostname, `hostname -s`; proxmox.node in
+# the inventory) says whether this is production or development, and this is
+# everything that differs between the two. A node not listed here is refused, by
+# `worms` (src/worms_cli/session.py) and by every play that needs one of these.
+# Django's DEBUG is not part of it: off on both (PRODUCTION=1 means "deployed").
+#   public_name              teams reach the dashboard (HTTPS) and the devbox SSH
+#                            gateway under it
+#   operator_ssh_port        the node's own sshd (management; OpenTofu uploads
+#                            snippets over it)
+#   ssh_gateway_public_port  the devbox SSH gateway's port on the WAN (DNAT to its :22)
+worms_environments:
+  worms:
+    name: production
+    public_name: worms.mlsec.tu-berlin.de
+    operator_ssh_port: 2222
+    ssh_gateway_public_port: 22
+  worms-dev:
+    name: development
+    public_name: worms-dev.mlsec.tu-berlin.de
+    operator_ssh_port: 22
+    ssh_gateway_public_port: 2222
+worms_environment: "{{ worms_environments[proxmox.node] }}"
+ssh_gateway_public_port: "{{ worms_environment.ssh_gateway_public_port }}"
 
 # --- PostgreSQL -------------------------------------------------------------
 postgres_db: mydb

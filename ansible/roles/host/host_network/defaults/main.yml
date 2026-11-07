@@ -15,7 +15,7 @@ host_publish_dashboard: false
 host_publish_ssh_gateway: false
 # The node's own sshd for operators. When the gateway takes port 22, the play refuses to
 # publish it unless sshd already listens here (docs/fresh-install.md, 2.5).
-host_operator_ssh_port: 2222
+host_operator_ssh_port: "{{ worms_environment.operator_ssh_port }}"  # group_vars/all.yml: worms_environments
 
 host_nft_file: /etc/worms/worms.nft
 

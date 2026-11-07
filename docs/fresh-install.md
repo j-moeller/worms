@@ -31,7 +31,7 @@ Ballooning reclaims unused guest memory, so worms-dev runs all of this, without 
 
 | What | Required | Check |
 |---|---|---|
-| Name | The node is called `worms` (it was planned as `worms-pve`; renamed on 2026-11-06). The OpenTofu default (`opentofu/shared/shared-variables.tf:4`) and `dashboard_public_names` (`ansible/group_vars/all.yml:31`) depend on it | `hostname; ls /etc/pve/nodes`: `worms` only |
+| Name | The node is called `worms` (it was planned as `worms-pve`; renamed on 2026-11-06). The name is the switch: `worms_environments` in `ansible/group_vars/all.yml` makes `worms` production and `worms-dev` development, with each one's public name and SSH ports; `worms` refuses any other name | `hostname; ls /etc/pve/nodes`: `worms` only |
 | Public bridge | `vmbr0` holds the public address and the default route, as the installer sets it up. The name is hardcoded (`host_wan_interface`, `ansible/roles/host/host_network/defaults/main.yml:7`) | `ip -br addr show vmbr0; ip route show default` |
 | DNS | `worms.mlsec.tu-berlin.de` points to the node. On 2026-11-06 it resolved to `141.23.117.59`, which answered on 22 and 8006 | `getent hosts worms.mlsec.tu-berlin.de`, on the node and a laptop |
 | Free ranges | Nothing on the node or its networks uses 10.2.0.0–10.13.255.255, 10.64.0.0/10 or 10.128.0.0/10 (`opentofu/shared/shared-variables.tf`) | `ip -br addr; ip route` |
@@ -43,7 +43,7 @@ The network in front of the node must let these through (a timeout from outside 
 |---|---|---|
 | 443/tcp | everyone | host DNAT to the dashboard |
 | 22/tcp | the teams | host DNAT to the devbox SSH gateway (`ssh_gateway_public_port`) |
-| 2222/tcp, 8006/tcp | operators | the node: its own sshd (2.5), the Proxmox web UI. OpenTofu's provider, and the round agent's, log in on 2222 too: the `node` block in each stack's `main.tf` (`worms.mlsec.tu-berlin.de`, 2222). The agent has only the WORMS key: `SetupRoundAgent.yml` authorizes it for root |
+| 2222/tcp, 8006/tcp | operators | the node: its own sshd (2.5), the Proxmox web UI. OpenTofu's provider, and the round agent's, log in on 2222 too, over loopback on the node (from a laptop: `worms.mlsec.tu-berlin.de`): `operator_ssh_port` in `worms_environments`, given to every stack's `node` block. The agent has only the WORMS key: `SetupRoundAgent.yml` authorizes it for root |
 
 **Optional, before the build, on a laptop with Docker:** Fabian's rehearsal of the dashboard stack (nginx, gunicorn, the orchestrator, real grants, concurrent sign-ins) in a container, `docs/testing.md`, "Rehearsals without the node". It has not run on the merged `main`; this node has no Docker.
 
@@ -286,13 +286,15 @@ for id in $(qm list | awk 'NR>1 {print $1}'); do echo "$id $(qm listsnapshot $id
 
 ## 6. Differences from worms-dev, and pitfalls
 
-| | worms-dev | Fresh worms |
+What differs between the two systems is one table, chosen by the node's name: `worms_environments` in `ansible/group_vars/all.yml` (`worms` = production, `worms-dev` = development). Nothing is changed by hand on either system. Django's `DEBUG` is off on both: `PRODUCTION=1` means "deployed", not "the production system"; `worms status` shows which system it is.
+
+| | worms-dev (development) | worms (production) |
 |---|---|---|
-| `proxmox_instance` in `shared-variables.tf` | Local change to `worms-dev`, never to be committed | The repository's `worms`. Copy nothing |
-| SSH ports | Node on 22, teams on 2222, as before (until worms-dev is redeployed: then its sshd needs 2222 first, 2.5) | Node on 2222 (and 22 from inside), teams on 22. The stacks' `node` block names `worms`, so on worms-dev the provider finds the node through the API (port 22) |
-| `TF_VAR_proxmox_instance` | Not set | Do not set it. The round agent gets the name from `proxmox.node` |
+| `proxmox_instance` | `worms-dev`: set by `worms` from the node's name (the stacks have no default) | `worms`, the same way. Copy nothing |
+| SSH ports (`operator_ssh_port`, `ssh_gateway_public_port`) | Node on 22, teams on 2222 | Node on 2222 (and 22 from inside), teams on 22. OpenTofu logs in to the node on that port, over loopback |
+| `TF_VAR_proxmox_instance` | Not set | Do not set it (`worms` refuses one that is not the node's name). The round agent gets the name from `proxmox.node` |
 | `cve_search` RAM | The repository's 4096 MB (VM 103) | The same |
-| Dashboard name | `worms-dev.mlsec.tu-berlin.de` | `worms.mlsec.tu-berlin.de`, from `dashboard_public_names`. An unlisted node name fails the dashboard play |
+| Dashboard name (`public_name`) | `worms-dev.mlsec.tu-berlin.de` | `worms.mlsec.tu-berlin.de`. An unlisted node name fails the dashboard play |
 | Firewall rules for SSH and 8006, storage, images | Added by hand | Steps 2.4, 2.5, 2.7 |
 | ssh-agent | None; the WORMS key is authorized for root | Needed for the first build (2.9) |
 | `bpg/proxmox` provider | 0.113.1 (platform, private internet, infrastructure), 0.116.0 (firewall), 0.118.0 (devbox, sandbox) | The same: each stack pins its version since 2026-11-06 (`version =` in its `required_providers`). The lock files stay git-ignored |

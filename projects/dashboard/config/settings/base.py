@@ -69,8 +69,13 @@ DEBUG = os.environ.get("PRODUCTION", None) != "1"
 
 # To stderr: stdout is reserved for machine-readable command output (e.g.
 # `manage.py create_users` prints an email,password CSV there).
+# PRODUCTION=1 means the deployed settings (DEBUG off), on the production and the
+# development system alike; which system this is, `worms` says (WORMS_ENVIRONMENT,
+# from the switch in ansible/group_vars/all.yml).
 if DEBUG:
     print("[DEBUG] We are running in DEBUG mode", file=sys.stderr)
+elif os.environ.get("WORMS_ENVIRONMENT"):
+    print(f"[{os.environ['WORMS_ENVIRONMENT']}] deployed settings, DEBUG off", file=sys.stderr)
 else:
     print("[PRODUCTION] We are running in PRODUCTION mode", file=sys.stderr)
 

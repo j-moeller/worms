@@ -111,6 +111,7 @@ team VM while it is open, and the firewall watchdog stops any that does. The sta
 | VM configuration | Ansible roles by component, `ansible/roles/README.md` |
 | The node: sysctls, nftables zone firewall, internet gate, traffic mirror, firewall watchdog | Ansible role `host_network` (`SetupHostNetwork.yml`, `Internet.yml`) |
 | The round agent on the node | `scripts/round_agent/`, role `round_agent` |
+| Which system this is (production `worms`, development `worms-dev`), and what differs: public name, SSH ports | `worms_environments` in `ansible/group_vars/all.yml`, chosen by the node's hostname |
 | The build's order and the internet window | `src/worms_cli/pipeline.py` |
 | The dashboard and orchestrator | `projects/dashboard/` (one Django project, two settings modules) |
 

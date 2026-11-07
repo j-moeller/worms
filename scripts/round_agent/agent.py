@@ -41,6 +41,7 @@ REQUIRED_ENV = (
     "REPO_ROOT", "DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD", "DB_SSLROOTCERT",
     "DASHBOARD_HOST", "DASHBOARD_MEDIA_ROOT", "SCORING_HOST", "LOGGING_HOST", "SERVICE_HOSTS", "SSH_KEY",
     "TF_VAR_proxmox_api_url", "TF_VAR_proxmox_api_token", "TF_VAR_proxmox_instance", "TF_VAR_ssh_public_key",
+    "TF_VAR_node_ssh_address", "TF_VAR_node_ssh_port", "TF_VAR_llm_access_ip",
 )
 HEARTBEAT_SECONDS = 30
 IDLE_POLL_SECONDS = 5

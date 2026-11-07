@@ -135,7 +135,7 @@ class Runner:
     def secrets(self) -> None:
         """Generate the missing generated secrets (never a new WORMS key while VMs exist
         that authorize the old one), and stop on a missing token the platform needs:
-        `worms secrets issue <name>`, then `worms build --resume`."""
+        `worms secrets issue <name>`."""
         from worms_cli.secrets import EXTERNAL, vms_deployed
 
         vault = self.session.vault

@@ -494,13 +494,13 @@ def test_the_internet_notice_never_stops_a_command(monkeypatch, capsys):
 
 def _fake_pipeline(run, rolled_back, devboxes=True):
     return lambda *_a, **_k: type("P", (), {
-        "run_component": lambda self, component, resume=None: run(self), "services_rolled_back": rolled_back,
+        "run_component": lambda self, component: run(self), "services_rolled_back": rolled_back,
         "devboxes_exist": lambda self: devboxes,
     })()  # fmt: skip
 
 
 def _build_args(component):
-    return argparse.Namespace(list=False, component=component, make_args=[], resume=False, restart=False)
+    return argparse.Namespace(list=False, component=component, make_args=[])
 
 
 @pytest.mark.parametrize("component", ["round-reset-services", "provision"])

@@ -5,10 +5,7 @@ the node), and the node's own part (sandbox and devbox stacks) on the node
 (worms_cli/session.py).
 
 A component is a list of named steps (Step). The first one that fails ends the
-run: nothing after it runs. A multi-step `worms build` (RESUMABLE) records its
-progress in <repo>/.worms-build.json, so that once the admin has fixed the cause
-`worms build --resume` continues at the step that failed, with what the earlier
-steps found out (BuildState).
+run: nothing after it runs.
 
 Two conditions are entered before the first step that needs them and left after
 the last one, and left at once when a step fails:
@@ -30,13 +27,10 @@ OpenTofu gets its Proxmox credentials from the vault, through the Runner
 
 from __future__ import annotations
 
-import json
-import os
 import shlex
 from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial
-from pathlib import Path
 from typing import Callable
 
 from worms_cli import output
@@ -84,10 +78,6 @@ CONFIGURE_PLAYBOOKS = [
     "SetupRoundAgent.yml",
 ]
 
-# The components `worms build --resume` can continue. The round agent's own
-# components are not among them: a failed job is enqueued again, and runs whole.
-RESUMABLE = frozenset({"all", "provision", "rebuild-services", "configure", "infrastructure"})
-
 
 def _stopping(cleanup: str) -> None:
     """Said before the cleanup that runs after a failed step, so that its commands do not
@@ -101,61 +91,17 @@ class Step:
     run: Callable[[], object]
     scope: tuple = ()  # of SCOPES: entered before the step, left after the last that needs it
     on_failure: Callable[[], None] | None = None  # cleanup of this step's own failure
-    refresh: bool = False  # the inventory: run again before a resumed build goes on after it
-
-
-class BuildState:
-    """A multi-step `worms build` that has not finished: the component, its steps, the
-    ones done, the one that failed and why, and what later steps need from earlier ones
-    (Pipeline.data). <repo>/.worms-build.json (git-ignored, 0600); gone once it finishes."""
-
-    def __init__(self, repo_root):
-        self.path = Path(repo_root) / ".worms-build.json"
-
-    def load(self) -> dict | None:
-        if not self.path.exists():
-            return None
-        try:
-            record = json.loads(self.path.read_text())
-        except (OSError, ValueError) as exc:
-            raise BuildError(f"{self.path} cannot be read ({exc}): remove it, and start the build over") from exc
-        if not isinstance(record, dict) or not {"component", "steps", "done", "data"} <= set(record):
-            raise BuildError(f"{self.path} is not a build's progress: remove it, and start the build over")
-        return record
-
-    def save(self, record: dict) -> None:
-        tmp = self.path.with_name(self.path.name + ".tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as handle:
-            json.dump(record, handle, indent=2)
-            handle.write("\n")
-        tmp.replace(self.path)
-
-    def clear(self) -> None:
-        self.path.unlink(missing_ok=True)
-
-
-def describe_stopped(record: dict, why: bool = True) -> str:
-    """One line on a build that stopped: which, where, and (`why`) its error."""
-    failed = record.get("failed") or {}
-    where = f"step {len(record['done']) + 1}/{len(record['steps'])}"
-    if failed.get("step"):
-        where += f" ({failed['step']})"
-    error = f": {failed['error']}" if why and failed.get("error") else ""
-    return f"`worms build {record['component']}` stopped at {where}{error}"
 
 
 class Pipeline:
-    def __init__(self, config, ansible_args: str = "", state: BuildState | None = None):
+    def __init__(self, config, ansible_args: str = ""):
         self.runner = Runner(config)
         # Extra args appended to every ansible-playbook call.
         self.ansible_args = ansible_args
-        self.state = state
         # Ansible caches facts for the run (ansible.cfg); start without any,
         # and drop them again whenever tofu may have rebuilt VMs.
         self._facts_fresh = False
-        self._record = None  # the run's progress while run_component records it
-        # What later steps need from earlier ones; kept with a recorded run.
+        # What later steps need from earlier ones.
         self.data = {
             "services_before": None,  # service vmids before the rollback
             "services_reset": None,  # the ones it rolled back to their snapshot
@@ -189,70 +135,23 @@ class Pipeline:
         builder = getattr(self, f"_plan_{method_name}", None)
         return builder() if builder else [Step(method_name.replace("_", " "), getattr(self, method_name))]
 
-    def run_component(self, component: str, resume: dict | None = None) -> None:
-        """`worms build <component>`. A RESUMABLE one with a BuildState records its progress
-        after every step; `resume` is the record of the stopped run to continue."""
-        steps = self.plan(COMPONENTS[component][0])
-        if self.state is None or component not in RESUMABLE:
-            self._execute(steps)
-            return
-        names = [step.name for step in steps]
-        record = {"component": component, "ansible_args": self.ansible_args, "steps": names, "done": [],
-                  "data": self.data, "started": datetime.now().isoformat(timespec="seconds")}  # fmt: skip
-        start = 0
-        if resume:
-            done = list(resume["done"])
-            if names[: len(done)] != done:
-                raise BuildError(
-                    f"the steps of `worms build {component}` changed since it stopped (a new checkout?): "
-                    f"start it over: `worms build {component} --restart`"
-                )
-            self.data.update(resume["data"])
-            record.update(done=done, started=resume.get("started", record["started"]))
-            start = len(done)
-            print(output.color(f"resuming `worms build {component}` at step {start + 1}/{len(steps)}: {steps[start].name}"
-                               if start < len(steps) else f"resuming `worms build {component}`: its last step", "bold"))  # fmt: skip
-            refresh = [step for step in steps[:start] if step.refresh]
-            if refresh:
-                print(output.color("== the inventory again first (the state may have changed meanwhile)", "bold"))
-                refresh[-1].run()
-        self._record = record
-        self.state.save(record)
-        try:
-            self._execute(steps, start)
-        except BaseException as exc:
-            index = len(record["done"])
-            record["failed"] = {
-                "step": steps[index].name if index < len(steps) else "",
-                "error": (str(exc) or type(exc).__name__)[:2000],
-                "at": datetime.now().isoformat(timespec="seconds"),
-            }
-            self.state.save(record)
-            raise
-        finally:
-            self._record = None
-        self.state.clear()
+    def run_component(self, component: str) -> None:
+        """`worms build <component>`."""
+        self._execute(self.plan(COMPONENTS[component][0]))
 
-    def _execute(self, steps: list[Step], start: int = 0) -> None:
-        """Run steps[start:] in order, each in the conditions it needs; on a failure, leave
+    def _execute(self, steps: list[Step]) -> None:
+        """Run the steps in order, each in the conditions it needs; on a failure, leave
         those at once and raise: nothing after the failed step runs."""
         active: list[str] = []
         try:
-            for index in range(start, len(steps)):
-                step = steps[index]
+            for step in steps:
                 self._set_scopes(active, step.scope)
-                if self._record is not None:
-                    print(output.color(f"== step {index + 1}/{len(steps)}: {step.name}", "bold"))
                 try:
                     step.run()
                 except BaseException:
                     if step.on_failure:
                         step.on_failure()
                     raise
-                if self._record is not None:
-                    self._record["done"].append(step.name)
-                    self._record["data"] = self.data
-                    self.state.save(self._record)
             self._set_scopes(active, ())
         except BaseException:
             self._leave_after_failure(active)
@@ -360,7 +259,7 @@ class Pipeline:
         return [
             *(Step(f"apply {stack}", partial(self._apply, stack), on_failure=self._inventory_after_failed_apply)
               for stack in ("private_internet", "infrastructure/persistent", "infrastructure/ephemeral")),  # fmt: skip
-            Step("inventory", self.inventory, refresh=True),
+            Step("inventory", self.inventory),
         ]
 
     def _inventory_after_failed_apply(self) -> None:
@@ -381,7 +280,7 @@ class Pipeline:
 
     def _plan_configure(self) -> list[Step]:
         return [
-            Step("inventory", self.inventory, refresh=True),
+            Step("inventory", self.inventory),
             *(Step(playbook, partial(self._ansible, playbook)) for playbook in CONFIGURE_PLAYBOOKS),
         ]
 

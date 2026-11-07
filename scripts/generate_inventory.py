@@ -419,8 +419,7 @@ def main() -> None:
             # inventory without them would have the playbooks after it skip them.
             fix = UNFINISHED.get(stack, "`worms build infrastructure` applies it again and shows the error")
             sys.exit(f"error: stack {stack} has outputs ({', '.join(sorted(outputs))}) but no ansible_hosts: "
-                     f"its last apply did not finish (its VMs are missing). To go on, {fix}; "
-                     "then `worms build --resume`")  # fmt: skip
+                     f"its last apply did not finish (its VMs are missing). To go on, {fix}")  # fmt: skip
         stacks[stack] = (outputs.get("ansible_hosts") or {}).get("value", {})
         status.setdefault(stack, f"applied, {len(stacks[stack])} VM(s)")
     sandbox = load_outputs(sandbox_dir, "sandbox", args.tofu_bin, args.sandbox_json)

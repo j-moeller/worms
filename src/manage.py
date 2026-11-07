@@ -514,71 +514,27 @@ done
 
 def cmd_build(config, args) -> int:
     """`worms build [<component>]`. The first step that fails ends it, and nothing after it
-    runs but closing the internet window and starting the devbox VMs again. A multi-step
-    build (pipeline.RESUMABLE) keeps its progress: fix the cause, then `worms build
-    --resume` goes on at the step that failed. Another one is refused meanwhile, unless
-    started over with --restart."""
+    runs but closing the internet window and starting the devbox VMs again."""
     from worms_cli.session import SessionError
 
     if args.list:
         print(_components_overview())
         return 0
-    state = pipeline.BuildState(config.repo_root)
-    try:
-        stopped = state.load()
-    except build.BuildError as exc:
-        output.error(str(exc))
+    component = args.component or "all"
+    if component not in pipeline.COMPONENTS:
+        output.error(f"unknown component {component!r}. Try `worms build --list`.")
         return 1
-    if args.resume:
-        if args.component or args.restart:
-            output.error("`worms build --resume` goes on with the build that stopped: no component, no --restart")
-            return 2
-        if not stopped:
-            output.error(f"nothing to resume: no build has stopped ({state.path} is not there)")
-            return 1
-        component = stopped["component"]
-        ansible_args = " ".join(args.make_args) if args.make_args else stopped.get("ansible_args", "")
-    else:
-        component = args.component or "all"
-        if component not in pipeline.COMPONENTS:
-            output.error(f"unknown component {component!r}. Try `worms build --list`.")
-            return 1
-        if stopped and component in pipeline.RESUMABLE:
-            if not args.restart:
-                output.error(
-                    f"{pipeline.describe_stopped(stopped)}. Fix the cause, then go on with it: `worms build --resume`; "
-                    f"or start `worms build {component}` over: `worms build {component} --restart`"
-                )
-                return 1
-            state.clear()
-            stopped = None
-        ansible_args = " ".join(args.make_args)
-    pipe = pipeline.Pipeline(config, ansible_args=ansible_args, state=state)
+    pipe = pipeline.Pipeline(config, ansible_args=" ".join(args.make_args))
     code = 0
     try:
-        pipe.run_component(component, resume=stopped if args.resume else None)
+        pipe.run_component(component)
     except (build.BuildError, SessionError, KeyboardInterrupt) as exc:
         output.error(f"build stopped: {exc}" if str(exc) else "build stopped: interrupted")
         code = 130 if isinstance(exc, KeyboardInterrupt) else 1
-        record = _stopped_record(state, component)
-        if record:
-            output.error(f"{pipeline.describe_stopped(record, why=False)}.")
-            print(output.color("Fix the cause shown above, then go on from that step: worms build --resume", "bold"))
-    # The devbox map on the rolled-back services is written again once the build is
-    # over: after it finished, or when it failed for good (not one that resumes).
-    if pipe.services_rolled_back and not _stopped_record(state, component) and pipe.devboxes_exist():
+    # Also after a failure: a rollback that happened is not undone by one.
+    if pipe.services_rolled_back and pipe.devboxes_exist():
         code = _restore_devbox_map(config) or code
     return code
-
-
-def _stopped_record(state, component):
-    """The progress of `component`'s build if it stopped and can be resumed."""
-    if component not in pipeline.RESUMABLE:
-        return None
-    try:
-        return state.load()
-    except build.BuildError:
-        return None
 
 
 def cmd_debug(config, args) -> int:
@@ -664,7 +620,7 @@ SECTIONS = (
             ("secrets issue <name>", "create or rotate a Proxmox token and store it"),
             ("secrets set <name>", "store a secret by hand (prompted, or from stdin)"),
             ("node trust", "once: let the WORMS key in, for root on the node and on VMs that predate it"),
-            ("build [<component>]", "end to end (= make), or one component (`--list`); `--resume`: go on after a fix"),
+            ("build [<component>]", "everything, end to end (= make), or one component: `worms build --list`"),
         ),
         more_components=("all", "init", "secrets", "platform", "firewall", "host-network", "infrastructure",
                          "inventory", "configure", "provision", "offline", "snapshot-services", "internet-allow"),  # fmt: skip
@@ -860,8 +816,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_build = _add(sub, "build", epilog=_components_overview(), formatter_class=argparse.RawDescriptionHelpFormatter)
     p_build.add_argument("component", nargs="?", help="component to build (default: all)")
     p_build.add_argument("--list", action="store_true", help="list components and exit")
-    p_build.add_argument("--resume", action="store_true", help="go on with the build that stopped, at the step that failed")
-    p_build.add_argument("--restart", action="store_true", help="start the component over, dropping a stopped build's progress")
     p_build.add_argument(
         "make_args", nargs="*", help="extra args passed to ansible-playbook, after `--` (e.g. -- --limit db -vvv)"
     )
@@ -913,7 +867,7 @@ def main(argv=None) -> int:
     if args.command == "build":
         return cmd_build(config, args)
     if args.command == "simulate":
-        return cmd_build(config, argparse.Namespace(component="simulate", list=False, make_args=[], resume=False, restart=False))
+        return cmd_build(config, argparse.Namespace(component="simulate", list=False, make_args=[]))
     if args.command == "test":
         return cmd_test(config, args)
     if args.command == "debug":

@@ -35,6 +35,7 @@ EXPECTED = {
     "configure": CONFIGURE,
     "provision": [ALLOW, *CONFIGURE, DENY, *OFFLINE],
     "offline": OFFLINE,
+    "dashboard": [("ansible", "SetupDbAndDashboard.yml")],
     "internet-allow": [ALLOW],
     "internet-deny": [DENY],
     "round-configure-sandbox": [("ansible", "SetupSandbox.yml")],

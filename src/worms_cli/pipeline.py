@@ -284,6 +284,14 @@ class Pipeline:
             *(Step(playbook, partial(self._ansible, playbook)) for playbook in CONFIGURE_PLAYBOOKS),
         ]
 
+    def dashboard(self):
+        """The dashboard's code and settings only: its Django play on its VM. No internet
+        window, no package steps (pip would hang without internet), so the devboxes keep
+        running; the dashboard restarts. Not for a change that adds a table, a role or a
+        grant: that is `worms build provision` (docs/management.md)."""
+        self.inventory()
+        self._ansible("SetupDbAndDashboard.yml", "--limit", "dashboard", "--skip-tags", "packages")
+
     def offline(self):
         if self.runner.flag_exists(INTERNET_FLAG):
             raise BuildError(f"internet access is still allowed ({INTERNET_FLAG}): run `worms build internet-deny`")
@@ -587,6 +595,7 @@ COMPONENTS: dict[str, tuple[str, str]] = {
     "configure": ("configure", "Ansible configuration of all VMs"),
     "provision": ("provision", "configure under the internet window (devboxes off), then offline; services re-snapshotted"),
     "offline": ("offline", "switch DNS/caches to offline (internet denied)"),
+    "dashboard": ("dashboard", "redeploy the dashboard only: its code and settings (devboxes keep running)"),
     "internet-allow": ("internet_allow", "open the internet window by hand (refused while a sandbox VM exists or a devbox VM runs)"),
     "internet-deny": ("internet_deny", "close the internet window by hand, if a build reports it still open"),
     "round-reset-services": (

@@ -53,7 +53,13 @@ The build covers the database: it configures the database VM and its roles, the 
 
 **A build opens the internet window, so it stops the devboxes.** It is refused while any sandbox VM exists (a round). Running devbox VMs are shut down until the new snapshot is taken, then started again, so **teams lose their devbox for the length of a build**. The window closes by itself, also on failure. If it cannot, the devboxes stay off and the build names the command that starts them.
 
-**To redeploy only the Django code without stopping the devboxes** (no internet window, no package steps, about 3 minutes, restarts the dashboard and orchestrator):
+**To redeploy only the dashboard** (its code and settings; no internet window, no package steps, so the devboxes keep running; about a minute, and the dashboard restarts):
+
+```sh
+worms build dashboard
+```
+
+**To redeploy the Django code of the dashboard and the orchestrator together** (no internet window, no package steps, about 3 minutes, restarts both):
 
 ```sh
 cd /root/app/ansible

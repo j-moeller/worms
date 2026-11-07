@@ -636,7 +636,7 @@ SECTIONS = (
             ("admin create-staff <email>", "a staff (tutor) account; one-time password printed once"),
             ("teams delete <name>", "delete a team with everything it owns (its users stay)"),
         ),
-        components=("round-reset-services", "rebuild-services", "internet-deny"),
+        components=("dashboard", "round-reset-services", "rebuild-services", "internet-deny"),
     ),
     Section(
         "run by the round agent",

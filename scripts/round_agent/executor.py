@@ -38,12 +38,15 @@ _COLOUR = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 # SSH options for reaching VMs on the management bridges (host -> VM only).
 # Host keys are not pinned (lab VMs are rebuilt with fresh keys), matching the
-# repo's ansible.cfg (host_key_checking = False).
+# repo's ansible.cfg (host_key_checking = False). The WORMS key in the agent
+# worms-node-run started is the one key offered: never root's ~/.ssh/id_*.
 SSH_OPTS = [
     "-o", "BatchMode=yes",
     "-o", "StrictHostKeyChecking=no",
     "-o", "UserKnownHostsFile=/dev/null",
     "-o", "ConnectTimeout=10",
+    "-o", "IdentityFile=none",
+    "-o", "IdentityAgent=SSH_AUTH_SOCK",
 ]
 
 

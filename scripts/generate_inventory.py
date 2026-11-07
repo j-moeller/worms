@@ -31,14 +31,19 @@ inventory.yml only declares groups (no hosts): the role groups (tls_hosts,
 django_hosts, ...) have these VM groups as children, and per-VM settings live
 in group_vars/<vm group>.yml. Re-run after every `tofu apply` (`worms build inventory`).
 
-How Ansible connects is written here too. On the Proxmox node (WORMS_SSH
-unset) the node is `ansible_connection: local`. On a laptop (WORMS_SSH =
-root@<node>, as the `worms` CLI sets it) the node is reached over SSH with your
-own SSH setup, every VM through it (ProxyJump), and the node's own stacks
-(sandbox, devbox: state in the round agent's workspace there) are read over SSH.
-When `worms` runs Ansible with the WORMS key's agent (WORMS_SSH_AUTH_SOCK), the
-VM connections use that agent (the VMs accept the WORMS key); the node and the
-ProxyJump hop keep yours.
+How Ansible connects is written here too: with the WORMS key in the agent, and no
+other key (IdentityFile=none). On the Proxmox node (WORMS_SSH unset) the node is
+`ansible_connection: local`. On a laptop (WORMS_SSH = root@<node>, as the `worms`
+CLI sets it) the node is reached over SSH, every VM through it (ProxyJump), and
+the node's own stacks (sandbox, devbox: state in the round agent's workspace
+there) are read over SSH. Written by `worms` (WORMS_SSH_AUTH_SOCK set), the
+connections name its agent; in the round agent's workspace, the agent
+worms-node-run started (SSH_AUTH_SOCK). The ProxyJump hop reads your
+~/.ssh/config: it must not name another IdentityAgent for the node.
+
+Every value the inventory needs must be there: a missing platform output, or a
+VM stack whose last apply did not finish (outputs, but no `ansible_hosts`), stops
+it with an error rather than leave hosts out.
 
 Standard library only, so it runs with the system Python on the control node.
 """
@@ -57,12 +62,18 @@ from pathlib import Path
 # Stacks whose state lives on the node (the round agent's workspace).
 NODE_STACKS = {"sandbox", "devbox"}
 NODE_RUN = "/usr/local/sbin/worms-node-run"
+# The one key: the agent's, never a key file (~/.ssh/id_*).
+ONE_KEY = ["-o", "IdentityFile=none", "-o", "IdentityAgent=SSH_AUTH_SOCK"]
+# What the platform stack's `infrastructure` output must have.
+PLATFORM_KEYS = ("infrastructure_ips", "management_ips", "services_ips", "host_ips", "private_internet_ips",
+                 "services_ports", "networks", "bridges", "ssh_gateway_ips", "ssh_gateway_public_port",
+                 "devbox_services_block", "proxmox")  # fmt: skip
 
 
 def node_output(target: str, stack: str) -> dict:
     """`tofu output -json` of a node-owned stack, over SSH ({} if unavailable)."""
     proc = subprocess.run(
-        ["ssh", "-o", "BatchMode=yes", target, f"{NODE_RUN} opentofu/stacks/{stack} 'tofu output -json'"],
+        ["ssh", "-o", "BatchMode=yes", *ONE_KEY, target, f"{NODE_RUN} opentofu/stacks/{stack} 'tofu output -json'"],
         capture_output=True, text=True,
     )  # fmt: skip
     if proc.returncode == 127 and NODE_RUN in proc.stderr:
@@ -150,34 +161,26 @@ def build_inventory(infrastructure: dict, stacks: dict, sandbox: dict, controlle
     stack is not applied). `controller` is the node's SSH target when Ansible
     runs elsewhere (a laptop), empty on the node itself. `worms_agent`: the VM
     connections use the agent in WORMS_SSH_AUTH_SOCK (expanded by ssh)."""
-    proxmox = dict(infrastructure.get("proxmox", {}))
+    missing = [key for key in PLATFORM_KEYS if key not in infrastructure]
+    proxmox = dict(infrastructure.get("proxmox") or {})
+    missing += [f"proxmox.{key}" for key in ("node", "host", "api_port") if not proxmox.get(key)]
+    if missing:
+        raise ValueError(f"the platform stack's `infrastructure` output lacks {', '.join(missing)}: "
+                         "apply it again (`worms build platform`)")  # fmt: skip
     # Proxmox API port is numeric in HCL but arrives as int; keep it an int.
-    if "api_port" in proxmox:
-        proxmox["api_port"] = int(proxmox["api_port"])
+    proxmox["api_port"] = int(proxmox["api_port"])
 
-    group_vars = {
-        "infrastructure_ips": infrastructure.get("infrastructure_ips", {}),
-        "management_ips": infrastructure.get("management_ips", {}),
-        "services_ips": infrastructure.get("services_ips", {}),
-        "host_ips": infrastructure.get("host_ips", {}),
-        "private_internet_ips": infrastructure.get("private_internet_ips", {}),
-        "services_ports": infrastructure.get("services_ports", {}),
-        "networks": infrastructure.get("networks", {}),
-        "bridges": infrastructure.get("bridges", {}),
-        # Devbox (docs/devbox.md): the trusted SSH gateway and the services
-        # block reserved for the per-team devbox gateways. Defaulted so an older
-        # platform output (without them) still produces a usable inventory.
-        "ssh_gateway_ips": infrastructure.get("ssh_gateway_ips", {}),
-        "ssh_gateway_public_port": infrastructure.get("ssh_gateway_public_port", 22),
-        "devbox_services_block": infrastructure.get("devbox_services_block", ""),
-        "proxmox": proxmox,
-    }
+    # Addressing (and, for devboxes, the trusted SSH gateway and the services block
+    # reserved for the per-team devbox gateways: docs/devbox.md).
+    group_vars = {key: infrastructure[key] for key in PLATFORM_KEYS}
+    group_vars["proxmox"] = proxmox
 
     sandbox_addresses = {
         name: host.get("addresses", [])
         for name, host in sandbox.get("hosts", {}).items()
     }
 
+    agent = ["-o", "IdentityFile=none", "-o", "IdentityAgent=" + ("${WORMS_SSH_AUTH_SOCK}" if worms_agent else "SSH_AUTH_SOCK")]
     children: dict = {}
     for stack, group_of in VM_STACKS:
         for key, vm in sorted(stacks.get(stack, {}).items()):
@@ -189,11 +192,7 @@ def build_inventory(infrastructure: dict, stacks: dict, sandbox: dict, controlle
                 "proxmox_vm_id": int(vm["vm_id"]),
                 "opentofu_stack": stack,
             }
-            ssh_args = ([f"-o ProxyJump={controller}"] if controller else []) + (
-                ["-o IdentityAgent=${WORMS_SSH_AUTH_SOCK}"] if worms_agent else []
-            )
-            if ssh_args:
-                host["ansible_ssh_common_args"] = " ".join(ssh_args)
+            host["ansible_ssh_common_args"] = " ".join(([f"-o ProxyJump={controller}"] if controller else []) + agent)
             if key in sandbox_addresses:
                 host["sandbox_addresses"] = sandbox_addresses[key]
             # Optional per-VM facts a stack exports for Ansible (e.g. the
@@ -206,7 +205,8 @@ def build_inventory(infrastructure: dict, stacks: dict, sandbox: dict, controlle
     # its host key checked (known_hosts), unlike the frequently rebuilt VMs.
     if controller:
         user, _, host = controller.rpartition("@")
-        node = {"ansible_host": host, "ansible_user": user or "root", "ansible_host_key_checking": True}
+        node = {"ansible_host": host, "ansible_user": user or "root", "ansible_host_key_checking": True,
+                "ansible_ssh_common_args": " ".join(agent)}  # fmt: skip
     else:
         node = {"ansible_host": "127.0.0.1", "ansible_connection": "local"}
     children["proxmox_host"] = {"hosts": {"proxmox.local": node}}
@@ -405,19 +405,23 @@ def main() -> None:
         outputs = tofu_output(stack_dir, args.tofu_bin)
         if not outputs:
             status[stack] = "NOT APPLIED (no state or no outputs)"
+            print(f"note: stack {stack}: {status[stack]}", file=sys.stderr)
         elif "ansible_hosts" not in outputs:
-            # Applied before the output existed: its VMs would silently vanish.
-            status[stack] = "NO ansible_hosts OUTPUT (run tofu apply in the stack)"
+            # Its last apply stopped before the VMs (or predates the output): an
+            # inventory without them would have the playbooks after it skip them.
+            sys.exit(f"error: stack {stack} has outputs ({', '.join(sorted(outputs))}) but no ansible_hosts: "
+                     "its last apply did not finish. Find the apply's error, fix it, and apply the stack again")  # fmt: skip
         stacks[stack] = (outputs.get("ansible_hosts") or {}).get("value", {})
         status.setdefault(stack, f"applied, {len(stacks[stack])} VM(s)")
-        if not status[stack].startswith("applied"):
-            print(f"warning: stack {stack}: {status[stack]}", file=sys.stderr)
     sandbox = load_outputs(sandbox_dir, "sandbox", args.tofu_bin, args.sandbox_json)
     if args.require_sandbox and not sandbox.get("hosts"):
         sys.exit("error: --require-sandbox set but the sandbox stack has no hosts.")
 
-    inventory = build_inventory(infrastructure, stacks, sandbox, os.environ.get("WORMS_SSH", ""),
-                                bool(os.environ.get("WORMS_SSH_AUTH_SOCK")))  # fmt: skip
+    try:
+        inventory = build_inventory(infrastructure, stacks, sandbox, os.environ.get("WORMS_SSH", ""),
+                                    bool(os.environ.get("WORMS_SSH_AUTH_SOCK")))  # fmt: skip
+    except ValueError as exc:
+        sys.exit(f"error: {exc}")
     inventory["all"]["vars"]["opentofu_stacks"] = status
     inventory["all"]["vars"]["inventory_generated_at"] = datetime.now().isoformat(timespec="seconds")
 

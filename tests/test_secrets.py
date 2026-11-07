@@ -164,7 +164,8 @@ def test_build_secrets_provides_every_vault_variable(tmp_path):
     def build_secrets():
         proc = subprocess.run([sys.executable, str(root / "src" / "manage.py"), "build", "secrets"], env=env,
                               capture_output=True, text=True)  # fmt: skip
-        assert proc.returncode == 0, proc.stdout + proc.stderr
+        # The generated ones are written; then it stops on the entered tokens, which are not.
+        assert proc.returncode == 1 and "`worms secrets issue proxmox-token`" in proc.stderr, proc.stdout + proc.stderr
         return (root / "ansible" / "group_vars" / "vault.yml").read_text()
 
     first = build_secrets()

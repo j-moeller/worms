@@ -494,13 +494,17 @@ def test_the_internet_notice_never_stops_a_command(monkeypatch, capsys):
 
 def _fake_pipeline(run, rolled_back, devboxes=True):
     return lambda *_a, **_k: type("P", (), {
-        "round_reset_services": run, "provision": run, "services_rolled_back": rolled_back,
+        "run_component": lambda self, component, resume=None: run(self), "services_rolled_back": rolled_back,
         "devboxes_exist": lambda self: devboxes,
     })()  # fmt: skip
 
 
+def _build_args(component):
+    return argparse.Namespace(list=False, component=component, make_args=[], resume=False, restart=False)
+
+
 @pytest.mark.parametrize("component", ["round-reset-services", "provision"])
-def test_a_rollback_asks_the_agent_for_the_devbox_map(monkeypatch, component):
+def test_a_rollback_asks_the_agent_for_the_devbox_map(monkeypatch, tmp_path, component):
     """The snapshot predates the devboxes, so the rollback emptied their map."""
     cli = _cli_module()
     from worms_cli import pipeline
@@ -508,12 +512,12 @@ def test_a_rollback_asks_the_agent_for_the_devbox_map(monkeypatch, component):
     done, asked = [], []
     monkeypatch.setattr(pipeline, "Pipeline", _fake_pipeline(lambda self: done.append(1), rolled_back=True))
     monkeypatch.setattr(cli, "_request_devbox_reconfigure", lambda config: asked.append(config) or 0)
-    args = argparse.Namespace(list=False, component=component, make_args=[])
-    assert cli.cmd_build("config", args) == 0
-    assert done == [1] and asked == ["config"]
+    config = argparse.Namespace(repo_root=tmp_path)
+    assert cli.cmd_build(config, _build_args(component)) == 0
+    assert done == [1] and asked == [config]
 
 
-def test_a_failure_after_the_rollback_still_asks_for_the_map(monkeypatch):
+def test_a_failure_after_the_rollback_still_asks_for_the_map(monkeypatch, tmp_path):
     cli = _cli_module()
     from worms_cli import build, pipeline
 
@@ -523,12 +527,12 @@ def test_a_failure_after_the_rollback_still_asks_for_the_map(monkeypatch):
     asked = []
     monkeypatch.setattr(pipeline, "Pipeline", _fake_pipeline(fails, rolled_back=True))
     monkeypatch.setattr(cli, "_request_devbox_reconfigure", lambda config: asked.append(config) or 0)
-    args = argparse.Namespace(list=False, component="provision", make_args=[])
-    assert cli.cmd_build("config", args) == 1 and asked == ["config"]
+    config = argparse.Namespace(repo_root=tmp_path)
+    assert cli.cmd_build(config, _build_args("provision")) == 1 and asked == [config]
 
 
 @pytest.mark.parametrize("rolled_back, devboxes", [(False, True), (True, False)])
-def test_no_map_is_asked_for_without_a_rollback_or_a_devbox(monkeypatch, rolled_back, devboxes):
+def test_no_map_is_asked_for_without_a_rollback_or_a_devbox(monkeypatch, tmp_path, rolled_back, devboxes):
     """A refused reset rolled nothing back, and a first build has no devbox to map."""
     cli = _cli_module()
     from worms_cli import build, pipeline
@@ -539,8 +543,7 @@ def test_no_map_is_asked_for_without_a_rollback_or_a_devbox(monkeypatch, rolled_
     asked = []
     monkeypatch.setattr(pipeline, "Pipeline", _fake_pipeline(fails, rolled_back=rolled_back, devboxes=devboxes))
     monkeypatch.setattr(cli, "_request_devbox_reconfigure", lambda config: asked.append(config) or 0)
-    args = argparse.Namespace(list=False, component="round-reset-services", make_args=[])
-    assert cli.cmd_build("config", args) == 1 and asked == []
+    assert cli.cmd_build(argparse.Namespace(repo_root=tmp_path), _build_args("round-reset-services")) == 1 and asked == []
 
 
 @pytest.mark.parametrize("failure", [SystemExit(2), RuntimeError("database down")])

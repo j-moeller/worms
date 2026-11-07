@@ -150,8 +150,8 @@ table inet worms {
     # only the node (masquerade, below), and ssh_gateway_logins matches a login to its
     # client by source port (scripts/round_agent/events.py). Rate-limited, so a scan cannot flood
     # the journal; no verdict, the next rule still forwards the connection.
-    iifname "{{ host_wan_interface }}" fib daddr type local tcp dport {{ ssh_gateway_public_port | default(2222) }} limit rate 60/minute burst 120 packets log prefix "worms-ssh-gw: " level info comment "audit: devbox SSH client address"
-    iifname "{{ host_wan_interface }}" fib daddr type local tcp dport {{ ssh_gateway_public_port | default(2222) }} dnat ip to {{ ssh_gateway_ips.devbox_ssh }}:22 comment "publish devbox SSH gateway"
+    iifname "{{ host_wan_interface }}" fib daddr type local tcp dport {{ ssh_gateway_public_port }} limit rate 60/minute burst 120 packets log prefix "worms-ssh-gw: " level info comment "audit: devbox SSH client address"
+    iifname "{{ host_wan_interface }}" fib daddr type local tcp dport {{ ssh_gateway_public_port }} dnat ip to {{ ssh_gateway_ips.devbox_ssh }}:22 comment "publish devbox SSH gateway"
 {% endif %}
   }
 

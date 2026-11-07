@@ -48,7 +48,7 @@ round_agent_logging_host: "{{ management_ips.logging }}"
 # here (scripts/round_agent/handlers.py, prepare).
 round_agent_service_hosts: >-
   {{ (['scoring', 'logging', 'monitor', 'dns'] | map('extract', management_ips) | select('defined') | list)
-     + ((private_internet_ips | default({})).values() | map(attribute='maintenance') | list) }}
+     + (private_internet_ips.values() | map(attribute='maintenance') | list) }}
 
 # Database (round_agent role; job queue only). Connects to the core address.
 round_agent_db_host: "{{ infrastructure_ips.database }}"
@@ -64,9 +64,10 @@ round_agent_db_sslrootcert: "{{ round_agent_repo_root }}/ansible/pki/worms/ca.cr
 # (worms-node-run), because the bpg provider uploads snippets over SSH with
 # `agent = true`; its .pub is what cloud-init puts on the sandbox and devbox
 # VMs, as on every other VM.
-round_agent_tofu_api_url: "https://127.0.0.1:{{ proxmox.api_port | default(8006) }}/"
-round_agent_tofu_api_token: "{{ vault_tofu_proxmox_api_token | default('') }}"
-round_agent_tofu_node: "{{ proxmox.node | default('worms-pve') }}"
+# No defaults: a missing value stops the play (tasks/workspace.yml checks them first).
+round_agent_tofu_api_url: "https://127.0.0.1:{{ proxmox.api_port }}/"
+round_agent_tofu_api_token: "{{ vault_tofu_proxmox_api_token }}"
+round_agent_tofu_node: "{{ proxmox.node }}"
 round_agent_ssh_key: /etc/worms/ssh/worms
 
 # The node's event tables (scripts/round_agent/events.py, docs/monitoring.md):
@@ -77,8 +78,8 @@ round_agent_ssh_key: /etc/worms/ssh/worms
 round_agent_audit_command: /usr/local/sbin/worms-audit
 round_agent_events_env_file: /etc/worms/events.env
 round_agent_events_db_user: dbuser_events_node
-round_agent_events_db_password: "{{ vault_dbuser_events_node_password | default('') }}"
-round_agent_ssh_gateway_host: "{{ ssh_gateway_ips.maintenance | default('') }}"
+round_agent_events_db_password: "{{ vault_dbuser_events_node_password }}"
+round_agent_ssh_gateway_host: "{{ ssh_gateway_ips.maintenance }}"
 round_agent_ssh_gateway_user: team
 
 # Least-privilege Proxmox role for the orchestrator's power token: start/stop

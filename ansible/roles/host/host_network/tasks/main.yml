@@ -21,6 +21,19 @@
     mode: "0644"
   tags: [kvm-nesting]
 
+# inventory.yml asks for it to be published: without the gateway's address the
+# ruleset would leave it out, and nothing would say so.
+- name: Check that the devbox SSH gateway can be published
+  ansible.builtin.assert:
+    that:
+      - ssh_gateway_public_port is defined
+      - not (host_publish_ssh_gateway | default(false) | bool) or ssh_gateway_ips.devbox_ssh is defined
+    fail_msg: >-
+      host_publish_ssh_gateway is set, but the inventory has no ssh_gateway_public_port or
+      ssh_gateway_ips.devbox_ssh: apply the platform stack again (`worms build platform`) and
+      regenerate the inventory (`worms build inventory`).
+    quiet: true
+
 - name: Create configuration directory
   ansible.builtin.file:
     path: "{{ host_nft_file | dirname }}"
@@ -30,7 +43,7 @@
 # Port 22 on the WAN goes to the devbox SSH gateway: without sshd on another port the
 # operators would lose SSH to the node with this ruleset.
 - name: Check that operators keep SSH to the node
-  when: host_publish_ssh_gateway | bool and (ssh_gateway_public_port | default(2222) | int) == 22
+  when: host_publish_ssh_gateway | bool and (ssh_gateway_public_port | int) == 22
   block:
     - name: Read sshd's listening ports
       ansible.builtin.command: ss -Htln "sport = :{{ host_operator_ssh_port }}"

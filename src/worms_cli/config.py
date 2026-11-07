@@ -102,8 +102,8 @@ class Config:
         env = {
             "WORMS_DB_HOST": db,  # TLS checks the certificate against this name
             "WORMS_DB_PORT": "5432",
-            "WORMS_DB_NAME": group_var(self.repo_root, "postgres_db", "mydb"),
-            "WORMS_DB_USER": group_var(self.repo_root, "postgres_admin_name", "admin"),
+            "WORMS_DB_NAME": group_var(self.repo_root, "postgres_db"),
+            "WORMS_DB_USER": group_var(self.repo_root, "postgres_admin_name"),
             "WORMS_DB_PASSWORD": session.values()["vault_postgres_admin_password"],
             "WORMS_DB_SSLMODE": "verify-full",
             "WORMS_DB_SSLROOTCERT": str(self.default_ca()),
@@ -135,8 +135,8 @@ class Config:
             return self.get("WORMS_PROXMOX_NODE")
         try:
             return for_config(self).infrastructure()["proxmox"]["node"]
-        except (SessionError, KeyError, OSError, ValueError):
-            return "worms-pve"
+        except KeyError as exc:
+            raise SessionError("the platform stack's `infrastructure` output has no proxmox.node: `worms build platform`") from exc
 
     def proxmox(self) -> dict | None:
         """The read-only (topology) token for `worms status`: explicit
@@ -160,8 +160,8 @@ class Config:
         port = session.tunnel("127.0.0.1", 8006) if session.laptop else 8006
         return {
             "url": f"https://127.0.0.1:{port}",
-            "user": group_var(self.repo_root, "proxmox_readonly_api_user", "topology@pve"),
-            "token_name": group_var(self.repo_root, "proxmox_readonly_api_token_name", "readonly"),
+            "user": group_var(self.repo_root, "proxmox_readonly_api_user"),
+            "token_name": group_var(self.repo_root, "proxmox_readonly_api_token_name"),
             "token_value": session.values()["vault_proxmox_readonly_api_token_value"],
             "node": self.proxmox_node(),
             "verify_ssl": session.pve_ca(),

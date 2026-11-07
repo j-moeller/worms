@@ -64,7 +64,8 @@ WORMS_AGENT = "/run/worms-agent"  # the CLI's agent with the WORMS key
 @pytest.fixture
 def recorded(monkeypatch):
     """The Runner's commands are recorded, not run (the vault still uses the
-    real ssh-keygen); no node to talk to. You have an ssh-agent of your own."""
+    real ssh-keygen); no node to talk to (it is called `worms`). You have an
+    ssh-agent of your own, which the build must never use."""
     import types
 
     rec = Recorded()
@@ -72,7 +73,7 @@ def recorded(monkeypatch):
     monkeypatch.setattr(Session, "check_node", lambda self: None)
     monkeypatch.setattr(Session, "internet_allowed", lambda self: True)
     monkeypatch.setattr(Session, "worms_agent", lambda self: {"SSH_AUTH_SOCK": WORMS_AGENT, "SSH_AGENT_PID": "1"})
-    monkeypatch.setattr(Session, "operator_agent", lambda self: True)
+    monkeypatch.setattr(Session, "node_name", lambda self: "worms")
     monkeypatch.setenv("SSH_AUTH_SOCK", OPERATOR_AGENT)
     return rec
 
@@ -95,27 +96,19 @@ def test_laptop_runs_tofu_here_with_the_vaults_inputs(checkout, recorded):
     assert env["WORMS_SSH"] == NODE
 
 
-def test_tofu_keeps_your_own_ssh_agent(checkout, recorded):
+def test_tofu_logs_in_with_the_worms_key_only(checkout, recorded):
     """OpenTofu's Proxmox provider logs in to root@<node> with the keys of the
-    agent in SSH_AUTH_SOCK only. Replacing your agent by one with just the
-    WORMS key made it fail ("unable to authenticate user root over SSH")
-    wherever the node knows your key but not the WORMS key."""
-    runner(checkout).tofu("platform", "apply")
-    (_argv, env), = recorded.calls
-    assert env["SSH_AUTH_SOCK"] == OPERATOR_AGENT
-    assert env["WORMS_SSH_AUTH_SOCK"] == WORMS_AGENT  # for the VMs (inventory: IdentityAgent)
-
-
-def test_without_an_agent_of_your_own_the_worms_key_reaches_the_node(checkout, recorded, monkeypatch):
-    monkeypatch.setattr(Session, "operator_agent", lambda self: False)
+    agent in SSH_AUTH_SOCK: the WORMS key's, never yours. Its node is the one
+    the node names itself, never the stacks' default."""
     runner(checkout).tofu("platform", "apply")
     (_argv, env), = recorded.calls
     assert env["SSH_AUTH_SOCK"] == WORMS_AGENT == env["WORMS_SSH_AUTH_SOCK"]
+    assert env["TF_VAR_proxmox_instance"] == "worms"
 
 
 def test_preflight_logs_in_like_the_provider_and_says_what_to_do(checkout, monkeypatch):
-    """Agent keys only (IdentityFile=none), no prompt; a failure names the
-    fixes instead of the provider's "unable to authenticate"."""
+    """The WORMS key in the agent only (IdentityFile=none, IdentityAgent=SSH_AUTH_SOCK),
+    no prompt; a failure names the fix instead of the provider's "unable to authenticate"."""
     import types
 
     calls = []
@@ -126,13 +119,13 @@ def test_preflight_logs_in_like_the_provider_and_says_what_to_do(checkout, monke
 
     monkeypatch.setattr("worms_cli.session.subprocess", types.SimpleNamespace(run=run, SubprocessError=Exception))
     monkeypatch.setattr(Session, "worms_agent", lambda self: {"SSH_AUTH_SOCK": WORMS_AGENT, "SSH_AGENT_PID": "1"})
-    monkeypatch.setattr(Session, "operator_agent", lambda self: True)
     session = Session(Config(env={"WORMS_REPO_ROOT": str(checkout), "WORMS_SSH": NODE}))
     with pytest.raises(build.SessionError) as error:
         session.tofu_env()
-    assert calls == [["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "IdentityFile=none", NODE, "true"]]
+    assert calls == [["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "IdentityFile=none",
+                      "-o", "IdentityAgent=SSH_AUTH_SOCK", NODE, "true"]]  # fmt: skip
     message = str(error.value)
-    assert "Permission denied (publickey)" in message and "ssh-add" in message and "worms node trust" in message
+    assert "Permission denied (publickey)" in message and "WORMS key" in message and "worms node trust" in message
 
 
 def probing_with(monkeypatch, checkout, returncode):
@@ -148,7 +141,6 @@ def probing_with(monkeypatch, checkout, returncode):
     monkeypatch.setattr("worms_cli.session.subprocess", types.SimpleNamespace(run=run, SubprocessError=Exception))
     monkeypatch.setattr(Session, "check_node", lambda self: None)
     monkeypatch.setattr(Session, "worms_agent", lambda self: {"SSH_AUTH_SOCK": WORMS_AGENT, "SSH_AGENT_PID": "1"})
-    monkeypatch.setattr(Session, "operator_agent", lambda self: True)
     return Session(Config(env={"WORMS_REPO_ROOT": str(checkout), "WORMS_SSH": NODE})), seen
 
 
@@ -185,7 +177,6 @@ def test_the_preflight_leaves_stdin_alone(checkout, monkeypatch):
 
     monkeypatch.setattr("worms_cli.session.subprocess", types.SimpleNamespace(run=run, SubprocessError=Exception))
     monkeypatch.setattr(Session, "worms_agent", lambda self: {"SSH_AUTH_SOCK": WORMS_AGENT, "SSH_AGENT_PID": "1"})
-    monkeypatch.setattr(Session, "operator_agent", lambda self: True)
     Session(Config(env={"WORMS_REPO_ROOT": str(checkout), "WORMS_SSH": NODE})).check_node()
     assert seen[0]["stdin"] == subprocess.DEVNULL
 
@@ -205,10 +196,11 @@ def test_laptop_runs_the_nodes_stacks_on_the_node(checkout, recorded):
     sync, apply, devbox = recorded.calls
     # The workspace is brought up to date first, once per run.
     assert "SetupRoundAgent.yml --tags agent-sync" in sync[0][2]
-    # Your own SSH setup to the node, as `ssh root@<node>`.
-    assert apply[0] == ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", NODE,
+    # To the node with the WORMS key only.
+    assert apply[0] == ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "IdentityFile=none",
+                        "-o", "IdentityAgent=SSH_AUTH_SOCK", NODE,
                         f"{NODE_RUN} opentofu/stacks/sandbox 'tofu apply -auto-approve'"]  # fmt: skip
-    assert apply[1]["SSH_AUTH_SOCK"] == OPERATOR_AGENT
+    assert apply[1]["SSH_AUTH_SOCK"] == WORMS_AGENT
     assert "TF_VAR_proxmox_api_token" not in apply[1]  # the node has its own (the agent's env file)
     assert devbox[0][0] == "ssh" and devbox[0][-2] == NODE
     assert devbox[0][-1].startswith(f"{NODE_RUN} ansible ") and "ansible-playbook SetupDevbox.yml" in devbox[0][-1]
@@ -261,7 +253,8 @@ def test_without_the_token_tofu_does_not_start(tmp_path, recorded, monkeypatch):
     require("ssh-keygen")
     monkeypatch.setattr("worms_cli.secrets.shutil.which",
                         lambda name, real=shutil.which: None if name == "ansible-vault" else real(name))  # fmt: skip
-    with pytest.raises(build.BuildError, match="worms secrets set proxmox-token"):
+    Vault(tmp_path).ensure()  # complete, but no token entered
+    with pytest.raises(build.BuildError, match="worms secrets issue proxmox-token"):
         runner(tmp_path).tofu("platform", "apply")
     assert not recorded.calls
 
@@ -301,12 +294,14 @@ def test_inventory_from_a_laptop(tmp_path):
                    env=env, check=True, capture_output=True)  # fmt: skip
     children = yaml.safe_load(out.read_text())["all"]["children"]
     node = children["proxmox_host"]["hosts"]["proxmox.local"]
-    assert node == {"ansible_host": "pve.example", "ansible_user": "root", "ansible_host_key_checking": True}
+    # The WORMS key's agent and no key file, for the node and every VM (ssh
+    # expands the variable; the path differs per run); the VMs through the node.
+    one_key = "-o IdentityFile=none -o IdentityAgent=${WORMS_SSH_AUTH_SOCK}"
+    assert node == {"ansible_host": "pve.example", "ansible_user": "root", "ansible_host_key_checking": True,
+                    "ansible_ssh_common_args": one_key}  # fmt: skip
     vm = children["sandbox"]["hosts"]["sandbox-vm01"]
-    # The VM through the node (your agent for that hop), with the WORMS key's
-    # agent (ssh expands the variable; the path differs per run).
     assert vm["ansible_host"] == "10.4.0.11"
-    assert vm["ansible_ssh_common_args"] == f"-o ProxyJump={NODE} -o IdentityAgent=${{WORMS_SSH_AUTH_SOCK}}"
+    assert vm["ansible_ssh_common_args"] == f"-o ProxyJump={NODE} {one_key}"
 
 
 @pytest.mark.parametrize("ssh_script, ok", [

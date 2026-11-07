@@ -129,9 +129,12 @@ and its workspace `/opt/worms` with the sandbox and devbox stacks and their stat
 checkout by `SetupRoundAgent.yml` before every step that runs there.
 
 What you set, once: `WORMS_SSH=root@<node>` in `~/.worms/config` and the three Proxmox tokens.
-SSH to the node is your own (`ssh root@<node>` must work with a key in your ssh-agent; OpenTofu's
-provider logs in that way). `worms node trust` is only for VMs older than the WORMS key, or without
-an agent of your own.
+**One SSH key: the WORMS key (vault).** The build logs in with it and nothing else, to root on the
+node (the CLI, OpenTofu's provider, Ansible, rsync) and to every VM; the round agent does the same
+from `/etc/worms/ssh/worms`. Your own keys, a forwarded agent and `~/.ssh/id_*` are never offered
+(`IdentityFile=none`, `IdentityAgent=SSH_AUTH_SOCK`). Root on the node has to accept it: `worms node
+trust`, once, with your own login (from a laptop over SSH, on the node right there); it also lets the
+key in on VMs older than it.
 
 ### 4.1 The vault
 

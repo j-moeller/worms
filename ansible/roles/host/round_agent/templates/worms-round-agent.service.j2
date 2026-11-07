@@ -17,8 +17,7 @@ EnvironmentFile={{ round_agent_env_file }}
 # worms-node-run loads the environment and wraps the agent in an ssh-agent
 # with the WORMS key (it lives exactly as long as the service): the OpenTofu
 # provider uploads snippets over SSH through an agent. A key that cannot be
-# loaded is reported, not fatal -- the jobs that need it fail with the
-# provider's error.
+# loaded stops the service (journalctl -u worms-round-agent says why).
 ExecStart={{ round_agent_node_run }} . "exec {{ round_agent_python }} -m round_agent"
 Restart=always
 RestartSec=5

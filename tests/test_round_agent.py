@@ -975,24 +975,27 @@ def test_loop_is_safe_against_a_second_worker(agent_db, database):
 # --- the role template --------------------------------------------------------
 
 
+# What the agent's environment file is rendered from: all of it is required (a missing
+# value stops SetupRoundAgent.yml before anything changes: tasks/workspace.yml).
+AGENT_ENV_VARS = dict(
+    infrastructure_ips={"database": "10.11.0.16"},
+    management_ips={"dashboard": "10.5.0.18", "scoring": "10.5.0.14", "logging": "10.5.0.15"},
+    postgres_db="mydb", pki_ca_cert_path="/etc/worms/ca.crt", vault_round_agent_db_password="secret",
+    dashboard_media_root="/opt/dashboard/media", vault_tofu_proxmox_api_token="root@pam!worms=0000-1111",
+    proxmox={"host": "10.11.0.1", "api_port": 8006, "node": "pve-lab"}, ssh_gateway_ips={"maintenance": "10.5.0.30"},
+)  # fmt: skip
+
+
 def test_round_agent_env_renders(render):
-    env = render(
-        "ansible/roles/host/round_agent", "round-agent.env.j2",
-        infrastructure_ips={"database": "10.11.0.16"},
-        management_ips={"dashboard": "10.5.0.18", "scoring": "10.5.0.14", "logging": "10.5.0.15"},
-        postgres_db="mydb",
-        pki_ca_cert_path="/etc/worms/ca.crt",
-        vault_round_agent_db_password="secret",
-        dashboard_media_root="/opt/dashboard/media",
-    )
+    env = render("ansible/roles/host/round_agent", "round-agent.env.j2", **AGENT_ENV_VARS)
     assert "DB_USER=round_agent" in env and "DB_SSLMODE=verify-full" in env
     assert "DASHBOARD_MEDIA_ROOT=/opt/dashboard/media" in env
     assert "PYTHONPATH=" in env and "/scripts" in env
     assert "SCORING_HOST=10.5.0.14" in env and "LOGGING_HOST=10.5.0.15" in env
     assert "DASHBOARD_HOST=10.5.0.18" in env
-    # OpenTofu: without the provisioning token in the vault, no value (and a hint).
+    # OpenTofu: the provisioning token from the vault.
     assert "TF_VAR_proxmox_api_url=https://127.0.0.1:8006/" in env
-    assert "TF_VAR_proxmox_api_token=" not in env and "worms secrets set proxmox-token" in env
+    assert "TF_VAR_proxmox_api_token=root@pam!worms=0000-1111" in env
     assert "TF_VAR_ssh_public_key=/etc/worms/ssh/worms.pub" in env  # the WORMS key, from the vault
     assert "REPO_ROOT=/opt/worms" in env and "DB_SSLROOTCERT=/opt/worms/ansible/pki/worms/ca.crt" in env
 
@@ -1001,13 +1004,7 @@ def test_the_agent_is_the_node_whatever_roots_worms_config_says(render, tmp_path
     """A /root/.worms/config with WORMS_SSH on the node (laptop mode) made the
     agent's `worms build devbox-apply` fail with "no ansible/inventory.generated.yml"
     (2026-11-06, production). The agent's environment empties it."""
-    env = render(
-        "ansible/roles/host/round_agent", "round-agent.env.j2",
-        infrastructure_ips={"database": "10.11.0.16"},
-        management_ips={"dashboard": "10.5.0.18", "scoring": "10.5.0.14", "logging": "10.5.0.15"},
-        postgres_db="mydb", pki_ca_cert_path="/etc/worms/ca.crt", vault_round_agent_db_password="secret",
-        dashboard_media_root="/opt/dashboard/media",
-    )  # fmt: skip
+    env = render("ansible/roles/host/round_agent", "round-agent.env.j2", **AGENT_ENV_VARS)
     sys.path.insert(0, str(REPO / "src"))
     from worms_cli import config
 
@@ -1025,13 +1022,10 @@ def test_the_agent_is_the_node_whatever_roots_worms_config_says(render, tmp_path
 def test_round_agent_env_names_every_service_vm_it_waits_for(render):
     """After rolling them back for a round's sandbox, which installs from the private internet."""
     env = render(
-        "ansible/roles/host/round_agent", "round-agent.env.j2",
-        infrastructure_ips={"database": "10.11.0.16"},
-        management_ips={"dashboard": "10.5.0.18", "scoring": "10.5.0.14", "logging": "10.5.0.15",
-                        "monitor": "10.5.0.100", "dns": "10.5.0.11", "database": "10.3.0.16"},
-        private_internet_ips={"apt_cache": {"maintenance": "10.5.0.20", "network": "10.2.0.20"}},
-        postgres_db="mydb", pki_ca_cert_path="/etc/worms/ca.crt", vault_round_agent_db_password="secret",
-        dashboard_media_root="/opt/dashboard/media",
+        "ansible/roles/host/round_agent", "round-agent.env.j2", **{**AGENT_ENV_VARS,
+        "management_ips": {"dashboard": "10.5.0.18", "scoring": "10.5.0.14", "logging": "10.5.0.15",
+                           "monitor": "10.5.0.100", "dns": "10.5.0.11", "database": "10.3.0.16"},
+        "private_internet_ips": {"apt_cache": {"maintenance": "10.5.0.20", "network": "10.2.0.20"}}},
     )  # fmt: skip
     assert "SERVICE_HOSTS=10.5.0.14,10.5.0.15,10.5.0.100,10.5.0.11,10.5.0.20\n" in env
     from round_agent.agent import config
@@ -1043,15 +1037,7 @@ def test_round_agent_env_names_every_service_vm_it_waits_for(render):
 def test_round_agent_env_carries_the_opentofu_inputs(render):
     """The agent runs `tofu apply` for the sandbox and devbox stacks from a
     systemd service: it needs the same inputs as the operator's `make`."""
-    env = render(
-        "ansible/roles/host/round_agent", "round-agent.env.j2",
-        infrastructure_ips={"database": "10.11.0.16"},
-        management_ips={"dashboard": "10.5.0.18", "scoring": "10.5.0.14", "logging": "10.5.0.15"},
-        postgres_db="mydb", pki_ca_cert_path="/etc/worms/ca.crt", vault_round_agent_db_password="secret",
-        dashboard_media_root="/opt/dashboard/media",
-        vault_tofu_proxmox_api_token="root@pam!worms=0000-1111",
-        proxmox={"host": "10.11.0.1", "api_port": 8006, "node": "pve-lab"},
-    )
+    env = render("ansible/roles/host/round_agent", "round-agent.env.j2", **AGENT_ENV_VARS)
     assert "TF_VAR_proxmox_api_token=root@pam!worms=0000-1111" in env
     assert "TF_VAR_proxmox_instance=pve-lab" in env
 

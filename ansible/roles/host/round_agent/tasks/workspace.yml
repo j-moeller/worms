@@ -8,6 +8,28 @@
 # (--tags agent-sync) before every step it runs on the node, so the node runs
 # the controller's code.
 
+# Everything the agent needs, checked before anything changes: `worms` adds the vault
+# to every playbook it runs, a bare ansible-playbook does not.
+- name: Check that the vault and the inventory have what the agent needs
+  ansible.builtin.assert:
+    that: round_agent_unset | length == 0
+    fail_msg: >-
+      Not set: {{ round_agent_unset | join(', ') }}. Run this through `worms` (`worms build configure`, which adds
+      the vault; by hand: ansible-playbook -e @group_vars/vault.yml SetupRoundAgent.yml), with the vault complete
+      (`worms build secrets`) and the Proxmox token issued (`worms secrets issue proxmox-token`).
+    quiet: true
+  vars:
+    round_agent_required:
+      vault_worms_ssh_key: "{{ vault_worms_ssh_key | default('') }}"
+      vault_worms_ssh_public_key: "{{ vault_worms_ssh_public_key | default('') }}"
+      vault_tofu_proxmox_api_token: "{{ vault_tofu_proxmox_api_token | default('') }}"
+      vault_round_agent_db_password: "{{ vault_round_agent_db_password | default('') }}"
+      vault_dbuser_events_node_password: "{{ vault_dbuser_events_node_password | default('') }}"
+      proxmox.node: "{{ proxmox.node | default('') }}"
+      proxmox.api_port: "{{ proxmox.api_port | default('') }}"
+      ssh_gateway_ips.maintenance: "{{ ssh_gateway_ips.maintenance | default('') }}"
+    round_agent_unset: "{{ round_agent_required | dict2items | selectattr('value', 'equalto', '') | map(attribute='key') | list }}"
+
 - name: Install rsync (the workspace is synced with it)
   ansible.builtin.apt:
     name: rsync
@@ -133,6 +155,16 @@
     - { content: "{{ vault_worms_ssh_key }}", dest: "{{ round_agent_ssh_key }}", mode: "0600" }
     - { content: "{{ vault_worms_ssh_public_key }}\n", dest: "{{ round_agent_ssh_key }}.pub", mode: "0644" }
   no_log: true
+
+# Its .pub goes onto the sandbox and devbox VMs (TF_VAR_ssh_public_key), the private
+# half logs in to them: they must be one key.
+- name: Check that the WORMS key's halves belong together
+  ansible.builtin.command: ssh-keygen -y -f {{ round_agent_ssh_key }}
+  register: round_agent_key_public
+  changed_when: false
+  failed_when: >-
+    round_agent_key_public.rc != 0
+    or round_agent_key_public.stdout.split()[:2] != vault_worms_ssh_public_key.split()[:2]
 
 # On Proxmox root's authorized_keys is a symlink into /etc/pve: keep it.
 - name: Let the WORMS key log in as root on this node

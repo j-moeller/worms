@@ -8,6 +8,7 @@ pipeline itself (every former Makefile recipe) lives in worms_cli/pipeline.py.
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -127,28 +128,39 @@ class Runner:
             raise BuildError(str(exc)) from exc
 
     def secrets(self) -> None:
-        """Generate the missing generated secrets; report the entered ones
-        that are missing (`worms secrets set <name>`)."""
-        print(output.color(f"$ (vault) generate missing secrets  [{self.session.vault.file}]", "dim"))
+        """Generate the missing generated secrets (never a new WORMS key while VMs exist
+        that authorize the old one), and stop on a missing token the platform needs:
+        `worms secrets issue <name>`, then `worms build --resume`."""
+        from worms_cli.secrets import EXTERNAL, vms_deployed
+
+        vault = self.session.vault
+        print(output.color(f"$ (vault) generate missing secrets  [{vault.file}]", "dim"))
         try:
-            added = self.session.vault.ensure()
-            rows = self.session.vault.status()
+            added = vault.ensure(new_ssh_key=not vms_deployed(self.repo_root))
+            vault.check(vault.load())
+            required, optional = vault.missing_tokens()
         except Exception as exc:  # noqa: BLE001  (VaultError, ssh-keygen/ansible-vault failures)
             raise BuildError(f"vault: {exc}") from exc
-        print(f"secrets: {len(added)} generated" if added else "secrets: nothing to generate")
-        for name, _what, state in rows:
-            if state.startswith("MISSING"):
-                output.warn(f"{name}: {state} -- `worms secrets set {name}`")
+        print(f"secrets: generated {', '.join(added)}" if added else "secrets: nothing to generate")
+        for name in optional:
+            output.warn(f"{name}: {EXTERNAL[name][2]} -- `worms secrets issue {name}`")
+        if required:
+            raise BuildError("; ".join(f"{name}: {EXTERNAL[name][2]}" for name in required)
+                             + " -- `worms secrets issue " + "` and `worms secrets issue ".join(required) + "`")  # fmt: skip
 
     def python(self, script: str, *args: str) -> int:
         extra = (" " + " ".join(shlex.quote(a) for a in args)) if args else ""
         return self.sh(f"python3 {script}{extra}")
 
     def flag_exists(self, path: str) -> bool:
-        """Whether a file exists on the node (for the internet flag check)."""
+        """Whether a file exists on the node (for the internet flag check). A failed
+        check is an error, never an answer: a lost connection says nothing about the flag."""
         if not self.session.laptop:
-            return self.sh(f"test -e {shlex.quote(path)}", check=False, quiet=True) == 0
-        return self.node_sh(f"test -e {shlex.quote(path)}", check=False, quiet=True) == 0
+            return os.path.exists(path)
+        code = self.node_sh(f"test -e {shlex.quote(path)}", check=False, quiet=True)
+        if code not in (0, 1):
+            raise BuildError(f"could not check {path} on {self.config.ssh} (exit {code})")
+        return code == 0
 
     def _node_json(self, *argv: str):
         """A read-only command on the node whose output is JSON."""
@@ -170,7 +182,8 @@ class Runner:
         return next((s for s in self._node_json("pvesh", "get", path, "--output-format", "json") if s.get("name") == name), None)
 
     def commit(self) -> str:
-        """The checkout's commit, to record what a snapshot was taken from."""
+        """The checkout's commit, to record what a snapshot was taken from ("unknown"
+        outside a git checkout: it only describes the snapshot)."""
         proc = subprocess.run(["git", "-C", str(self.repo_root), "rev-parse", "--short", "HEAD"], capture_output=True, text=True)
         return proc.stdout.strip() or "unknown"
 

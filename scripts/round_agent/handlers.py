@@ -62,10 +62,21 @@ def _has_team_vm_cpu(ex, vmid):
     return any(line.strip() == f"cpu: {TEAM_VM_CPU}" for line in config.splitlines())
 
 
+def _ansible_hosts(stack, outputs):
+    """A stack's `ansible_hosts` output: {} when nothing is applied (no outputs), an error
+    when its last apply did not finish (outputs, but not this one): never "no VMs"."""
+    if outputs and "ansible_hosts" not in outputs:
+        raise RuntimeError(
+            f"the {stack} stack has outputs ({', '.join(sorted(outputs))}) but no ansible_hosts: its last apply "
+            f"did not finish. Find its error in the job log, fix it, and enqueue the job again"
+        )
+    return outputs.get("ansible_hosts") or {}
+
+
 def _sandbox_vms(ex):
     """{name: {maintenance_ip, vmid, addresses}} from the sandbox stack state."""
     hosts = ex.tofu_output("sandbox")
-    ansible_hosts = hosts.get("ansible_hosts", {}) or {}
+    ansible_hosts = _ansible_hosts("sandbox", hosts)
     sandbox = (hosts.get("sandbox", {}) or {}).get("hosts", {}) or {}
     vms = {}
     for key, vm in ansible_hosts.items():
@@ -133,7 +144,7 @@ def _refuse_while_internet(cfg, what):
 
 def _sandbox_hosts(ex):
     """Every sandbox VM's management address, its gateway's too."""
-    hosts = ex.tofu_output("sandbox").get("ansible_hosts", {}) or {}
+    hosts = _ansible_hosts("sandbox", ex.tofu_output("sandbox"))
     return [host["management_ip"] for host in hosts.values()]
 
 
@@ -142,7 +153,7 @@ def _reusable_sandbox(ex, hcl):
     of it has its clean snapshot; else None."""
     if ex.sandbox_definition() != hcl:
         return None
-    built = {int(host["vm_id"]) for host in (ex.tofu_output("sandbox").get("ansible_hosts", {}) or {}).values()}
+    built = {int(host["vm_id"]) for host in _ansible_hosts("sandbox", ex.tofu_output("sandbox")).values()}
     pool = snapshots.pool_vms(ex, "sandbox")
     if not built or {vm["vmid"] for vm in pool} != built:
         return None
@@ -174,7 +185,7 @@ def _build_sandbox(ex, cfg, hcl):
     devbox VMs are shut down and the service VMs it installs from are back to their snapshot,
     so nothing in it comes from team code: every later run of the round rolls back to it."""
     _refuse_while_internet(cfg, "build a sandbox")
-    if ex.tofu_output("sandbox").get("ansible_hosts"):
+    if ex.tofu_output("sandbox"):
         _destroy_sandbox(ex, cfg)  # another round's, or one left half built: it may hold team code
     devboxes = snapshots.shut_down(ex, snapshots.pool_vms(ex, "devbox"))
     try:
@@ -377,7 +388,7 @@ def _fetch_artifact(ex, cfg, artifact):
 
 def _devbox_vms(ex):
     """{name: {maintenance_ip, vmid, team, ssh_ip}} from the devbox stack state."""
-    hosts = ex.tofu_output("devbox").get("ansible_hosts", {}) or {}
+    hosts = _ansible_hosts("devbox", ex.tofu_output("devbox"))
     vms = {}
     for key, host in hosts.items():
         if key == "ssh_gateway" or key.endswith("-gw"):

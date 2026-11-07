@@ -167,17 +167,9 @@ echo 'worms() { /root/app/.venv-test/bin/python /root/app/src/manage.py "$@"; }'
 
 This is the venv `worms test` would create (`src/manage.py:507-512`). The database commands and `worms status` need its Django, psycopg2 and proxmoxer; `worms build` uses the system Python. The node needs no `~/.worms/config`: with `WORMS_SSH` empty, the CLI treats its own machine as the node.
 
-### 2.9 tmux and an ssh-agent
+### 2.9 tmux
 
-OpenTofu's provider logs in to `root@<node>` with an ssh-agent's keys only (`opentofu/stacks/platform/main.tf:14-17`). The WORMS key is authorized for root only at the end of the first build (`ansible/roles/host/round_agent/tasks/workspace.yml:138`), so the first build needs an agent with a key root already accepts: root's own `/root/.ssh/id_rsa`, which Proxmox creates and authorizes, as on worms-dev. Work in tmux from here on, so a dropped SSH session does not stop the build: `tmux new -s worms` (back in later: `tmux attach -t worms`), then inside it:
-
-```sh
-eval "$(ssh-agent -s)" && ssh-add /root/.ssh/id_rsa
-grep -qF "$(cut -d' ' -f2 /root/.ssh/id_rsa.pub)" /root/.ssh/authorized_keys && echo authorized   # else: cat /root/.ssh/id_rsa.pub >> /root/.ssh/authorized_keys
-ssh -o BatchMode=yes -o IdentityFile=none -o StrictHostKeyChecking=accept-new root@"$(hostname -i)" true && echo ok
-```
-
-Without `/root/.ssh/id_rsa` (not verified on a fresh 9.x): `ssh-keygen -t ed25519 -N '' -f /root/.ssh/id_ed25519`, append its `.pub` to `authorized_keys`, `ssh-add` it. Each new tmux window needs the agent again. Later builds need none: the WORMS key logs in then, as on worms-dev. `worms node trust` is for laptops only (it refuses without `WORMS_SSH`).
+Work in tmux from here on, so a dropped SSH session does not stop the build: `tmux new -s worms` (back in later: `tmux attach -t worms`). No ssh-agent of your own is needed, and none is used: the build logs in everywhere with one key, the WORMS key from the vault (§3), which it loads into a private agent of its own (`src/worms_cli/session.py`). OpenTofu's provider uploads snippets to `root@<node>` with it, so root has to accept it: `worms node trust` in §3.
 
 ## 3. Secrets and tokens
 
@@ -190,7 +182,10 @@ worms secrets issue orchestrator-token   # WormsSandboxPower on /pool/sandbox (P
 worms secrets issue topology-token       # WormsTopology on /
 worms secrets                            # the three tokens and ssh-key "set", (generated) 15/15 present
 head -c 14 ansible/group_vars/vault.yml; echo    # $ANSIBLE_VAULT
+worms node trust                         # root on this node accepts the WORMS key: "... accepts the WORMS key ...: ok"
 ```
+
+`worms secrets` generates what is missing; every other command only reads the vault, and stops, naming what is missing and `worms build secrets`, if anything is. A new WORMS key is never generated while VMs of this checkout exist: they authorize the old one (restore the vault, or `worms secrets set ssh-key < key`).
 
 `issue` runs `pveum` on the node and needs nothing beforehand (`issue` in `src/worms_cli/tokens.py`). Ignore its hint "Deliver it to its users with `worms build provision`": the first build delivers the tokens. The old `terraform-prov@pve` token and `credentials.auto.tfvars` are not needed; do not create them (`worms` refuses to run while any `*.auto.tfvars` exists).
 
@@ -200,13 +195,19 @@ head -c 14 ansible/group_vars/vault.yml; echo    # $ANSIBLE_VAULT
 cd /root/app && worms build; echo "exit $?"
 ```
 
-It runs init, secrets, platform (bridges, images, snippets, pools, hookscript), firewall and host network, then the infrastructure and the 14 configure playbooks under the internet window, offline mode, and the `clean` snapshot of the 11 service VMs. **About an hour** (an estimate: never run on an empty node). `Update all packages` prints nothing for about 16 minutes. Success: the last lines are the host summary and `== setup complete (internet access denied) ==`, exit 0. It is safe to repeat after any failure, and the internet window closes by itself.
+It runs secrets, init, platform (bridges, images, snippets, pools, hookscript), firewall and host network, then the infrastructure and the 14 configure playbooks under the internet window, offline mode, and the `clean` snapshot of the 11 service VMs, each a numbered step (`== step 12/27: SetupDbAndDashboard.yml`). **About an hour** (an estimate: never run on an empty node). `Update all packages` prints nothing for about 16 minutes. Success: the last lines are the host summary and `== setup complete (internet access denied) ==`, exit 0.
+
+**When a step fails, the build stops there.** Nothing after it runs; the internet window is closed and the devbox VMs it shut down are started again. A missing value (a token, a vault entry, a platform output) stops it the same way, before the step that needs it. The last lines say which step and why, and the tool's own error is above them. Fix the cause, then go on from the failed step: `worms build --resume` (the progress is in `.worms-build.json`, with what the earlier steps found, such as which service VMs were rolled back). Another `worms build`, `provision`, `configure`, `infrastructure` or `rebuild-services` is refused meanwhile; `worms build <component> --restart` starts one over instead.
 
 On the way it migrates the empty database through `core` 0001–0006 and then applies the grants, the event tables' included. That chain was run from an empty schema on worms-dev's PostgreSQL on 2026-11-06 (a throwaway schema, dropped afterwards): every migration applied, the event tables got their `written_by` default and CHECK constraints, and the models match the migrations. The collision queries in `docs/testing.md` are for upgrading a database with data, not for this. The orchestrator gets the Proxmox CA from `/etc/pve/pve-root-ca.pem` over the build's SSH connection and the node's name in its `/etc/hosts` (role `django_app`, `tasks/connectivity.yml`); the dashboard reaches the orchestrator as `orchestrator.worms.internal` the same way. Neither needs DNS.
 
 | Symptom | Do |
 |---|---|
-| `cannot log in ... OpenTofu's Proxmox provider`, or tofu fails with an SSH authentication error | Step 2.9 in this shell |
+| `root on this node does not accept the WORMS key`, `cannot log in ... with the WORMS key`, or tofu fails with an SSH authentication error | `worms node trust` (§3), then `worms build --resume` |
+| `PROXMOX_VE_SSH_... is set in your environment` | `unset` it: OpenTofu would log in with it instead of the WORMS key |
+| `the vault lacks ...` / `there is no vault` | `worms build secrets` |
+| `proxmox-token: MISSING ...` / `orchestrator-token: MISSING ...` | `worms secrets issue <name>`, then `worms build --resume` |
+| `` `worms build all` stopped at step ... `` on the next `worms build` | That build is waiting for `worms build --resume`; or `worms build all --restart` |
 | `... overrides the vault's token for OpenTofu: remove it` | Delete that `*.auto.tfvars` |
 | tofu cannot find a `.qcow2` | Step 2.7 |
 | tofu errors about `snippets`, `import` or `local-zfs-sandbox` | Step 2.4 |
@@ -220,7 +221,8 @@ On the way it migrates the empty database through `core` 0001–0006 and then ap
 | `Kernel network settings` fails on `net.netfilter.*` (not verified) | `modprobe nf_conntrack`, then build again |
 | From a laptop: `stack sandbox` / `stack devbox ... worms-node-run: No such file or directory`, then `NOT APPLIED` (now: `no round agent yet`) | Expected until the build has installed the round agent (`SetupRoundAgent.yml`): the two stacks live in its workspace `/opt/worms` and do not exist yet. The inventory is still written. If it persists after a full build: `ls -l /usr/local/sbin/worms-node-run` on the node. Any other failure to read them (SSH, tofu) aborts the build with `error: 'tofu output' of stack ...` |
 | A devbox job fails at once: `build devbox-apply` ... `error: no ansible/inventory.generated.yml` in `/var/log/worms/jobs/<id>.log` | A `/root/.worms/config` on the node with `WORMS_SSH` (laptop mode) that the agent read. Remove that line on the node (the node needs no config, §2.8); `SetupRoundAgent.yml` now also empties it in the agent's environment |
-| What runs after a failure | Nothing but the cleanup, announced by `error: a step failed, stopping the build: ... first`: regenerating the inventory after a failed apply, closing the internet window (`Internet.yml -e internet=denied`) and starting the devbox VMs it shut down. The last line is `build aborted: ...`, exit 1. The step's own error is above that line |
+| What runs after a failure | Nothing but the cleanup, announced by `error: a step failed, stopping the build: ... first`: regenerating the inventory after a failed apply, closing the internet window (`Internet.yml -e internet=denied`) and starting the devbox VMs it shut down. Then `build stopped: ...`, the step, and `worms build --resume`, exit 1. The step's own error is above those lines |
+| `stack devbox has outputs (devbox) but no ansible_hosts: its last apply did not finish` | The apply stopped before the VMs (the job log has its `Error:`). Fix that, then `worms devbox provision` again |
 | `Completely failed to parse inventory source .../inventory.yml` (or `inventory.generated.yml`) | Ansible could not read that file, and stops (`ansible.cfg`: `any_unparsed_is_failed`; by default it would go on without the file and skip every play on its groups). The `Failed to parse inventory with 'yaml' plugin` warning above it gives line and column. In a job (`/opt/worms/ansible/...`): fix the file in the checkout, then `ansible-playbook SetupRoundAgent.yml --tags agent-sync` while no job runs. A missing `inventory.generated.yml`: `worms build inventory` |
 | `worms-audit-gateway.service` fails every minute (`systemctl --failed`, `ssh exited 255`) | Expected until `worms devbox provision`: there is no SSH gateway to read logins from yet |
 | Rerunning a single playbook later waits for minutes on `apt` or `pip` | The internet window is closed: add `--skip-tags packages -e internet_enabled=false` (`docs/management.md`, "Build and deploy") |

@@ -14,3 +14,7 @@ __pycache__/
 
 # Upload storage of older test runs (before MEDIA_ROOT was set; now projects/dashboard/media/ locally)
 /malware-artifacts/
+
+# A `worms build` that stopped, for `worms build --resume` (src/worms_cli/pipeline.py)
+/.worms-build.json
+/.worms-build.json.tmp

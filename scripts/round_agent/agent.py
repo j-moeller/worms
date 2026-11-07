@@ -13,9 +13,12 @@ Connection settings come from the environment (a root-only file, like the
 other services):
 
     DB_HOST DB_PORT DB_NAME DB_USER DB_PASSWORD DB_SSLMODE DB_SSLROOTCERT
-    REPO_ROOT                 the agent's workspace (default: cwd; /opt/worms)
+    REPO_ROOT                 the agent's workspace (/opt/worms)
     DASHBOARD_HOST            where to read uploaded artifacts (ssh)
     DASHBOARD_MEDIA_ROOT      the dashboard's media directory
+
+The service does not start while one it needs is missing or empty (REQUIRED_ENV),
+or the WORMS key is not there: it says which, rather than fail a job later.
 """
 
 from __future__ import annotations
@@ -33,6 +36,12 @@ from round_agent.executor import DEFAULT_JOB_LOG_DIR, Executor
 
 log = logging.getLogger("round-agent")
 
+# What /etc/worms/round-agent.env must set (role round_agent writes all of it).
+REQUIRED_ENV = (
+    "REPO_ROOT", "DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD", "DB_SSLROOTCERT",
+    "DASHBOARD_HOST", "DASHBOARD_MEDIA_ROOT", "SCORING_HOST", "LOGGING_HOST", "SERVICE_HOSTS", "SSH_KEY",
+    "TF_VAR_proxmox_api_url", "TF_VAR_proxmox_api_token", "TF_VAR_proxmox_instance", "TF_VAR_ssh_public_key",
+)
 HEARTBEAT_SECONDS = 30
 IDLE_POLL_SECONDS = 5
 
@@ -200,8 +209,21 @@ class Agent:
             time.sleep(IDLE_POLL_SECONDS)
 
 
+def check_env(env) -> None:
+    """Stop before the loop when the environment file lacks what the jobs need."""
+    missing = [name for name in REQUIRED_ENV if not env.get(name)]
+    missing += [path for path in (env.get("SSH_KEY"), env.get("TF_VAR_ssh_public_key")) if path and not os.path.exists(path)]
+    if missing:
+        raise SystemExit(
+            f"round agent: not set or not there: {', '.join(missing)} (/etc/worms/round-agent.env). "
+            "Run SetupRoundAgent.yml again from the controller (`worms build configure`), with the vault complete "
+            "(`worms build secrets`)"
+        )
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    check_env(os.environ)
     agent = Agent()
 
     def stop(*_):

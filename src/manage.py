@@ -399,7 +399,7 @@ def cmd_secrets(config, args) -> int:
     secrets check`: ask Proxmox whether the stored tokens are right."""
     import getpass
 
-    from worms_cli.secrets import EXTERNAL, Vault, VaultError
+    from worms_cli.secrets import EXTERNAL, Vault, VaultError, vms_deployed
     from worms_cli.session import SessionError, for_config
     from worms_cli.tokens import TOKENS, TokenError, check, issue
 
@@ -412,7 +412,7 @@ def cmd_secrets(config, args) -> int:
             print(output.color("Deliver it to its users with `worms build provision`.", "dim"))
             return 0
         if args.secrets_action == "check":
-            vault.ensure()
+            vault.ensure(new_ssh_key=not vms_deployed(config.repo_root))
             permissions = for_config(config).token_permissions()
             rows, bad = [], 0
             for name, spec in TOKENS.items():
@@ -432,7 +432,7 @@ def cmd_secrets(config, args) -> int:
             vault.set(args.name, value)
             print(f"{args.name}: stored in {vault.file}")
             return 0
-        vault.ensure()
+        vault.ensure(new_ssh_key=not vms_deployed(config.repo_root))
         rows = [[name, what, output.status_cell("ok" if state == "set" else ("warn" if "MISSING" in state else "stopped"),
                                                 state)] for name, what, state in vault.status()]  # fmt: skip
     except (VaultError, KeyError, TokenError, SessionError) as exc:
@@ -444,19 +444,15 @@ def cmd_secrets(config, args) -> int:
 
 
 def cmd_node(config, args) -> int:
-    """`worms node trust`: authorize the WORMS key (vault) on the VMs that exist
-    already (they accept root's old key on the node, which logs in to them), and
-    for root on the node, with your own SSH login. Needed once for VMs that
-    predate the WORMS key, and for the node only without an ssh-agent of your
-    own (the node is otherwise reached with your keys)."""
+    """`worms node trust`: let the WORMS key (vault) in, the one key the build logs in
+    with: for root on the node, and on the VMs that exist already (they accept root's
+    old key on the node, which logs in to them). Once, with your own login: over SSH
+    from a laptop, right here on the node. It fails unless every VM took it."""
     import shlex
 
     from worms_cli.secrets import SSH_PUBLIC_KEY
     from worms_cli.session import SessionError, for_config
 
-    if not config.ssh:
-        output.error("set WORMS_SSH=root@<node> first (~/.worms/config)")
-        return 2
     session = for_config(config)
     try:
         key = session.values()[SSH_PUBLIC_KEY].strip()
@@ -474,21 +470,29 @@ echo "node: the WORMS key may log in as $(id -un)"
 old=$(sed -n 's/^REPO_ROOT=//p' /etc/worms/round-agent.env 2>/dev/null)
 known=$(cat "$old/ansible/inventory.generated.yml" /opt/worms/ansible/inventory.generated.yml 2>/dev/null \
   | sed -n 's/^ *ansible_host: \([0-9.]*\)$/\1/p')
+failed=0
 for ip in $(printf '%s\n' {' '.join(ips)} $known | sort -u); do
   [ "$ip" = 127.0.0.1 ] && continue
-  if {vm} debian@"$ip" {shlex.quote(add)} >/dev/null 2>&1; then echo "vm $ip: ok"; else echo "vm $ip: FAILED (not reachable with root's key)"; fi
+  if {vm} debian@"$ip" {shlex.quote(add)} >/dev/null 2>&1; then echo "vm $ip: ok"
+  else echo "vm $ip: FAILED (not reachable with root's key)"; failed=$((failed + 1)); fi
 done
+[ "$failed" -eq 0 ] || {{ echo "$failed VM(s) do not accept the WORMS key: fix their SSH, then run this again" >&2; exit 1; }}
 """
-    print(output.color(f"$ ssh {config.ssh} ...  (your own SSH login)", "dim"))
-    if subprocess.run(["ssh", config.ssh, script]).returncode != 0:
-        output.error(f"could not add the key on {config.ssh}")
+    if config.ssh:
+        print(output.color(f"$ ssh {config.ssh} ...  (your own SSH login)", "dim"))
+        argv = ["ssh", config.ssh, script]
+    else:
+        print(output.color("$ (this node, as root) ...", "dim"))
+        argv = ["sh", "-c", script]
+    if subprocess.run(argv).returncode != 0:
+        output.error("the WORMS key is not let in everywhere yet: see the lines above")
         return 1
     try:
         session.check_node()
     except SessionError as exc:
         output.error(str(exc))
         return 1
-    print(output.color("login to the node with the agent's keys (as OpenTofu does): ok", "green"))
+    print(output.color("root on the node accepts the WORMS key (as OpenTofu logs in): ok", "green"))
     return 0
 
 
@@ -498,27 +502,72 @@ done
 
 
 def cmd_build(config, args) -> int:
+    """`worms build [<component>]`. The first step that fails ends it, and nothing after it
+    runs but closing the internet window and starting the devbox VMs again. A multi-step
+    build (pipeline.RESUMABLE) keeps its progress: fix the cause, then `worms build
+    --resume` goes on at the step that failed. Another one is refused meanwhile, unless
+    started over with --restart."""
+    from worms_cli.session import SessionError
+
     if args.list:
         print(_components_overview())
         return 0
-    component = args.component or "all"
-    if component not in pipeline.COMPONENTS:
-        output.error(f"unknown component {component!r}. Try `worms build --list`.")
+    state = pipeline.BuildState(config.repo_root)
+    try:
+        stopped = state.load()
+    except build.BuildError as exc:
+        output.error(str(exc))
         return 1
-    method_name, _ = pipeline.COMPONENTS[component]
-    pipe = pipeline.Pipeline(config, ansible_args=" ".join(args.make_args))
+    if args.resume:
+        if args.component or args.restart:
+            output.error("`worms build --resume` goes on with the build that stopped: no component, no --restart")
+            return 2
+        if not stopped:
+            output.error(f"nothing to resume: no build has stopped ({state.path} is not there)")
+            return 1
+        component = stopped["component"]
+        ansible_args = " ".join(args.make_args) if args.make_args else stopped.get("ansible_args", "")
+    else:
+        component = args.component or "all"
+        if component not in pipeline.COMPONENTS:
+            output.error(f"unknown component {component!r}. Try `worms build --list`.")
+            return 1
+        if stopped and component in pipeline.RESUMABLE:
+            if not args.restart:
+                output.error(
+                    f"{pipeline.describe_stopped(stopped)}. Fix the cause, then go on with it: `worms build --resume`; "
+                    f"or start `worms build {component}` over: `worms build {component} --restart`"
+                )
+                return 1
+            state.clear()
+            stopped = None
+        ansible_args = " ".join(args.make_args)
+    pipe = pipeline.Pipeline(config, ansible_args=ansible_args, state=state)
     code = 0
     try:
-        getattr(pipe, method_name)()
-    except build.BuildError as exc:
-        # Nothing ran after the failed step but the internet window's close and
-        # the devbox VMs' start (tests/test_pipeline.py).
-        output.error(f"build aborted: {exc}")
-        code = 1
-    # Also after a failure: a rollback that happened is not undone by one.
-    if pipe.services_rolled_back and pipe.devboxes_exist():
+        pipe.run_component(component, resume=stopped if args.resume else None)
+    except (build.BuildError, SessionError, KeyboardInterrupt) as exc:
+        output.error(f"build stopped: {exc}" if str(exc) else "build stopped: interrupted")
+        code = 130 if isinstance(exc, KeyboardInterrupt) else 1
+        record = _stopped_record(state, component)
+        if record:
+            output.error(f"{pipeline.describe_stopped(record, why=False)}.")
+            print(output.color("Fix the cause shown above, then go on from that step: worms build --resume", "bold"))
+    # The devbox map on the rolled-back services is written again once the build is
+    # over: after it finished, or when it failed for good (not one that resumes).
+    if pipe.services_rolled_back and not _stopped_record(state, component) and pipe.devboxes_exist():
         code = _restore_devbox_map(config) or code
     return code
+
+
+def _stopped_record(state, component):
+    """The progress of `component`'s build if it stopped and can be resumed."""
+    if component not in pipeline.RESUMABLE:
+        return None
+    try:
+        return state.load()
+    except build.BuildError:
+        return None
 
 
 def cmd_debug(config, args) -> int:
@@ -603,8 +652,8 @@ SECTIONS = (
         commands=(
             ("secrets issue <name>", "create or rotate a Proxmox token and store it"),
             ("secrets set <name>", "store a secret by hand (prompted, or from stdin)"),
-            ("node trust", "once: authorize the WORMS key on VMs that predate it (and for root on the node)"),
-            ("build [<component>]", "everything, end to end (= make), or one component: `worms build --list`"),
+            ("node trust", "once: let the WORMS key in, for root on the node and on VMs that predate it"),
+            ("build [<component>]", "end to end (= make), or one component (`--list`); `--resume`: go on after a fix"),
         ),
         more_components=("all", "init", "secrets", "platform", "firewall", "host-network", "infrastructure",
                          "inventory", "configure", "provision", "offline", "snapshot-services", "internet-allow"),  # fmt: skip
@@ -800,6 +849,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_build = _add(sub, "build", epilog=_components_overview(), formatter_class=argparse.RawDescriptionHelpFormatter)
     p_build.add_argument("component", nargs="?", help="component to build (default: all)")
     p_build.add_argument("--list", action="store_true", help="list components and exit")
+    p_build.add_argument("--resume", action="store_true", help="go on with the build that stopped, at the step that failed")
+    p_build.add_argument("--restart", action="store_true", help="start the component over, dropping a stopped build's progress")
     p_build.add_argument(
         "make_args", nargs="*", help="extra args passed to ansible-playbook, after `--` (e.g. -- --limit db -vvv)"
     )
@@ -851,7 +902,7 @@ def main(argv=None) -> int:
     if args.command == "build":
         return cmd_build(config, args)
     if args.command == "simulate":
-        return cmd_build(config, argparse.Namespace(component="simulate", list=False, make_args=[]))
+        return cmd_build(config, argparse.Namespace(component="simulate", list=False, make_args=[], resume=False, restart=False))
     if args.command == "test":
         return cmd_test(config, args)
     if args.command == "debug":

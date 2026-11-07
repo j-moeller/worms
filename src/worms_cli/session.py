@@ -11,14 +11,14 @@ Two modes, chosen by WORMS_SSH (~/.worms/config):
   node    WORMS_SSH empty: everything runs on this machine, the Proxmox node
           (the round agent itself, or an operator logged in on the node).
 
-SSH: the node is reached with your own SSH setup -- your ssh-agent, keys and
-~/.ssh/config, exactly as `ssh root@<node>` -- by the CLI, by Ansible and by
-OpenTofu's Proxmox provider (which logs in with the agent's keys only). The VMs
-accept the WORMS key (vault): it is loaded into a private ssh-agent that lives
-as long as the CLI process (WORMS_SSH_AUTH_SOCK; the generated inventory points
-the VM connections at it) and never touches the disk. Without an agent of your
-own the WORMS key is used for the node too, which then has to accept it
-(`worms node trust`).
+SSH: one key, the WORMS key (vault). It is loaded into a private ssh-agent that
+lives as long as the CLI process and never touches the disk, and every SSH login
+of the build uses that agent and nothing else: the CLI's to the node, OpenTofu's
+Proxmox provider (snippet uploads), Ansible to the node and the VMs, rsync. Your
+own keys, a forwarded agent and ~/.ssh/id_* are never offered (IdentityFile=none,
+IdentityAgent=SSH_AUTH_SOCK, SSH_AUTH_SOCK = the WORMS agent). Root on the node
+has to accept the key: `worms node trust`, once, with your own login, says so
+when it does not (check_node).
 """
 
 from __future__ import annotations
@@ -59,11 +59,13 @@ def for_config(config) -> "Session":
     return session
 
 
-def group_var(repo_root: Path, name: str, default: str) -> str:
-    """A plain scalar from ansible/group_vars/all.yml (names, not secrets)."""
-    text = (Path(repo_root) / "ansible" / "group_vars" / "all.yml").read_text()
-    match = re.search(rf'^{re.escape(name)}:\s*"?([^"\n#]+?)"?\s*$', text, re.M)
-    return match.group(1) if match else default
+def group_var(repo_root: Path, name: str) -> str:
+    """A plain scalar from ansible/group_vars/all.yml (names, not secrets); an error if it is not there."""
+    path = Path(repo_root) / "ansible" / "group_vars" / "all.yml"
+    match = re.search(rf'^{re.escape(name)}:\s*"?([^"\n#]+?)"?\s*$', path.read_text(), re.M)
+    if not match:
+        raise SessionError(f"{name} is not set in {path}")
+    return match.group(1)
 
 
 def free_port() -> int:
@@ -85,6 +87,12 @@ def ssh_host(target: str) -> str:
     return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
 
 
+# Set in the environment, OpenTofu's Proxmox provider would log in to the node with
+# these instead of the WORMS key in the agent (bpg/proxmox).
+PROVIDER_SSH_OVERRIDES = ("PROXMOX_VE_SSH_PRIVATE_KEY", "PROXMOX_VE_SSH_AUTH_SOCK", "PROXMOX_VE_SSH_PASSWORD",
+                          "PROXMOX_VE_SSH_USERNAME")  # fmt: skip
+
+
 class Session:
     def __init__(self, config):
         self.config = config
@@ -92,39 +100,30 @@ class Session:
         self.vault = Vault(config.repo_root)
         self._values = None
         self._agent = None  # the WORMS key's agent: {"SSH_AUTH_SOCK": ..., "SSH_AGENT_PID": ...}
-        self._operator_agent = None
         self._tmp = None
         self._node_ok = False
+        self._node_name = None
 
     # -- secrets ---------------------------------------------------------------
 
     def values(self) -> dict:
+        """The vault, complete (Vault.check): a missing secret is an error that says how to
+        fix it, never generated on the side (`worms build secrets` does that)."""
         if self._values is None:
             try:
-                self.vault.ensure()  # generated secrets appear on first use
-                self._values = self.vault.load()
+                values = self.vault.load()
+                self.vault.check(values)
             except (VaultError, OSError, subprocess.CalledProcessError) as exc:
                 raise SessionError(f"vault: {exc}") from exc
+            self._values = values
         return self._values
 
     def has_vault(self) -> bool:
-        # Laptop mode always works from the vault (it is created on first use);
+        # Laptop mode always works from the vault (values() says how to make one);
         # on the node only if the operator keeps one there (the agent has none).
         return self.laptop or self.vault.exists()
 
     # -- ssh-agents ----------------------------------------------------------------
-
-    def operator_agent(self) -> bool:
-        """Whether your own ssh-agent (SSH_AUTH_SOCK) is there and holds a key."""
-        if self._operator_agent is None:
-            ok = False
-            if os.environ.get("SSH_AUTH_SOCK"):
-                try:
-                    ok = subprocess.run(["ssh-add", "-l"], capture_output=True, timeout=10).returncode == 0
-                except (OSError, subprocess.SubprocessError):
-                    ok = False
-            self._operator_agent = ok
-        return self._operator_agent
 
     def worms_agent(self) -> dict:
         """A private ssh-agent holding the WORMS key (started once)."""
@@ -156,17 +155,17 @@ class Session:
     # -- environments for the tools ---------------------------------------------
 
     def env(self) -> dict:
-        """For ssh, OpenTofu, Ansible and the generator scripts: your SSH_AUTH_SOCK
-        stays (it reaches the node), WORMS_SSH_AUTH_SOCK is the WORMS key's
-        agent (it reaches the VMs)."""
+        """For ssh, OpenTofu, Ansible and the generator scripts: SSH_AUTH_SOCK (and
+        WORMS_SSH_AUTH_SOCK, which the generated inventory names) is the WORMS key's
+        agent, whatever agent you have: the build logs in with that key only. Without
+        a vault (the round agent in its workspace) worms-node-run has set it already."""
         env = dict(os.environ)
         if self.laptop:
             env["WORMS_SSH"] = self.config.ssh
         if self.has_vault():
             worms = self.worms_agent()
+            env.update(worms)
             env["WORMS_SSH_AUTH_SOCK"] = worms["SSH_AUTH_SOCK"]
-            if not self.operator_agent():
-                env.update(worms)  # no agent of your own: the WORMS key for the node too
         return env
 
     def proxmox_api_url(self) -> str:
@@ -183,50 +182,87 @@ class Session:
         """OpenTofu's inputs from the vault, in the process environment only.
         On the node without a vault (the round agent) its environment file
         already has them."""
-        env = self.env()
         if not self.has_vault():
-            return env
+            return self.env()
         stray = self.stray_tofu_credentials()
         if stray:
             # OpenTofu prefers *.auto.tfvars to TF_VAR_*: the vault would silently lose.
             raise SessionError(f"{stray[0]} overrides the vault's token for OpenTofu: remove it ({len(stray)} file(s))")
-        # The provider logs in to root@<node> with the agent's keys only; say
-        # so here rather than let it fail with "unable to authenticate".
+        env = self.env()
+        overrides = [name for name in PROVIDER_SSH_OVERRIDES if env.get(name)]
+        if overrides:
+            raise SessionError(
+                f"{', '.join(overrides)} is set in your environment: OpenTofu would log in to the node with it "
+                "instead of the WORMS key. Unset it"
+            )
+        # The provider logs in to root@<node> with the agent's key; say so here
+        # rather than let it fail with "unable to authenticate".
         self.check_node()
         token = self.values().get("vault_tofu_proxmox_api_token", "")
         if not token:
-            raise SessionError("the Proxmox provisioning token is not in the vault: run `worms secrets set proxmox-token`")
+            raise SessionError("the Proxmox provisioning token is not in the vault: `worms secrets issue proxmox-token`")
         env["TF_VAR_proxmox_api_token"] = token
         env["TF_VAR_proxmox_api_url"] = self.proxmox_api_url()
         env["TF_VAR_ssh_public_key"] = str(self.public_key_file())
-        # Not a secret. The stack's own default is the safe one (no access).
-        env["TF_VAR_llm_access_ip"] = group_var(self.config.repo_root, "llm_access_ip", "127.0.0.1")
+        env["TF_VAR_proxmox_instance"] = self.node_name()
+        # Not a secret, but the stacks' default (no access) would hide that it is missing.
+        env["TF_VAR_llm_access_ip"] = group_var(self.config.repo_root, "llm_access_ip")
         return env
+
+    def node_name(self) -> str:
+        """The Proxmox node's name, from the node itself, for OpenTofu (proxmox_instance):
+        never a default, which would build on whichever node it names. A name set in the
+        environment (TF_VAR_proxmox_instance) must be that one."""
+        if self._node_name is None:
+            code, out, err = self.node_run(["hostname", "-s"])
+            name = out.strip()
+            if code != 0 or not name:
+                raise SessionError(f"cannot read the node's name (`hostname -s`): {err.strip()[:200] or 'empty'}")
+            wanted = os.environ.get("TF_VAR_proxmox_instance")
+            if wanted and wanted != name:
+                raise SessionError(f"TF_VAR_proxmox_instance={wanted} is set, but the node is {name}: unset it")
+            self._node_name = name
+        return self._node_name
 
     # -- the node ----------------------------------------------------------------
 
     def ssh_opts(self) -> list[str]:
-        """To the node: your own SSH setup, never a prompt, and no long wait: every
+        """To the node: the WORMS key in the agent and nothing else (no key file, not an
+        IdentityAgent from ~/.ssh/config), never a prompt, and no long wait: every
         command starts by asking the node about its internet access."""
-        return ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+        return ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "IdentityFile=none",
+                "-o", "IdentityAgent=SSH_AUTH_SOCK"]  # fmt: skip
 
     def ssh_argv(self, command: str) -> list[str]:
         return ["ssh", *self.ssh_opts(), self.config.ssh, command]
 
     def check_node(self) -> None:
-        """Laptop mode: a login to the node without a prompt and with the agent's
-        keys only (IdentityFile=none), as OpenTofu's provider logs in."""
-        if not self.laptop or self._node_ok:
+        """Root on the node accepts the WORMS key, as OpenTofu's provider logs in with it:
+        from a laptop, a login with that key alone; on the node, the key in root's
+        authorized_keys. Without a vault (the round agent) there is nothing to check here."""
+        if self._node_ok or not self.has_vault():
             return
-        argv = ["ssh", *self.ssh_opts(), "-o", "IdentityFile=none", self.config.ssh, "true"]
+        if not self.laptop:
+            blob = self.values()[SSH_PUBLIC_KEY].split()[1]
+            keys = Path("/root/.ssh/authorized_keys")
+            try:
+                accepted = any(line.split()[1:2] == [blob] or f" {blob}" in line for line in keys.read_text().splitlines())
+            except OSError as exc:
+                raise SessionError(f"cannot read {keys}: {exc}") from exc
+            if not accepted:
+                raise SessionError(
+                    f"root on this node does not accept the WORMS key ({keys}): OpenTofu, Ansible and the round "
+                    "agent log in with it. Let it in once: `worms node trust`"
+                )
+            self._node_ok = True
+            return
+        argv = ["ssh", *self.ssh_opts(), self.config.ssh, "true"]
         # No stdin: ssh would read it, and `worms secrets set ssh-key < key` needs it.
         proc = subprocess.run(argv, env=self.env(), stdin=DEVNULL, capture_output=True, text=True, timeout=30)
         if proc.returncode != 0:
-            agent = "your ssh-agent" if self.operator_agent() else "an ssh-agent (yours: none, or no key in it)"
             raise SessionError(
-                f"cannot log in to {self.config.ssh} with the keys of {agent}: {proc.stderr.strip()[:200].rstrip('.')}. "
-                "OpenTofu's Proxmox provider logs in this way. Load your key (`ssh-add`), "
-                "or let the WORMS key in once: `worms node trust`."
+                f"cannot log in to {self.config.ssh} with the WORMS key: {proc.stderr.strip()[:200].rstrip('.')}. "
+                "The build logs in with that key only. Let it in once, with your own login: `worms node trust`."
             )
         self._node_ok = True
 
@@ -282,11 +318,14 @@ class Session:
         return str(path)
 
     def node_run(self, argv: list) -> tuple:
-        """A command on the Proxmox node: (returncode, stdout, stderr), all captured."""
+        """A command on the Proxmox node: (returncode, stdout, stderr), all captured. Run
+        right here on the node it logs in nowhere, so it needs no key (`worms secrets
+        issue` runs before the vault is complete)."""
+        env = dict(os.environ)
         if self.laptop:
             self.check_node()
-            argv = self.ssh_argv(shlex.join(argv))
-        proc = subprocess.run(argv, env=self.env(), capture_output=True, text=True)
+            argv, env = self.ssh_argv(shlex.join(argv)), self.env()
+        proc = subprocess.run(argv, env=env, stdin=DEVNULL, capture_output=True, text=True)
         return proc.returncode, proc.stdout, proc.stderr
 
     def token_permissions(self):

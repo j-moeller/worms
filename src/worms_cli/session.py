@@ -86,6 +86,51 @@ def environments(repo_root: Path) -> dict:
     return table
 
 
+def known_hosts_problems(path) -> list:
+    """The lines of a known_hosts file that OpenTofu's Proxmox provider cannot read: it
+    parses the whole file (Go's knownhosts) before every SSH login, and one bad line
+    stops every snippet upload ("failed to read .../known_hosts"). ssh itself skips
+    such lines, so nothing else notices. [(line number, reason, start of the line)]"""
+    import base64
+    import binascii
+
+    problems = []
+    try:
+        lines = Path(path).read_text(errors="replace").splitlines()
+    except FileNotFoundError:
+        return problems
+    for number, line in enumerate(lines, 1):
+        fields = line.split()
+        if not fields or fields[0].startswith("#"):
+            continue
+        if fields[0] in ("@cert-authority", "@revoked"):
+            fields = fields[1:]
+        try:
+            if len(fields) < 3:
+                raise ValueError("fewer than three fields (host, key type, key)")
+            base64.b64decode(fields[2], validate=True)
+            if fields[0].startswith("|1|"):
+                for part in fields[0].split("|")[2:4]:
+                    base64.b64decode(part, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            problems.append((number, str(exc) or "not base64", line[:60]))
+    return problems
+
+
+def check_known_hosts() -> None:
+    """Stop before OpenTofu if root's (your) known_hosts has a line its provider cannot read."""
+    path = Path.home() / ".ssh" / "known_hosts"
+    problems = known_hosts_problems(path)
+    if problems:
+        listed = "; ".join(f"line {n} ({why}): {start!r}" for n, why, start in problems)
+        lines = ";".join(f"{n}d" for n, _, _ in problems)
+        raise SessionError(
+            f"{path} has lines OpenTofu's Proxmox provider cannot read, and it reads the whole file before every "
+            f"SSH login: {listed}. Remove them (ssh learns those hosts again): "
+            f"cp {path} {path}.bak && sed -i '{lines}' {path}"
+        )
+
+
 def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))

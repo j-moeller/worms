@@ -53,6 +53,37 @@ SSH_OPTS = [
 REASON_PREFIXES = ("fatal:", "failed:", "[ERROR]", "ERROR!", "Error:", "error:")
 
 
+def known_hosts_problems(path) -> list:
+    """The lines of a known_hosts file that OpenTofu's Proxmox provider cannot read: it
+    parses the whole file (Go's knownhosts) before every SSH login, and one bad line
+    stops every snippet upload ("failed to read .../known_hosts"). ssh itself skips
+    such lines, so nothing else notices. [(line number, reason, start of the line)]"""
+    import base64
+    import binascii
+
+    problems = []
+    try:
+        lines = Path(path).read_text(errors="replace").splitlines()
+    except FileNotFoundError:
+        return problems
+    for number, line in enumerate(lines, 1):
+        fields = line.split()
+        if not fields or fields[0].startswith("#"):
+            continue
+        if fields[0] in ("@cert-authority", "@revoked"):
+            fields = fields[1:]
+        try:
+            if len(fields) < 3:
+                raise ValueError("fewer than three fields (host, key type, key)")
+            base64.b64decode(fields[2], validate=True)
+            if fields[0].startswith("|1|"):
+                for part in fields[0].split("|")[2:4]:
+                    base64.b64decode(part, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            problems.append((number, str(exc) or "not base64", line[:60]))
+    return problems
+
+
 class CommandError(RuntimeError):
     """The job's `error` (and the dashboard's "Recently failed"): the END of stderr,
     where Ansible, OpenTofu and the worms CLI put the reason (its start is Ansible's
@@ -239,6 +270,15 @@ class Executor:
 
     def tofu(self, stack, *args, timeout=3600):
         path = self.repo_root / "opentofu" / "stacks" / stack
+        if args[:1] in (("apply",), ("destroy",)):
+            known_hosts = Path.home() / ".ssh" / "known_hosts"
+            problems = known_hosts_problems(known_hosts)
+            if problems:
+                raise RuntimeError(
+                    f"{known_hosts} has lines OpenTofu's Proxmox provider cannot read: "
+                    + "; ".join(f"line {n} ({why})" for n, why, _ in problems)
+                    + f". Remove them: sed -i '{';'.join(f'{n}d' for n, _, _ in problems)}' {known_hosts}"
+                )
         return self.run(["tofu", f"-chdir={path}", *args], timeout=timeout, stream=args[:1] != ("output",))
 
     def tofu_output(self, stack):

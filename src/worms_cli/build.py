@@ -14,7 +14,7 @@ import subprocess
 import sys
 
 from worms_cli import output
-from worms_cli.session import NODE_PLAYBOOKS, NODE_RUN, NODE_STACKS, SessionError, for_config
+from worms_cli.session import NODE_PLAYBOOKS, NODE_RUN, NODE_STACKS, SessionError, check_known_hosts, for_config
 
 
 class BuildError(RuntimeError):
@@ -93,6 +93,11 @@ class Runner:
 
     def tofu(self, stack: str, *args: str, check: bool = True) -> int:
         command = "tofu " + " ".join(args)
+        if args and args[0] in ("apply", "destroy") and not (stack in NODE_STACKS and self._node_part()):
+            try:  # OpenTofu runs here, and its provider logs in to the node over SSH
+                check_known_hosts()
+            except SessionError as exc:
+                raise BuildError(str(exc)) from exc
         if stack in NODE_STACKS and self._node_part():
             if args and args[0] == "init":
                 # Initialised on the node whenever the workspace is synced

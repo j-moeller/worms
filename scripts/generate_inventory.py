@@ -64,6 +64,14 @@ NODE_STACKS = {"sandbox", "devbox"}
 NODE_RUN = "/usr/local/sbin/worms-node-run"
 # The one key: the agent's, never a key file (~/.ssh/id_*).
 ONE_KEY = ["-o", "IdentityFile=none", "-o", "IdentityAgent=SSH_AUTH_SOCK"]
+# How to finish (or remove) a stack whose last apply stopped half way.
+UNFINISHED = {
+    "devbox": "the round agent applies it: `worms devbox provision` (follow it: `tail -F /var/log/worms/jobs/latest.log` "
+              "on the node). Or remove what was built, on the node: "
+              "`worms-node-run opentofu/stacks/devbox 'tofu destroy -auto-approve -parallelism=1'`",
+    "sandbox": "the round agent builds it again for the next round. Or remove it, on the node: "
+               "`worms-node-run opentofu/stacks/sandbox 'tofu destroy -auto-approve -parallelism=1'`",
+}
 # What the platform stack's `infrastructure` output must have.
 PLATFORM_KEYS = ("infrastructure_ips", "management_ips", "services_ips", "host_ips", "private_internet_ips",
                  "services_ports", "networks", "bridges", "ssh_gateway_ips", "devbox_services_block",
@@ -409,8 +417,10 @@ def main() -> None:
         elif "ansible_hosts" not in outputs:
             # Its last apply stopped before the VMs (or predates the output): an
             # inventory without them would have the playbooks after it skip them.
+            fix = UNFINISHED.get(stack, "`worms build infrastructure` applies it again and shows the error")
             sys.exit(f"error: stack {stack} has outputs ({', '.join(sorted(outputs))}) but no ansible_hosts: "
-                     "its last apply did not finish. Find the apply's error, fix it, and apply the stack again")  # fmt: skip
+                     f"its last apply did not finish (its VMs are missing). To go on, {fix}; "
+                     "then `worms build --resume`")  # fmt: skip
         stacks[stack] = (outputs.get("ansible_hosts") or {}).get("value", {})
         status.setdefault(stack, f"applied, {len(stacks[stack])} VM(s)")
     sandbox = load_outputs(sandbox_dir, "sandbox", args.tofu_bin, args.sandbox_json)

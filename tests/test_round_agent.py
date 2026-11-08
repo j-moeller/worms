@@ -1468,7 +1468,7 @@ def test_a_job_logs_its_commands_and_how_it_ended(agent_db, tmp_path, monkeypatc
         return {"built": True}
 
     def broken(ex, cfg, params):
-        ex.run(["sh", "-c", "echo 'fatal: the reason'; echo warning >&2; exit 1"], stream=True)
+        ex.run(["sh", "-c", "echo 'step one done'; echo 'fatal: the reason'; echo warning >&2; exit 1"], stream=True)
 
     monkeypatch.setitem(handlers.HANDLERS, "check", build)
     _queue(conn, "check", {})
@@ -1485,8 +1485,10 @@ def test_a_job_logs_its_commands_and_how_it_ended(agent_db, tmp_path, monkeypatc
     with conn.cursor() as cur:
         cur.execute("SELECT state, error, uuid FROM host_jobs WHERE id = %s", (job_id,))
         state, error, uuid = cur.fetchone()
-    # The job's error points to the log, and its stdout stays out of the database.
-    assert state == "failed" and f"{uuid}.log" in error and "fatal: the reason" not in error
+    # The job's error points to the log and names the failure (CommandError); the rest of its
+    # stdout stays out of the database.
+    assert state == "failed" and f"{uuid}.log" in error and "last failure: fatal: the reason" in error
+    assert "step one done" not in error
     assert isinstance(CommandError(["x"], 1, ""), RuntimeError)
 
 

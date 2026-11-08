@@ -36,6 +36,7 @@ def test_daemon_recovers_a_closed_database_connection(db_clean, app_roles, monke
         options = {"once": False, "interval": 0, "grace": 120}
     else:
         class Conductor:
+            stopping = False  # set by SIGTERM (conduct_rounds.py)
             tick = staticmethod(pass_once)
         monkeypatch.setattr(module, "Conductor", Conductor)
         command = module.Command()

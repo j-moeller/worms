@@ -120,17 +120,20 @@ def window(team, rnd, now, run=None):
     return timeline.run_window(run) if run is not None else (None, None)
 
 
-def build(team, rnd, *, now, audience="team", infra=None, flows=False, flow_limit=FLOW_LIMIT):
+def build(team, rnd, *, now, audience="team", infra=None, flows=False, flow_limit=FLOW_LIMIT, run=None):
     """The progression of `team` in `rnd` at `now` (core.clock.now()).
 
     audience: "team" (only what the team may see, see above) or "staff"
     (everything the run's timeline has; scene left to the caller).
     infra: the live snapshot's address index (views/topology.live_address_index),
     to name the far end of a flow. flows: put the connections inline
-    (timeline.flows); otherwise they are only counted (network.count)."""
+    (timeline.flows); otherwise they are only counted (network.count). run: the attempt to
+    show (staff only: any attempt, a failed one too); a team always gets its standing one."""
     if audience not in ("team", "staff"):
         raise ValueError(f"unknown audience {audience!r}")
-    doc = _live(team, rnd, now, audience, infra or {}, flow_limit)
+    if run is not None and audience != "staff":
+        raise ValueError("only staff choose the attempt")
+    doc = _live(team, rnd, now, audience, infra or {}, flow_limit, run)
     doc["audience"] = audience
     if not flows:
         doc["timeline"].pop("flows", None)
@@ -201,8 +204,8 @@ def _empty_timeline():
 # --- live: the team's run ------------------------------------------------------
 
 
-def _live(team, rnd, now, audience, infra, flow_limit):
-    standing = RoundRun.for_team(rnd, team)
+def _live(team, rnd, now, audience, infra, flow_limit, chosen=None):
+    standing = chosen or RoundRun.for_team(rnd, team)
     run = (
         RoundRun.objects.filter(pk=standing.pk)
         .select_related("round", "team")

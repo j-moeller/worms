@@ -249,7 +249,6 @@ As of 2026-11-08. The gameplan rework is uncommitted and not yet deployed.
 
 - **Testing.** No round has run on a real node yet. `tests/test_rounds.py` and several dashboard tests still test the old conductor.
 - **Shared services.** The service VMs are rolled back only when a sandbox is built, i.e. the first attempt of a round. What one team's worm does to them stays for later attempts.
-- **Staff replay.** It shows the team's standing attempt, not the failed attempt clicked.
 - **Operations.**
   - Nothing clears a failed-teardown hold.
   - New agent code needs `systemctl restart worms-round-agent` on the node; gameplan files are read fresh.

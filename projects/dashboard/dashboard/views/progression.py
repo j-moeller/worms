@@ -342,7 +342,7 @@ def _staff_run(request, uuid):
 def _staff_document(run, flows=False):
     doc = progression.build(
         run.team, run.round, now=clock.now(), audience="staff",
-        infra=live_address_index(), flows=flows,
+        infra=live_address_index(), flows=flows, run=run,
     )  # fmt: skip
     log_url = reverse("run_progression_log", args=[run.uuid, ZERO_UUID]).replace(ZERO_UUID, "{ref}")
     return with_links(doc, reverse("run_progression_flows", args=[run.uuid]), log_url)

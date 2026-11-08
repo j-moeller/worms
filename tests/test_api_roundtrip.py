@@ -116,13 +116,13 @@ class Ledger:
         self.attempts.append(rec)
         return rec
 
-    def log(self, team, ts, devbox=False, stored_round=None, devbox_log=False, source=None):
+    def log(self, team, ts, devbox=False, stored_round=None, devbox_log=False, source=None, run=None):
         from core.models.devbox import DevboxLog
         from core.models.logging import Logging, LoggingAttempt
 
         data = payload(self.rng, f"{team.name}-log-{len(self.logs)}")
         obj = LoggingAttempt.objects.create(team_uuid=str(team.uuid), log_data=data, created_at=ts, devbox=devbox, processed=True)
-        row = Logging.objects.create(team=team, round=stored_round, logging_attempt=obj) if stored_round else None
+        row = Logging.objects.create(team=team, round=stored_round, run=run, logging_attempt=obj) if stored_round else None
         if devbox_log:
             DevboxLog.objects.create(team=team, devbox_version=1, logging_attempt=obj)
         if source is not None:
@@ -145,7 +145,7 @@ class Ledger:
         at = lambda s: zero + timedelta(seconds=s)  # noqa: E731
         run = RoundRun.objects.create(
             round=rnd, team=team, position=position, seed=rng.randrange(10**6), state=state, worm_start_at=zero,
-            ends_at=at(600), sandbox_params={"start_vm": f"{team.name}-vm0"}, topology={"layers": f"ARCH-{team.name}"},
+            ends_at=at(600), entrypoint=f"{team.name}-vm0", topology={"layers": f"ARCH-{team.name}"},
         )  # fmt: skip
         vms = []
         for i in range(rng.randint(3, 6)):
@@ -165,7 +165,7 @@ class Ledger:
             RunEvent.objects.create(run=run, ts=at(s), kind=kind, vm=vm["obj"] if vm else None, data=data)
             rec["events"].append((s, kind, vm["uuid"] if vm else None, data))
 
-        states = [(-60, "preparing"), (-50, "checking"), (-40, "deploying"), (-20, "armed"), (0, "running")]
+        states = [(-60, "preparing"), (-50, "checking"), (-40, "running")]
         if state == "finished":
             states += [(600, "ending"), (620, "tearing_down"), (640, "finished")]
         for s, name in states:
@@ -204,7 +204,7 @@ class Ledger:
             else:
                 self.attempt(team, self.hash(), at(slots.pop()), source=source())
         for _ in range(rng.randint(2, 6)):
-            self.log(team, at(slots.pop()), stored_round=rnd if rng.random() < 0.8 else None, source=source())
+            self.log(team, at(slots.pop()), stored_round=rnd if rng.random() < 0.8 else None, source=source(), run=run)
 
         # Noise around the run: outside its window, devbox records inside it.
         self.attempt(team, rng.choice(vms)["hash"], at(-3600))
@@ -393,7 +393,7 @@ def expected_rounds(world, team):
         run = run_of(world, team, rnd)
         info = None
         if run is not None:
-            info = {"state": run["state"], "position": run["position"], "worm_start_at": iso(run["zero"]),
+            info = {"state": run["state"], "position": run["position"], "attempt": 1, "worm_start_at": iso(run["zero"]),
                     "ends_at": iso(run["zero"] + timedelta(seconds=600))}  # fmt: skip
         out.append({
             "id": rnd.id, "name": rnd.name,
@@ -405,8 +405,15 @@ def expected_rounds(world, team):
     return {"team": {"uuid": str(team.uuid), "name": team.name}, "rounds": out}
 
 
+def withheld(run):
+    """Nothing of an attempt is shown to its team before it has finished."""
+    return run is not None and run["state"] != "finished"
+
+
 def expected_scoring(world, team, rnd):
     run = run_of(world, team, rnd)
+    if withheld(run):
+        return [], {"captured": 0, "vms": 0}
     captured = run["captured"] if run else {}
     items = [
         {"id": a["obj"].id, "submitted_at": iso(a["ts"]), "flag_hash": a["hash"], "result": result,
@@ -417,6 +424,8 @@ def expected_scoring(world, team, rnd):
 
 
 def expected_logging(world, team, rnd):
+    if withheld(run_of(world, team, rnd)):
+        return []
     rows = sorted((g for g in world["ledger"].logs if g["team"] == team.id and g["round"] == rnd.id), key=lambda g: g["logging_id"])
     return [{"id": g["logging_id"], "uuid": g["uuid"], "received_at": iso(g["ts"]), "log": g["data"]} for g in rows]
 
@@ -437,9 +446,17 @@ def expected_live(world, team, rnd):
         return {"events": [], "nodes": [], "cidrs": set(), "edges": set(), "vm_status": {}, "captures": [], "flows": [], "run": None,
                 "logs": [], "span": (0.0, 0.0)}  # fmt: skip
     zero, V = run["zero"], run["captured"]
+    if withheld(run):
+        return {"events": [], "nodes": [], "cidrs": set(), "edges": set(), "vm_status": {}, "captures": [], "flows": [],
+                "run": {"uuid": None, "team": team.name, "round": rnd.name, "state": run["state"], "position": run["position"],
+                        "worm_start_at": iso(zero), "ends_at": iso(zero + timedelta(seconds=600)), "start_vm": None,
+                        "duration": 600.0, "withheld": True},
+                "logs": [], "span": (0.0, 0.0), "hidden": run["vms"]}  # fmt: skip
     vm_by_uuid = {vm["uuid"]: vm for vm in run["vms"]}
-    label = lambda u: vm_by_uuid[u]["label"] if u in V else None  # noqa: E731
-    see = lambda u: u if u in V else None  # noqa: E731
+    # What the team sees: the VMs it captured, and the one its worm started on.
+    seen = {**{u: None for u in vm_by_uuid if vm_by_uuid[u]["start"]}, **V}
+    label = lambda u: vm_by_uuid[u]["label"] if u in seen else None  # noqa: E731
+    see = lambda u: u if u in seen else None  # noqa: E731
     start = see(run["vms"][0]["uuid"])
     events = []
     for s, kind, vm, data in run["events"]:
@@ -447,7 +464,7 @@ def expected_live(world, team, rnd):
             events.append({"t": float(s), "kind": kind, "node": None, "vm": None, "data": {"state": data["state"]}})
         elif kind in ("worm_deployed", "worm_started"):
             events.append({"t": float(s), "kind": kind, "node": start, "vm": start, "data": {}})
-        elif kind in ("vm_stopped", "vm_started", "secret_released", "captured") and vm in V:
+        elif kind in ("vm_stopped", "vm_started", "secret_released", "captured") and vm in seen:
             events.append({"t": float(s), "kind": kind, "node": vm, "vm": vm, "data": {}})
     for a, result, vm in live_submissions(world, team, rnd):
         source, target = see(a["source"]), see(vm["uuid"]) if vm else None
@@ -464,7 +481,7 @@ def expected_live(world, team, rnd):
     def end(address):
         owner = next((vm for vm in run["vms"] if address in vm["addresses"]), None)
         if owner is not None:
-            return (owner["uuid"], "sandbox", owner["label"]) if owner["uuid"] in V else None
+            return (owner["uuid"], "sandbox", owner["label"]) if owner["uuid"] in seen else None
         return SERVICES.get(address)
 
     bounds = window(run)
@@ -485,7 +502,7 @@ def expected_live(world, team, rnd):
         })  # fmt: skip
 
     status = {}
-    for vm in V:
+    for vm in seen:
         points = [[-50.0, "running"]]
         for s, kind, who, data in run["events"]:
             if kind in ("vm_stopped", "vm_started") and who == vm:
@@ -498,9 +515,10 @@ def expected_live(world, team, rnd):
     return {
         "events": events,
         "nodes": [{"id": u, "label": vm_by_uuid[u]["label"], "group": "sandbox", "addresses": vm_by_uuid[u]["addresses"],
-                   "start_vm": vm_by_uuid[u]["start"], "captured": True, "captured_at": float(V[u])} for u in V],  # fmt: skip
-        "cidrs": {c for u in V for c in vm_by_uuid[u]["cidrs"]},
-        "edges": {(u, c) for u in V for c in vm_by_uuid[u]["cidrs"]},
+                   "start_vm": vm_by_uuid[u]["start"], "captured": u in V, "captured_at": float(V[u]) if u in V else None}
+                  for u in seen],  # fmt: skip
+        "cidrs": {c for u in seen for c in vm_by_uuid[u]["cidrs"]},
+        "edges": {(u, c) for u in seen for c in vm_by_uuid[u]["cidrs"]},
         "vm_status": status,
         "captures": sorted([[float(t), u] for u, t in V.items()]),
         "flows": flows,
@@ -509,7 +527,7 @@ def expected_live(world, team, rnd):
                 "start_vm": vm_by_uuid[start]["label"] if start else None, "duration": 600.0},  # fmt: skip
         "logs": logs,
         "span": (min([0.0] + times), max([0.0, 600.0] + times)),
-        "hidden": [vm for vm in run["vms"] if vm["uuid"] not in V],
+        "hidden": [vm for vm in run["vms"] if vm["uuid"] not in seen],
     }
 
 
@@ -725,6 +743,9 @@ def test_the_page_serves_the_same_document(world):
     client = world["client"]
     for name in TEAMS:
         client.force_login(User.objects.get(username=f"{name}-member"))
+        session = client.session
+        session["is_dev_environment"] = False  # the Live view: a new session starts in Dev
+        session.save()
         rnd = world["rounds"]["R1"]
         page = json.loads(client.get(f"/progression/rounds/{rnd.id}/", **proxied(HOST)).content)
         _, api = get(world, f"/api/v1/rounds/{rnd.id}/progression/", name)

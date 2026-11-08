@@ -612,11 +612,15 @@ def _log_file(attempt):
     return {"ref": str(attempt.uuid), "received_at": _iso(attempt.created_at), "data": attempt.log_data}
 
 
-def log_record(team, rnd, ref, *, now):
+def log_record(team, rnd, ref, *, now, run=None, audience="team"):
     """One log record of the progression ({ref, received_at, data}; ref is
     the attempt's uuid), or None when it is not the team's or not part of its
-    run in the round."""
-    start, end = window(team, rnd, now)
+    run in the round. `run`: that attempt (staff), else the team's standing one. A team
+    gets nothing of an attempt before it has finished (docs/07-security.md, D14)."""
+    run = run or RoundRun.for_team(rnd, team)
+    if run is None or (audience == "team" and run.state != RoundRun.State.FINISHED):
+        return None
+    start, end = window(team, rnd, now, run)
     if start is None:
         return None
     attempt = LoggingAttempt.objects.filter(

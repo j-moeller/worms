@@ -212,7 +212,6 @@ IDs are cited in code comments. S = team VMs, D = dashboard, C = cross-cutting. 
 | D10 | Design | Staff pages are on the public dashboard. The DB role cannot mint staff, but a stolen staff session can create rounds and accounts |
 | D12 | Medium | `/admin/login/` signs staff in without nginx's rate limit and without `login_events` |
 | D13 | Low | Team API tokens never expire and survive their creator leaving the team |
-| D14 | Low | The per-log progression endpoints do not check that the attempt is FINISHED (the log's uuid is the only guard) |
 | C1 | Accepted | The Proxmox provider uses `insecure = true` |
 | C2 | Open | VM host keys are not checked (`StrictHostKeyChecking no`) |
 | S11 | Partly | Audit forwarding is plain TCP, sorted by source address |
@@ -239,3 +238,4 @@ IDs are cited in code comments. S = team VMs, D = dashboard, C = cross-cutting. 
   - D7: keys shared across teams or kept by leavers.
   - D9: joins failed under the real grants.
   - D11: uploads without quota.
+  - D14 (2026-11-08): a team could fetch a log of an attempt that had not finished, by its uuid; the progression also named the attempt's entry VM.

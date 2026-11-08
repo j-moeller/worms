@@ -375,7 +375,7 @@ def run_log(request: HttpRequest, uuid, ref):
     run = _staff_run(request, uuid)
     if run is None:
         return _json(FORBIDDEN, status=403)
-    record = progression.log_record(run.team, run.round, ref, now=clock.now())
+    record = progression.log_record(run.team, run.round, ref, now=clock.now(), run=run, audience="staff")
     if record is None:
         return _json({"error": "No such log in this run."}, status=404)
     return _json(record)

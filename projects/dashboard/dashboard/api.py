@@ -4,7 +4,7 @@
     GET /api/v1/rounds/<round>/scoring/?limit=&cursor=  every flag the team's sandbox submitted
                                                       during its run, with the result
     GET /api/v1/rounds/<round>/logging/?limit=&cursor=  every log attributed to the team in that round
-    GET /api/v1/rounds/<round>/progression/           the round's progression (docs/progression.md):
+    GET /api/v1/rounds/<round>/progression/           the round's progression (docs/08-user-guide.md):
                                                       clock, scene, every event; logs by reference
     GET /api/v1/rounds/<round>/progression/flows/     its connections (network traffic)
     GET /api/v1/rounds/<round>/progression/logs/<ref>/  one log record
@@ -20,7 +20,7 @@ The token is one of the team's access tokens (ACCESS page; stored only as its
 SHA-256, revocable). It selects the team: nothing of another team is ever
 returned, and a round outside the team's competitions is a 404.
 
-Availability (docs/team_api.md) -- a client can ask for a lot of data, so:
+Availability (docs/08-user-guide.md) -- a client can ask for a lot of data, so:
 - keyset pagination: each page is one bounded range scan over an index
   (flag_attempts_team_time, logging_team_round), however deep the client
   pages; the page ends with an opaque `next_cursor`;
@@ -179,7 +179,8 @@ def _round_info(rnd, team):
 def _run_info(run):
     if run is None:
         return None
-    return {"state": run.state, "position": run.position, "worm_start_at": _iso(run.worm_start_at), "ends_at": _iso(run.ends_at)}
+    return {"state": run.state, "position": run.position, "attempt": run.attempt + 1,
+            "worm_start_at": _iso(run.worm_start_at), "ends_at": _iso(run.ends_at)}
 
 
 def _limit(request, kind) -> int:
@@ -248,7 +249,7 @@ def _page_info(name, rnd, limit, items, next_cursor):
 def rounds(request, team):
     qs = Round.objects.filter(competition_id=team.competition_id).order_by("round_start", "id")[:MAX_ROUNDS]
     rounds_ = list(qs)
-    runs = {run.round_id: run for run in RoundRun.objects.filter(team=team, round__in=rounds_)}
+    runs = {rnd.id: RoundRun.for_team(rnd, team) for rnd in rounds_}
     return {
         "team": _team_info(team),
         "rounds": [
@@ -274,15 +275,17 @@ def round_scoring(request, team, round_id):
     rnd = _round(team, round_id)
     limit = _limit(request, "scoring")
     cursor = _decode_cursor(request, "s", 2)
-    run = RoundRun.objects.filter(round=rnd, team=team).first()
-    captures = FlagCapture.objects.filter(team=team, round=rnd)
+    run = RoundRun.for_team(rnd, team)
+    # Only a finished attempt's results are shown (docs/05-live-environment.md): before, the run is withheld.
+    shown_run = run if run is not None and run.state == RoundRun.State.FINISHED else None
+    captures = FlagCapture.published().filter(team=team, round=rnd)
     summary = {
         "captured": captures.count(),
-        "vms": run.virtual_machines.count() if run else 0,
+        "vms": shown_run.virtual_machines.count() if shown_run else 0,
     }
 
     items, next_cursor = [], None
-    start, end = run_window(run) if run else (None, None)
+    start, end = run_window(shown_run) if shown_run else (None, None)
     if start is not None:
         qs = FlagCaptureAttempt.objects.filter(
             team_uuid=str(team.uuid), devbox=False, created_at__gte=start, created_at__lte=end
@@ -310,7 +313,7 @@ def round_scoring(request, team, round_id):
                 "flag_hash": attempt.vm_flag_hash,
                 "result": result,
                 # Named only if the team captured it in this round: a team
-                # never sees a sandbox VM it did not capture (docs/progression.md).
+                # never sees a sandbox VM it did not capture (docs/08-user-guide.md).
                 "vm": vm.vm_identifier if vm is not None and str(vm.uuid) in captured_vm_ids else None,
             }
 
@@ -335,9 +338,13 @@ def round_logging(request, team, round_id):
     rnd = _round(team, round_id)
     limit = _limit(request, "logging")
     cursor = _decode_cursor(request, "l", 1)
-    run = RoundRun.objects.filter(round=rnd, team=team).first()
+    run = RoundRun.for_team(rnd, team)
 
-    qs = Logging.objects.filter(team=team, round=rnd)
+    # A finished attempt's logs only (and logs from before attempts existed): nothing of a run
+    # is shown before it has finished, and a failed attempt's never are (docs/05-live-environment.md).
+    qs = Logging.objects.filter(team=team, round=rnd).filter(
+        Q(run__state=RoundRun.State.FINISHED) | Q(run__isnull=True)
+    )
     if cursor:
         qs = qs.filter(id__gt=cursor[0])
     rows = list(qs.select_related("logging_attempt").order_by("id")[: limit + 1])
@@ -374,7 +381,7 @@ def _progression(team, round_id, flows=False):
 
 @api_view
 def round_progression(request, team, round_id):
-    """The round's progression (docs/progression.md): the clock (round start,
+    """The round's progression (docs/08-user-guide.md): the clock (round start,
     end, now while it runs), the scene, every event; each log is a reference
     (logs.url), the connections are at network.url."""
     return _progression(team, round_id)[1]
@@ -421,7 +428,7 @@ def _devbox_progression(team):
 
 @api_view
 def devbox_progression(request, team):
-    """The devbox's progression so far (docs/progression.md): it has no rounds, so this
+    """The devbox's progression so far (docs/08-user-guide.md): it has no rounds, so this
     is one document, from when its current version began up to now."""
     return _devbox_progression(team)
 

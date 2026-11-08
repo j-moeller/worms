@@ -187,7 +187,7 @@ def build(run: RoundRun, flow_limit=20000, infra: dict | None = None) -> dict:
     infra = infra or {}
     vms = list(run.virtual_machines.all())
     zero = run.worm_start_at or run.created_at
-    start_vm = run.sandbox_params.get("start_vm")
+    start_vm = run.entrypoint or None
     team_uuid = str(run.team.uuid)
 
     # Address -> run VM id, to turn a flow's sandbox end into a node.

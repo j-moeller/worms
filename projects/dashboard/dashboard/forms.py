@@ -2,8 +2,8 @@
 
 Plain Django forms rendered by the shared field template
 (templates/staff/_field.html); they work without JavaScript. Every value is
-validated here; the round parameters again by the round agent (the same
-bounds: core/schedule.py).
+validated here. A round's gameplan is picked by file name from the list the
+orchestrator keeps (GameplanFile): the dashboard never reads a gameplan.
 """
 
 from __future__ import annotations
@@ -172,57 +172,54 @@ def _minutes(label, default, low, high, required=True, help_text=""):
 
 
 class RoundForm(StyledForm):
-    """A round of the competition: every team's worm runs, one team after another."""
+    """A round of the competition: every team's worm runs by the round's gameplan, one team
+    after another (docs/05-live-environment.md)."""
 
     name = forms.CharField(max_length=100)
     round_start = _datetime("Starts", help_text="UTC. The upload deadline: each team's latest upload before it runs.")
-    round_end = _datetime("Ends", help_text="UTC. Runs that cannot finish before it are skipped.")
+    round_end = _datetime("Ends", help_text="UTC. When the round should be over. Every team still runs, retries "
+                                             "included; results are final when the last one has.")  # fmt: skip
+    gameplan = forms.ChoiceField(
+        required=False,
+        help_text="A file in gameplans/ (docs/05-live-environment.md). Only gameplans the orchestrator and the node both "
+                  "hold, and find valid, are listed. It can be chosen later, until the first team's attempt starts; "
+                  "the round waits for it.",
+    )  # fmt: skip
+    team_duration = _minutes(
+        "Duration per team (min)", schedule.TEAM_DURATION[0] // 60, schedule.TEAM_DURATION[1] // 60,
+        schedule.TEAM_DURATION[2] // 60, help_text="From a team's worm starting to the end of its run: the "
+        "gameplan's round_duration.",
+    )  # fmt: skip
     seed = forms.IntegerField(
         required=False, min_value=0, max_value=2**62,
-        help_text="Empty: random. Every team's sandbox and game plan derive from it.",
+        help_text="Empty: random. The order the teams run in derives from it.",
     )  # fmt: skip
 
-    # The sandbox (scripts/generate_sandbox.py), per team.
-    vms = forms.IntegerField(label="VMs", min_value=schedule.SANDBOX_BOUNDS["vms"][1],
-                             max_value=schedule.SANDBOX_BOUNDS["vms"][2], initial=schedule.SANDBOX_BOUNDS["vms"][0])
-    networks = forms.IntegerField(min_value=schedule.SANDBOX_BOUNDS["networks"][1],
-                                  max_value=schedule.SANDBOX_BOUNDS["networks"][2],
-                                  initial=schedule.SANDBOX_BOUNDS["networks"][0])
-    sites = forms.IntegerField(min_value=schedule.SANDBOX_BOUNDS["sites"][1],
-                               max_value=schedule.SANDBOX_BOUNDS["sites"][2], initial=schedule.SANDBOX_BOUNDS["sites"][0])
-    max_interfaces = forms.IntegerField(label="Interfaces per VM at most",
-                                        min_value=schedule.SANDBOX_BOUNDS["max_interfaces"][1],
-                                        max_value=schedule.SANDBOX_BOUNDS["max_interfaces"][2],
-                                        initial=schedule.SANDBOX_BOUNDS["max_interfaces"][0])  # fmt: skip
-    vm_ram = forms.IntegerField(label="RAM per VM (MB)",
-                                min_value=schedule.SANDBOX_BOUNDS["vm_ram"][1],
-                                max_value=schedule.SANDBOX_BOUNDS["vm_ram"][2],
-                                initial=schedule.SANDBOX_BOUNDS["vm_ram"][0],
-                                help_text="Ceiling; the host reclaims a VM's unused RAM (ballooning).")  # fmt: skip
-
-    # One run (minutes).
-    worm_start_delay = _minutes("Fuse (min)", 5, 0, 1440, help_text="From deploy to the worm's start.")
-    run_duration = _minutes("Run length (min)", 60, 1, 1440, help_text="From the worm's start to the end of its run.")
-
-    # The game plan (orchestrator/rounds/gameplan.py), minutes after the worm's start.
-    initial_fraction = forms.FloatField(
-        label="Secrets up front", min_value=0.0, max_value=1.0, initial=0.5,
-        help_text="Share of the other VMs whose flag exists before the worm starts.",
-    )  # fmt: skip
-    first_stop_after = _minutes("First VM stop (min)", 10, 0, 1440, help_text="The start VM is switched off first.")
-    stop_interval = _minutes("Then a stop every (min)", 10, 1, 1440)
-    min_alive = forms.IntegerField(label="VMs kept running", min_value=0, max_value=250, initial=2)
-    restart_after = _minutes("Restart a stopped VM after (min)", None, 1, 1440, required=False,
-                             help_text="Empty: stopped VMs stay off.")  # fmt: skip
+    # A round that has begun: its end, and its gameplan until the first attempt starts.
+    STARTED_FIELDS = ("round_end", "gameplan", "team_duration")
 
     def __init__(self, *args, competition=None, instance=None, started=False, **kwargs):
+        from core.models.rounds import GameplanFile
+
         super().__init__(*args, **kwargs)
         self.competition, self.instance, self.started = competition, instance, started
         if started:
-            # A round that has begun: only its end can still move.
             for name in list(self.fields):
-                if name != "round_end":
+                if name not in self.STARTED_FIELDS:
                     del self.fields[name]
+        choices = [(g.filename, g.filename) for g in GameplanFile.objects.filter(valid=True).order_by("filename")]
+        current = instance.gameplan if instance is not None else ""
+        if current and current not in dict(choices):
+            choices.append((current, f"{current} (not valid now)"))
+        self.fields["gameplan"].choices = [("", "— none yet —"), *choices]
+
+    def clean_gameplan(self):
+        from core.models.rounds import GameplanFile
+
+        value = self.cleaned_data["gameplan"]
+        if value and not GameplanFile.objects.filter(filename=value, valid=True).exists():
+            raise ValidationError("Choose a gameplan the orchestrator lists as valid.")
+        return value
 
     def clean(self):
         data = super().clean()
@@ -234,45 +231,12 @@ class RoundForm(StyledForm):
             self.add_error("round_end", "The round must end after it starts.")
         if not self.started and start is not None and start <= clock.now():
             self.add_error("round_start", "Start the round in the future (the conductor plans its runs at the start).")
-        if self.started:
-            return data
-
-        vms, networks = data["vms"], data["networks"]
-        interfaces, alive = data["max_interfaces"], data["min_alive"]
-        if networks > vms:
-            self.add_error("networks", "At most one network per VM.")
-        if interfaces > networks:
-            self.add_error("max_interfaces", "A VM cannot have more interfaces than there are networks.")
-        if alive >= vms:
-            self.add_error("min_alive", "Keep fewer VMs running than the sandbox has.")
         return data
 
     # -- results ---------------------------------------------------------------
 
-    def sandbox_params(self) -> dict:
-        """The round's sandbox_params (core/schedule.py) in the conductor's
-        and the agent's units (seconds)."""
-        data = self.cleaned_data
-        minute = 60
-        game_plan = {
-            "initial_fraction": float(data["initial_fraction"]),
-            "first_stop_after": data["first_stop_after"] * minute,
-            "stop_interval": data["stop_interval"] * minute,
-            "min_alive": data["min_alive"],
-            "restart_after": data["restart_after"] * minute if data.get("restart_after") else None,
-        }
-        return {
-            "vms": data["vms"],
-            "networks": data["networks"],
-            "sites": data["sites"],
-            "max_interfaces": data["max_interfaces"],
-            "vm_ram": data["vm_ram"],
-            "game_plan": game_plan,
-            "timing": {
-                "worm_start_delay": data["worm_start_delay"] * minute,
-                "run_duration": data["run_duration"] * minute,
-            },
-        }
+    def team_duration_seconds(self) -> int:
+        return self.cleaned_data["team_duration"] * 60
 
     def chosen_seed(self) -> int:
         value = self.cleaned_data.get("seed")
@@ -281,27 +245,14 @@ class RoundForm(StyledForm):
     @staticmethod
     def initial_from(round_obj) -> dict:
         """Form values of an existing round (seconds back to minutes)."""
-        params = round_obj.sandbox_params or {}
-        game_plan = params.get("game_plan") or {}
-        timing = schedule.run_timing(params)
-        initial = {
+        return {
             "name": round_obj.name,
             "round_start": round_obj.round_start,
             "round_end": round_obj.round_end,
             "seed": round_obj.seed,
+            "gameplan": round_obj.gameplan,
+            "team_duration": round_obj.team_duration // 60,
         }
-        for key, (default, _, _) in schedule.SANDBOX_BOUNDS.items():
-            initial[key] = params.get(key, default)
-        initial.update(
-            worm_start_delay=timing["worm_start_delay"] // 60,
-            run_duration=timing["run_duration"] // 60,
-            initial_fraction=game_plan.get("initial_fraction", 0.5),
-            first_stop_after=game_plan.get("first_stop_after", 600) // 60,
-            stop_interval=game_plan.get("stop_interval", 600) // 60,
-            min_alive=game_plan.get("min_alive", 2),
-            restart_after=(game_plan["restart_after"] // 60) if game_plan.get("restart_after") else None,
-        )
-        return initial
 
 
 def overlapping_round(competition, start, end, exclude=None):

@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import re
 
-# A sandbox VM name as scripts/generate_sandbox.py produces it (dns_name()):
-# lowercase letters, digits and single hyphens.
+# A sandbox VM name as a gameplan makes it (sandbox-<attribute>, src/gameplan/definition.py):
+# lowercase letters, digits and hyphens.
 VM_NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 # A sha256 hex digest (artifact content hash, flag hash).
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -36,7 +36,7 @@ def integer(value, name, low, high):
 
 
 def vm_name(value, field="vm"):
-    if not isinstance(value, str) or not VM_NAME.match(value):
+    if not isinstance(value, str) or not VM_NAME.fullmatch(value):
         raise Invalid(f"{field} is not a valid sandbox VM name: {value!r}")
     return value
 
@@ -50,41 +50,37 @@ def vm_names(value, field="vms", allow_empty=False):
 
 
 def sha256(value, field="hash"):
-    if not isinstance(value, str) or not SHA256.match(value):
+    if not isinstance(value, str) or not SHA256.fullmatch(value):
         raise Invalid(f"{field} is not a sha256 digest")
     return value
 
 
 def storage_key(value):
-    if not isinstance(value, str) or not STORAGE_KEY.match(value):
+    if not isinstance(value, str) or not STORAGE_KEY.fullmatch(value):
         raise Invalid(f"storage_key is not a valid artifact key: {value!r}")
     return value
 
 
-def sandbox_params(value):
-    """The sandbox generator parameters. Only known keys, all bounded; the
-    game_plan sub-dict is the conductor's business and is not used here."""
-    value = value or {}
-    if not isinstance(value, dict):
-        raise Invalid("sandbox_params must be an object")
-    return {
-        "networks": integer(value.get("networks", 4), "networks", 1, 30),
-        "vms": integer(value.get("vms", 8), "vms", 1, 250),
-        "sites": integer(value.get("sites", 1), "sites", 1, 8),
-        "max_interfaces": integer(value.get("max_interfaces", 3), "max_interfaces", 1, 8),
-        "vm_ram": integer(value.get("vm_ram", 512), "vm_ram", 256, 8192),
-    }
+def gameplan_file(value):
+    """A gameplan's file name: the loader takes it from the gameplans directory's own listing
+    only (src/gameplan/loader.py), so no path is built from it."""
+    from gameplan.loader import valid_name
+
+    if not valid_name(value):
+        raise Invalid(f"not a gameplan file name: {value!r}")
+    return value
 
 
 def prepare(params):
     return {
-        "seed": integer(params.get("seed", 0), "seed", 0, 2**63 - 1),
-        "sandbox_params": sandbox_params(params.get("sandbox_params")),
+        "gameplan": gameplan_file(params.get("gameplan")),
+        "gameplan_sha256": sha256(params.get("gameplan_sha256"), "gameplan_sha256"),
+        "run_uuid": team_uuid(params.get("run_uuid"), "run_uuid"),
     }
 
 
 def team_uuid(value, field="team_uuid"):
-    if not isinstance(value, str) or not UUID.match(value):
+    if not isinstance(value, str) or not UUID.fullmatch(value):
         raise Invalid(f"{field} is not a uuid: {value!r}")
     return value
 
@@ -93,8 +89,7 @@ def deploy(params):
     out = {
         "start_vm": vm_name(params.get("start_vm"), "start_vm"),
         "team_uuid": team_uuid(params.get("team_uuid")),
-        "worm_delay": integer(params.get("worm_delay", 300), "worm_delay", 0, 86400),
-        "initial_secrets": vm_names(params.get("initial_secrets", []), "initial_secrets", allow_empty=True),
+        "worm_delay": integer(params.get("worm_delay", 15), "worm_delay", 5, 86400),
     }
     out["artifact"] = _artifact(params)
     return out
@@ -110,11 +105,24 @@ def _artifact(params):
     }
 
 
-def release_secrets(params):
-    return {"vms": vm_names(params.get("vms", []))}
+def _strict(params):
+    # Anything but false is strict: a failure fails the job (the safe side).
+    return params.get("strict", True) is not False
 
 
-# --- devbox (docs/devbox.md) --------------------------------------------------
+def flags(params):
+    return {"vms": vm_names(params.get("vms", [])), "strict": _strict(params)}
+
+
+def write_file(params):
+    return {
+        "run_uuid": team_uuid(params.get("run_uuid"), "run_uuid"),
+        "file": integer(params.get("file"), "file", 0, 10_000),
+        "strict": _strict(params),
+    }
+
+
+# --- devbox (docs/04-dev-environment.md) --------------------------------------------------
 
 # A team slug as scripts/generate_devbox.py accepts it.
 TEAM_SLUG = re.compile(r"^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$")
@@ -122,7 +130,7 @@ TEAM_SLUG = re.compile(r"^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$")
 # comment is restricted to a safe charset -- NO `{ } % $ "` ' \ etc. -- because
 # a registered key is rendered through Jinja on the Proxmox host (the devbox +
 # gateway authorized_keys, run by the agent as root): a `{{...}}` in a comment
-# would otherwise be evaluated (template injection). See docs/security-assessment.md.
+# would otherwise be evaluated (template injection). See docs/07-security.md.
 SSH_KEY = re.compile(
     r"^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp(256|384|521)|sk-[a-z0-9@.-]+) "
     r"[A-Za-z0-9+/=]{20,}( [A-Za-z0-9._@/+:,-]{1,200})?$"
@@ -130,7 +138,7 @@ SSH_KEY = re.compile(
 
 
 def team_slug(value):
-    if not isinstance(value, str) or not TEAM_SLUG.match(value):
+    if not isinstance(value, str) or not TEAM_SLUG.fullmatch(value):
         raise Invalid(f"invalid team slug: {value!r}")
     return value
 
@@ -142,7 +150,7 @@ def ssh_keys(value):
         raise Invalid("too many authorized_keys")
     out = []
     for key in value:
-        if not isinstance(key, str) or "\n" in key or len(key) > 8192 or not SSH_KEY.match(key.strip()):
+        if not isinstance(key, str) or "\n" in key or len(key) > 8192 or not SSH_KEY.fullmatch(key.strip()):
             raise Invalid(f"invalid SSH public key: {key!r:.60}")
         out.append(key.strip())
     return out
@@ -232,15 +240,21 @@ def devbox_deploy(params):
 
 def teardown(params):
     # Anything but true destroys the sandbox: the safe side.
-    return {"keep": params.get("keep", False) is True}
+    out = {"keep": params.get("keep", False) is True, "run_uuid": None}
+    if params.get("run_uuid") is not None:
+        out["run_uuid"] = team_uuid(params.get("run_uuid"), "run_uuid")
+    return out
 
 
 # Job kind -> validator. CHECK takes no parameters.
 VALIDATORS = {
+    "gameplans": lambda params: {},
     "prepare": prepare,
     "check": lambda params: {},
     "deploy": deploy,
-    "release_secrets": release_secrets,
+    "remove_flags": flags,
+    "place_flags": flags,
+    "write_file": write_file,
     "teardown": teardown,
     "devbox_provision": devbox_provision,
     "devbox_rebuild": devbox_rebuild,

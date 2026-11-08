@@ -1,4 +1,4 @@
-"""The event tables (core/events.py, scripts/round_agent/events.py, docs/monitoring.md):
+"""The event tables (core/events.py, scripts/round_agent/events.py, docs/06-background-processes.md):
 the dashboard records the events an investigation needs, with who, whom and from
 where, and nothing a writer should not hold; the node records the SSH gateway's
 team logins, matched to the client's address. The database's side (each account
@@ -20,6 +20,7 @@ from conftest import REPO
 from test_dashboard_login import HOST, login, proxied, site  # noqa: F401 (fixture)
 
 sys.path.insert(0, str(REPO / "scripts"))
+sys.path.insert(0, str(REPO / "src"))  # the gameplan framework, as the agent's PYTHONPATH has it
 
 ORIGIN = {"HTTP_ORIGIN": f"https://{HOST}"}
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHx8Y2l5S0bWzv0W8iQ5b2sJw2z8b9C1nM1oQ7mXJt3a laptop"

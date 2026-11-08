@@ -12,7 +12,7 @@ terraform {
     proxmox = {
       source = "bpg/proxmox"
       # The version each stack has run with on worms-dev; a fresh `tofu init`
-      # would otherwise take the newest (docs/fresh-install.md).
+      # would otherwise take the newest (docs/02-installation.md).
       version = "0.116.0"
     }
   }
@@ -187,7 +187,7 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "database
     }
   }
 
-  # The round agent (docs/rounds.md) and the admin role (pg_hba) connect from
+  # The round agent (docs/05-live-environment.md) and the admin role (pg_hba) connect from
   # the Proxmox host's address on the core bridge.
   rule {
     type    = "in"
@@ -370,29 +370,13 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "pi_apt_c
   }
 }
 
-# Sandbox VMs (assumed root-compromised). Free traffic among the generated
-# networks (that is the experiment), plus the service hosts only (scoring,
-# logging, DNS, private internet) on the allowed ports -- never another gateway
-# or an empty address on the services bridge. Nothing else exists from their
-# point of view.
+# Sandbox VMs (assumed root-compromised): the service hosts only (scoring, logging,
+# DNS, private internet) on the allowed ports, through sandbox-gw -- never another
+# gateway or an empty address on the services bridge. Traffic between sandbox VMs is
+# not here: each VM's firewall gets exactly what its round's gameplan allows
+# (opentofu/stacks/sandbox, src/gameplan), everything else is dropped.
 resource "proxmox_virtual_environment_cluster_firewall_security_group" "sandbox" {
   name = "sandbox"
-
-  rule {
-    type    = "in"
-    action  = "ACCEPT"
-    source  = local.networks.sandbox_vms
-    dest    = local.networks.sandbox_vms
-    comment = "Within the sandbox networks"
-  }
-
-  rule {
-    type    = "out"
-    action  = "ACCEPT"
-    source  = local.networks.sandbox_vms
-    dest    = local.networks.sandbox_vms
-    comment = "Within the sandbox networks"
-  }
 
   rule {
     type    = "out"
@@ -413,27 +397,12 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "sandbox"
   }
 }
 
-# sandbox-gw, sandbox legs: routes between the sandbox networks and towards the
-# services bridge. The router itself is assumed compromised; these rules (on the
-# host side of its NICs) are what bound it.
+# sandbox-gw, sandbox legs: routes from the sandbox networks towards the services
+# bridge (and the LLM endpoint), never between sandbox networks: which VMs meet is the
+# gameplan's networks' business. The router itself is assumed compromised; these rules
+# (on the host side of its NICs) are what bound it.
 resource "proxmox_virtual_environment_cluster_firewall_security_group" "sandbox_gw" {
   name = "sandbox_gw"
-
-  rule {
-    type    = "in"
-    action  = "ACCEPT"
-    source  = local.networks.sandbox_vms
-    dest    = local.networks.sandbox_vms
-    comment = "Route between sandbox networks"
-  }
-
-  rule {
-    type    = "out"
-    action  = "ACCEPT"
-    source  = local.networks.sandbox_vms
-    dest    = local.networks.sandbox_vms
-    comment = "Route between sandbox networks"
-  }
 
   rule {
     type    = "in"
@@ -467,7 +436,7 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "sandbox_
 }
 
 # =============================================================================
-# Devbox (docs/devbox.md). Mirrors the sandbox groups on the devbox networks,
+# Devbox (docs/04-dev-environment.md). Mirrors the sandbox groups on the devbox networks,
 # plus a trusted SSH gateway. Devbox and sandbox never share a security group,
 # a bridge (except services, where gateway<->gateway is dropped by the host
 # nftables) or a network, so they cannot reach each other.
@@ -480,7 +449,7 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "sandbox_
 # network.
 resource "proxmox_virtual_environment_cluster_firewall_security_group" "devbox" {
   name    = "devbox"
-  comment = "Devbox VMs: own networks + services (docs/devbox.md)"
+  comment = "Devbox VMs: own networks + services (docs/04-dev-environment.md)"
 
   rule {
     type    = "in"
@@ -517,7 +486,7 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "devbox" 
 # Per-team devbox-gw, devbox legs. Routes within the team's devbox networks and
 # towards the services bridge. The router itself is assumed compromised; these
 # host-side rules bound it (its cloud-init declines to bridge the two devbox
-# segments, so B is the only pivot -- docs/devbox.md).
+# segments, so B is the only pivot -- docs/04-dev-environment.md).
 resource "proxmox_virtual_environment_cluster_firewall_security_group" "devbox_gw" {
   name    = "devbox_gw"
   comment = "Devbox gateway, devbox legs"
@@ -567,7 +536,7 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "devbox_g
 
 # Sandbox/devbox leg of scoring/logging: inbound 443 from the per-team devbox
 # gateways' SNAT block. The scoring/logging servers attribute a devbox
-# submission to its team by the source address (docs/devbox.md).
+# submission to its team by the source address (docs/04-dev-environment.md).
 resource "proxmox_virtual_environment_cluster_firewall_security_group" "devbox_api" {
   name = "devbox_api"
 
@@ -583,7 +552,7 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "devbox_a
 
 # Devbox VM, SSH-fabric NIC (vmbr7): accept SSH only from the trusted gateway.
 # Teams never reach a devbox VM directly; they go through the gateway, which
-# ProxyJumps to this address (docs/devbox.md).
+# ProxyJumps to this address (docs/04-dev-environment.md).
 resource "proxmox_virtual_environment_cluster_firewall_security_group" "devbox_ssh_target" {
   name = "devbox_ssh_target"
 
@@ -633,7 +602,7 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "devbox_s
 # only; the destination is a single operator-set address (llm_access_ip in
 # ansible/group_vars/all.yml, passed in by `worms`: worms_cli/session.py).
 # This is the only way out of the sandbox and the devboxes; every layer on the
-# path allows only this address and port (docs/security-assessment.md,
+# path allows only this address and port (docs/07-security.md,
 # "LLM endpoint"). This group lets the packet leave the VM.
 resource "proxmox_virtual_environment_cluster_firewall_security_group" "llm_access" {
   name    = "llm-access"

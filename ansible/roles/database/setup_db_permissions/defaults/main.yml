@@ -39,12 +39,12 @@ postgresql_table_privileges:
     # staff add and remove members (dashboard/views/staff_teams.py).
     - privs: INSERT, DELETE
       tables: [team_memberships]
-    # Devbox: teams add/remove their own SSH keys (docs/devbox.md); a member
+    # Devbox: teams add/remove their own SSH keys (docs/04-dev-environment.md); a member
     # removed from a team loses theirs.
     - privs: INSERT, DELETE
       tables: [devbox_ssh_keys]
     # Staff administration on the dashboard (dashboard/views/staff*.py,
-    # docs/accounts.md): student accounts, teams, the competition's
+    # docs/07-security.md): student accounts, teams, the competition's
     # registration window and development competition, rounds. Column-scoped:
     # username, is_staff and is_superuser are never updated here, and the
     # accounts it inserts can be neither (postgresql_account_guard_roles);
@@ -65,7 +65,9 @@ postgresql_table_privileges:
       tables: [competitions]
     - privs: INSERT, DELETE
       tables: [rounds]
-    - privs: UPDATE (name, seed, round_start, round_end, sandbox_params)
+    # A round names its gameplan by file only (docs/05-live-environment.md); editing one clears the
+    # orchestrator's check of it (gameplan_status), which the orchestrator then redoes.
+    - privs: UPDATE (name, seed, round_start, round_end, gameplan, team_duration, gameplan_status)
       tables: [rounds]
 
   # Reads competition/round/team/upload/VM state; writes only its own results.
@@ -75,10 +77,15 @@ postgresql_table_privileges:
     # manage.py collect_topology (update_or_create).
     - privs: INSERT, UPDATE
       tables: [topology_snapshots]
-    # Round orchestration (orchestrator/rounds, docs/rounds.md): runs, game
-    # plans and the sandbox VMs they register; host jobs are only requested.
+    # Round orchestration (orchestrator/rounds, docs/05-live-environment.md): runs (attempts) and the
+    # sandbox VMs they register; host jobs are only requested. The gameplans it and the
+    # node hold (file names, valid or not) and its check of each round's gameplan.
     - privs: INSERT, UPDATE
-      tables: [round_runs, game_plan_steps, virtual_machines]
+      tables: [round_runs, virtual_machines]
+    - privs: INSERT, UPDATE, DELETE
+      tables: [gameplans]
+    - privs: UPDATE (gameplan_status, gameplan_checked_at)
+      tables: [rounds]
     - privs: INSERT
       tables: [host_jobs, run_events]
     # Processing of the sandbox APIs' attempts into captures / logs.
@@ -86,7 +93,7 @@ postgresql_table_privileges:
       tables: [flag_capture_attempts, logging_attempts]
     - privs: INSERT
       tables: [flag_captures, logging]
-    # Devbox (docs/devbox.md): register each team's devbox and its VMs, bump
+    # Devbox (docs/04-dev-environment.md): register each team's devbox and its VMs, bump
     # the version on reset, and record devbox captures / logs.
     - privs: INSERT, UPDATE
       tables: [devboxes, devbox_vms]
@@ -135,7 +142,7 @@ postgresql_table_privileges:
     - privs: UPDATE (state, started_at, heartbeat_at, finished_at, result, error)
       tables: [host_jobs]
 
-  # The event tables (core/models/events.py, docs/monitoring.md): each writing
+  # The event tables (core/models/events.py, docs/06-background-processes.md): each writing
   # component has an account of its own, used for nothing else. It may INSERT
   # only into its component's tables and only the columns it fills: created_at
   # and written_by (current_user) are the database's, so no row is backdated or

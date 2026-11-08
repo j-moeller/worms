@@ -1,10 +1,9 @@
-"""Memory-saving changes (docs/resources.md): ballooning on every VM,
+"""Memory-saving changes (docs/01-components.md): ballooning on every VM,
 right-sized ceilings, a light rsyslog log server, and the per-round sandbox RAM
 ceiling. Static checks over the OpenTofu/Ansible sources plus the generator."""
 
 from __future__ import annotations
 
-import subprocess
 import sys
 
 import pytest
@@ -62,37 +61,26 @@ def test_infra_ceilings_were_trimmed():
     assert "ram      = 512" in ephemeral                      # scoring/logging module call
 
 
-# --- the per-round sandbox RAM ceiling -------------------------------------------
+# --- a sandbox VM's RAM ceiling: the gameplan's (src/gameplan) --------------------------
 
 
-def test_the_sandbox_ram_bounds_match_the_agent():
-    sys.path.insert(0, str(REPO / "projects" / "dashboard"))
-    sys.path.insert(0, str(REPO / "scripts"))
-    from core import schedule  # noqa: E402
+def test_a_gameplans_ram_ceiling_reaches_the_sandbox_stack():
+    sys.path.insert(0, str(REPO / "src"))
+    from gameplan import BasicVM, Gameplan, GameplanError, build
+    from gameplan.definition import LIMITS
+    from gameplan.runtime import instantiate
 
-    import importlib.util
+    assert LIMITS["memory"] == (256, 8192)
 
-    spec = importlib.util.spec_from_file_location("agent_validation", REPO / "scripts" / "round_agent" / "validation.py")
-    validation = importlib.util.module_from_spec(spec)
-    sys.modules["agent_validation"] = validation
-    spec.loader.exec_module(validation)
+    def plan(memory):
+        def init(self):
+            self.a = BasicVM(memory=memory)
+            self.register_network(self.a)
+            self.set_worm_entrypoint(self.a)
 
-    default, low, high = schedule.SANDBOX_BOUNDS["vm_ram"]
-    assert (default, low, high) == (512, 256, 8192)
-    assert validation.sandbox_params({})["vm_ram"] == default
-    validation.sandbox_params({"vm_ram": low})
-    validation.sandbox_params({"vm_ram": high})
-    for bad in (low - 1, high + 1):
-        with pytest.raises(validation.Invalid):
-            validation.sandbox_params({"vm_ram": bad})
+        return instantiate(type("Plan", (Gameplan,), {"__init__": init}))
 
-
-def test_the_generator_honours_the_ram_ceiling(tmp_path):
-    out = subprocess.run(
-        [sys.executable, "-I", str(REPO / "scripts" / "generate_sandbox.py"),
-         "--seed", "1", "--networks", "3", "--vms", "5", "--max-interfaces", "2", "--sites", "1",
-         "--vm-ram", "640", "--network-file", str(tmp_path / "g.json")],
-        capture_output=True, text=True, check=True,
-    ).stdout  # fmt: skip
-    rams = [line for line in out.splitlines() if "ram" in line and "=" in line]
-    assert rams and all("640" in line for line in rams), rams
+    assert "ram                      = 640" in build.hcl(plan(640).spec(), "p.py", "0" * 64)
+    for bad in (255, 8193):
+        with pytest.raises(GameplanError, match="memory"):
+            plan(bad).spec()

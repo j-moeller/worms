@@ -93,13 +93,16 @@ class Round(models.Model):
     )
     created_at = models.DateTimeField(default=clock.now)
 
-    # What every run of this round gets (copied into RoundRun.sandbox_params
-    # when the runs are planned): the sandbox generator's size (vms, networks,
-    # sites, max_interfaces -- validated again by the round agent), the game
-    # plan (orchestrator/rounds/gameplan.py) and the timing of a run
-    # (core/schedule.py). Set by staff on the dashboard (docs/rounds.md).
-    # db_default too: rounds inserted with raw SQL (the simulation) get {}.
-    sandbox_params = models.JSONField(default=dict, db_default={}, blank=True)
+    # The round's gameplan: a file in gameplans/ on the node and the orchestrator, named here
+    # and nowhere read by the dashboard (docs/05-live-environment.md). Set by staff on the dashboard.
+    # db_default too: rounds inserted with raw SQL (the simulation) get the defaults.
+    gameplan = models.TextField(blank=True, default="", db_default="")
+    # Seconds from a team's worm starting to the end of its run (the gameplan's round_duration).
+    team_duration = models.PositiveIntegerField(default=3600, db_default=3600)
+    # The orchestrator's check of the gameplan against this round, before the round starts:
+    # "" (not yet), "ok" or "invalid" (why: the orchestrator's journal, never the database).
+    gameplan_status = models.TextField(blank=True, default="", db_default="")
+    gameplan_checked_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "rounds"
@@ -142,7 +145,12 @@ class Round(models.Model):
         return self.round_start <= now < self.round_end
 
     def is_finished(self, now):
+        """Over, results final: its end has passed and every team's run is over (a run whose
+        attempt failed may go on past the end; docs/05-live-environment.md)."""
         if self.round_start is None or self.round_end is None:
             return False
+        if now < self.round_end:
+            return False
+        from core.models.rounds import RoundRun
 
-        return now >= self.round_end
+        return not RoundRun.objects.filter(round=self, state__in=RoundRun.OPEN_STATES).exists()

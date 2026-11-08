@@ -2,8 +2,9 @@
 
 Run as a long-lived systemd service on the orchestrator (ansible role
 django_app, django_daemons). It plans the runs of any round whose deadline has
-passed and then advances the active run one step per tick. Safe to restart:
-all state is in the database.
+passed and then runs one attempt at a time, start to finish. A restart during an
+attempt fails it, and the team's worm runs again (docs/05-live-environment.md): do not redeploy
+the orchestrator while a round runs.
 
     manage.py conduct_rounds                 # loop forever
     manage.py conduct_rounds --once          # a single tick (tests, cron)
@@ -47,20 +48,33 @@ class Command(BaseCommand):
             self.plan_due_rounds()
             return
         conductor = Conductor()
+        import signal
+
+        def stop(*_):
+            # The attempt under way fails at its next wait and is queued to run again.
+            conductor.stopping = True
+            if not busy_now[0]:
+                raise SystemExit(0)
+
+        busy_now = [False]
+        signal.signal(signal.SIGTERM, stop)
         if once:
             self.plan_due_rounds()
             conductor.tick()
             return
         self.stdout.write("conductor started")
-        while True:
+        while not conductor.stopping:
             close_old_connections()
             busy = False
             try:
                 self.plan_due_rounds()
+                busy_now[0] = True
                 busy = conductor.tick()
             except Exception:  # a bad run must not kill the loop
                 import logging
 
                 logging.getLogger("orchestrator").exception("conductor tick failed")
-            if not busy:
+            finally:
+                busy_now[0] = False
+            if not busy and not conductor.stopping:
                 time.sleep(interval)

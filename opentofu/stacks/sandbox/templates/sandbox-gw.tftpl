@@ -60,12 +60,12 @@ write_files:
           type filter hook forward priority filter; policy drop;
           ct state invalid drop
           ct state established,related accept
-          # The experiment: free routing between the generated networks.
-          ip saddr $SANDBOX ip daddr $SANDBOX accept
+          # No routing between sandbox networks: a VM meets another only on a network the
+          # gameplan put them both on (src/gameplan).
           # Services bridge on the allowed ports only.
           ip saddr $SANDBOX ip daddr $SERVICES tcp dport { ${services_tcp_ports} } accept
           ip saddr $SANDBOX ip daddr $SERVICES udp dport { ${services_udp_ports} } accept
-          # The only way out: the LLM endpoint, towards the host (docs/security-assessment.md).
+          # The only way out: the LLM endpoint, towards the host (docs/07-security.md).
           ip saddr $SANDBOX ip daddr $LLM tcp dport 443 accept
         }
 

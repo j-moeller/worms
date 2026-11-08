@@ -151,9 +151,14 @@ t = Team.objects.create(name='MiXeD Team', competition=c)
 TeamMembership.objects.create(user=u, team=t)
 a = MalwareArtifact.objects.create(content_hash='a'*64, storage_key='existing-fixture.zip')
 Upload.objects.create(user=u, team=t, artifact=a)
-r = Round.objects.create(name='Existing round', competition=c, seed=123)
 attempt = LoggingAttempt.objects.create(team_uuid=str(t.uuid), log_data={'text':'keep ü 🐛'}, processed=True)
-Logging.objects.create(team=t, round=r, logging_attempt=attempt)
+# Rounds and their logs in SQL: today's models have columns this schema does not yet.
+from django.db import connection
+with connection.cursor() as cur:
+    cur.execute("INSERT INTO rounds (name, competition_id, seed, created_at) VALUES ('Existing round', %s, 123, now())"
+                " RETURNING id", [c.id])
+    cur.execute("INSERT INTO logging (team_id, round_id, logging_attempt_id, created_at) VALUES (%s, %s, %s, now())",
+                [t.id, cur.fetchone()[0], attempt.id])
 '''
     proc = django(cluster, "enrollment_upgrade", "shell", "-c", seed)
     assert proc.returncode == 0, proc.stdout + proc.stderr

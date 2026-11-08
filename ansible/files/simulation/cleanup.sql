@@ -16,8 +16,6 @@ WITH team AS (
     SELECT id FROM virtual_machines WHERE run_id IN (SELECT id FROM runs)
 ), del_run_events AS (
     DELETE FROM run_events WHERE run_id IN (SELECT id FROM runs)
-), del_steps AS (
-    DELETE FROM game_plan_steps WHERE run_id IN (SELECT id FROM runs)
 ), del_host_jobs AS (
     DELETE FROM host_jobs WHERE run_id IN (SELECT id FROM runs)
 ), del_captures AS (

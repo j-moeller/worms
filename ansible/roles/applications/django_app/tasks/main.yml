@@ -108,6 +108,57 @@
     group: "{{ django_app_group }}"
     recurse: true
 
+# The gameplans (docs/05-live-environment.md): the orchestrator runs their execute() and checks them; the
+# dashboard must never hold one. Root-owned, readable by the application (it cannot change them).
+- name: Create the gameplan directories (orchestrator only)
+  when: django_variant == "orchestrator"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: "{{ django_app_group }}"
+    mode: "0750"
+  loop:
+    - "{{ django_app_dir }}/gameplans"
+    - "{{ django_gameplan_dir }}"
+    - "{{ django_gameplan_lib }}"
+    - "{{ django_gameplan_lib }}/gameplan"
+
+- name: Synchronize the gameplans and their framework (orchestrator only)
+  when: django_variant == "orchestrator"
+  ansible.posix.synchronize:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    delete: true
+    recursive: true
+    use_ssh_args: true
+    rsync_opts:
+      - "--exclude=__pycache__"
+      - "--exclude=*.pyc"
+  loop:
+    - { src: "{{ playbook_dir }}/../gameplans/", dest: "{{ django_gameplan_dir }}/" }
+    - { src: "{{ playbook_dir }}/../src/gameplan/", dest: "{{ django_gameplan_lib }}/gameplan/" }
+  loop_control:
+    label: "{{ item.dest }}"
+  notify:
+    - Restart Django
+
+- name: Make the gameplans root's, readable by the application only (orchestrator only)
+  when: django_variant == "orchestrator"
+  ansible.builtin.file:
+    path: "{{ django_app_dir }}/gameplans"
+    state: directory
+    recurse: true
+    owner: root
+    group: "{{ django_app_group }}"
+    mode: "u=rwX,g=rX,o="
+
+- name: Remove any gameplans from the dashboard
+  when: django_variant != "orchestrator"
+  ansible.builtin.file:
+    path: "{{ django_app_dir }}/gameplans"
+    state: absent
+
 - name: Create virtual environment
   ansible.builtin.command:
     cmd: python3 -m venv "{{ django_venv_dir }}"

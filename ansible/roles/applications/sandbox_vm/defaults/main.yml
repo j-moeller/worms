@@ -1,0 +1,4 @@
+---
+# {VM name: {install, uninstall, files, setup, services, users}}: what the round's gameplan
+# puts on each sandbox VM (src/gameplan/build.py). The round agent passes it (-e @file).
+sandbox_vm_config: {}

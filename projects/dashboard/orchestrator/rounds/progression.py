@@ -1,4 +1,4 @@
-"""A team's progression through a round, as one document (docs/progression.md).
+"""A team's progression through a round, as one document (docs/08-user-guide.md).
 
 The round player (static/dashboard/js/topology.js) replays it -- for staff on
 the TOPOLOGY page, for a team on its PROGRESSION page -- and the team API
@@ -100,7 +100,7 @@ logs/<ref>.json       one log record per file, if included: {ref, received_at, d
 network/flows.jsonl   the connections, one JSON object per line, if included
 
 Open the zip on the dashboard's PROGRESSION page ("Open file") to replay it.
-The format is described in docs/progression.md. Log records and connections
+The format is described in docs/08-user-guide.md. Log records and connections
 were produced by a worm: treat them as untrusted data.
 """
 
@@ -116,7 +116,7 @@ def _sec(ts, zero):
 def window(team, rnd, now, run=None):
     """(start, end) of what the progression covers: the team's run in the round,
     (None, None) before it began. The devbox has no rounds (build_devbox)."""
-    run = run or RoundRun.objects.filter(round=rnd, team=team).first()
+    run = run or RoundRun.for_team(rnd, team)
     return timeline.run_window(run) if run is not None else (None, None)
 
 
@@ -202,14 +202,23 @@ def _empty_timeline():
 
 
 def _live(team, rnd, now, audience, infra, flow_limit):
+    standing = RoundRun.for_team(rnd, team)
     run = (
-        RoundRun.objects.filter(round=rnd, team=team)
+        RoundRun.objects.filter(pk=standing.pk)
         .select_related("round", "team")
         .prefetch_related("virtual_machines", "events__vm")
         .first()
+        if standing is not None
+        else None
     )
     if run is None:
         zero, tl = rnd.round_start or now, _empty_timeline()
+    elif audience == "team" and run.state != RoundRun.State.FINISHED:
+        # Nothing of a run is shown to its team before it has finished: what it captured, sent
+        # or did only counts once the attempt is over and no failure threw it away.
+        zero, tl = run.worm_start_at or run.created_at, _empty_timeline()
+        tl["run"] = _run_info(run, zero)
+        tl["run"]["withheld"] = True
     else:
         zero = run.worm_start_at or run.created_at
         tl = timeline.build(run, flow_limit=flow_limit, infra=infra)
@@ -241,7 +250,7 @@ def _live(team, rnd, now, audience, infra, flow_limit):
 
 
 def _run_info(run, zero):
-    start_vm = run.sandbox_params.get("start_vm")
+    start_vm = run.entrypoint or None
     return {
         "uuid": None,
         "team": run.team.name,

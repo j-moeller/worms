@@ -1,17 +1,18 @@
 """Staff: the rounds of the competition -- defining them, and following them.
 
-A round is a database record: its window, its seed and the parameters every
-team's run gets (the sandbox size, the game plan, the timing;
-core/schedule.py). Creating one builds nothing. At the round's start the
-conductor on the orchestrator plans one run per team. The round agent on the
-Proxmox host builds the round's sandbox from the seed for the first run, with
-OpenTofu (root on the host), and snapshots it; every run starts from that
-snapshot, gets its team's worm, and the last one destroys the sandbox
-(docs/rounds.md). This page shows how far that got: the runs, their host jobs
-and errors, and the architecture each prepare reported.
+A round is a database record: its window, its seed (the order the teams run in),
+its gameplan and its duration per team. The gameplan is picked by file name from
+the list the orchestrator keeps; the dashboard never reads a gameplan
+(docs/05-live-environment.md). Creating a round builds nothing. At the round's start the
+conductor on the orchestrator plans one run per team; the round agent on the
+Proxmox host builds the gameplan's sandbox for the first, with OpenTofu (root on
+the host), and snapshots it; every run starts from that snapshot. An attempt the
+infrastructure failed is run again (docs/05-live-environment.md). This page shows how far
+that got: the attempts, their host jobs and errors.
 
-A round is edited only before it starts (afterwards only its end can move) and
-deleted only before its runs exist.
+A round is edited fully before it starts. Afterwards its end, its gameplan and its
+duration per team can change until its first attempt starts (the conductor pins the
+gameplan then; a round without one waits). It is deleted only before its runs exist.
 """
 
 from __future__ import annotations
@@ -49,7 +50,7 @@ def _status(round_obj, now) -> str:
 
 
 def _estimate(round_obj, teams):
-    return schedule.estimate(round_obj.round_start, round_obj.round_end, round_obj.sandbox_params, teams)
+    return schedule.estimate(round_obj.round_start, round_obj.round_end, round_obj.team_duration, teams)
 
 
 def _check_window(form, competition, start, end, exclude=None):
@@ -61,15 +62,15 @@ def _check_window(form, competition, start, end, exclude=None):
         form.add_error("round_start", f"Overlaps {clash.name} ({clash.round_start:%Y-%m-%d %H:%M} – {clash.round_end:%Y-%m-%d %H:%M} UTC).")
 
 
-def _check_fit(form, start, end, params, teams):
-    estimate = schedule.estimate(start, end, params, teams)
+def _check_fit(form, start, end, team_duration, teams):
+    estimate = schedule.estimate(start, end, team_duration, teams)
     if not estimate.fits:
         form.add_error(
             "round_end",
             f"{teams} teams need {schedule.format_duration(estimate.needed)} "
             f"({schedule.format_duration(estimate.slot)} each, one after another); "
             f"this round is {schedule.format_duration(estimate.available)} "
-            f"(room for {estimate.max_teams}). Make it longer or the runs shorter.",
+            f"(room for {estimate.max_teams}). Make it longer or the duration per team shorter.",
         )
 
 
@@ -86,21 +87,22 @@ def rounds(request: HttpRequest):
         if form.is_valid():
             # Read before checking: an error on a field removes it from cleaned_data.
             data = dict(form.cleaned_data)
-            start, end, params = data["round_start"], data["round_end"], form.sandbox_params()
+            start, end, duration = data["round_start"], data["round_end"], form.team_duration_seconds()
             with transaction.atomic():
                 # One round at a time per competition: two staff saving at once cannot
                 # both pass the overlap check.
                 Competition.objects.select_for_update().get(pk=comp.pk)
                 teams = Team.objects.filter(competition=comp).count()
                 _check_window(form, comp, start, end)
-                _check_fit(form, start, end, params, teams)
+                _check_fit(form, start, end, duration, teams)
                 if not form.errors:
                     created = Round.objects.create(
                         competition=comp, name=data["name"], seed=form.chosen_seed(),
-                        round_start=start, round_end=end, sandbox_params=params,
+                        round_start=start, round_end=end, gameplan=data["gameplan"], team_duration=duration,
                     )  # fmt: skip
                     events.competition("round_created", request=request, round_id=created.pk, detail={"name": created.name})
-                    messages.success(request, f"Round {created.name} created. Its runs are planned when it starts.")
+                    note = "" if created.gameplan else " It waits for a gameplan: choose one before its first attempt."
+                    messages.success(request, f"Round {created.name} created. Its runs are planned when it starts.{note}")
                     return redirect("staff_round", round_id=created.pk)
 
     def listing(competition):
@@ -111,13 +113,14 @@ def rounds(request: HttpRequest):
                 "round": r,
                 "status": _status(r, now),
                 "states": sorted(states.items()),
-                "captures": FlagCapture.objects.filter(round=r).count(),
+                "captures": FlagCapture.objects.filter(round=r, vm__run__state=RoundRun.State.FINISHED).count(),
                 "estimate": _estimate(r, teams),
             })  # fmt: skip
         return rows
 
     active_run = (
-        RoundRun.objects.filter(state__in=ACTIVE_STATES).select_related("round", "team").order_by("round_id", "position").first()
+        RoundRun.objects.filter(state__in=ACTIVE_STATES).select_related("round", "team")
+        .order_by("round_id", "position", "attempt").first()
     )
     return render_with_base_info(request, "staff/rounds.html", {
         "form": form,
@@ -132,6 +135,17 @@ def rounds(request: HttpRequest):
     })  # fmt: skip
 
 
+def _max_retries():
+    from django.conf import settings
+
+    return getattr(settings, "ROUND_CONDUCTOR", {}).get("max_retries", 3)
+
+
+def _attempt_started(round_obj) -> bool:
+    """An attempt of the round has begun (or its gameplan is pinned): it can no longer change."""
+    return RoundRun.objects.filter(round=round_obj).exclude(state=RoundRun.State.PENDING, gameplan_sha256="").exists()
+
+
 @staff_required
 def round_detail(request: HttpRequest, round_id):
     comp = request.competition
@@ -141,16 +155,18 @@ def round_detail(request: HttpRequest, round_id):
         RoundRun.objects.filter(round=round_obj)
         .select_related("team", "upload__artifact")
         .annotate(vm_count=Count("virtual_machines"))
-        .order_by("position")
+        .order_by("position", "attempt")
     )
-    captures = Counter(FlagCapture.objects.filter(round=round_obj).values_list("team_id", flat=True))
+    # Per attempt: a failed one's captures are kept for the record but never count.
+    captures = Counter(FlagCapture.objects.filter(round=round_obj).values_list("vm__run_id", flat=True))
     for run in runs:
-        run.captured = captures.get(run.team_id, 0)
-        # The generator graph prepare reported (scripts/generate_sandbox.py).
+        run.captured = captures.get(run.pk, 0)
         nodes = (run.topology or {}).get("nodes") or []
         run.network_count = sum(1 for node in nodes if isinstance(node, dict) and node.get("type") == "network")
-    started = round_obj.round_start is not None and round_obj.round_start <= now
-    editable = not runs
+    # Started, or its runs planned (from its seed and window): only its end, gameplan and
+    # duration per team can still change.
+    started = (round_obj.round_start is not None and round_obj.round_start <= now) or bool(runs)
+    editable = not any(run.state != RoundRun.State.PENDING or run.gameplan_sha256 for run in runs)
     form = None
     if editable:
         initial = RoundForm.initial_from(round_obj)
@@ -161,33 +177,40 @@ def round_detail(request: HttpRequest, round_id):
                 data = dict(form.cleaned_data)
                 start = data.get("round_start", round_obj.round_start)
                 end = data["round_end"]
-                params = round_obj.sandbox_params if started else form.sandbox_params()
+                duration = form.team_duration_seconds()
                 with transaction.atomic():
                     Competition.objects.select_for_update().get(pk=round_obj.competition_id)
                     with serialized_resource("round-plan", round_obj.pk):
                         # Against the conductor planning the round meanwhile.
                         round_obj = get_object_or_404(Round, pk=round_obj.pk, competition=comp)
-                        if RoundRun.objects.filter(round=round_obj).exists():
-                            messages.error(request, "The round's runs are planned; it can no longer be changed.")
+                        if _attempt_started(round_obj):
+                            messages.error(request, "An attempt of the round has started; it can no longer be changed.")
                             return redirect("staff_round", round_id=round_obj.pk)
-                        if not started and round_obj.round_start is not None and round_obj.round_start <= clock.now():
-                            messages.error(request, "The round has started; reload before editing its end.")
+                        if not started and ((round_obj.round_start is not None and round_obj.round_start <= clock.now())
+                                            or RoundRun.objects.filter(round=round_obj).exists()):
+                            messages.error(request, "The round has started meanwhile; reload before editing it.")
                             return redirect("staff_round", round_id=round_obj.pk)
                         _check_window(form, round_obj.competition, start, end, exclude=round_obj)
-                        _check_fit(form, start, end, params, Team.objects.filter(competition=round_obj.competition).count())
+                        _check_fit(form, start, end, duration, Team.objects.filter(competition=round_obj.competition).count())
                         if not form.errors:
                             if started:
-                                round_obj.round_end = end
-                                round_obj.save(update_fields=["round_end"])
+                                round_obj.round_end, round_obj.gameplan = end, data["gameplan"]
+                                round_obj.team_duration, round_obj.gameplan_status = duration, ""
+                                # Runs planned already take both from the round when the conductor
+                                # pins its gameplan (the dashboard cannot write runs).
+                                round_obj.save(update_fields=["round_end", "gameplan", "team_duration", "gameplan_status"])
                             else:
                                 round_obj.name, round_obj.round_start, round_obj.round_end = data["name"], start, end
-                                round_obj.seed, round_obj.sandbox_params = form.chosen_seed(), params
-                                round_obj.save(update_fields=["name", "seed", "round_start", "round_end", "sandbox_params"])
+                                round_obj.seed, round_obj.gameplan = form.chosen_seed(), data["gameplan"]
+                                # The orchestrator checks it again against the new values.
+                                round_obj.team_duration, round_obj.gameplan_status = duration, ""
+                                round_obj.save(update_fields=["name", "seed", "round_start", "round_end", "gameplan",
+                                                              "team_duration", "gameplan_status"])  # fmt: skip
                             events.competition("round_updated", request=request, round_id=round_obj.pk, detail={"name": round_obj.name})
                             messages.success(request, f"Saved {round_obj.name}.")
                             return redirect("staff_round", round_id=round_obj.pk)
     elif request.method == "POST":
-        messages.error(request, "The round's runs are planned; it can no longer be changed.")
+        messages.error(request, "An attempt of the round has started; it can no longer be changed.")
         return redirect("staff_round", round_id=round_obj.pk)
 
     teams = Team.objects.filter(competition=round_obj.competition).count()
@@ -197,8 +220,8 @@ def round_detail(request: HttpRequest, round_id):
         "runs": runs,
         "form": form,
         "started": started,
-        "params": round_obj.sandbox_params or {},
-        "timing": schedule.run_timing(round_obj.sandbox_params),
+        "timing": schedule.timing_defaults(),
+        "max_retries": _max_retries(),
         "estimate": _estimate(round_obj, teams),
         "jobs": HostJob.objects.filter(run__round=round_obj).select_related("run__team").order_by("-id")[:50],
     })  # fmt: skip

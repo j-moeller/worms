@@ -40,21 +40,19 @@ def postgres_database(user, password):
 
 
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 MiB
-# Per team, so one team cannot fill the dashboard VM's disk (docs/security-assessment.md, D11):
+# Per team, so one team cannot fill the dashboard VM's disk (docs/07-security.md, D11):
 # what its uploads keep stored (an artifact counts once, however often it is uploaded),
 # and how many uploads it may make in an hour.
 UPLOAD_TEAM_QUOTA = 2 * 1024 * 1024 * 1024  # 2 GiB
 UPLOAD_TEAM_PER_HOUR = 30
 CHUNK_SIZE = 1024 * 1024  # 1 MiB
 
-# The default timing of one team's run in a round, in seconds (core/schedule.py).
-# A round created on the dashboard stores its own copy in sandbox_params; the
-# conductor (orchestrator) falls back to these. slot_overhead is the allowance
-# for building, checking and tearing down a sandbox, used to tell whether every
-# team's run fits in the round.
+# The timing of one team's run in a round, in seconds (core/schedule.py): the fuse between a
+# gameplan's deploy_worm() and the worm's start, the drain after the run, and the allowance for
+# building, checking and tearing down a sandbox (to tell whether every team fits in a round).
+# A round's duration per team is its own (Round.team_duration).
 ROUND_TIMING = {
-    "worm_start_delay": int(env("ROUND_WORM_START_DELAY", "300")),
-    "run_duration": int(env("ROUND_DURATION", "3600")),
+    "worm_start_delay": int(env("ROUND_WORM_START_DELAY", "15")),
     "end_drain": int(env("ROUND_END_DRAIN", "120")),
     "slot_overhead": int(env("ROUND_SLOT_OVERHEAD", "900")),
 }

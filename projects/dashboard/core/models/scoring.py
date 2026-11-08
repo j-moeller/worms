@@ -11,14 +11,14 @@ from django.db.models.aggregates import Count
 class FlagCaptureAttempt(models.Model):
     # Only one team runs at a time, so the scoring API is told which team is
     # running (its uuid) and records it directly -- no access token is needed
-    # at the scoring server (docs/rounds.md). Nullable: an attempt made while
+    # at the scoring server (docs/05-live-environment.md). Nullable: an attempt made while
     # no round is active carries no team and is never scored.
     team_uuid = models.TextField(null=True, blank=True)
     vm_flag_hash = models.TextField()
 
     # True when the submission came from a team's devbox (attributed by source
     # address), not from the running round's sandbox. Devbox attempts are
-    # scored against the team's DevboxVMs, never the round (docs/devbox.md).
+    # scored against the team's DevboxVMs, never the round (docs/04-dev-environment.md).
     devbox = models.BooleanField(default=False, db_default=False)
 
     # Database defaults as well: the sandbox API inserts only the columns
@@ -88,10 +88,18 @@ class FlagCapture(models.Model):
         return f"FlagCapture({self.team}, {self.vm}, , {self.round})"
 
     @staticmethod
+    def published():
+        """The captures that count, and that teams see: those of an attempt that FINISHED. A
+        failed attempt's are kept for staff and never count; a running one's wait for its end."""
+        from core.models.rounds import RoundRun
+
+        return FlagCapture.objects.filter(vm__run__state=RoundRun.State.FINISHED)
+
+    @staticmethod
     def get_round_standings(round: Round) -> list[tuple[int, int]]:
         """Return (team_id, score) pairs for a round."""
         return list(
-            FlagCapture.objects.filter(round=round)
+            FlagCapture.published().filter(round=round)
             .values("team_id")
             .annotate(score=Count("id"))
             .order_by("-score", "team_id")

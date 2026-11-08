@@ -31,6 +31,9 @@ django_media_root: ""
 
 # The two apps live in the same Django project; the settings module selects the role.
 django_local_source: "{{ playbook_dir }}/../projects/dashboard"
+# The gameplans and their framework, on the orchestrator only (tasks/main.yml).
+django_gameplan_dir: "{{ django_app_dir }}/gameplans/plans"
+django_gameplan_lib: "{{ django_app_dir }}/gameplans/lib"
 django_wsgi_module: "config.wsgi:application"
 
 gunicorn_workers: 2

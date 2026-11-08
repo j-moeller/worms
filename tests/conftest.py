@@ -23,7 +23,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 def pytest_addoption(parser):
-    group = parser.getgroup("live", "the live journey on a deployed platform (tests/live, docs/testing.md)")
+    group = parser.getgroup("live", "the live journey on a deployed platform (tests/live, docs/03-manage-py.md)")
     group.addoption("--live", action="store_true", help="run only the live journey; it creates accounts and VMs on this node")
     group.addoption("--live-out", metavar="DIR", help="where the protocol and screenshots go (default: a new directory in /var/tmp)")
     group.addoption("--live-wipe-database", metavar="NODE", help="wipe the database first; you must name this node")
@@ -39,7 +39,7 @@ def pytest_collection_modifyitems(config, items):
             config.hook.pytest_deselected(items=others)
         items[:] = live
     else:
-        skip = pytest.mark.skip(reason="the live journey needs --live and a deployed platform (docs/testing.md)")
+        skip = pytest.mark.skip(reason="the live journey needs --live and a deployed platform (docs/03-manage-py.md)")
         for item in live:
             item.add_marker(skip)
 
@@ -223,7 +223,7 @@ def db_clean(django_env):
 
     with connection.cursor() as cur:
         cur.execute(
-            "TRUNCATE run_events, game_plan_steps, host_jobs, flag_captures, logging,"
+            "TRUNCATE run_events, gameplans, host_jobs, flag_captures, logging,"
             " flag_capture_attempts, logging_attempts, virtual_machines, round_runs,"
             " access_tokens, rounds, team_memberships, teams, uploads, malware_artifacts,"
             " application_setting, competitions, users, password_resets, network_flows,"

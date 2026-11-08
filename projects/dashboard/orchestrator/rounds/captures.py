@@ -169,14 +169,14 @@ def process_logs(grace_seconds=120, batch=500):
             team_id = teams.get(attempt.team_uuid)
             run = next((r for r in runs.get(team_id, []) if _live(r, attempt.created_at, grace)), None)
             if run is not None:
-                Logging.objects.create(team_id=team_id, round=run.round, logging_attempt=attempt)
+                Logging.objects.create(team_id=team_id, round=run.round, run=run, logging_attempt=attempt)
                 stored += 1
             attempt.processed, attempt.processed_at = True, now
             attempt.save(update_fields=["processed", "processed_at"])
     return stored
 
 
-# --- devbox (docs/devbox.md) --------------------------------------------------
+# --- devbox (docs/04-dev-environment.md) --------------------------------------------------
 #
 # Devbox submissions are attributed to a team by the scoring/logging server
 # (source address), not to a round. A token counts once per team and devbox

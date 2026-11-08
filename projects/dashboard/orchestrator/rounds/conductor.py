@@ -1,57 +1,63 @@
-"""The conductor: drives each team's run through its states, requests the
-privileged work from the Proxmox host (host_jobs) and runs the game plan.
+"""The conductor: runs every team's worm in a round, one attempt after another, by the round's
+gameplan (docs/05-live-environment.md, docs/05-live-environment.md).
 
-It never touches the host directly. The only privileged thing it does itself
-is sandbox VM power (orchestrator/rounds/power.py, a pool-scoped token); every
-host-level operation (build the sandbox, checks, deploy the worm, release
-secrets, teardown) is a HostJob the round agent executes. The conductor is a
-single loop (manage.py conduct_rounds) that advances one step per tick, so a
-crash just resumes from the database state.
+    for each team (in the round's order):
+        reset the sandbox  (host job prepare: built or rolled back, the run's secrets, files, flags)
+        check it           (host job check)
+        gameplan.execute() (deploy_worm, waits, power, flags: host jobs and the Proxmox API)
+        the rest of the run's time, stop every VM, drain, tear down
+    any failure: the attempt is thrown away (FAILED, its points never count) and the team's
+    worm runs again, at most max_retries more times.
 
-State machine of a RoundRun (see docs/rounds.md):
+An attempt runs start to finish inside one tick (manage.py conduct_rounds is a loop with
+nothing else to do). The conductor never touches the host itself: VM power goes through the
+Proxmox API with a pool-scoped token (power.py), everything else is a HostJob the round agent
+executes. A crash cannot resume an attempt in the middle of execute(): the next start fails
+it and the team's worm runs again, as for any other failure.
 
-    PENDING ─ prepare ─▶ PREPARING ─▶ CHECKING ─▶ DEPLOYING ─▶ ARMED
-                                                                 │ worm_start_at
-                                                                 ▼
-    FINISHED ◀─ TEARING_DOWN ◀─ ENDING ◀──────────────────── RUNNING
-                                 (ends_at)              (game plan steps)
-
-A failed host job or an exception moves the run to FAILED and tears the
-sandbox down. One run is active at a time (one sandbox fits on the host).
-
-The runs of a round share one sandbox, built from the round's seed: the first
-run's prepare builds and snapshots it, the others roll it back to that snapshot,
-so each team starts from the same clean sandbox. A teardown keeps it while
-another run of the round is still to come, and the last one destroys it.
+Results are published only for a FINISHED attempt: its captures and logs count and are shown
+to the team (core/models/rounds.py). Failures are logged (the attempt's error and events, the
+journal) and kept for staff.
 """
 
 from __future__ import annotations
 
 import logging
+import time
 from datetime import timedelta
 
-from core.models.rounds import GamePlanStep, HostJob, RoundRun, RunEvent
+from core.locking import serialized_resource
+from core.models.competition import Round
+from core.models.rounds import HostJob, RoundRun, RunEvent
 from core.models.vm import VirtualMachine
 from django.conf import settings
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 
-from orchestrator.rounds.power import ProxmoxPower, PowerError
+from orchestrator.rounds import gameplans
+from orchestrator.rounds.power import PowerError, ProxmoxPower
 
 log = logging.getLogger("orchestrator")
 
+S = RoundRun.State
+
 # Run-level config, overridable via settings.ROUND_CONDUCTOR.
 CONFIG = {
-    "worm_start_delay": 300,        # ARMED -> RUNNING: the fuse before the worm starts
-    "round_duration": 3600,         # worm start -> ENDING
+    "worm_start_delay": 15,         # deploy_worm(): the fuse, then the worm and the run's clock start
     "end_drain": 120,               # ENDING: let the monitor catch up before teardown
     "job_timeout": 1800,            # a host job with no heartbeat for this long failed
+    "job_poll": 2.0,                # seconds between looks at a host job
     "capture_grace": 120,           # captures/logs accepted this long after ends_at
+    "max_retries": 3,               # attempts after a team's first, when the infrastructure fails
+    "gameplan_check_interval": 600, # how often the gameplans are checked again (seconds)
     # A dev upload (rounds/devbox_runs.py). Short fuse: the VMs were rebuilt just before.
     "devbox_worm_start_delay": 10,
     "devbox_run_duration": 3600,    # systemd stops main.sh after this, as a round would end it
-    "slot_overhead": 900,           # allowance for prepare/check/deploy/teardown (core/schedule.py)
+    "slot_overhead": 900,           # allowance for prepare/check/teardown (core/schedule.py)
 }
+
+ACTIVE = [S.PREPARING, S.CHECKING, S.RUNNING, S.ENDING, S.TEARING_DOWN]
+DONE = [S.FINISHED, S.FAILED, S.SKIPPED]
 
 
 def config():
@@ -74,14 +80,173 @@ def parse_armed_at(result, now, job_timeout):
     return armed
 
 
+class Stopping(BaseException):
+    """The conductor is asked to stop: the attempt under way fails and runs again later. A
+    BaseException, so that a gameplan's `except Exception` does not swallow it."""
+
+
+class HostJobs:
+    """Host jobs, waited for: a row the round agent picks up, then its result."""
+
+    def __init__(self, conductor):
+        self.conductor = conductor
+
+    def request(self, run, kind, **params):
+        job = HostJob.objects.create(run=run, kind=kind, params=params)
+        # Wake the round agent at once (it also polls, so a missed NOTIFY only adds a few seconds).
+        with connection.cursor() as cur:
+            cur.execute("NOTIFY host_jobs")
+        log.info("run %s requested %s job %s", run.uuid if run else "-", kind, job.uuid)
+        return job
+
+    def run(self, run, kind, **params):
+        """The job's result, or RoundError if it failed or went silent."""
+        from gameplan.definition import RoundError
+
+        job = self.request(run, kind, **params)
+        cfg = self.conductor.cfg
+        while True:
+            job.refresh_from_db()
+            if job.state == HostJob.State.DONE:
+                return job.result or {}
+            if job.state == HostJob.State.FAILED:
+                raise RoundError(f"{kind} job failed: {job.error}"[:1000])
+            reference = job.heartbeat_at or job.started_at or job.requested_at
+            if reference and self.conductor.now() - reference > timedelta(seconds=cfg["job_timeout"]):
+                raise RoundError(f"{kind} job timed out (no heartbeat for {cfg['job_timeout']} s)")
+            self.conductor.sleep(cfg["job_poll"])
+
+
+class AttemptBackend:
+    """What a gameplan's execute() needs, for one attempt (src/gameplan/runtime.py)."""
+
+    def __init__(self, conductor, run):
+        self.conductor, self.run = conductor, run
+        self.vms = {vm.vm_identifier: vm for vm in run.virtual_machines.all()}
+
+    def _vm(self, name):
+        from gameplan.definition import RoundError
+
+        vm = self.vms.get(name)
+        if vm is None:
+            raise RoundError(f"{name} is not a VM of this attempt's sandbox")
+        return vm
+
+    def now(self):
+        return self.conductor.now().timestamp()
+
+    def sleep(self, seconds):
+        self.conductor.sleep(seconds)
+
+    def power(self, name, action, timeout=None):
+        from gameplan.definition import RoundError
+
+        vm = self._vm(name)
+        try:
+            if action == "shutdown":
+                self.conductor.power.shutdown(vm, timeout=timeout)
+            else:
+                getattr(self.conductor.power, action)(vm, **({"wait": True} if action in ("start", "stop") else {}))
+        except PowerError as error:
+            raise RoundError(f"power control: {action} {name}: {error}") from None
+
+    def status(self, name):
+        from gameplan.definition import RoundError
+
+        try:
+            return self.conductor.power.status(self._vm(name))
+        except PowerError as error:
+            raise RoundError(f"power control: status of {name}: {error}") from None
+
+    def deploy_worm(self, name):
+        """Deploy, then wait out the fuse: execute() goes on when the worm has started, and the
+        run's time counts from then."""
+        conductor, run = self.conductor, self.run
+        artifact = run.upload.artifact
+        result = conductor.jobs.run(
+            run, HostJob.Kind.DEPLOY,
+            start_vm=name, team_uuid=str(run.team.uuid),
+            artifact={"storage_key": artifact.storage_key, "content_hash": artifact.content_hash},
+            worm_delay=conductor.cfg["worm_start_delay"],
+        )  # fmt: skip
+        # The fuse was lit when the agent armed it (its clock), not when this loop noticed.
+        start = parse_armed_at(result, conductor.now(), conductor.cfg["job_timeout"]) or conductor.now()
+        start += timedelta(seconds=conductor.cfg["worm_start_delay"])
+        run.worm_start_at, run.ends_at = start, start + timedelta(seconds=run.duration)
+        run.save(update_fields=["worm_start_at", "ends_at"])
+        RunEvent.objects.create(run=run, kind=RunEvent.Kind.WORM_DEPLOYED, vm=self.vms.get(name),
+                                data={"worm_start_at": start.isoformat()})  # fmt: skip
+        left = (start - conductor.now()).total_seconds()
+        if left > 0:
+            conductor.sleep(left)
+        RunEvent.objects.create(run=run, kind=RunEvent.Kind.WORM_STARTED, vm=self.vms.get(name))
+        return start.timestamp()
+
+    def _guest(self, kind, strict, **params):
+        return self.conductor.jobs.run(self.run, kind, strict=strict, **params)
+
+    def remove_flags(self, names, strict):
+        result = self._guest(HostJob.Kind.REMOVE_FLAGS, strict, vms=list(names))
+        problems = {entry["vm"]: entry["error"] for entry in result.get("failed", [])}
+        for name in result.get("removed", []):
+            vm = self._vm(name)
+            vm.ctf_flag_hash = None  # gone: a submission of it no longer counts
+            vm.save(update_fields=["ctf_flag_hash"])
+        for name, problem in problems.items():
+            self._skipped(name, f"flag not removed: {problem}")
+        return {name: problems.get(name) for name in names}
+
+    def place_flags(self, names, strict):
+        result = self._guest(HostJob.Kind.PLACE_FLAGS, strict, vms=list(names))
+        self.conductor.apply_released(self.run, result.get("released", []))
+        problems = {entry["vm"]: entry["error"] for entry in result.get("failed", [])}
+        for name, problem in problems.items():
+            self._skipped(name, f"flag not placed: {problem}")
+        return {name: problems.get(name) for name in names}
+
+    def write_file(self, file_id, strict):
+        result = self._guest(HostJob.Kind.WRITE_FILE, strict, run_uuid=str(self.run.uuid), file=file_id)
+        if not result.get("written"):
+            self._skipped(result.get("vm"), f"file {file_id} not written: {result.get('error')}")
+            return result.get("error") or "not written"
+        return None
+
+    def _skipped(self, name, message):
+        RunEvent.objects.create(run=self.run, kind=RunEvent.Kind.SKIPPED, vm=self.vms.get(name), data={"message": message[:500]})
+
+    def event(self, kind, vm=None, **data):
+        RunEvent.objects.create(run=self.run, kind=kind, vm=self.vms.get(vm), data=data)
+
+    def log(self, message):
+        log.info("run %s (%s, attempt %s): %s", self.run.uuid, self.run.team.name, self.run.attempt, message)
+
+
 class Conductor:
-    def __init__(self, power=None, now=None):
+    def __init__(self, power=None, now=None, sleep=None, jobs=None):
         self.power = power or ProxmoxPower()
-        self._now = now
+        self._now, self._sleep = now, sleep
         self.cfg = config()
+        self.jobs = jobs or HostJobs(self)
+        self.stopping = False
+        self._checked_at, self._valid, self._waiting = None, {}, {}
+        gameplans.framework()  # the framework's modules, for what follows
 
     def now(self):
         return self._now() if self._now else timezone.now()
+
+    def sleep(self, seconds):
+        """Sleep in small steps, so that a stop request is noticed."""
+        if self._sleep is not None:
+            self._sleep(seconds)
+            return
+        deadline = time.monotonic() + max(0.0, float(seconds))
+        while True:
+            if self.stopping:
+                raise Stopping("the conductor is stopping")
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return
+            time.sleep(min(left, 1.0))
 
     # -- helpers --------------------------------------------------------------
 
@@ -92,66 +257,11 @@ class Conductor:
             setattr(run, key, value)
         run.save()
         RunEvent.objects.create(run=run, kind=RunEvent.Kind.STATE, data={"state": state})
-        log.info("run %s -> %s", run.uuid, state)
-
-    def fail(self, run, message):
-        log.warning("run %s failed: %s", run.uuid, message)
-        RunEvent.objects.create(run=run, kind=RunEvent.Kind.ERROR, data={"message": message[:500]})
-        now = self.now()
-        fields = {"error": message[:2000], "finished_at": now}
-        # Tear the sandbox down unless prepare never built one.
-        if run.state not in (RoundRun.State.PENDING, RoundRun.State.PREPARING):
-            # Nothing may score after the failure: stop the VMs (best effort;
-            # the failure may be power control itself) and close the run's
-            # capture window now rather than at its planned end.
-            for vm in run.virtual_machines.all():
-                try:
-                    self.power.stop(vm)
-                except Exception:  # noqa: BLE001  (best effort; teardown follows)
-                    log.warning("run %s: could not stop %s", run.uuid, vm.vm_identifier)
-            if run.ends_at is not None and run.ends_at > now:
-                fields["ends_at"] = now
-            self.request_job(run, HostJob.Kind.TEARDOWN, keep=self._sandbox_needed_after(run))
-        # The next run waits for that teardown (_teardown_pending).
-        self.set_state(run, RoundRun.State.FAILED, **fields)
-
-    def request_job(self, run, kind, **params):
-        job = HostJob.objects.create(run=run, kind=kind, params=params)
-        # Wake the round agent at once (it also polls, so a missed NOTIFY only
-        # adds a few seconds).
-        from django.db import connection
-
-        with connection.cursor() as cur:
-            cur.execute("NOTIFY host_jobs")
-        log.info("run %s requested %s job %s", run.uuid, kind, job.uuid)
-        return job
-
-    def active_job(self, run, kind):
-        return run.jobs.filter(kind=kind).order_by("-id").first()
-
-    def timing(self, run):
-        """The run's fuse and duration: its round's own (sandbox_params
-        "timing", set on the dashboard; core/schedule.py), else the defaults."""
-        own = (run.sandbox_params or {}).get("timing") or {}
-
-        def pick(key, default):
-            value = own.get(key)
-            return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else default
-
-        return {
-            "worm_start_delay": pick("worm_start_delay", self.cfg["worm_start_delay"]),
-            "run_duration": pick("run_duration", self.cfg["round_duration"]),
-        }
-
-    def slot_seconds(self, run):
-        """How long the run occupies the host, start to teardown (the same
-        estimate the dashboard uses when a round is created)."""
-        timing = self.timing(run)
-        return timing["worm_start_delay"] + timing["run_duration"] + self.cfg["end_drain"] + self.cfg["slot_overhead"]
+        log.info("run %s (%s, attempt %s) -> %s", run.uuid, run.team.name, run.attempt, state)
 
     def _sandbox_needed_after(self, run) -> bool:
-        """Whether another run of the round may still use its sandbox: keep it, powered off."""
-        return RoundRun.objects.filter(round_id=run.round_id, state=RoundRun.State.PENDING, upload__isnull=False).exists()
+        """Whether another attempt of the round may still use its sandbox: keep it, powered off."""
+        return RoundRun.objects.filter(round_id=run.round_id, state=S.PENDING, upload__isnull=False).exclude(pk=run.pk).exists()
 
     def _kept_sandbox(self):
         """The run whose teardown kept the sandbox for a run that then never came (it was
@@ -162,266 +272,20 @@ class Conductor:
         return last.run
 
     def _teardown_pending(self) -> bool:
-        """True while a sandbox teardown has not completed, so the host may
-        still hold a sandbox and the next run must not build over it. A teardown
-        that is queued/running means wait; a FAILED run whose teardown itself
-        failed means the host is dirty and the queue holds until an operator
-        clears it, rather than applying a fresh sandbox over the leftovers
-        (docs/security-assessment.md, S7)."""
-        if HostJob.objects.filter(
-            kind=HostJob.Kind.TEARDOWN, state__in=[HostJob.State.QUEUED, HostJob.State.RUNNING]
-        ).exists():
+        """True while a sandbox teardown has not completed, so the host may still hold a
+        sandbox and the next attempt must not build over it. A FAILED attempt whose teardown
+        itself failed means the host is dirty: the queue holds until an operator clears it,
+        rather than applying a fresh sandbox over the leftovers (docs/07-security.md, S7)."""
+        if HostJob.objects.filter(kind=HostJob.Kind.TEARDOWN, state__in=[HostJob.State.QUEUED, HostJob.State.RUNNING]).exists():
             return True
-        for run in RoundRun.objects.filter(state=RoundRun.State.FAILED):
-            teardown = self.active_job(run, HostJob.Kind.TEARDOWN)
+        for run in RoundRun.objects.filter(state=S.FAILED):
+            teardown = run.jobs.filter(kind=HostJob.Kind.TEARDOWN).order_by("-id").first()
             if teardown is not None and teardown.state == HostJob.State.FAILED:
                 return True
         return False
 
-    # -- the tick -------------------------------------------------------------
-
-    def tick(self):
-        """Advance the one active run, or start the next pending one. Returns
-        True if anything changed (the loop then ticks again without sleeping).
-
-        Processing of the sandbox APIs' attempts into captures/logs is NOT done
-        here: a separate continuous process owns it (manage.py
-        process_attempts), so there is exactly one writer of captures."""
-        active = RoundRun.objects.exclude(
-            state__in=[RoundRun.State.FINISHED, RoundRun.State.FAILED, RoundRun.State.SKIPPED, RoundRun.State.PENDING]
-        ).order_by("round_id", "position").first()
-        if active is not None:
-            return self.advance(active)
-
-        # A failed run tears its sandbox down asynchronously; don't build the
-        # next run's sandbox until that teardown has finished (S7).
-        if self._teardown_pending():
-            return False
-
-        nxt = (
-            RoundRun.objects.filter(state=RoundRun.State.PENDING)
-            .select_related("round")
-            .order_by("round_id", "position")
-            .first()
-        )
-        if nxt is not None:
-            if nxt.upload_id is None:
-                self.set_state(nxt, RoundRun.State.SKIPPED, finished_at=self.now(),
-                               error="no upload before the round's start")  # fmt: skip
-                return True
-            # A run that cannot finish before the round ends is not started:
-            # the round's results are final at its end (the leaderboard).
-            end = nxt.round.round_end
-            if end is not None and self.now() + timedelta(seconds=self.slot_seconds(nxt)) > end:
-                self.set_state(
-                    nxt, RoundRun.State.SKIPPED, finished_at=self.now(),
-                    error=f"not enough time left in the round (a run needs {self.slot_seconds(nxt)} s)",
-                )  # fmt: skip
-                return True
-            self.set_state(nxt, RoundRun.State.PREPARING)
-            # The round's seed: the same sandbox for every team (the run's own seed is its game plan's).
-            self.request_job(nxt, HostJob.Kind.PREPARE, seed=nxt.round.seed, sandbox_params=nxt.sandbox_params)
-            return True
-        kept = self._kept_sandbox()
-        if kept is not None:
-            log.info("no run left for the sandbox kept after run %s: destroying it", kept.uuid)
-            self.request_job(kept, HostJob.Kind.TEARDOWN, keep=False)
-            return True
-        return False
-
-    def advance(self, run):
-        handler = getattr(self, f"_in_{run.state}", None)
-        if handler is None:
-            return False
-        try:
-            return handler(run)
-        except PowerError as exc:
-            self.fail(run, f"power control: {exc}")
-            return True
-        except Exception as exc:  # noqa: BLE001
-            log.exception("run %s", run.uuid)
-            self.fail(run, f"{type(exc).__name__}: {exc}")
-            return True
-
-    # Each _in_<state> returns True if it changed something.
-
-    def _finished_job(self, run, kind):
-        """The job's result if it is done, None while it runs; fails the run
-        if the job failed or timed out."""
-        job = self.active_job(run, kind)
-        if job is None:
-            self.fail(run, f"no {kind} job")
-            return None
-        if job.state == HostJob.State.DONE:
-            return job.result or {}
-        if job.state == HostJob.State.FAILED:
-            self.fail(run, f"{kind} job failed: {job.error}"[:1000])
-            return None
-        reference = job.heartbeat_at or job.started_at or job.requested_at
-        if reference and self.now() - reference > timedelta(seconds=self.cfg["job_timeout"]):
-            self.fail(run, f"{kind} job timed out")
-        return None
-
-    def _in_preparing(self, run):
-        result = self._finished_job(run, HostJob.Kind.PREPARE)
-        if result is None:
-            return run.state == RoundRun.State.FAILED
-        self._register_topology(run, result)
-        self.set_state(run, RoundRun.State.CHECKING)
-        self.request_job(run, HostJob.Kind.CHECK)
-        return True
-
-    def _in_checking(self, run):
-        result = self._finished_job(run, HostJob.Kind.CHECK)
-        if result is None:
-            return run.state == RoundRun.State.FAILED
-        if not result.get("ok", False):
-            self.fail(run, f"sanity checks failed: {result.get('failures')}")
-            return True
-        self.set_state(run, RoundRun.State.DEPLOYING)
-        self._build_game_plan(run)
-        artifact = run.upload.artifact
-        self.request_job(
-            run, HostJob.Kind.DEPLOY,
-            start_vm=run.sandbox_params.get("start_vm"),
-            team_uuid=str(run.team.uuid),
-            artifact={"storage_key": artifact.storage_key, "content_hash": artifact.content_hash},
-            initial_secrets=[s.vm.vm_identifier for s in self._initial_secret_steps(run)],
-            worm_delay=self.timing(run)["worm_start_delay"],
-        )  # fmt: skip
-        return True
-
-    def _in_deploying(self, run):
-        result = self._finished_job(run, HostJob.Kind.DEPLOY)
-        if result is None:
-            return run.state == RoundRun.State.FAILED
-        self._apply_released(run, result.get("released", []))
-        timing = self.timing(run)
-        # The fuse was lit when the agent armed it (its clock), not when this
-        # loop noticed the job was done.
-        start = self._armed_at(result) or self.now()
-        start += timedelta(seconds=timing["worm_start_delay"])
-        RunEvent.objects.create(run=run, kind=RunEvent.Kind.WORM_DEPLOYED, data={"worm_start_at": start.isoformat()})
-        for step in self._initial_secret_steps(run):
-            step.state = GamePlanStep.State.DONE
-            step.executed_at = self.now()
-            step.save(update_fields=["state", "executed_at"])
-        self.set_state(
-            run, RoundRun.State.ARMED,
-            worm_start_at=start, ends_at=start + timedelta(seconds=timing["run_duration"]),
-        )  # fmt: skip
-        return True
-
-    def _in_armed(self, run):
-        if self.now() >= run.worm_start_at:
-            RunEvent.objects.create(run=run, kind=RunEvent.Kind.WORM_STARTED)
-            self.set_state(run, RoundRun.State.RUNNING)
-            return True
-        return False
-
-    def _in_running(self, run):
-        changed = self._run_due_steps(run)
-        if self.now() >= run.ends_at:
-            self.set_state(run, RoundRun.State.ENDING)
-            return True
-        return changed
-
-    def _in_ending(self, run):
-        # Stop every VM still running, so nothing keeps talking while the
-        # monitor drains, then wait out the drain before teardown.
-        if self.active_job(run, HostJob.Kind.TEARDOWN) is None:
-            for vm in run.virtual_machines.all():
-                try:
-                    self.power.stop(vm)
-                except PowerError:
-                    pass
-            if self.now() - run.state_changed_at < timedelta(seconds=self.cfg["end_drain"]):
-                return False
-            self.set_state(run, RoundRun.State.TEARING_DOWN)
-            self.request_job(run, HostJob.Kind.TEARDOWN, keep=self._sandbox_needed_after(run))
-            return True
-        return False
-
-    def _in_tearing_down(self, run):
-        result = self._finished_job(run, HostJob.Kind.TEARDOWN)
-        if result is None:
-            return run.state == RoundRun.State.FAILED
-        self.set_state(run, RoundRun.State.FINISHED, finished_at=self.now())
-        return True
-
-    def _armed_at(self, result):
-        return parse_armed_at(result, self.now(), self.cfg["job_timeout"])
-
-    # -- game plan ------------------------------------------------------------
-
-    def _build_game_plan(self, run):
-        from orchestrator.rounds import gameplan
-
-        if run.steps.exists():
-            return
-        vms = {vm.vm_identifier: vm for vm in run.virtual_machines.all()}
-        plan = gameplan.generate(
-            list(vms), run.seed, self.timing(run)["run_duration"], run.sandbox_params.get("game_plan")
-        )
-        run.sandbox_params = {**run.sandbox_params, "start_vm": plan.start_vm}
-        run.save(update_fields=["sandbox_params"])
-        with transaction.atomic():
-            for step in plan.steps:
-                GamePlanStep.objects.create(
-                    run=run, position=step.position, action=step.action,
-                    vm=vms[step.vm], at_seconds=step.at_seconds, after=step.after,
-                )  # fmt: skip
-
-    def _initial_secret_steps(self, run):
-        return list(run.steps.filter(action=GamePlanStep.Action.RELEASE_SECRET, at_seconds__isnull=True))
-
-    def _run_due_steps(self, run):
-        elapsed = (self.now() - run.worm_start_at).total_seconds()
-        done = set(run.steps.filter(state=GamePlanStep.State.DONE).values_list("position", flat=True))
-        changed = False
-        # REQUESTED steps (a release_secret waiting for its host job) are
-        # revisited every tick so the result is applied once the job finishes;
-        # PENDING steps become due when their time and preconditions are met.
-        for step in run.steps.filter(state=GamePlanStep.State.REQUESTED).select_related("host_job", "vm"):
-            self._run_step(run, step)
-            changed = True
-        for step in run.steps.filter(state=GamePlanStep.State.PENDING, at_seconds__isnull=False).order_by("position"):
-            if step.at_seconds > elapsed or not set(step.after).issubset(done):
-                continue
-            self._run_step(run, step)
-            changed = True
-        return changed
-
-    def _run_step(self, run, step):
-        if step.action == GamePlanStep.Action.STOP_VM:
-            self.power.stop(step.vm)
-            RunEvent.objects.create(run=run, kind=RunEvent.Kind.VM_STOPPED, vm=step.vm)
-            self._finish_step(step)
-        elif step.action == GamePlanStep.Action.START_VM:
-            self.power.start(step.vm)
-            RunEvent.objects.create(run=run, kind=RunEvent.Kind.VM_STARTED, vm=step.vm)
-            self._finish_step(step)
-        elif step.action == GamePlanStep.Action.RELEASE_SECRET:
-            # A secret needs the host: request a job once, finish when it is done.
-            if step.host_job is None:
-                step.host_job = self.request_job(run, HostJob.Kind.RELEASE_SECRETS, vms=[step.vm.vm_identifier])
-                step.state = GamePlanStep.State.REQUESTED
-                step.save(update_fields=["host_job", "state"])
-            elif step.host_job.state == HostJob.State.DONE:
-                self._apply_released(run, step.host_job.result.get("released", []))
-                self._finish_step(step)
-            elif step.host_job.state == HostJob.State.FAILED:
-                step.state = GamePlanStep.State.FAILED
-                step.detail = step.host_job.error[:500]
-                step.save(update_fields=["state", "detail"])
-
-    def _finish_step(self, step):
-        step.state = GamePlanStep.State.DONE
-        step.executed_at = self.now()
-        step.save(update_fields=["state", "executed_at"])
-
-    def _apply_released(self, run, released):
-        """released: [{vm, flag_hash}] from a deploy / release_secrets job."""
+    def apply_released(self, run, released):
+        """released: [{vm, flag_hash}] from a prepare / place_flags job."""
         for entry in released:
             vm = run.virtual_machines.filter(vm_identifier=entry["vm"]).first()
             if vm is None:
@@ -431,12 +295,11 @@ class Conductor:
             vm.save(update_fields=["ctf_flag_hash", "secret_released_at"])
             RunEvent.objects.create(run=run, kind=RunEvent.Kind.SECRET_RELEASED, vm=vm)
 
-    def _register_topology(self, run, result):
-        """result from a prepare job: the sandbox as built (full topology and
-        the generated OpenTofu definition, saved for the round's replay)."""
+    def _register(self, run, result):
+        """A prepare job's result: the sandbox as built (for the replay) and its VMs."""
         run.topology = result.get("topology", {})
-        run.sandbox_definition = result.get("sandbox_definition", "")
-        run.save(update_fields=["topology", "sandbox_definition"])
+        run.entrypoint = str(result.get("entrypoint") or "")
+        run.save(update_fields=["topology", "entrypoint"])
         with transaction.atomic():
             for entry in result.get("vms", []):
                 VirtualMachine.objects.update_or_create(
@@ -449,3 +312,221 @@ class Conductor:
                         "networks": entry.get("networks", []),
                     },
                 )  # fmt: skip
+        self.apply_released(run, result.get("released", []))
+
+    # -- gameplans ------------------------------------------------------------
+
+    def check_gameplans(self, force=False):
+        """Every gameplan_check_interval: the node's view (a `gameplans` job), the table the
+        dashboard picks from, and the gameplan of every round that has not started. Returns
+        {file: sha256} of the valid gameplans."""
+        now = self.now()
+        if not force and self._checked_at is not None and now - self._checked_at < timedelta(seconds=self.cfg["gameplan_check_interval"]):
+            return self._valid
+        self._checked_at = now
+        from gameplan.definition import RoundError
+
+        try:
+            self.jobs.run(None, HostJob.Kind.GAMEPLANS)
+        except RoundError as error:
+            log.warning("the node did not list its gameplans: %s", error)
+        valid = self._valid = gameplans.refresh(gameplans.node_view())
+        for round_ in Round.objects.filter(round_start__gt=now):
+            status = gameplans.check_round(round_, valid)
+            Round.objects.filter(pk=round_.pk).update(gameplan_status=status, gameplan_checked_at=now)
+        return valid
+
+    def _waits(self, round_, reason):
+        """Log why a round waits, once per reason (the loop asks every few seconds)."""
+        if self._waiting.get(round_.pk) != reason:
+            self._waiting[round_.pk] = reason
+            log.warning("round %s waits: %s", round_.name, reason)
+        return False
+
+    def _pin(self, run):
+        """Fix the round's gameplan version for every attempt still to come: the one the
+        orchestrator and the node both hold now, valid for the round's duration. False (and
+        the round waits) if there is none: staff may choose it until the first attempt starts."""
+        round_ = Round.objects.get(pk=run.round_id)
+        if not round_.gameplan:
+            return self._waits(round_, "it has no gameplan yet (staff choose one on its page)")
+        # Asked again at most once a minute while the round waits.
+        stale = self._checked_at is None or self.now() - self._checked_at > timedelta(seconds=60)
+        valid = self.check_gameplans(force=stale)
+        status = gameplans.check_round(round_, valid)
+        Round.objects.filter(pk=round_.pk).update(gameplan_status=status, gameplan_checked_at=self.now())
+        if status != "ok":
+            return self._waits(round_, f"its gameplan {round_.gameplan!r} is not valid (see above)")
+        with serialized_resource("round-plan", round_.pk):
+            # Against staff changing the gameplan or the duration meanwhile (staff_rounds.py).
+            now = Round.objects.filter(pk=round_.pk).values_list("gameplan", "team_duration").first()
+            if now != (round_.gameplan, round_.team_duration):
+                return False
+            RoundRun.objects.filter(round=round_, gameplan_sha256="").update(
+                gameplan=round_.gameplan, gameplan_sha256=valid[round_.gameplan], duration=round_.team_duration)
+        self._waiting.pop(round_.pk, None)
+        run.refresh_from_db()
+        return True
+
+    # -- the tick -------------------------------------------------------------
+
+    def tick(self):
+        """Run the next attempt, start to finish, or tidy up. Returns True if anything changed
+        (the loop then ticks again without sleeping)."""
+        self.check_gameplans()
+        left = RoundRun.objects.filter(state__in=ACTIVE).select_related("round", "team").order_by("round_id", "position", "attempt").first()
+        if left is not None:
+            # Nobody runs it: this process does one attempt at a time, inside a tick.
+            return self.recover(left)
+
+        # A failed attempt tears its sandbox down asynchronously; don't build the next one
+        # until that teardown has finished (S7).
+        if self._teardown_pending():
+            return False
+
+        nxt = (
+            RoundRun.objects.filter(state=S.PENDING)
+            .select_related("round", "team", "upload__artifact")
+            .order_by("round_id", "position", "attempt")
+            .first()
+        )
+        if nxt is not None:
+            if nxt.upload_id is None:
+                self.set_state(nxt, S.SKIPPED, finished_at=self.now(), error="no upload before the round's start")
+                return True
+            if not nxt.gameplan_sha256 and not self._pin(nxt):
+                return False
+            self.run_attempt(nxt)
+            return True
+        kept = self._kept_sandbox()
+        if kept is not None:
+            log.info("no attempt left for the sandbox kept after run %s: destroying it", kept.uuid)
+            self.jobs.request(kept, HostJob.Kind.TEARDOWN, keep=False, run_uuid=str(kept.uuid))
+            return True
+        return False
+
+    def recover(self, run):
+        """An attempt a previous conductor left behind. Before its end it cannot be resumed
+        (execute() was in the middle of something): it fails, and the worm runs again. Past
+        its end, only the teardown is left to do."""
+        if run.state in (S.ENDING, S.TEARING_DOWN):
+            self.end(run)
+        else:
+            self.fail(run, "the conductor stopped during the attempt")
+        return True
+
+    def run_attempt(self, run):
+        from gameplan.definition import GameplanError, RoundError
+        from gameplan.runtime import Runner, instantiate
+
+        try:
+            loaded = gameplans.load(run.gameplan, run.gameplan_sha256)
+            self.set_state(run, S.PREPARING)
+            result = self.jobs.run(run, HostJob.Kind.PREPARE, gameplan=run.gameplan,
+                                   gameplan_sha256=run.gameplan_sha256, run_uuid=str(run.uuid))  # fmt: skip
+            self._register(run, result)
+            self.set_state(run, S.CHECKING)
+            result = self.jobs.run(run, HostJob.Kind.CHECK)
+            if not result.get("ok", False):
+                raise RoundError(f"sanity checks failed: {result.get('failures')}")
+            self.set_state(run, S.RUNNING)
+            notes = Runner(instantiate(loaded.cls), AttemptBackend(self, run), run.duration).run()
+            for note in notes:
+                log.info("run %s: %s", run.uuid, note)
+        except (RoundError, Stopping) as error:
+            self.fail(run, str(error))
+            return
+        except GameplanError as error:
+            log.error("run %s: the gameplan %s: %s", run.uuid, run.gameplan, error)
+            self.fail(run, "the gameplan was used the wrong way (the orchestrator's journal says how)")
+            return
+        except Exception as error:  # noqa: BLE001  (the gameplan's own code, or ours)
+            log.exception("run %s failed", run.uuid)
+            self.fail(run, f"{type(error).__name__} in the attempt (the orchestrator's journal has the traceback)")
+            return
+        self.end(run)
+
+    def end(self, run):
+        """ENDING: every VM stopped, the monitor drains; TEARING_DOWN; FINISHED."""
+        from gameplan.definition import RoundError
+
+        if run.state != S.TEARING_DOWN:
+            if run.state != S.ENDING:
+                self.set_state(run, S.ENDING)
+            for vm in run.virtual_machines.all():
+                try:
+                    self.power.stop(vm)
+                except PowerError:
+                    pass
+            drained = run.state_changed_at + timedelta(seconds=self.cfg["end_drain"]) - self.now()
+            try:
+                if drained.total_seconds() > 0:
+                    self.sleep(drained.total_seconds())
+            except Stopping:
+                return  # the next start finishes it (recover)
+            self.set_state(run, S.TEARING_DOWN)
+            job = self.jobs.request(run, HostJob.Kind.TEARDOWN, keep=self._sandbox_needed_after(run), run_uuid=str(run.uuid))
+        else:
+            job = run.jobs.filter(kind=HostJob.Kind.TEARDOWN).order_by("-id").first()
+            if job is None:
+                job = self.jobs.request(run, HostJob.Kind.TEARDOWN, keep=self._sandbox_needed_after(run), run_uuid=str(run.uuid))
+        try:
+            self._wait(job)
+        except Stopping:
+            return
+        except RoundError as error:
+            # The worm's run is over and its results stand; the host may hold leftovers. The
+            # queue holds until an operator has looked (_teardown_pending).
+            log.error("run %s: teardown failed: %s", run.uuid, error)
+            self.set_state(run, S.FINISHED, finished_at=self.now(), error=f"teardown failed: {error}"[:2000])
+            return
+        self.set_state(run, S.FINISHED, finished_at=self.now())
+
+    def _wait(self, job):
+        from gameplan.definition import RoundError
+
+        while True:
+            job.refresh_from_db()
+            if job.state == HostJob.State.DONE:
+                return job.result or {}
+            if job.state == HostJob.State.FAILED:
+                raise RoundError(f"{job.kind} job failed: {job.error}"[:1000])
+            reference = job.heartbeat_at or job.started_at or job.requested_at
+            if reference and self.now() - reference > timedelta(seconds=self.cfg["job_timeout"]):
+                raise RoundError(f"{job.kind} job timed out")
+            self.sleep(self.cfg["job_poll"])
+
+    def fail(self, run, message):
+        """The attempt is thrown away: its VMs stopped, its window closed (nothing more can
+        count), its sandbox torn down, and the team's worm queued to run again while attempts
+        are left. Its points never count: only a FINISHED attempt's do."""
+        log.warning("run %s (%s, attempt %s) failed: %s", run.uuid, run.team.name, run.attempt, message)
+        RunEvent.objects.create(run=run, kind=RunEvent.Kind.ERROR, data={"message": message[:500]})
+        now = self.now()
+        fields = {"error": message[:2000], "finished_at": now}
+        built = run.state not in (S.PENDING,)
+        if built:
+            for vm in run.virtual_machines.all():
+                try:
+                    self.power.stop(vm)
+                except Exception:  # noqa: BLE001  (best effort; the teardown follows)
+                    log.warning("run %s: could not stop %s", run.uuid, vm.vm_identifier)
+            if run.ends_at is None or run.ends_at > now:
+                fields["ends_at"] = now
+        retry = None
+        with transaction.atomic():
+            self.set_state(run, S.FAILED, **fields)
+            if run.attempt < self.cfg["max_retries"] and run.upload_id is not None:
+                retry = RoundRun.objects.create(
+                    round=run.round, team=run.team, upload=run.upload, position=run.position,
+                    attempt=run.attempt + 1, seed=run.seed, gameplan=run.gameplan,
+                    gameplan_sha256=run.gameplan_sha256, duration=run.duration,
+                )  # fmt: skip
+        if built:
+            # The next attempt waits for this teardown (_teardown_pending); it may keep the
+            # sandbox for that retry, which rolls back to the clean snapshot.
+            self.jobs.request(run, HostJob.Kind.TEARDOWN, keep=self._sandbox_needed_after(run), run_uuid=str(run.uuid))
+        if retry is not None:
+            log.info("run %s: the team's worm runs again (attempt %s of %s)", run.uuid, retry.attempt + 1, self.cfg["max_retries"] + 1)
+        else:
+            log.error("run %s: no attempt left for team %s in round %s", run.uuid, run.team.name, run.round.name)

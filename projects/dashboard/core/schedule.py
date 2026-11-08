@@ -1,22 +1,12 @@
-"""A round's parameters and its schedule: one source for the dashboard (staff
-create rounds, see whether every team fits) and the conductor (runs them).
+"""A round's schedule: one source for the dashboard (staff create rounds, see whether every
+team fits) and the conductor (runs them).
 
-A round's `sandbox_params` (copied into every RoundRun when its runs are
-planned) holds
-
-    {"vms": 8, "networks": 4, "sites": 1, "max_interfaces": 3,   # the sandbox
-     "game_plan": {...},                                          # gameplan.py
-     "timing": {"worm_start_delay": 300, "run_duration": 3600}}   # one run
-
-The sandbox keys are generator parameters (scripts/generate_sandbox.py); the
-round agent validates them again with the same bounds
-(scripts/round_agent/validation.py:sandbox_params, tests/test_staff_rounds.py
-checks that the two agree). Everything missing falls back to the defaults
-below and to settings.ROUND_TIMING.
-
-Runs are sequential (one sandbox fits on the host), so a round needs one slot
-per team: the fuse before the worm starts, the run itself, the drain after it
-and an allowance for building and tearing down the sandbox (`slot_overhead`).
+A round names its gameplan (a file the orchestrator and the node hold; docs/05-live-environment.md)
+and its duration per team: seconds from a team's worm starting to the end of its run. The
+rest of a team's slot is the platform's: the fuse before the worm starts, the drain after
+the run, and an allowance for building, checking and tearing down the sandbox
+(`slot_overhead`). Runs are sequential (one sandbox fits on the host), so a round needs one
+slot per team, more if an attempt fails and the team's worm runs again.
 """
 
 from __future__ import annotations
@@ -25,51 +15,21 @@ from dataclasses import dataclass
 
 from django.conf import settings
 
-# Generator parameters: (default, low, high). Keep the bounds equal to the
-# round agent's validator.
-SANDBOX_BOUNDS = {
-    "vms": (8, 1, 250),
-    "networks": (4, 1, 30),
-    "sites": (1, 1, 8),
-    "max_interfaces": (3, 1, 8),
-    "vm_ram": (512, 256, 8192),  # RAM ceiling per sandbox VM (MB); the host balloons the rest back
-}
+# Seconds from a team's worm starting to the end of its run: (default, low, high). The same
+# bounds as the gameplan framework's (src/gameplan/definition.py, LIMITS["round_duration"]).
+TEAM_DURATION = (3600, 60, 7 * 86400)
 
-# Game plan parameters (orchestrator/rounds/gameplan.py DEFAULTS): (low, high).
-GAME_PLAN_BOUNDS = {
-    "initial_fraction": (0.0, 1.0),
-    "first_stop_after": (0, 86400),
-    "stop_interval": (1, 86400),
-    "min_alive": (0, 250),
-    "restart_after": (1, 86400),
-}
-
-# Timing of one run (seconds): (low, high).
-TIMING_BOUNDS = {
-    "worm_start_delay": (0, 86400),
-    "run_duration": (60, 86400),
-}
-
-TIMING_DEFAULTS = {"worm_start_delay": 300, "run_duration": 3600, "end_drain": 120, "slot_overhead": 900}
+TIMING_DEFAULTS = {"worm_start_delay": 15, "end_drain": 120, "slot_overhead": 900}
 
 
 def timing_defaults() -> dict:
-    return {**TIMING_DEFAULTS, **getattr(settings, "ROUND_TIMING", {})}
+    return {**TIMING_DEFAULTS, **{k: v for k, v in getattr(settings, "ROUND_TIMING", {}).items() if k in TIMING_DEFAULTS}}
 
 
-def run_timing(sandbox_params: dict | None) -> dict:
-    """The timing of one run: the round's own values over the defaults."""
-    timing = dict(timing_defaults())
-    own = (sandbox_params or {}).get("timing") or {}
-    for key in TIMING_BOUNDS:
-        if isinstance(own.get(key), int) and not isinstance(own.get(key), bool):
-            timing[key] = own[key]
-    return timing
-
-
-def slot_seconds(timing: dict) -> int:
+def slot_seconds(team_duration: int) -> int:
     """How long one team's run occupies the host, start to teardown."""
-    return int(timing["worm_start_delay"] + timing["run_duration"] + timing["end_drain"] + timing["slot_overhead"])
+    timing = timing_defaults()
+    return int(timing["worm_start_delay"] + team_duration + timing["end_drain"] + timing["slot_overhead"])
 
 
 @dataclass
@@ -90,8 +50,8 @@ class Estimate:
         return self.available // self.slot
 
 
-def estimate(round_start, round_end, sandbox_params: dict | None, teams: int) -> Estimate:
-    slot = slot_seconds(run_timing(sandbox_params))
+def estimate(round_start, round_end, team_duration: int, teams: int) -> Estimate:
+    slot = slot_seconds(team_duration)
     available = None
     if round_start is not None and round_end is not None:
         available = max(0, int((round_end - round_start).total_seconds()))

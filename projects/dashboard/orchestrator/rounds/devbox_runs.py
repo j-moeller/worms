@@ -1,5 +1,5 @@
 """Uploads made in the dev view: reset the team's devbox, then run the upload on VM A
-(docs/devbox.md).
+(docs/04-dev-environment.md).
 
 The devbox's counterpart of the conductor, and separate from it: no round, no sandbox, no
 other team, and the upload never enters a round (orchestrator/rounds/planner.py).
@@ -34,7 +34,7 @@ ACTIVE = [S.PENDING, S.RESETTING, S.DEPLOYING, S.ARMED, S.RUNNING]
 ENTRY_ROLE = "a"  # where the worm starts, as the start VM of a sandbox
 # A round's run, from its first host job to its last.
 ROUND_BUSY = [
-    RoundRun.State.PREPARING, RoundRun.State.CHECKING, RoundRun.State.DEPLOYING, RoundRun.State.ARMED,
+    RoundRun.State.PREPARING, RoundRun.State.CHECKING,
     RoundRun.State.RUNNING, RoundRun.State.ENDING, RoundRun.State.TEARING_DOWN,
 ]  # fmt: skip
 

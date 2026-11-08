@@ -1,6 +1,8 @@
-"""Create the RoundRuns for a round: one per team, in a deterministic order,
-each with the team's latest upload before the round's deadline (round_start).
-An upload made in the dev view is not an entry: it only ever runs on the devbox.
+"""Create the RoundRuns for a round: one per team (its first attempt), in a deterministic
+order, each with the team's latest upload before the round's deadline (round_start), the
+round's gameplan and its duration per team. An upload made in the dev view is not an entry:
+it only ever runs on the devbox. The conductor pins the gameplan's version when the first
+attempt starts, and adds an attempt when one fails (conductor.py).
 
 A team without an upload before the deadline still gets a run, in state
 PENDING with no upload; the conductor marks it SKIPPED. This keeps the running
@@ -20,23 +22,20 @@ from django.db import transaction
 from django.db.models import OuterRef, Subquery
 
 
-def plan_round(round, base_seed=None, sandbox_params=None):
+def plan_round(round, base_seed=None):
     """Create the missing runs for `round`. Idempotent: existing runs are left
-    as they are. Returns the runs in running order. Every run gets the round's
-    parameters (sandbox size, game plan, timing; set on the dashboard)."""
+    as they are. Returns the first attempts in running order."""
     # Staff editing/deletion and other planner processes use the same lock.
     # Re-read the round after waiting: its seed/window may have changed.
     with serialized_resource("round-plan", round.pk):
         current = Round.objects.filter(pk=round.pk).first()
         if current is None:
             return []
-        return _plan_round(current, base_seed, sandbox_params)
+        return _plan_round(current, base_seed)
 
 
-def _plan_round(round, base_seed, sandbox_params):
+def _plan_round(round, base_seed):
     base_seed = base_seed if base_seed is not None else round.seed
-    if sandbox_params is None:
-        sandbox_params = round.sandbox_params or {}
     latest_upload = (
         Upload.objects.filter(
             team=OuterRef("pk"),
@@ -67,9 +66,10 @@ def _plan_round(round, base_seed, sandbox_params):
                 team=team,
                 upload_id=team.latest_upload_id,
                 position=position,
-                # Per-run seed, derived but distinct: the run's game plan. The sandbox is the
-                # round's, from the round's seed, the same for every team (conductor.py).
+                # Per-run seed, derived but distinct (kept for the record; the sandbox is the
+                # gameplan's, the same for every team).
                 seed=(base_seed * 1_000_003 + team.id) % (2**63),
-                sandbox_params=sandbox_params or {},
+                gameplan=round.gameplan,
+                duration=round.team_duration,
             )
-    return list(RoundRun.objects.filter(round=round).order_by("position"))
+    return list(RoundRun.objects.filter(round=round, attempt=0).order_by("position"))

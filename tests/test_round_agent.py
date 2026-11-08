@@ -13,13 +13,16 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
+from pathlib import Path
 
 import pytest
 
 from conftest import REPO, require
 
 sys.path.insert(0, str(REPO / "scripts"))
+sys.path.insert(0, str(REPO / "src"))  # the gameplan framework, as the agent's PYTHONPATH has it
 
 from round_agent import handlers, validation  # noqa: E402
 from round_agent.agent import Agent  # noqa: E402
@@ -78,7 +81,6 @@ def test_validate_deploy_accepts_good_input():
             "start_vm": "sandbox-site-1-vm-1",
             "team_uuid": "11111111-2222-3333-4444-555555555555",
             "artifact": {"storage_key": key, "content_hash": "d" * 64},
-            "initial_secrets": ["sandbox-site-1-vm-1", "sandbox-site-2-vm-2"],
             "worm_delay": 300,
         },
     )
@@ -96,7 +98,7 @@ def test_validate_deploy_rejects_bad_team_uuid():
         )
 
 
-# --- devbox (docs/devbox.md) --------------------------------------------------
+# --- devbox (docs/04-dev-environment.md) --------------------------------------------------
 
 GOOD_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILx5kgdiAiIfKABbQ2D4tT9hgQ2Km8WiYll6Ji5CdEXD alice@team"
 
@@ -151,7 +153,7 @@ BLOB = "AAAAC3NzaC1lZDI1NTE5AAAAILx5kgdiAiIfKABbQ2D4tT9hgQ2Km8WiYll6Ji5CdEXD"
 ])
 def test_ssh_key_rejects_template_and_shell_characters(comment):
     """A key comment that could be evaluated as a template on the Proxmox host,
-    or break the varfile, is rejected (docs/security-assessment.md)."""
+    or break the varfile, is rejected (docs/07-security.md)."""
     with pytest.raises(validation.Invalid):
         validation.ssh_keys([f"ssh-ed25519 {BLOB} {comment}"])
 
@@ -177,43 +179,89 @@ def test_the_same_key_may_not_belong_to_two_teams():
     assert validation.validate("devbox_provision", ok)
 
 
-def test_validate_prepare_bounds():
-    with pytest.raises(validation.Invalid):
-        validation.validate("prepare", {"seed": 1, "sandbox_params": {"vms": 10_000}})
-    clean = validation.validate("prepare", {"seed": 7, "sandbox_params": {"vms": 8, "networks": 4}})
-    assert clean["seed"] == 7 and clean["sandbox_params"]["vms"] == 8
+RUN = "33333333-4444-5555-6666-777777777777"
 
 
-def test_validate_release_secrets():
+@pytest.mark.parametrize("name", ["../x.py", "x", "/etc/passwd", "a/b.py", "X.py", ".py", "x.py\n", None, 3])
+def test_a_gameplan_is_named_by_a_plain_file_name_only(name):
     with pytest.raises(validation.Invalid):
-        validation.validate("release_secrets", {"vms": []})
-    assert validation.validate("release_secrets", {"vms": ["vm-a"]})["vms"] == ["vm-a"]
+        validation.validate("prepare", {"gameplan": name, "gameplan_sha256": "0" * 64, "run_uuid": RUN})
+
+
+def test_validate_prepare():
+    clean = validation.validate("prepare", {"gameplan": "round_one.py", "gameplan_sha256": "a" * 64, "run_uuid": RUN})
+    assert clean == {"gameplan": "round_one.py", "gameplan_sha256": "a" * 64, "run_uuid": RUN}
+    with pytest.raises(validation.Invalid):
+        validation.validate("prepare", {"gameplan": "round_one.py", "gameplan_sha256": "nothex", "run_uuid": RUN})
+
+
+def test_validate_flags_and_files_are_strict_unless_told_otherwise():
+    with pytest.raises(validation.Invalid):
+        validation.validate("place_flags", {"vms": []})
+    assert validation.validate("place_flags", {"vms": ["vm-a"]}) == {"vms": ["vm-a"], "strict": True}
+    assert validation.validate("remove_flags", {"vms": ["vm-a"], "strict": "no"})["strict"] is True
+    assert validation.validate("remove_flags", {"vms": ["vm-a"], "strict": False})["strict"] is False
+    assert validation.validate("write_file", {"run_uuid": RUN, "file": 2})["strict"] is True
+    with pytest.raises(validation.Invalid):
+        validation.validate("write_file", {"run_uuid": RUN, "file": "../x"})
 
 
 # --- handlers with a fake executor --------------------------------------------
 
 
-class FakeExecutor:
-    """Records commands and returns canned output; no host, no SSH."""
+# The gameplan the agent's tests build: two VMs on one network (src/gameplan).
+PAIR = """
+from gameplan import Allow, BasicVM, FirewallRule, Gameplan, Incoming
 
-    def __init__(self, vms=None, graph=None):
+
+class Pair(Gameplan):
+    def __init__(self):
+        self.a = BasicVM()
+        self.b = BasicVM()
+        self.b.install("jq")
+        self.key = self.generate_ssh_key()
+        self.login = self.generate_ssh_pwd_login("alice")
+        self.add_private_ssh_key(self.a, self.key)
+        self.add_public_ssh_key(self.b, self.key)
+        self.add_ssh_pwd_login(self.b, self.login)
+        self.note = self.write_file(self.b, "~/note", f"{self.login.user} {self.login.pwd}")
+        self.later = self.write_file(self.a, "/root/later", f"{self.key.public}", owner="root", at_reset=False)
+        self.register_network([self.a, self.b])
+        self.register_fw_rule(self.b, FirewallRule(Allow, 22, Incoming))
+        self.set_worm_entrypoint(self.a)
+
+    def execute(self):
+        self.deploy_worm()
+"""
+GAMEPLAN_ROOT = Path(tempfile.mkdtemp(prefix="agent-gameplans-"))
+(GAMEPLAN_ROOT / "gameplans").mkdir()
+(GAMEPLAN_ROOT / "gameplans" / "pair.py").write_text(PAIR)
+PAIR_SHA = hashlib.sha256(PAIR.encode()).hexdigest()
+
+
+def _pair_hcl():
+    """The sandbox definition prepare installs for PAIR."""
+    from gameplan import build, loader, runtime
+
+    loaded = loader.load(GAMEPLAN_ROOT / "gameplans", "pair.py")
+    return build.hcl(runtime.instantiate(loaded.cls).spec(), "pair.py", loaded.sha256)
+
+
+class FakeExecutor:
+    """Records commands and returns canned output; no host, no SSH. A VM keeps the flag it
+    was given, so that reading it back works."""
+
+    def __init__(self, vms=None):
         self.ssh_user = "debian"
+        self.repo_root = GAMEPLAN_ROOT
         self.calls = []
         self.ssh_calls = []
+        self.notes = []
+        self.flags = {}
+        self.unreachable = set()
         self._vms = vms or {
             "sandbox-a": {"maintenance_ip": "10.4.0.10", "vmid": 900, "addresses": ["10.64.0.10"]},
             "sandbox-b": {"maintenance_ip": "10.4.0.11", "vmid": 901, "addresses": ["10.64.1.11"]},
-        }
-        self._graph = graph or {
-            "nodes": [
-                {"id": "network-1000", "label": "vmbr1000", "type": "network", "cidr": "10.64.0.0/24", "network_type": "users"},
-                {"id": "vm:sandbox-a", "label": "sandbox-a", "type": "virtual-machine"},
-                {"id": "vm:sandbox-b", "label": "sandbox-b", "type": "virtual-machine"},
-            ],
-            "edges": [
-                {"source": "vm:sandbox-a", "target": "network-1000", "relationship": "attached-to"},
-                {"source": "vm:sandbox-b", "target": "network-1000", "relationship": "attached-to"},
-            ],
         }
         self.artifact_bytes = b"PK\x03\x04 worm zip"
         self.installed_hcl = None
@@ -269,12 +317,8 @@ class FakeExecutor:
             "sandbox": {"hosts": {name: {"addresses": info["addresses"]} for name, info in self._vms.items()}},
         }
 
-    def generate_sandbox(self, seed, params, network_file):
-        self.calls.append(("generate", seed, params["vms"]))
-        from pathlib import Path
-
-        Path(network_file).write_text(json.dumps(self._graph))
-        return "locals { seed = \"x\" }"
+    def note(self, text):
+        self.notes.append(text)
 
     def install_sandbox_definition(self, hcl):
         self.installed_hcl = hcl
@@ -286,6 +330,11 @@ class FakeExecutor:
 
     def run(self, argv, check=False, timeout=60):
         self.calls.append(("run", *[str(a) for a in argv]))
+        if argv[0] == "ssh-keygen":
+            key = Path(argv[argv.index("-f") + 1])
+            key.write_text(f"-----BEGIN OPENSSH PRIVATE KEY-----\n{argv[argv.index('-t') + 1]}\n-----END OPENSSH PRIVATE KEY-----\n")
+            key.with_name("key.pub").write_text("ssh-ed25519 AAAAPUBLIC worms-gameplan\n")
+            return ""
         if argv[:3] == ["pvesh", "get", "/cluster/resources"]:
             return json.dumps(self.sandbox_pool() + [vm for vms in self.pools.values() for vm in vms])
         if argv[:2] == ["pvesh", "get"] and argv[2].endswith("/snapshot"):
@@ -305,8 +354,17 @@ class FakeExecutor:
 
     def ssh(self, host, argv, input=None, timeout=120):
         self.ssh_calls.append({"host": host, "argv": argv, "input": input})
+        if host in self.unreachable:
+            raise RuntimeError(f"ssh {host}: connection refused")
         if argv[:2] == ["sudo", "base64"] and input is None:
             return base64.b64encode(self.artifact_bytes).decode()
+        if handlers.FLAG_PATH in argv and argv[:2] == ["sudo", "install"]:
+            self.flags[host] = input
+        if argv == ["sudo", "sha256sum", handlers.FLAG_PATH]:
+            flag = self.flags.get(host)
+            return f"{hashlib.sha256(flag.encode()).hexdigest()}  {handlers.FLAG_PATH}\n" if flag else ""
+        if argv[:2] == ["sh", "-c"] and "is-active" in argv[2]:
+            return "active\ninactive\n"
         return ""
 
 
@@ -314,7 +372,7 @@ CFG = {"dashboard_host": "10.5.0.18", "dashboard_media_root": "/opt/dashboard/me
        "scoring_host": "10.5.0.14", "logging_host": "10.5.0.15"}
 
 
-PREPARE = {"seed": 5, "sandbox_params": {"vms": 2}}
+PREPARE = {"gameplan": "pair.py", "gameplan_sha256": PAIR_SHA, "run_uuid": RUN}
 SANDBOX_VMIDS = {900, 901, 950}  # the two VMs and the gateway
 SERVICE_VMS = [{"vmid": 111, "name": "scoring", "node": "n", "status": "running", "pool": "ephemeral"},
                {"vmid": 100, "name": "apt-cache", "node": "n", "status": "running", "pool": "private_internet"}]  # fmt: skip
@@ -330,29 +388,125 @@ def _first_index(steps, prefix):
     return next(i for i, step in enumerate(steps) if step.startswith(prefix))
 
 
-def test_prepare_builds_sandbox_and_reports_topology():
+def test_prepare_builds_the_gameplans_sandbox_and_reports_its_topology():
     ex = FakeExecutor()
     ex.sandbox_built = False
     result = _prepare(ex)
-    assert ("generate", 5, 2) in ex.calls
     assert any(c[:2] == ("tofu", "sandbox") and "apply" in c for c in ex.calls)
-    assert ("worms", "round-configure-sandbox") in ex.calls  # inventory + install the CA
-    assert ex.installed_hcl is not None
-    names = {vm["name"] for vm in result["vms"]}
-    assert names == {"sandbox-a", "sandbox-b"}
-    assert result["vms"][0]["networks"] == [{"name": "vmbr1000", "cidr": "10.64.0.0/24"}]
-    # The full generator graph and the generated OpenTofu config are returned
-    # for the round's visualisation.
-    assert result["topology"]["nodes"] and result["topology"]["edges"]
+    assert ("worms", "round-configure-sandbox") in ex.calls  # inventory, the CA, the gameplan's packages
+    assert f'gameplan_sha256 = "{PAIR_SHA}"' in ex.installed_hcl and '"sandbox-b" = {' in ex.installed_hcl
+    assert {vm["name"] for vm in result["vms"]} == {"sandbox-a", "sandbox-b"}
+    assert result["vms"][0]["networks"] == [{"name": "net0", "cidr": "10.64.0.0/24"}]
+    assert result["entrypoint"] == "sandbox-a"
+    # The sandbox as a graph, for the replay; nothing of the gameplan's files, commands or rules.
     assert any(n["type"] == "network" for n in result["topology"]["nodes"])
-    assert result["sandbox_definition"] == ex.installed_hcl
+    assert "sandbox_definition" not in result and "alice" not in json.dumps(result)
     assert result["sandbox"] == "built and snapshotted"
+
+
+def test_a_failed_build_tells_the_database_nothing_of_the_gameplan():
+    """Ansible prints the setup command that failed; the job's error (which the dashboard can
+    read) names the job only, and the reason goes to the job log on the node."""
+
+    class Failing(FakeExecutor):
+        def worms(self, component, timeout=3600, args=None):
+            raise RuntimeError('ansible-playbook exited 2: failed: [sandbox-a] => {"cmd": "echo hunter2 | chpasswd"}')
+
+    ex = Failing()
+    ex.sandbox_built = False
+    with pytest.raises(RuntimeError) as failure:
+        _prepare(ex)
+    assert str(failure.value) == "the prepare job failed: its log on the node says why"
+    assert any("hunter2" in note for note in ex.notes)
+
+
+def test_the_gameplans_packages_and_files_reach_ansible_unsafe(monkeypatch):
+    """Ansible renders the varfile on the node as root: a gameplan's text is never templated."""
+    seen = {}
+
+    class Capture(FakeExecutor):
+        def worms(self, component, timeout=3600, args=None):
+            super().worms(component, timeout, args)
+            if component == "round-configure-sandbox":
+                seen["text"] = Path(args.split("@", 1)[1]).read_text()
+
+    ex = Capture()
+    ex.sandbox_built = False
+    _prepare(ex)
+    assert "!unsafe" in seen["text"]
+    config = _load_varfile_text(seen["text"])["sandbox_vm_config"]
+    assert config["sandbox-b"]["install"] == ["jq"] and config["sandbox-b"]["users"] == ["alice"]
+
+
+def test_a_run_gets_its_own_keys_password_files_and_flags_before_the_worm():
+    ex = FakeExecutor()
+    result = _prepare(ex)
+    calls = ex.ssh_calls
+    password = next(c for c in calls if c["argv"] == ["sudo", "chpasswd"])
+    assert password["host"] == "10.4.0.11" and password["input"].startswith("alice:")
+    secret = password["input"].strip().split(":", 1)[1]
+    private = next(c for c in calls if c["argv"][-1] == "/home/debian/.ssh/id_ed25519")
+    assert private["host"] == "10.4.0.10" and "PRIVATE KEY" in private["input"] and "0600" in private["argv"]
+    public = next(c for c in calls if c["argv"] == ["sudo", "tee", "-a", "/home/debian/.ssh/authorized_keys"])
+    assert public["host"] == "10.4.0.11" and public["input"] == "ssh-ed25519 AAAAPUBLIC worms-gameplan\n"
+    note = next(c for c in calls if c["argv"][-1] == "/home/debian/note")
+    assert note["input"] == f"alice {secret}" and note["argv"][note["argv"].index("-o") + 1] == "debian"
+    assert not any(c["argv"][-1:] == ["/root/later"] for c in calls)  # declared for later only
+    # A flag on every VM, read back.
+    assert {r["vm"] for r in result["released"]} == {"sandbox-a", "sandbox-b"}
+    for entry in result["released"]:
+        host = {"sandbox-a": "10.4.0.10", "sandbox-b": "10.4.0.11"}[entry["vm"]]
+        assert hashlib.sha256(ex.flags[host].encode()).hexdigest() == entry["flag_hash"]
+    # The run's secrets stay on the node, root only, and nothing of them is in the result.
+    state = Path(handlers.STATE_DIR) / "runs" / f"{RUN}.json"
+    assert oct(state.stat().st_mode & 0o777) == "0o600" and secret in state.read_text()
+    assert secret not in json.dumps(result)
+
+
+def test_every_run_gets_new_secrets():
+    ex = FakeExecutor()
+    _prepare(ex)
+    first = next(c for c in ex.ssh_calls if c["argv"] == ["sudo", "chpasswd"])["input"]
+    ex.ssh_calls.clear()
+    _prepare(ex)
+    assert next(c for c in ex.ssh_calls if c["argv"] == ["sudo", "chpasswd"])["input"] != first
+
+
+def test_the_node_runs_only_the_gameplan_the_orchestrator_validated():
+    ex = FakeExecutor()
+    with pytest.raises(Exception, match="not the version expected"):
+        handlers.prepare(ex, CFG, validation.validate("prepare", {**PREPARE, "gameplan_sha256": "0" * 64}))
+    with pytest.raises(Exception, match="no gameplan"):
+        handlers.prepare(ex, CFG, validation.validate("prepare", {**PREPARE, "gameplan": "other.py"}))
+    assert not any(c[0] == "tofu" for c in ex.calls)
+
+
+def test_the_gameplans_job_lists_files_hashes_and_validity_but_no_reasons(tmp_path):
+    root = tmp_path / "repo"
+    (root / "gameplans").mkdir(parents=True)
+    (root / "gameplans" / "pair.py").write_text(PAIR)
+    (root / "gameplans" / "broken.py").write_text("raise SystemError('secret detail')\n")
+    ex = FakeExecutor()
+    ex.repo_root = root
+    result = handlers.gameplans(ex, CFG, validation.validate("gameplans", {}))
+    assert result == {"gameplans": [
+        {"file": "broken.py", "sha256": hashlib.sha256(b"raise SystemError('secret detail')\n").hexdigest(), "valid": False},
+        {"file": "pair.py", "sha256": PAIR_SHA, "valid": True},
+    ]}  # fmt: skip
+    assert any("secret detail" in note for note in ex.notes)  # the reason: in the job log only
 
 
 def test_a_new_sandbox_is_snapshotted_before_any_team_reaches_it():
     """Every VM, its gateway too, shut down first: no guest agent, so a running one would be
-    snapshotted like a power cut."""
-    ex = FakeExecutor()
+    snapshotted like a power cut. No run's flag or secret is in the snapshot."""
+
+    class Watching(FakeExecutor):
+        def run(self, argv, check=False, timeout=60):
+            if argv[:2] == ["qm", "snapshot"]:
+                assert not self.flags and not any(c["argv"] == ["sudo", "chpasswd"] for c in self.ssh_calls)
+            return super().run(argv, check, timeout)
+
+    ex = Watching()
     ex.sandbox_built = False
     _prepare(ex)
     steps = ex.qm_steps()
@@ -360,7 +514,7 @@ def test_a_new_sandbox_is_snapshotted_before_any_team_reaches_it():
         assert steps.index(f"qm shutdown {vmid} --timeout 120 --forceStop 1") < _first_index(steps, f"qm snapshot {vmid} clean")
         assert f"qm start {vmid}" in steps
     assert ex.clean == SANDBOX_VMIDS
-    assert not any(handlers.FLAG_PATH in c["argv"] for c in ex.ssh_calls)  # no flag yet, nor a worm
+    assert not any("systemd-run" in c["argv"] for c in ex.ssh_calls)  # nor a worm
 
 
 def test_the_next_run_of_the_round_rolls_the_sandbox_back():
@@ -378,7 +532,7 @@ def test_the_next_run_of_the_round_rolls_the_sandbox_back():
 @pytest.mark.parametrize("change", ["another round", "a missing snapshot"])
 def test_a_sandbox_that_is_not_the_rounds_or_not_whole_is_destroyed_and_built_again(change):
     ex = FakeExecutor()
-    ex.installed_hcl = "locals { seed = \"another round\" }" if change == "another round" else 'locals { seed = "x" }'
+    ex.installed_hcl = "locals { seed = \"another round\" }" if change == "another round" else _pair_hcl()
     ex.clean = set() if change == "another round" else SANDBOX_VMIDS - {901}
     _prepare(ex)
     tofu = [c[2] for c in ex.calls if c[:2] == ("tofu", "sandbox") and c[2] in ("destroy", "apply")]
@@ -433,8 +587,9 @@ def test_the_devboxes_come_back_when_the_build_fails():
     ex.sandbox_built = False
     ex.pools.update(devbox=list(DEVBOX_VMS))
     ex.fail_on = "apply"
-    with pytest.raises(RuntimeError, match="apply failed"):
+    with pytest.raises(RuntimeError, match="prepare job failed"):
         _prepare(ex)
+    assert any("apply failed" in note for note in ex.notes)  # the reason: in the job log
     assert ex.qm_steps()[-1] == "qm start 116"
 
 
@@ -445,7 +600,7 @@ def test_no_sandbox_is_started_while_internet_access_is_allowed(tmp_path, built)
     ex = FakeExecutor()
     ex.pools.update(devbox=list(DEVBOX_VMS))
     if built:
-        ex.installed_hcl, ex.clean = 'locals { seed = "x" }', set(SANDBOX_VMIDS)
+        ex.installed_hcl, ex.clean = _pair_hcl(), set(SANDBOX_VMIDS)
     with pytest.raises(RuntimeError, match="internet access is allowed"):
         _prepare(ex)
     assert ex.qm_steps() == [] and not any(c[0] == "tofu" and "output" not in c for c in ex.calls)
@@ -481,10 +636,10 @@ def test_check_refuses_a_sandbox_vm_without_the_cpu_that_hides_kvm(config):
     assert result["failures"] == ["vm:sandbox-b:no-kvm"]
 
 
-def test_release_secrets_writes_flag_and_returns_hash():
+def test_place_flags_writes_flag_and_returns_hash():
     ex = FakeExecutor()
-    result = handlers.release_secrets(ex, CFG, validation.validate("release_secrets", {"vms": ["sandbox-a"]}))
-    assert len(result["released"]) == 1
+    result = handlers.place_flags(ex, CFG, validation.validate("place_flags", {"vms": ["sandbox-a"]}))
+    assert result["failed"] == [] and len(result["released"]) == 1
     entry = result["released"][0]
     assert entry["vm"] == "sandbox-a" and validation.SHA256.match(entry["flag_hash"])
     # The secret went in over stdin to install into /etc/worms/flag, not argv.
@@ -493,10 +648,46 @@ def test_release_secrets_writes_flag_and_returns_hash():
     assert write["input"].startswith("FLAG{") and entry["flag_hash"] == hashlib.sha256(write["input"].encode()).hexdigest()
 
 
+def test_a_flag_that_does_not_read_back_is_not_released():
+    class Lying(FakeExecutor):
+        def ssh(self, host, argv, input=None, timeout=120):
+            out = super().ssh(host, argv, input, timeout)
+            return "0" * 64 + "  /etc/worms/flag\n" if "sha256sum" in argv else out
+
+    with pytest.raises(RuntimeError, match="reads back differently"):
+        handlers.place_flags(Lying(), CFG, validation.validate("place_flags", {"vms": ["sandbox-a"]}))
+    result = handlers.place_flags(Lying(), CFG, validation.validate("place_flags", {"vms": ["sandbox-a"], "strict": False}))
+    assert result["released"] == [] and "reads back differently" in result["failed"][0]["error"]
+
+
+def test_after_the_worm_a_vm_it_broke_is_reported_not_failed():
+    ex = FakeExecutor()
+    ex.unreachable.add("10.4.0.11")
+    with pytest.raises(RuntimeError):
+        handlers.remove_flags(ex, CFG, validation.validate("remove_flags", {"vms": ["sandbox-a", "sandbox-b"]}))
+    result = handlers.remove_flags(ex, CFG, validation.validate("remove_flags", {"vms": ["sandbox-a", "sandbox-b"], "strict": False}))
+    assert result["removed"] == ["sandbox-a"] and result["failed"][0]["vm"] == "sandbox-b"
+    remove = next(c for c in ex.ssh_calls if c["host"] == "10.4.0.10")
+    assert remove["argv"] == ["sudo", "sh", "-c", "rm -f /etc/worms/flag && test ! -e /etc/worms/flag"]
+
+
+def test_a_declared_file_is_written_later_from_the_nodes_copy():
+    ex = FakeExecutor()
+    _prepare(ex)
+    public = next(c for c in ex.ssh_calls if c["argv"][:3] == ["sudo", "tee", "-a"])["input"].strip()
+    ex.ssh_calls.clear()
+    result = handlers.write_file(ex, CFG, validation.validate("write_file", {"run_uuid": RUN, "file": 1}))
+    assert result == {"written": True, "vm": "sandbox-a", "error": None}
+    write = ex.ssh_calls[-1]
+    assert write["argv"][-1] == "/root/later" and write["input"] == public
+    with pytest.raises(validation.Invalid, match="no state for run"):
+        handlers.write_file(ex, CFG, validation.validate("write_file", {"run_uuid": "4" * 8 + RUN[8:], "file": 1}))
+
+
 def test_release_unknown_vm_fails():
     ex = FakeExecutor()
     with pytest.raises(validation.Invalid):
-        handlers.release_secrets(ex, CFG, {"vms": ["not-in-sandbox"]})
+        handlers.place_flags(ex, CFG, {"vms": ["not-in-sandbox"], "strict": True})
 
 
 def test_deploy_fetches_verifies_copies_and_arms():
@@ -508,12 +699,11 @@ def test_deploy_fetches_verifies_copies_and_arms():
             "start_vm": "sandbox-a",
             "team_uuid": "11111111-2222-3333-4444-555555555555",
             "artifact": {"storage_key": key, "content_hash": hashlib.sha256(ex.artifact_bytes).hexdigest()},
-            "initial_secrets": ["sandbox-a"],
             "worm_delay": 120,
         },
     )
     result = handlers.deploy(ex, CFG, params)
-    assert result["released"][0]["vm"] == "sandbox-a"
+    assert result["start_vm"] == "sandbox-a" and "released" not in result
     # Fetched from the dashboard.
     # (as root: the media directory belongs to the dashboard's service user)
     fetch = next(c for c in ex.ssh_calls if c["host"] == "10.5.0.18")
@@ -599,7 +789,7 @@ def test_deploy_rejects_tampered_artifact():
     params = validation.validate(
         "deploy",
         {"start_vm": "sandbox-a", "team_uuid": "11111111-2222-3333-4444-555555555555",
-         "artifact": {"storage_key": key, "content_hash": "0" * 64}, "initial_secrets": [], "worm_delay": 60},
+         "artifact": {"storage_key": key, "content_hash": "0" * 64}, "worm_delay": 60},
     )
     with pytest.raises(validation.Invalid, match="hash mismatch"):
         handlers.deploy(ex, CFG, params)
@@ -607,7 +797,11 @@ def test_deploy_rejects_tampered_artifact():
 
 def test_teardown():
     ex = FakeExecutor()
-    assert handlers.teardown(ex, CFG, validation.validate("teardown", {}))["destroyed"] is True
+    _prepare(ex)
+    state = Path(handlers.STATE_DIR) / "runs" / f"{RUN}.json"
+    assert state.exists()
+    assert handlers.teardown(ex, CFG, validation.validate("teardown", {"run_uuid": RUN}))["destroyed"] is True
+    assert not state.exists()  # the run's secrets are gone
     destroy = next(c for c in ex.calls if c[:2] == ("tofu", "sandbox") and "destroy" in c)
     # In parallel, VMs fight over the storage lock and leave volumes that block later VMs.
     assert "-parallelism=1" in destroy
@@ -624,12 +818,12 @@ def test_teardown_keeps_the_sandbox_for_the_rounds_next_run_powered_off():
 @pytest.mark.parametrize("keep", ["true", 1, "yes", None, {}])
 def test_only_a_real_true_keeps_a_sandbox(keep):
     """Destroying is the safe side."""
-    assert validation.validate("teardown", {"keep": keep}) == {"keep": False}
+    assert validation.validate("teardown", {"keep": keep}) == {"keep": False, "run_uuid": None}
 
 
 def test_devbox_gateway_permitopen_is_only_the_entry_vm():
     """The SSH gateway forwards each team to its entry VM (A) only; B/C are
-    reached by pivoting inside the devbox network (docs/security-assessment.md).
+    reached by pivoting inside the devbox network (docs/07-security.md).
     Every registered key is still installed on the VMs themselves (team_keys)."""
 
     class Ex:
@@ -848,7 +1042,7 @@ def test_the_agents_copy_of_the_map_is_root_only(tmp_path):
 def test_devbox_key_varfile_tags_keys_unsafe():
     """The keys are written with the YAML `!unsafe` tag so Ansible never
     templates attacker-controlled key text (template injection defence in
-    depth; docs/security-assessment.md)."""
+    depth; docs/07-security.md)."""
     raw = handlers._unsafe_yaml(
         {"devbox_team_keys": {"t1": [handlers._Unsafe("ssh-ed25519 AAAA marker={{ 7*7 }}")]},
          "ssh_gateway_authorized_keys": [{"public_key": handlers._Unsafe("ssh-ed25519 AAAA x"), "comment": "team=t1", "permitopen": []}]}
@@ -991,7 +1185,7 @@ def test_round_agent_env_renders(render):
     env = render("ansible/roles/host/round_agent", "round-agent.env.j2", **AGENT_ENV_VARS)
     assert "DB_USER=round_agent" in env and "DB_SSLMODE=verify-full" in env
     assert "DASHBOARD_MEDIA_ROOT=/opt/dashboard/media" in env
-    assert "PYTHONPATH=" in env and "/scripts" in env
+    assert "PYTHONPATH=/opt/worms/scripts:/opt/worms/src\n" in env  # the gameplan framework is in src
     assert "SCORING_HOST=10.5.0.14" in env and "LOGGING_HOST=10.5.0.15" in env
     assert "DASHBOARD_HOST=10.5.0.18" in env
     # OpenTofu: the provisioning token from the vault.
@@ -1328,7 +1522,7 @@ def _deploy_params(ex, delay=120):
         "start_vm": "sandbox-a", "team_uuid": "11111111-2222-3333-4444-555555555555",
         "artifact": {"storage_key": "malware-artifacts/aa/bb/" + "c" * 64 + ".zip",
                      "content_hash": hashlib.sha256(ex.artifact_bytes).hexdigest()},
-        "initial_secrets": ["sandbox-a"], "worm_delay": delay,
+        "worm_delay": delay,
     })  # fmt: skip
 
 
@@ -1394,7 +1588,7 @@ def test_a_file_that_is_not_a_zip_fails_the_unpack(tmp_path, monkeypatch):
 def test_flags_are_written_where_no_directory_exists_yet():
     """A fresh VM has no /etc/worms: install -D creates it (sandbox and devbox)."""
     ex = FakeExecutor()
-    handlers.release_secrets(ex, CFG, validation.validate("release_secrets", {"vms": ["sandbox-a"]}))
+    handlers.place_flags(ex, CFG, validation.validate("place_flags", {"vms": ["sandbox-a"]}))
     write = next(c for c in ex.ssh_calls if "install" in c["argv"])
     assert write["argv"][:4] == ["sudo", "install", "-D", "-m"]
     ex = FakeExecutor()

@@ -1,0 +1,88 @@
+---
+# What a round's gameplan installs on one sandbox VM (src/gameplan/build.py, ansible_vars):
+# run by the round agent's prepare job when it builds the sandbox, before the snapshot every
+# team's run starts from, so before any team. The values come from the gameplan file on the
+# node and arrive tagged !unsafe (scripts/round_agent/handlers.py): none of it is templated.
+# Packages come from the private apt cache: a gameplan's must be in apt_cache_seed_packages.
+
+- name: The gameplan's part for this VM
+  ansible.builtin.set_fact:
+    sandbox_vm: "{{ sandbox_vm_config[inventory_hostname] | default({}) }}"
+
+- name: Install the gameplan's packages
+  when: sandbox_vm.install | default([]) | length > 0
+  ansible.builtin.apt:
+    name: "{{ sandbox_vm.install }}"
+    state: present
+    install_recommends: false
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Remove the packages it removes
+  when: sandbox_vm.uninstall | default([]) | length > 0
+  ansible.builtin.apt:
+    name: "{{ sandbox_vm.uninstall }}"
+    state: absent
+
+# The users of the gameplan's password logins. Locked here: every run sets a new password
+# (the agent, before the worm), and the snapshot holds none.
+- name: Create the login users
+  ansible.builtin.user:
+    name: "{{ item }}"
+    shell: /bin/bash
+    create_home: true
+    password: "!"
+  loop: "{{ sandbox_vm.users | default([]) }}"
+
+# Only these users may log in with a password; everyone else keeps keys only (the VM's
+# cloud-init hardening). At the end of sshd_config, not in sshd_config.d: a Match block in an
+# included file would run on into the main file's global settings.
+- name: Let the login users in with their password
+  ansible.builtin.blockinfile:
+    path: /etc/ssh/sshd_config
+    marker: "# {mark} worms gameplan password logins"
+    insertafter: EOF
+    validate: /usr/sbin/sshd -t -f %s
+    block: |
+      Match User {{ sandbox_vm.users | join(',') }}
+          PasswordAuthentication yes
+  when: sandbox_vm.users | default([]) | length > 0
+  notify: Reload ssh
+
+- name: Write the VM's files
+  ansible.builtin.copy:
+    dest: "{{ item.path }}"
+    content: "{{ item.content }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ sandbox_vm.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Run the VM's setup commands
+  ansible.builtin.shell:
+    cmd: "{{ item }}"
+    executable: /bin/bash
+  loop: "{{ sandbox_vm.setup | default([]) }}"
+  loop_control:
+    index_var: sandbox_vm_step
+    label: "setup command {{ sandbox_vm_step + 1 }}"
+  changed_when: true
+
+- name: Enable and start the VM's services
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  loop: "{{ sandbox_vm.services | default([]) }}"
+
+- name: Apply the SSH change before the snapshot
+  ansible.builtin.meta: flush_handlers
+
+- name: Check the services run
+  ansible.builtin.command:
+    argv: [systemctl, is-active, "{{ item }}"]
+  loop: "{{ sandbox_vm.services | default([]) }}"
+  changed_when: false

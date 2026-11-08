@@ -5,27 +5,34 @@ the already-validated parameters, and returns the JSON result the conductor
 reads. They contain no string taken from the database: every command is built
 from fixed literals and validated values.
 
-See docs/rounds.md for how these fit the round lifecycle.
+See docs/05-live-environment.md for how these fit the round lifecycle.
 """
 
 from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
 import secrets
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from gameplan import build as gameplan_build
+from gameplan import loader as gameplan_loader
+from gameplan import runtime as gameplan_runtime
+from gameplan.definition import SECRET_MARKER, GameplanError
 from generate_devbox import team_addressing
 from round_agent import snapshots, validation
 
 FLAG_PATH = "/etc/worms/flag"
+# The gameplan files, in the agent's workspace (synced from the controller's checkout).
+GAMEPLANS = "gameplans"
 WORM_DIR = "/home/debian"
 WORM_ZIP = "user-worm.zip"
 # The zip is unpacked here; the worm is `bash main.sh` run in this
-# directory (docs/worm-contract.md).
+# directory (docs/08-user-guide.md).
 WORM_CODE = "worm"
 WORM_ENTRY = "main.sh"
 WORM_UNIT = "worms-start"
@@ -50,7 +57,7 @@ SERVICE_POOLS = ("ephemeral", "private_internet")
 # The agent's own records on the node (root only).
 STATE_DIR = "/var/lib/worms"
 # Team code is assumed hostile and root on its VM. This CPU offers it no hardware virtualisation,
-# so no /dev/kvm and no way to drive the node's nested-KVM code (docs/security-assessment.md). The
+# so no /dev/kvm and no way to drive the node's nested-KVM code (docs/07-security.md). The
 # sandbox and devbox stacks set it. These checks refuse anything else, such as a VM changed by hand.
 TEAM_VM_CPU = "x86-64-v3"
 
@@ -90,48 +97,75 @@ def _sandbox_vms(ex):
     return vms
 
 
-def _vm_networks(network_graph):
-    """From the generator's graph, the networks each VM is attached to
-    (keyed by VM name), for the VM rows."""
-    nodes = network_graph.get("nodes", [])
-    by_id = {n["id"]: n for n in nodes}
-    vm_networks = {}
-    for edge in network_graph.get("edges", []):
-        if edge.get("relationship") == "attached-to":
-            vm = by_id.get(edge["source"], {})
-            net = by_id.get(edge["target"], {})
-            name = (vm.get("label") or "").strip()
-            if name:
-                vm_networks.setdefault(name, []).append(
-                    {"name": net.get("label"), "cidr": net.get("cidr")}
-                )
-    return vm_networks
+class Refused(RuntimeError):
+    """A refusal whose message names nothing of a gameplan's content (a file name, a version,
+    the internet window): it may reach the database."""
 
 
-def _release(ex, cfg, vm_names):
-    """Generate a fresh secret for each VM, write it into the VM over SSH
-    (the secret goes through stdin, never the command line) and return the
-    SHA-256 of each. The plaintext never leaves the host."""
-    vms = _sandbox_vms(ex)
-    released = []
-    for name in vm_names:
-        info = vms.get(name)
-        if info is None:
-            raise validation.Invalid(f"{name} is not a VM of the current sandbox")
-        secret = f"FLAG{{{secrets.token_hex(16)}}}"
-        ex.ssh(
-            info["maintenance_ip"],
-            # -D: /etc/worms does not exist in a fresh VM.
-            ["sudo", "install", "-D", "-m", "0444", "/dev/stdin", FLAG_PATH],
-            input=secret,
-        )
-        released.append({"vm": name, "flag_hash": hashlib.sha256(secret.encode()).hexdigest()})
-    return released
+def _quiet(job):
+    """For the jobs that load a gameplan or apply what it defines. Their errors can quote it
+    (Ansible prints a failed setup command, OpenTofu the resource it refused), and a job's
+    error goes to the database, which the dashboard reads. The reason goes to the job log;
+    the database gets the job's name only."""
+
+    def wrapper(ex, cfg, params):
+        try:
+            return job(ex, cfg, params)
+        except (validation.Invalid, Refused):  # our own messages, which name no content
+            raise
+        except Exception as error:  # noqa: BLE001
+            ex.note(f"{job.__name__} failed: {type(error).__name__}: {error}")
+            raise RuntimeError(f"the {job.__name__} job failed: its log on the node says why") from None
+
+    wrapper.__name__ = wrapper.__qualname__ = job.__name__
+    wrapper.__doc__ = job.__doc__
+    return wrapper
 
 
-# ---------------------------------------------------------------------------
-# Job handlers
-# ---------------------------------------------------------------------------
+def _gameplan(ex, name, sha256):
+    """The gameplan the job names, from the node's own copy: the file must be exactly the one
+    the orchestrator validated (sha256), and valid here too, with the node's apt cache list.
+    Its problems go to the job log only: the database (which the dashboard reads) gets none of
+    a gameplan's content. Returns (spec, loaded)."""
+    directory = ex.repo_root / GAMEPLANS
+    try:
+        _, digest = gameplan_loader.read(directory, name)  # its name, presence, type and size
+    except GameplanError as error:
+        raise Refused(str(error)) from None
+    if digest != sha256:
+        raise Refused(f"{name} is not the version expected (sha256 {digest[:12]}, expected {sha256[:12]}): "
+                      "deploy the same checkout to the node and the orchestrator")  # fmt: skip
+    loaded = gameplan_loader.load(directory, name, sha256)
+    problems = gameplan_runtime.validate(loaded.cls, packages=gameplan_build.seeded_packages(ex.repo_root))
+    if problems:
+        for problem in problems:
+            ex.note(f"gameplan {name}: {problem}")
+        raise validation.Invalid(f"the gameplan {name} is not valid on the node: the job log lists why")
+    return gameplan_runtime.instantiate(loaded.cls).spec(), loaded
+
+
+@_quiet
+def gameplans(ex, cfg, params):
+    """Every gameplan file on the node, its SHA-256 and whether it is valid here. Why one is
+    not goes to the job log, not into the result."""
+    directory = ex.repo_root / GAMEPLANS
+    seeded = gameplan_build.seeded_packages(ex.repo_root)
+    out = []
+    for name in gameplan_loader.available(directory):
+        try:
+            loaded = gameplan_loader.load(directory, name)
+            problems = gameplan_runtime.validate(loaded.cls, packages=seeded)
+            digest = loaded.sha256
+        except Exception as error:  # noqa: BLE001  (a gameplan that does not even load)
+            problems = [f"{type(error).__name__}: {error}"]
+            try:
+                digest = gameplan_loader.read(directory, name)[1]
+            except Exception:  # noqa: BLE001  (unreadable as well: too large, replaced, gone)
+                digest = ""
+        for problem in problems:
+            ex.note(f"gameplan {name}: {problem}")
+        out.append({"file": name, "sha256": digest, "valid": not problems})
+    return {"gameplans": out}
 
 
 def _refuse_while_internet(cfg, what):
@@ -139,7 +173,7 @@ def _refuse_while_internet(cfg, what):
     reach could then reach out. OpenTofu refuses to build them then; a rollback or a start
     goes past it, so these check it themselves."""
     if Path(cfg.get("internet_flag", INTERNET_FLAG)).exists():
-        raise RuntimeError(f"internet access is allowed ({INTERNET_FLAG}): refusing to {what}")
+        raise Refused(f"internet access is allowed ({INTERNET_FLAG}): refusing to {what}")
 
 
 def _sandbox_hosts(ex):
@@ -180,7 +214,17 @@ def _reset_services(ex, cfg):
     return f"reset: {len(vms)} VMs back to their clean snapshot"
 
 
-def _build_sandbox(ex, cfg, hcl):
+def _unsafe_tree(value):
+    """Every string in `value` tagged `!unsafe` for Ansible (_unsafe_yaml): a gameplan's files
+    and commands are written as they are, never templated."""
+    if isinstance(value, dict):
+        return {key: _unsafe_tree(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_unsafe_tree(item) for item in value]
+    return _Unsafe(value) if isinstance(value, str) else value
+
+
+def _build_sandbox(ex, cfg, hcl, config):
     """A new sandbox, snapshotted before any team's code reaches it. While it is built the
     devbox VMs are shut down and the service VMs it installs from are back to their snapshot,
     so nothing in it comes from team code: every later run of the round rolls back to it."""
@@ -193,9 +237,12 @@ def _build_sandbox(ex, cfg, hcl):
         ex.install_sandbox_definition(hcl)
         ex.tofu("sandbox", "init", "-input=false", timeout=600)
         ex.tofu("sandbox", "apply", "-auto-approve", "-input=false", "-parallelism=1", timeout=cfg.get("apply_timeout", 5400))
-        # Refresh the inventory and configure the sandbox guests (install the
-        # internal CA, so a worm can reach scoring/logging over verified HTTPS).
-        ex.worms("round-configure-sandbox", timeout=cfg.get("configure_timeout", 1800))
+        # Refresh the inventory and configure the sandbox: the internal CA (a worm reaches scoring
+        # and logging over verified HTTPS) and what the gameplan installs on each VM.
+        with tempfile.TemporaryDirectory() as tmp:
+            varfile = Path(tmp) / "sandbox-vms.yml"
+            varfile.write_text(_unsafe_yaml(_unsafe_tree(config)))
+            ex.worms("round-configure-sandbox", timeout=cfg.get("configure_timeout", 1800), args=f"-e @{varfile}")
         snapshots.take(ex, snapshots.pool_vms(ex, "sandbox"), f"worms round sandbox {hashlib.sha256(hcl.encode()).hexdigest()[:12]}")
     finally:
         if devboxes:
@@ -204,44 +251,197 @@ def _build_sandbox(ex, cfg, hcl):
     return services
 
 
-def prepare(ex, cfg, params):
-    """The run's sandbox. The runs of a round share one, generated from the round's seed and
-    parameters: the first run builds and snapshots it, every later one rolls it back to that
-    snapshot, which takes a boot instead of a build and leaves nothing of the team before.
-    Reports the topology and VMs."""
-    with tempfile.TemporaryDirectory() as tmp:
-        network_file = Path(tmp) / "network.json"
-        hcl = ex.generate_sandbox(params["seed"], params["sandbox_params"], network_file)
-        graph = ex.read_json(network_file)
+# -- a run's secrets and files ---------------------------------------------------------------
 
+
+def _run_state_path(cfg, run_uuid):
+    return Path(cfg.get("state_dir", STATE_DIR)) / "runs" / f"{run_uuid}.json"
+
+
+def _save_run_state(cfg, run_uuid, state):
+    """The run's gameplan and secrets, on the node only (root, 0600), for files execute()
+    writes later. Only the current run's: a new prepare removes the others."""
+    directory = _run_state_path(cfg, run_uuid).parent
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for stale in directory.glob("*.json"):
+        stale.unlink()
+    path = _run_state_path(cfg, run_uuid)
+    with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as fh:
+        json.dump(state, fh)
+
+
+def _load_run_state(cfg, run_uuid):
+    path = _run_state_path(cfg, run_uuid)
+    if not path.is_file():
+        raise validation.Invalid(f"no state for run {run_uuid} on the node (prepare did not run, or it was torn down)")
+    return json.loads(path.read_text())
+
+
+def _generate_secrets(ex, spec):
+    """{secret id: {field: value}}, new for this run: key pairs from ssh-keygen, passwords from
+    `secrets`. They stay on the node; the database never sees them."""
+    out = {}
+    for secret in spec["secrets"]:
+        if secret["kind"] == "password":
+            out[secret["id"]] = {"password": secrets.token_urlsafe(15)}
+            continue
+        with tempfile.TemporaryDirectory() as tmp:
+            key = Path(tmp) / "key"
+            bits = ["-b", "3072"] if secret["type"] == "rsa" else []
+            ex.run(["ssh-keygen", "-q", "-t", secret["type"], *bits, "-N", "", "-C", "worms-gameplan", "-f", key], timeout=120)
+            out[secret["id"]] = {"private": key.read_text(), "public": (Path(tmp) / "key.pub").read_text().strip()}
+    return out
+
+
+def _fill(content, values):
+    """The file's content with the run's secrets in place of their markers."""
+    return SECRET_MARKER.sub(lambda m: values[m.group(1)][m.group(2)], content)
+
+
+def _home(user):
+    return "/root" if user == "root" else f"/home/{user}"
+
+
+def _ssh_dir(ex, ip, user):
+    ex.ssh(ip, ["sudo", "install", "-d", "-m", "0700", "-o", user, "-g", user, f"{_home(user)}/.ssh"])
+
+
+def _apply_setup(ex, vms, spec, values):
+    """Before the worm: every key and password of the run, as the gameplan placed them."""
+    keys = {s["id"]: s for s in spec["secrets"]}
+    for step in spec["setup"]:
+        ip = vms[step["vm"]]["maintenance_ip"]
+        secret = values[step["secret"]]
+        if step["op"] == "password":
+            user = keys[step["secret"]]["user"]
+            ex.ssh(ip, ["sudo", "chpasswd"], input=f"{user}:{secret['password']}\n")
+        elif step["op"] == "private_key":
+            user = step["user"]
+            _ssh_dir(ex, ip, user)
+            ex.ssh(ip, ["sudo", "install", "-m", "0600", "-o", user, "-g", user, "/dev/stdin", f"{_home(user)}/.ssh/{step['name']}"],
+                   input=secret["private"])  # fmt: skip
+        elif step["op"] == "public_key":
+            user = step["user"]
+            _ssh_dir(ex, ip, user)
+            path = f"{_home(user)}/.ssh/authorized_keys"
+            ex.ssh(ip, ["sudo", "tee", "-a", path], input=secret["public"] + "\n")
+            ex.ssh(ip, ["sudo", "chown", f"{user}:{user}", path])
+            ex.ssh(ip, ["sudo", "chmod", "0600", path])
+        else:
+            raise validation.Invalid(f"unknown setup step {step['op']!r}")
+
+
+def _write_gameplan_file(ex, ip, entry, values):
+    ex.ssh(
+        ip,
+        ["sudo", "install", "-D", "-m", entry["mode"], "-o", entry["owner"], "-g", entry["owner"], "/dev/stdin", entry["path"]],
+        input=_fill(entry["content"], values),
+    )
+
+
+def _guest_step(strict, action):
+    """Run `action` on a VM. strict (before the worm): a failure fails the job. Otherwise the
+    worm may have caused it (it is root on the VM): the reason is returned instead."""
+    if strict:
+        action()
+        return None
+    try:
+        action()
+        return None
+    except Exception as error:  # noqa: BLE001  (whatever the VM did to us)
+        return f"{type(error).__name__}: {str(error)[:300]}"
+
+
+def _place_flags(ex, vms, names, strict):
+    """A fresh flag on each VM, read back to check it is there. Returns (released, failed)."""
+    released, failed = [], []
+    for name in names:
+        info = vms.get(name)
+        if info is None:
+            raise validation.Invalid(f"{name} is not a VM of the current sandbox")
+        secret = f"FLAG{{{secrets.token_hex(16)}}}"
+        digest = hashlib.sha256(secret.encode()).hexdigest()
+
+        def place(ip=info["maintenance_ip"], secret=secret, digest=digest):
+            # -D: /etc/worms does not exist in a fresh VM.
+            ex.ssh(ip, ["sudo", "install", "-D", "-m", "0444", "/dev/stdin", FLAG_PATH], input=secret)
+            written = ex.ssh(ip, ["sudo", "sha256sum", FLAG_PATH]).split()[:1]
+            if written != [digest]:
+                raise RuntimeError(f"the flag on {name} reads back differently")
+
+        problem = _guest_step(strict, place)
+        if problem:
+            failed.append({"vm": name, "error": problem})
+        else:
+            released.append({"vm": name, "flag_hash": digest})
+    return released, failed
+
+
+def _remove_flags(ex, vms, names, strict):
+    removed, failed = [], []
+    for name in names:
+        info = vms.get(name)
+        if info is None:
+            raise validation.Invalid(f"{name} is not a VM of the current sandbox")
+        problem = _guest_step(strict, lambda ip=info["maintenance_ip"]: ex.ssh(
+            ip, ["sudo", "sh", "-c", f"rm -f {FLAG_PATH} && test ! -e {FLAG_PATH}"]))  # fmt: skip
+        if problem:
+            failed.append({"vm": name, "error": problem})
+        else:
+            removed.append(name)
+    return removed, failed
+
+
+# ---------------------------------------------------------------------------
+# Job handlers
+# ---------------------------------------------------------------------------
+
+
+@_quiet
+def prepare(ex, cfg, params):
+    """The run's sandbox, from its gameplan, and everything of the run that comes before the
+    worm. The runs of a round share one sandbox: the first builds and snapshots it, every later
+    one rolls it back to that snapshot (a boot instead of a build, nothing left of the team
+    before). Then this run's keys, passwords and files, and a fresh flag on every VM."""
+    spec, loaded = _gameplan(ex, params["gameplan"], params["gameplan_sha256"])
+    hcl = gameplan_build.hcl(spec, loaded.filename, loaded.sha256)
     built = _reusable_sandbox(ex, hcl)
     if built:
         _refuse_while_internet(cfg, "start a sandbox")
         snapshots.roll_back(ex, built)
         services = "not reset: a later run of the round (the first one reset them)"
     else:
-        services = _build_sandbox(ex, cfg, hcl)
+        services = _build_sandbox(ex, cfg, hcl, gameplan_build.ansible_vars(spec))
     snapshots.wait_for_ssh(ex, _sandbox_hosts(ex))
 
-    vm_networks = _vm_networks(graph)
     vms = _sandbox_vms(ex)
-    # The full generator graph (every layer: internet, edge/core/distribution/
-    # access switches, networks and VMs, with all edges) and the generated
-    # OpenTofu definition are saved on the run for later visualisation.
+    missing = sorted({vm["name"] for vm in spec["vms"]} - set(vms))
+    if missing:
+        raise RuntimeError(f"the sandbox lacks VMs of the gameplan: {', '.join(missing)}")
+    values = _generate_secrets(ex, spec)
+    _apply_setup(ex, vms, spec, values)
+    for entry in spec["files"]:
+        if entry["at_reset"]:
+            _write_gameplan_file(ex, vms[entry["vm"]]["maintenance_ip"], entry, values)
+    released, _ = _place_flags(ex, vms, [vm["name"] for vm in spec["vms"]], strict=True)
+    _save_run_state(cfg, params["run_uuid"], {"gameplan": loaded.filename, "sha256": loaded.sha256, "secrets": values})
+
+    networks = gameplan_build.vm_networks(spec)
     return {
         "sandbox": "rolled back to its snapshot" if built else "built and snapshotted",
         "services": services,
-        "topology": graph,
-        "sandbox_definition": hcl,
+        "topology": gameplan_build.topology(spec),
+        "entrypoint": spec["entrypoint"],
+        "released": released,
         "vms": [
             {
                 "name": name,
-                "maintenance_ip": info["maintenance_ip"],
-                "vmid": info["vmid"],
-                "addresses": info["addresses"],
-                "networks": vm_networks.get(name, []),
+                "maintenance_ip": vms[name]["maintenance_ip"],
+                "vmid": vms[name]["vmid"],
+                "addresses": vms[name]["addresses"],
+                "networks": networks.get(name, []),
             }
-            for name, info in sorted(vms.items())
+            for name in sorted(networks)
         ],
     }
 
@@ -272,8 +472,8 @@ def check(ex, cfg, params):
 
 
 def deploy(ex, cfg, params):
-    """Put the team's worm on the start VM, release the initial secrets, and
-    arm the fuse that starts the worm after worm_delay seconds."""
+    """Put the team's worm on its entry VM and arm the fuse that starts it after worm_delay
+    seconds; check the fuse is armed. Every flag is placed already (prepare)."""
     vms = _sandbox_vms(ex)
     start = params["start_vm"]
     if start not in vms:
@@ -285,13 +485,13 @@ def deploy(ex, cfg, params):
     _set_current_team(ex, cfg, params["team_uuid"])
 
     _place_worm(ex, cfg, start_ip, params["artifact"])
-    released = _release(ex, cfg, params["initial_secrets"])
     delay = params["worm_delay"]
     armed_at = _arm_worm(ex, start_ip, delay)
-    return {
-        "released": released, "start_vm": start, "worm_delay": delay,
-        "team_uuid": params["team_uuid"], "armed_at": armed_at,
-    }  # fmt: skip
+    # Armed: the timer waits, or (a short fuse) the worm runs already.
+    states = ex.ssh(start_ip, ["sh", "-c", f"systemctl is-active {WORM_UNIT}.timer {WORM_UNIT}.service || true"], timeout=60)
+    if not {"active", "activating"} & set(states.split()):
+        raise RuntimeError(f"the worm's timer on {start} is not armed ({' '.join(states.split()) or 'no unit'})")
+    return {"start_vm": start, "worm_delay": delay, "team_uuid": params["team_uuid"], "armed_at": armed_at}
 
 
 def _place_worm(ex, cfg, ip, artifact):
@@ -347,14 +547,45 @@ def _clear_current_team(ex, cfg):
             ex.ssh(host, ["sudo", "rm", "-f", CURRENT_TEAM_FILE])
 
 
-def release_secrets(ex, cfg, params):
-    return {"released": _release(ex, cfg, params["vms"])}
+def remove_flags(ex, cfg, params):
+    """Remove flags, and check that they are gone. strict (before the worm): any failure fails
+    the job; otherwise failures are reported (the worm may be behind them)."""
+    removed, failed = _remove_flags(ex, _sandbox_vms(ex), params["vms"], params["strict"])
+    return {"removed": removed, "failed": failed}
+
+
+def place_flags(ex, cfg, params):
+    """New flags, read back. strict as for remove_flags."""
+    released, failed = _place_flags(ex, _sandbox_vms(ex), params["vms"], params["strict"])
+    return {"released": released, "failed": failed}
+
+
+@_quiet
+def write_file(ex, cfg, params):
+    """A file the run's gameplan declared, by its number: its content comes from the node's
+    copy of the gameplan and the run's secrets, never from the job. A failure after the worm
+    is returned, but by name only: the reason (it may quote the path) goes to the job log."""
+    state = _load_run_state(cfg, params["run_uuid"])
+    spec, _ = _gameplan(ex, state["gameplan"], state["sha256"])
+    entry = next((f for f in spec["files"] if f["id"] == params["file"]), None)
+    if entry is None:
+        raise validation.Invalid(f"the gameplan has no file {params['file']}")
+    vms = _sandbox_vms(ex)
+    if entry["vm"] not in vms:
+        raise validation.Invalid(f"{entry['vm']} is not a VM of the current sandbox")
+    problem = _guest_step(params["strict"], lambda: _write_gameplan_file(ex, vms[entry["vm"]]["maintenance_ip"], entry, state["secrets"]))
+    if problem:
+        ex.note(f"file {params['file']} on {entry['vm']}: {problem}")
+        problem = "the file could not be written: the job log on the node says why"
+    return {"written": problem is None, "vm": entry["vm"], "error": problem}
 
 
 def teardown(ex, cfg, params):
     """After a run. With `keep` (another run of the round follows) the sandbox stays, powered
-    off, for the next prepare to roll back; else it is destroyed."""
+    off, for the next prepare to roll back; else it is destroyed. The run's secrets go."""
     _clear_current_team(ex, cfg)
+    if params.get("run_uuid"):
+        _run_state_path(cfg, params["run_uuid"]).unlink(missing_ok=True)
     if params["keep"]:
         snapshots.stop(ex, snapshots.pool_vms(ex, "sandbox"))
         return {"destroyed": False, "kept": True}
@@ -382,7 +613,7 @@ def _fetch_artifact(ex, cfg, artifact):
 
 
 # ---------------------------------------------------------------------------
-# Devbox (docs/devbox.md)
+# Devbox (docs/04-dev-environment.md)
 # ---------------------------------------------------------------------------
 
 
@@ -424,7 +655,7 @@ def _write_devbox_token(ex, maintenance_ip):
 
 def _write_devbox_map(ex, cfg, teams):
     """Write the source-address -> team-uuid map onto scoring and logging, so a
-    devbox submission is attributed to its team (docs/devbox.md). The services
+    devbox submission is attributed to its team (docs/04-dev-environment.md). The services
     source of a team is its devbox-gw address from the stack output."""
     devbox = ex.tofu_output("devbox").get("devbox", {}) or {}
     lines = []
@@ -608,7 +839,7 @@ def _unsafe_yaml(data) -> str:
 def devbox_reconfigure(ex, cfg, params):
     """Re-push every team's SSH keys to the devbox VMs and the gateway, and the
     source->team map, without rebuilding any VM or touching tokens. Enqueued
-    when a team adds/removes a key or leaves (docs/devbox.md). Idempotent."""
+    when a team adds/removes a key or leaves (docs/04-dev-environment.md). Idempotent."""
     teams = params["teams"]
     # The map first: it is what a reset of scoring and logging takes, and the configuration
     # takes minutes.
@@ -626,7 +857,7 @@ def _configure_devbox(ex, teams):
     key string is therefore tagged `!unsafe` in the variable file, so a
     `{{...}}`/`{%...%}` in it is never evaluated as a template -- defence in
     depth behind the strict validation (validation.ssh_keys, which already
-    rejects template characters). See docs/security-assessment.md."""
+    rejects template characters). See docs/07-security.md."""
     import tempfile
 
     devbox = ex.tofu_output("devbox").get("devbox", {}) or {}
@@ -637,7 +868,7 @@ def _configure_devbox(ex, teams):
         # The gateway forwards each team to its ENTRY VM (A) only; the worm
         # pivots A->B->C inside the team's own devbox network, as in the sandbox.
         # permitopen is thus a single host, so a team key cannot open a forward
-        # to B/C directly (docs/devbox.md; docs/security-assessment.md).
+        # to B/C directly (docs/04-dev-environment.md; docs/07-security.md).
         entry = f"devbox-{t['slug']}-a"
         targets = [f"{vm['ssh_fabric_ip']}:22" for vm in vms if vm["name"] == entry]
         if not targets:
@@ -654,10 +885,13 @@ def _configure_devbox(ex, teams):
 
 
 HANDLERS = {
+    "gameplans": gameplans,
     "prepare": prepare,
     "check": check,
     "deploy": deploy,
-    "release_secrets": release_secrets,
+    "remove_flags": remove_flags,
+    "place_flags": place_flags,
+    "write_file": write_file,
     "teardown": teardown,
     "devbox_provision": devbox_provision,
     "devbox_rebuild": devbox_rebuild,

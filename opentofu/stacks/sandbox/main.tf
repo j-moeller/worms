@@ -3,7 +3,7 @@ terraform {
     proxmox = {
       source = "bpg/proxmox"
       # The version each stack has run with on worms-dev; a fresh `tofu init`
-      # would otherwise take the newest (docs/fresh-install.md).
+      # would otherwise take the newest (docs/02-installation.md).
       version = "0.118.0"
     }
   }
@@ -107,7 +107,7 @@ resource "terraform_data" "guard" {
         for b in values(local.sandbox_bridges) :
         startswith(b.name, "vmbr1") && length(b.name) >= 8 && can(cidrhost(b.network_cidr, 1))
       ])
-      error_message = "Sandbox bridges must be named vmbr1NNN (the host firewall matches the vmbr1* prefix) and carry a valid CIDR (inside networks.sandbox_vms; checked by scripts/generate_sandbox.py)."
+      error_message = "Sandbox bridges must be named vmbr1NNN (the host firewall matches the vmbr1* prefix) and carry a valid CIDR (inside networks.sandbox_vms; checked by src/gameplan)."
     }
   }
 }
@@ -172,7 +172,7 @@ resource "proxmox_virtual_environment_vm" "gw" {
   }
   memory {
     dedicated = 512
-    floating  = 256 # ballooning: nftables router, reclaimable (docs/resources.md)
+    floating  = 256 # ballooning: nftables router, reclaimable (docs/01-components.md)
   }
 
   # Only SSH is used: no guest agent (the host never parses guest-controlled
@@ -190,7 +190,7 @@ resource "proxmox_virtual_environment_vm" "gw" {
   # management bridge cannot reach each other at layer 2 (defense in depth behind
   # the per-VM firewall). Left commented because attaching a hookscript needs the
   # provider to act as root@pam; the provisioning API token cannot. Enable when
-  # applying with root@pam credentials (docs/security-assessment.md, S4).
+  # applying with root@pam credentials (docs/07-security.md, S4).
   # hook_script_file_id = local.platform.hookscript_file_id
 
   initialization {
@@ -417,8 +417,11 @@ resource "proxmox_virtual_environment_firewall_ipset" "vm" {
   }
 }
 
-# Sandbox traffic (within the sandbox networks, services bridge on the allowed
-# ports) on the sandbox NICs; SSH from the host on the management NIC only.
+# Everything is dropped (firewall_options above) but: the services through sandbox-gw
+# (scoring, logging, the private internet) and the LLM endpoint, SSH from the host on the
+# management NIC, and the gameplan's own rules (src/gameplan: each within the sandbox
+# networks only). A VM reaches another only on a network they share, and only as both
+# firewalls allow: sandbox-gw does not route between sandbox networks.
 resource "proxmox_virtual_environment_firewall_rules" "vm" {
   for_each = local.sandbox_vms
 
@@ -427,7 +430,7 @@ resource "proxmox_virtual_environment_firewall_rules" "vm" {
 
   rule {
     security_group = local.sg.sandbox
-    comment        = "Sandbox networks + services bridge"
+    comment        = "Services bridge (scoring, logging, private internet) via sandbox-gw"
   }
 
   rule {
@@ -440,6 +443,20 @@ resource "proxmox_virtual_environment_firewall_rules" "vm" {
     iface          = "net${length(each.value.network_devices)}"
     comment        = "SSH from the Proxmox host on the management NIC"
   }
+
+  dynamic "rule" {
+    for_each = each.value.firewall_rules
+
+    content {
+      type    = rule.value.type
+      action  = rule.value.action
+      proto   = rule.value.proto
+      dport   = rule.value.dport
+      source  = rule.value.source
+      dest    = rule.value.dest
+      comment = "gameplan"
+    }
+  }
 }
 
 resource "proxmox_virtual_environment_vm" "vm" {
@@ -450,7 +467,7 @@ resource "proxmox_virtual_environment_vm" "vm" {
 
   # Team code is assumed hostile and root on these VMs. This CPU offers no hardware
   # virtualisation, so they get no /dev/kvm and cannot drive the node's nested-KVM code
-  # (docs/security-assessment.md). Never "host" or "max". The same as a devbox VM, and the
+  # (docs/07-security.md). Never "host" or "max". The same as a devbox VM, and the
   # round's check job refuses any other (round_agent/handlers.py).
   cpu {
     cores = each.value.cpu
@@ -463,7 +480,7 @@ resource "proxmox_virtual_environment_vm" "vm" {
     dedicated = each.value.ram
     # The memory floor of a devbox VM (stacks/devbox/main.tf), so a worm tried there has
     # the same room in a round. The host may reclaim unused RAM down to 512 MB, or half the
-    # ceiling on a larger VM (docs/resources.md). A VM below 512 MB keeps all of its RAM.
+    # ceiling on a larger VM (docs/01-components.md). A VM below 512 MB keeps all of its RAM.
     floating = min(each.value.ram, max(512, floor(each.value.ram / 2)))
   }
 
@@ -485,7 +502,7 @@ resource "proxmox_virtual_environment_vm" "vm" {
   # depth behind the per-VM firewall). Left commented because attaching a
   # hookscript needs the provider to act as root@pam; the provisioning API token
   # cannot. Enable when applying with root@pam credentials
-  # (docs/security-assessment.md, S4).
+  # (docs/07-security.md, S4).
   # hook_script_file_id = local.platform.hookscript_file_id
 
   initialization {
@@ -542,7 +559,7 @@ resource "proxmox_virtual_environment_vm" "vm" {
     interface = "virtio0"
     iothread  = true
     discard   = "on"
-    size      = 5
+    size      = each.value.disk_size
     speed {
       iops_read  = local.limits.disk_iops
       iops_write = local.limits.disk_iops

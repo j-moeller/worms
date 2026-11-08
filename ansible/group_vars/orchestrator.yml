@@ -28,6 +28,9 @@ django_extra_env:
   # teams never see how to connect. See host_publish_ssh_gateway for the port.
   DEVBOX_SSH_GATEWAY_HOST: "{{ worms_environment.public_name }}"
   DEVBOX_SSH_GATEWAY_PORT: "{{ ssh_gateway_public_port }}"
+  # The gameplans (docs/05-live-environment.md), deployed here and on the node only.
+  WORMS_GAMEPLAN_DIR: "{{ django_gameplan_dir }}"
+  WORMS_GAMEPLAN_LIB: "{{ django_gameplan_lib }}"
   PROXMOX_HOST: "{{ proxmox.node }}"
   PROXMOX_CA_BUNDLE: "{{ proxmox_ca_bundle }}"
   PROXMOX_PORT: "{{ proxmox.api_port }}"
@@ -52,7 +55,7 @@ django_timers:
     command: collect_topology
     description: Collect Proxmox topology for the dashboard (read-only)
     on_calendar: "*:0/2"
-# Round conductor loop (orchestrator/rounds, docs/rounds.md): plans runs for
+# Round conductor loop (orchestrator/rounds, docs/05-live-environment.md): plans runs for
 # due rounds and drives the active run. One instance; safe to restart.
 django_daemons:
   - name: conduct-rounds

@@ -4,7 +4,7 @@
 <header class="page-head">
     <p class="page-head__kicker">Staff</p>
     <h1 class="page-head__title">Rounds</h1>
-    <p class="page-head__lead">A round is defined here; nothing is built until it starts. At its start the conductor plans one run per team. For each run the round agent on the Proxmox host generates that team's sandbox from the round's seed, builds it with OpenTofu, deploys the worm and tears the sandbox down again.</p>
+    <p class="page-head__lead">A round is defined here: its window, its gameplan and the duration per team. Nothing is built until it starts. Then the conductor runs every team's worm, one after another: the round agent on the Proxmox host builds the gameplan's sandbox once and rolls it back for each team, and the gameplan's <code>execute()</code> plays out. An attempt the infrastructure fails is thrown away and run again.</p>
 </header>
 {% include "staff/_tabs.html" with section="rounds" %}
 
@@ -44,17 +44,18 @@
         <header class="panel__head"><h2 class="panel__title" id="live-title">Live rounds</h2><p class="panel__meta">{{ teams }} team{{ teams|pluralize }}</p></header>
         <div class="table-wrap">
             <table class="table">
-                <thead><tr><th scope="col">Round</th><th scope="col">Window (UTC)</th><th scope="col">Runs</th><th scope="col">Fits</th></tr></thead>
+                <thead><tr><th scope="col">Round</th><th scope="col">Window (UTC)</th><th scope="col">Gameplan</th><th scope="col">Runs</th><th scope="col">Fits</th></tr></thead>
                 <tbody>
                     {% for row in live_rounds %}
                     <tr>
                         <th scope="row"><a href="{% url 'staff_round' row.round.pk %}">{{ row.round.name }}</a> <span class="badge{% if row.status == 'active' %} badge--accent{% endif %}">{{ row.status }}</span></th>
                         <td>{{ row.round.round_start|date:"Y-m-d H:i" }} – {{ row.round.round_end|date:"H:i" }}</td>
+                        <td>{% include "staff/_gameplan.html" with round=row.round %}</td>
                         <td>{% for state, count in row.states %}<span class="badge badge--state">{{ state }} {{ count }}</span> {% empty %}<span class="muted">planned at the start</span>{% endfor %}</td>
                         <td>{% if row.estimate.fits %}<span class="badge badge--ok">yes</span>{% else %}<span class="badge badge--bad" title="room for {{ row.estimate.max_teams }} teams">no</span>{% endif %}</td>
                     </tr>
                     {% empty %}
-                    <tr><td colspan="4" class="empty">No rounds yet.</td></tr>
+                    <tr><td colspan="5" class="empty">No rounds yet.</td></tr>
                     {% endfor %}
                 </tbody>
             </table>
@@ -65,7 +66,7 @@
 <section class="panel" aria-labelledby="new-round-title">
     <header class="panel__head">
         <h2 class="panel__title" id="new-round-title">New round</h2>
-        <p class="panel__meta">each team's slot: fuse + run + {{ timing.end_drain }} s drain + {{ timing.slot_overhead }} s build/teardown</p>
+        <p class="panel__meta">each team's slot: {{ timing.worm_start_delay }} s fuse + its duration + {{ timing.end_drain }} s drain + {{ timing.slot_overhead }} s build/teardown</p>
     </header>
     <form method="post" class="panel__body form">
         {% csrf_token %}
@@ -80,31 +81,12 @@
             </div>
         </fieldset>
         <fieldset class="fieldset">
-            <legend>Each team's sandbox</legend>
+            <legend>Each team's run</legend>
             <div class="fields">
-                {% include "staff/_field.html" with field=form.vms %}
-                {% include "staff/_field.html" with field=form.networks %}
-                {% include "staff/_field.html" with field=form.sites %}
-                {% include "staff/_field.html" with field=form.max_interfaces %}
-                {% include "staff/_field.html" with field=form.vm_ram %}
+                {% include "staff/_field.html" with field=form.gameplan %}
+                {% include "staff/_field.html" with field=form.team_duration %}
             </div>
-        </fieldset>
-        <fieldset class="fieldset">
-            <legend>Each run</legend>
-            <div class="fields">
-                {% include "staff/_field.html" with field=form.worm_start_delay %}
-                {% include "staff/_field.html" with field=form.run_duration %}
-            </div>
-        </fieldset>
-        <fieldset class="fieldset">
-            <legend>Game plan</legend>
-            <div class="fields">
-                {% include "staff/_field.html" with field=form.initial_fraction %}
-                {% include "staff/_field.html" with field=form.first_stop_after %}
-                {% include "staff/_field.html" with field=form.stop_interval %}
-                {% include "staff/_field.html" with field=form.min_alive %}
-                {% include "staff/_field.html" with field=form.restart_after %}
-            </div>
+            {% if form.gameplan.field.choices|length == 1 %}<p class="form__note">No gameplan is valid yet: the round can be created without one and given one later. Gameplans are files in <code>gameplans/</code> on the node and the orchestrator; the orchestrator's journal (<code>journalctl -u orchestrator-conduct-rounds</code>) says what is wrong with one.</p>{% endif %}
         </fieldset>
         <div class="form__actions"><button type="submit" class="btn btn--primary">Create round</button></div>
     </form>

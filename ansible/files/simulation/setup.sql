@@ -40,11 +40,11 @@ WITH competition AS (
     FROM team
     RETURNING id
 ), run AS (
-    INSERT INTO round_runs (uuid, round_id, team_id, position, seed, state, error,
-                            sandbox_params, topology, sandbox_definition, created_at,
+    INSERT INTO round_runs (uuid, round_id, team_id, position, attempt, seed, state, error,
+                            gameplan, gameplan_sha256, duration, topology, entrypoint, created_at,
                             state_changed_at, worm_start_at, ends_at, finished_at)
-    SELECT gen_random_uuid(), round.id, team.id, 0, 0, 'finished', '',
-           '{}'::jsonb, '{}'::jsonb, '', now(), now(),
+    SELECT gen_random_uuid(), round.id, team.id, 0, 0, 0, 'finished', '',
+           '', '', 1800, '{}'::jsonb, '', now(), now(),
            now() - interval '1 minute', now() + interval '30 minutes', now()
     FROM round, team
     RETURNING id, round_id

@@ -286,7 +286,7 @@ def _demo_run(round, team, now):
     position = (RoundRun.objects.filter(round=round).aggregate(last=Max("position"))["last"] or 0) + 1
     run = RoundRun.objects.create(
         round=round, team=team, position=position, seed=7, state=RoundRun.State.FINISHED,
-        sandbox_params={"start_vm": "web-0"}, worm_start_at=start, ends_at=at(600), finished_at=at(660),
+        entrypoint="web-0", worm_start_at=start, ends_at=at(600), finished_at=at(660),
     )  # fmt: skip
     nets = {"dmz": {"name": "vmbr1000", "cidr": "10.64.0.0/24"}, "core": {"name": "vmbr1001", "cidr": "10.64.1.0/24"}}
     vms = {}

@@ -144,4 +144,7 @@ def test_each_vm_gets_the_packages_its_code_imports():
     orchestrator = yaml.safe_load((REPO / "ansible/group_vars/orchestrator.yml").read_text())
     shared = set(role["pip_packages"])
     assert _third_party_imports("config", "core", "dashboard") <= shared
-    assert _third_party_imports("orchestrator") <= shared | set(orchestrator["django_extra_pip_packages"])
+    # The gameplan framework is no pip package: the role copies src/gameplan to the
+    # orchestrator only (WORMS_GAMEPLAN_LIB).
+    assert orchestrator["django_extra_env"]["WORMS_GAMEPLAN_LIB"]
+    assert _third_party_imports("orchestrator") <= shared | set(orchestrator["django_extra_pip_packages"]) | {"gameplan"}

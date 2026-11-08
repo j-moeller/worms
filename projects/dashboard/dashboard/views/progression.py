@@ -1,6 +1,6 @@
 """Round progression: the PROGRESSION page (a team's rounds, replayed) and the
 progression data behind it and behind the staff TOPOLOGY player
-(orchestrator/rounds/progression.py, docs/progression.md).
+(orchestrator/rounds/progression.py, docs/08-user-guide.md).
 
 Team (signed in; a round of the competition of the active environment, Live
 or Dev):
@@ -144,15 +144,16 @@ def devbox_summary(doc: dict) -> dict:
 def summary(team: Team, rnd: Round, now) -> dict:
     """What the page shows without JavaScript: the captured VMs and the
     counts (cheap queries; no flows, no log records)."""
-    run = RoundRun.objects.filter(round=rnd, team=team).first()
+    run = RoundRun.for_team(rnd, team)
+    # Only a finished attempt's: before, nothing of the run is shown (docs/05-live-environment.md).
     captures = (
-        FlagCapture.objects.filter(team=team, round=rnd)
+        FlagCapture.published().filter(team=team, round=rnd)
         .select_related("vm", "flag_capture_attempt")
         .order_by("flag_capture_attempt__created_at", "id")
     )
     start, end = progression.window(team, rnd, now, run)
     counts = {"submissions": 0, "logs": 0}
-    if start is not None:
+    if start is not None and run.state == RoundRun.State.FINISHED:
         scope = {"team_uuid": str(team.uuid), "devbox": False, "created_at__gte": start, "created_at__lte": end}
         counts = {
             "submissions": FlagCaptureAttempt.objects.filter(**scope).count(),
@@ -224,7 +225,7 @@ def team_rounds(request: HttpRequest, team: Team):
     rounds = _rounds(request)
     runs = {}
     if rounds:
-        runs = {run.round_id: run.state for run in RoundRun.objects.filter(team=team, round__in=rounds)}
+        runs = {r.id: run.state for r in rounds if (run := RoundRun.for_team(r, team)) is not None}
     default = default_round(rounds, now)
     return _json(
         {

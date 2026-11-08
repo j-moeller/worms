@@ -14,13 +14,13 @@ class LoggingAttempt(models.Model):
     uuid = models.UUIDField(default=uuid.uuid4, unique=True)
     # The running team's uuid, recorded by the logging API directly (only one
     # team runs at a time, so no access token is needed there; see
-    # docs/rounds.md). Nullable: a log sent while no round is active is not
+    # docs/05-live-environment.md). Nullable: a log sent while no round is active is not
     # attributed.
     team_uuid = models.TextField(null=True, blank=True)
     log_data = models.JSONField()
 
     # True when the log came from a team's devbox (attributed by source
-    # address), not from the running round's sandbox (docs/devbox.md).
+    # address), not from the running round's sandbox (docs/04-dev-environment.md).
     devbox = models.BooleanField(default=False, db_default=False)
 
     # Database defaults as well: the sandbox API inserts only the columns
@@ -58,6 +58,15 @@ class Logging(models.Model):
         LoggingAttempt,
         on_delete=models.CASCADE,
         related_name="logging",
+    )
+    # The run (attempt) it came from: a log counts, and a team sees it, only once that attempt
+    # has FINISHED (docs/05-live-environment.md). Null for logs recorded before attempts existed.
+    run = models.ForeignKey(
+        "core.RoundRun",
+        on_delete=models.CASCADE,
+        related_name="logs",
+        null=True,
+        blank=True,
     )
     created_at = models.DateTimeField(default=clock.now)
 

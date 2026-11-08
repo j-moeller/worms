@@ -6,7 +6,9 @@ apt_cache_log_dir: /var/log/apt-cacher-ng
 # VMs cannot install anything else, so a team's `apt install` of a package not
 # listed here, and not fetched by another VM, fails. nftables: the gateways' rules.
 # jq: not on a devbox by default, so `apt install jq` shows the path works and a
-# reset removes it (tests/live). What else belongs here: docs/status.md, decisions.
+# reset removes it (tests/live).
+# Every package a gameplan installs (gameplans/, their VM classes included) must be listed:
+# the round agent refuses a gameplan that needs one that is not (tests/test_gameplan.py).
 apt_cache_seed_packages:
   - ca-certificates
   - curl
@@ -15,3 +17,8 @@ apt_cache_seed_packages:
   - python3
   - python3-pip
   - unzip
+  # Gameplans (src/gameplan/definition.py: DjangoVM, PostgreVM; gameplans/round_one.py).
+  - gunicorn
+  - postgresql
+  - python3-django
+  - python3-venv

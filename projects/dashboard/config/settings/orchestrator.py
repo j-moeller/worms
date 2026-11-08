@@ -66,18 +66,22 @@ ORCHESTRATOR_TOKENS = {
 }
 
 # Round conductor (orchestrator/rounds, manage.py conduct_rounds). Times in
-# seconds. See docs/rounds.md. A run's own timing (the round's sandbox_params,
-# core/schedule.py) takes precedence over worm_start_delay/round_duration.
+# seconds. See docs/05-live-environment.md. A round's duration per team is its own (set on the dashboard).
 ROUND_CONDUCTOR = {
     "worm_start_delay": ROUND_TIMING["worm_start_delay"],
-    "round_duration": ROUND_TIMING["run_duration"],
     "end_drain": ROUND_TIMING["end_drain"],
     "slot_overhead": ROUND_TIMING["slot_overhead"],
     "job_timeout": int(env("ROUND_JOB_TIMEOUT", "1800")),
     "capture_grace": int(env("ROUND_CAPTURE_GRACE", "120")),
+    "max_retries": int(env("ROUND_MAX_RETRIES", "3")),
 }
 
-# Devbox (docs/devbox.md): how a team reaches the shared SSH gateway. The host
+# The gameplans (docs/05-live-environment.md): the files, and the framework they import. Deployed to the
+# orchestrator VM only (role django_app, variant orchestrator); the dashboard has neither.
+GAMEPLAN_DIR = env("WORMS_GAMEPLAN_DIR", "")
+GAMEPLAN_LIB = env("WORMS_GAMEPLAN_LIB", "")
+
+# Devbox (docs/04-dev-environment.md): how a team reaches the shared SSH gateway. The host
 # publishes the gateway on its WAN at DEVBOX_SSH_GATEWAY_PORT (DNAT -> gateway:22);
 # set DEVBOX_SSH_GATEWAY_HOST to the address/name teams connect to. Applied to
 # the team's Devbox record when a devbox job completes (orchestrator/rounds/devbox.py).

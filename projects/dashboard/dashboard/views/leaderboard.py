@@ -40,11 +40,13 @@ def score_flag_captures(
     """
     passed_points = defaultdict(int)
     current_points = defaultdict(int)
+    now = clock.now()
+    finished = {round.id for round in rounds if round.is_finished(now)}
 
     for capture in captures:
         if current_round and capture.round_id == current_round.id:
             current_points[capture.team_id] += 1
-        elif capture.round.is_finished(clock.now()):
+        elif capture.round_id in finished:
             passed_points[capture.team_id] += 1
 
     for team in teams:
@@ -333,10 +335,11 @@ def round_result(competition, round, now) -> dict:
 
     teams = list(Team.objects.filter(competition=competition).order_by("name")) if competition else []
     captured = dict(FlagCapture.get_round_standings(round))
-    runs = {
-        run.team_id: run
-        for run in RoundRun.objects.filter(round=round).annotate(vm_count=Count("virtual_machines"))
-    }
+    # A team's finished attempt stands for it, else its latest (RoundRun.for_team).
+    runs = {}
+    for run in RoundRun.objects.filter(round=round).annotate(vm_count=Count("virtual_machines")).order_by("attempt"):
+        if runs.get(run.team_id) is None or runs[run.team_id].state != RoundRun.State.FINISHED:
+            runs[run.team_id] = run
     standings = sorted(((team, captured.get(team.id, 0)) for team in teams), key=lambda item: (-item[1], item[0].name))
     points = get_formula_one_points([(team.id, score) for team, score in standings if score > 0])
     finished, running = round.is_finished(now), round.is_active(now)

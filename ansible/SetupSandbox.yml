@@ -1,10 +1,12 @@
 ---
-# Configure the sandbox VMs after they are built (round agent, prepare job).
-# Right now this installs the internal CA into their trust store, so a worm
-# can reach the scoring and logging APIs over HTTPS with normal certificate
-# verification (no bundled CA, no --insecure). The sandbox VMs are assumed
-# compromised; trusting the internal CA only lets them *verify* the services,
-# it grants no access the firewall does not already allow.
+# Configure the sandbox VMs after they are built (round agent, prepare job), before the
+# snapshot every team's run starts from:
+#  - the internal CA in their trust store, so a worm can reach the scoring and logging APIs
+#    over HTTPS with normal certificate verification (no bundled CA, no --insecure). The
+#    sandbox VMs are assumed compromised; trusting the internal CA only lets them *verify*
+#    the services, it grants no access the firewall does not already allow;
+#  - what the round's gameplan installs on each (role sandbox_vm; its values come from the
+#    agent, -e @file, docs/05-live-environment.md).
 
 # A VM that was just built refuses SSH until it has booted, and gathering facts
 # would then fail before the wait for cloud-init below can run.
@@ -53,3 +55,4 @@
   roles:
     - role: ca_distribute
     - role: apt_client
+    - role: sandbox_vm

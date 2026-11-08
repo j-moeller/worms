@@ -11,7 +11,7 @@ from .logging import Logging, LoggingAttempt
 from .worms import MalwareArtifact, Upload
 from .topology import TopologySnapshot
 from .monitoring import NetworkEvent, NetworkFlow
-from .rounds import GamePlanStep, HostJob, RoundRun, RunEvent
+from .rounds import GameplanFile, HostJob, RoundRun, RunEvent
 from .devbox import Devbox, DevboxVM, DevboxSSHKey, DevboxCapture, DevboxLog, DevboxRun
 from .events import (AccountEvent, CompetitionEvent, CredentialEvent, ImpersonationEvent, LoginEvent,
                      PasswordEvent, PlatformEvent, SSHGatewayLogin, TeamEvent)

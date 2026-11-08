@@ -325,15 +325,22 @@ def round_data(**overrides):
         "name": "R1",
         "round_start": start.strftime("%Y-%m-%dT%H:%M"),
         "round_end": (start + timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M"),
-        "seed": "", "vms": 8, "networks": 4, "sites": 1, "max_interfaces": 3, "vm_ram": 512,
-        "worm_start_delay": 5, "run_duration": 60,
-        "initial_fraction": 0.5, "first_stop_after": 10, "stop_interval": 10, "min_alive": 2, "restart_after": "",
+        "seed": "", "gameplan": "", "team_duration": 60,
     }  # fmt: skip
     data.update(overrides)
     return data
 
 
+def valid_gameplan(name="round_one.py", valid=True):
+    """A gameplan the orchestrator lists (it writes the table; the dashboard only reads it)."""
+    from core.models.rounds import GameplanFile
+
+    with as_role("postgres"):
+        GameplanFile.objects.update_or_create(filename=name, defaults={"valid": valid})
+
+
 def test_create_a_round(staff_site):
+    """A round needs no gameplan to be created: it is shown, and waits for one."""
     from core.models.competition import Round
     from core.models.team import Team
 
@@ -343,22 +350,36 @@ def test_create_a_round(staff_site):
     assert response.status_code == 302, text(response)[:2000]
     created = Round.objects.get(name="R1")
     assert created.competition == competition() and created.seed >= 0
-    assert created.sandbox_params == {
-        "vms": 8, "networks": 4, "sites": 1, "max_interfaces": 3, "vm_ram": 512,
-        "game_plan": {"initial_fraction": 0.5, "first_stop_after": 600, "stop_interval": 600, "min_alive": 2,
-                      "restart_after": None},
-        "timing": {"worm_start_delay": 300, "run_duration": 3600},
-    }  # fmt: skip
+    assert (created.gameplan, created.team_duration) == ("", 3600)
     page = text(get(staff_site, f"/staff/rounds/{created.pk}/"))
     assert "Nothing is built until it starts" in page and f"seed {created.seed}" in page
+    assert "Choose its gameplan before then" in page and "none yet" in page
+
+    # With a gameplan the orchestrator lists as valid; never one it does not.
+    valid_gameplan()
+    valid_gameplan("broken.py", valid=False)
+    later = clock_window(days=2)
+    assert post(staff_site, "/staff/rounds/", round_data(name="R2", gameplan="round_one.py", **later),
+                page="/staff/rounds/").status_code == 302  # fmt: skip
+    assert Round.objects.get(name="R2").gameplan == "round_one.py"
+    refused = post(staff_site, "/staff/rounds/", round_data(name="R3", gameplan="broken.py", **clock_window(days=3)),
+                   page="/staff/rounds/")  # fmt: skip
+    assert refused.status_code == 200 and "Select a valid choice" in text(refused)
+    assert not Round.objects.filter(name="R3").exists()
+
+
+def clock_window(days):
+    from core import clock
+
+    start = clock.now() + timedelta(days=days)
+    return {"round_start": start.strftime("%Y-%m-%dT%H:%M"), "round_end": (start + timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M")}
 
 
 @pytest.mark.parametrize("overrides, message", [
     ({"round_start": "2000-01-01T10:00", "round_end": "2000-01-01T12:00"}, "Start the round in the future"),
-    ({"networks": 9}, "At most one network per VM"),
-    ({"max_interfaces": 5}, "more interfaces than there are networks"),
-    ({"min_alive": 8}, "Keep fewer VMs running"),
-    ({"vms": 251}, "less than or equal to 250"),
+    ({"team_duration": 0}, "greater than or equal to 1"),
+    ({"team_duration": 7 * 24 * 60 + 1}, "less than or equal to 10080"),
+    ({"gameplan": "../etc/passwd"}, "Select a valid choice"),
 ])  # fmt: skip
 def test_round_validation(staff_site, overrides, message):
     from core.models.competition import Round
@@ -374,16 +395,16 @@ def test_a_round_must_fit_every_team(staff_site):
 
     for i in range(4):
         Team.objects.create(name=f"t{i}", competition=competition())
-    # 4 teams x (5 + 60 min + 2 min drain + 15 min build/teardown) = 5 h 28 min > 5 h.
+    # 4 teams x (15 s fuse + 60 min + 2 min drain + 15 min build/teardown) = 5 h 9 min > 5 h.
     from datetime import datetime
 
     start = datetime.strptime(round_data()["round_start"], "%Y-%m-%dT%H:%M")
     short = round_data(round_end=(start + timedelta(hours=5)).strftime("%Y-%m-%dT%H:%M"))
     response = post(staff_site, "/staff/rounds/", short, page="/staff/rounds/")
-    assert "4 teams need 5 h 28 min" in text(response) and "room for 3" in text(response)
+    assert "4 teams need 5 h 9 min" in text(response) and "room for 3" in text(response)
     assert not Round.objects.exists()
     # Shorter runs fit.
-    assert post(staff_site, "/staff/rounds/", {**short, "run_duration": 45}, page="/staff/rounds/").status_code == 302
+    assert post(staff_site, "/staff/rounds/", {**short, "team_duration": 45}, page="/staff/rounds/").status_code == 302
 
 
 def test_rounds_do_not_overlap_and_there_are_no_dev_rounds(staff_site):
@@ -395,32 +416,42 @@ def test_rounds_do_not_overlap_and_there_are_no_dev_rounds(staff_site):
     # The form has no environment any more: a round asked to be "dev" is an ordinary round.
     page = text(get(staff_site, "/staff/rounds/"))
     assert "Dev round" not in page and 'name="environment"' not in page
-    from core import clock
-
-    start = clock.now() + timedelta(days=3)
-    later = {"round_start": start.strftime("%Y-%m-%dT%H:%M"), "round_end": (start + timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M")}
-    assert post(staff_site, "/staff/rounds/", round_data(name="D1", environment="dev", **later), page="/staff/rounds/").status_code == 302
+    assert post(staff_site, "/staff/rounds/", round_data(name="D1", environment="dev", **clock_window(days=3)),
+                page="/staff/rounds/").status_code == 302  # fmt: skip
     d1 = Round.objects.get(name="D1")
-    assert not d1.competition.is_dev_competition and d1.sandbox_params["vms"] == 8
+    assert not d1.competition.is_dev_competition and d1.team_duration == 3600
 
 
 def test_edit_and_delete_before_the_runs_exist(staff_site):
+    """Edited fully before it starts; its gameplan can still be chosen once its runs are
+    planned, until the first attempt starts; then it is read-only and kept."""
     from core.models.competition import Round
     from core.models.rounds import RoundRun
     from core.models.team import Team
 
     post(staff_site, "/staff/rounds/", round_data(), page="/staff/rounds/")
     r1 = Round.objects.get(name="R1")
-    edited = post(staff_site, f"/staff/rounds/{r1.pk}/", round_data(name="R1b", vms=10, seed=42),
+    edited = post(staff_site, f"/staff/rounds/{r1.pk}/", round_data(name="R1b", team_duration=50, seed=42),
                   page=f"/staff/rounds/{r1.pk}/")  # fmt: skip
     assert edited.status_code == 302, text(edited)[:1500]
     r1.refresh_from_db()
-    assert (r1.name, r1.seed, r1.sandbox_params["vms"]) == ("R1b", 42, 10)
+    assert (r1.name, r1.seed, r1.team_duration, r1.gameplan) == ("R1b", 42, 3000, "")
 
-    # Once its runs are planned it is read-only and kept.
+    # Planned, nothing started: the gameplan is added later (the conductor copies it to the
+    # runs when it pins it).
     team = Team.objects.create(name="t", competition=competition())
     with as_role("postgres"):  # runs are the conductor's
-        RoundRun.objects.create(round=r1, team=team, position=0, seed=1)
+        run = RoundRun.objects.create(round=r1, team=team, position=0, seed=1, duration=3000)
+    valid_gameplan()
+    added = post(staff_site, f"/staff/rounds/{r1.pk}/", round_data(name="R1b", team_duration=50, seed=42,
+                 gameplan="round_one.py"), page=f"/staff/rounds/{r1.pk}/")  # fmt: skip
+    assert added.status_code == 302, text(added)[:1500]
+    r1.refresh_from_db()
+    assert r1.gameplan == "round_one.py"
+
+    # Once an attempt has started it is read-only and kept.
+    with as_role("postgres"):
+        RoundRun.objects.filter(pk=run.pk).update(state=RoundRun.State.PREPARING)
     assert "can no longer change" in text(get(staff_site, f"/staff/rounds/{r1.pk}/"))
     post(staff_site, f"/staff/rounds/{r1.pk}/", round_data(name="nope"), page=f"/staff/rounds/{r1.pk}/")
     r1.refresh_from_db()
@@ -438,37 +469,26 @@ def test_edit_and_delete_before_the_runs_exist(staff_site):
 def test_round_parameters_reach_the_runs_and_the_conductor(db_clean):
     from core.models.competition import Competition, Round
     from core.models.team import Team
-    from orchestrator.rounds.conductor import Conductor
     from orchestrator.rounds.planner import plan_round
 
     comp = Competition.objects.create(name="c")
     Team.objects.create(name="t", competition=comp)
-    params = {"vms": 5, "networks": 2, "timing": {"worm_start_delay": 60, "run_duration": 900}}
     from django.utils import timezone
 
-    round_obj = Round.objects.create(competition=comp, name="R", seed=3, sandbox_params=params,
+    round_obj = Round.objects.create(competition=comp, name="R", seed=3, gameplan="round_one.py", team_duration=900,
                                      round_start=timezone.now(), round_end=timezone.now() + timedelta(hours=1))  # fmt: skip
     [run] = plan_round(round_obj)
-    assert run.sandbox_params == params
-    assert Conductor(power=object()).timing(run) == {"worm_start_delay": 60, "run_duration": 900}
+    assert (run.gameplan, run.duration, run.gameplan_sha256, run.attempt) == ("round_one.py", 900, "", 0)
 
 
-def test_the_form_bounds_are_the_round_agents(db_clean):
-    """The dashboard and the round agent validate a sandbox the same way."""
-    import importlib.util
+def test_the_form_bounds_are_the_gameplans(db_clean):
+    """The dashboard and the gameplan framework bound a team's duration the same way."""
     import sys
 
     from core import schedule
 
-    spec = importlib.util.spec_from_file_location("agent_validation", REPO / "scripts" / "round_agent" / "validation.py")
-    validation = importlib.util.module_from_spec(spec)
-    sys.modules["agent_validation"] = validation
-    spec.loader.exec_module(validation)
-    defaults = validation.sandbox_params({})
-    for key, (default, low, high) in schedule.SANDBOX_BOUNDS.items():
-        assert defaults[key] == default, key
-        validation.sandbox_params({key: low})
-        validation.sandbox_params({key: high})
-        for bad in (low - 1, high + 1):
-            with pytest.raises(validation.Invalid):
-                validation.sandbox_params({key: bad})
+    sys.path.insert(0, str(REPO / "src"))
+    from gameplan.definition import LIMITS
+
+    default, low, high = schedule.TEAM_DURATION
+    assert (low, high) == LIMITS["round_duration"] and low <= default <= high

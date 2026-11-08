@@ -79,7 +79,7 @@ def get_flag_captures(
 ) -> list[FlagCapture]:
     """Return all flag captures in chronological order."""
     return list(
-        FlagCapture.objects.filter(round__competition=competition)
+        FlagCapture.published().filter(round__competition=competition)
         .select_related(
             "team",
             "flag_capture_attempt",

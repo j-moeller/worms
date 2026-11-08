@@ -290,23 +290,9 @@ class Executor:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
 
-    def generate_sandbox(self, seed, params, network_file):
-        """Run scripts/generate_sandbox.py; returns the HCL (stdout). The
-        network graph is written to network_file (read back by the handler)."""
-        script = self.repo_root / "scripts" / "generate_sandbox.py"
-        return self.run(
-            [
-                "python3", script,
-                "--seed", str(seed),
-                "--networks", str(params["networks"]),
-                "--vms", str(params["vms"]),
-                "--sites", str(params["sites"]),
-                "--max-interfaces", str(params["max_interfaces"]),
-                "--vm-ram", str(params["vm_ram"]),
-                "--network-file", str(network_file),
-            ],
-            timeout=120,
-        )
+    def note(self, text):
+        """A line in the current job's log (on the node only)."""
+        self._log.note(text)
 
     def install_sandbox_definition(self, hcl):
         """Make `hcl` the one active generated sandbox definition: write

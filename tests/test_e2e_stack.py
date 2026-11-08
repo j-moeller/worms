@@ -2,7 +2,7 @@
 test database -- the single test that ties every subsystem together:
 
     admin provisions users + teams  ->  admin schedules two rounds  ->
-    admin's game plan for round 1   ->  a user logs in + registers an SSH key ->
+    admin picks round 1's gameplan  ->  a user logs in + registers an SSH key ->
     (the SSH gateway confinement that key gets)                      ->
     the user's devbox submits a token + a log  ->  the dashboard shows it   ->
     the user resets the devbox (dashboard -> orchestrator, real both sides)  ->
@@ -17,7 +17,7 @@ in-process with its real token check).
 
 What is faked -- exactly as tests/test_rounds.py fakes it, because there is no
 Proxmox host here -- is the host side: VM power (FakePower) and the round agent
-(fake_agent completes each host job the way the real agent would). The live SSH
+(Agent answers each host job the way the real agent would). The live SSH
 jump onto a devbox and the real tofu/ansible build are the human protocol's job
 (docs/archive/e2e_test_protocol.md, in the git history); this asserts that every piece of code those steps
 drive is present and wired.
@@ -41,8 +41,8 @@ import pytest
 # competition + an admin) and its helpers.
 from test_dashboard_login import HOST, login, proxied, site  # noqa: F401 (fixture)
 
-# The proven conductor driver: a fake Proxmox and a fake round agent.
-from test_rounds import Clock, FakePower, drive, fake_agent, make_conductor, sha
+# The proven conductor driver: a fake Proxmox, a fake round agent, a gameplan (two.py).
+from test_rounds import gameplans, make_conductor  # noqa: F401 (fixture)
 
 pytest.importorskip("django")
 pytest.importorskip("psycopg2")
@@ -134,7 +134,7 @@ def _provision_devbox(team, index=0):
     return box, vms
 
 
-# The round form payload (minutes; the form multiplies the plan/timing by 60).
+# The round form payload: its window, no gameplan yet, 10 minutes per team.
 def _round_form(**overrides):
     from core import clock
 
@@ -143,9 +143,7 @@ def _round_form(**overrides):
         "name": "R1",
         "round_start": start.strftime("%Y-%m-%dT%H:%M"),
         "round_end": (start + timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M"),
-        "seed": "", "vms": 8, "networks": 4, "sites": 1, "max_interfaces": 3, "vm_ram": 512,
-        "worm_start_delay": 5, "run_duration": 60,
-        "initial_fraction": 0.5, "first_stop_after": 10, "stop_interval": 10, "min_alive": 2, "restart_after": "",
+        "seed": "", "gameplan": "", "team_duration": 10,
     }  # fmt: skip
     data.update(overrides)
     return data
@@ -154,7 +152,7 @@ def _round_form(**overrides):
 # --- the end-to-end journey --------------------------------------------------------
 
 
-def test_end_to_end_competition_journey(site, monkeypatch):  # noqa: F811
+def test_end_to_end_competition_journey(site, monkeypatch, gameplans):  # noqa: F811
     """One pass through the eleven steps the operator walks by hand, each
     asserting the functionality it needs is present and wired."""
     from core import clock
@@ -197,14 +195,18 @@ def test_end_to_end_competition_journey(site, monkeypatch):  # noqa: F811
     assert [r.name for r in rounds] == ["R1", "R2"]  # ordered by their start; non-overlapping
     r1 = Round.objects.get(name="R1")
 
-    # ---- STEP 3: the game plan assigned to round 1 (its sandbox_params) ---------
-    # How many VMs, how long, the stop schedule -- the entry/start VM is chosen
-    # per run from the seed (not an admin field), so it is asserted at step 10.
-    assert r1.sandbox_params == {
-        "vms": 8, "networks": 4, "sites": 1, "max_interfaces": 3, "vm_ram": 512,
-        "game_plan": {"initial_fraction": 0.5, "first_stop_after": 600, "stop_interval": 600, "min_alive": 2, "restart_after": None},
-        "timing": {"worm_start_delay": 300, "run_duration": 3600},
-    }  # fmt: skip
+    # ---- STEP 3: the gameplan assigned to round 1 ------------------------------
+    # Created without one; the orchestrator lists the gameplans it and the node hold
+    # (by file name only), and staff choose one on the round's page.
+    assert (r1.gameplan, r1.team_duration) == ("", 600)
+    conductor, agent, flow_clock = make_conductor(gameplans)
+    conductor.check_gameplans(force=True)
+    picked = _post(site, f"/staff/rounds/{r1.pk}/", _round_form(name="R1", seed=r1.seed, gameplan="two.py",
+                   round_start=r1.round_start.strftime("%Y-%m-%dT%H:%M"), round_end=r1.round_end.strftime("%Y-%m-%dT%H:%M")),
+                   page=f"/staff/rounds/{r1.pk}/")  # fmt: skip
+    assert picked.status_code == 302, _text(picked)[:1500]
+    r1.refresh_from_db()
+    assert r1.gameplan == "two.py"
 
     # A devbox exists for the team (what `worms devbox provision` leaves behind).
     _provision_devbox(alpha, index=0)
@@ -283,44 +285,30 @@ def test_end_to_end_competition_journey(site, monkeypatch):  # noqa: F811
     Round.objects.filter(pk=r1.pk).update(round_start=timezone.now() - timedelta(minutes=1), round_end=timezone.now() + timedelta(days=1))
     Upload.objects.filter(pk=upload.pk).update(created_at=timezone.now() - timedelta(minutes=5))
     r1.refresh_from_db()
-    # The planner makes one run per team (one here) with the team's latest upload;
-    # short game-plan intervals so stops/secret releases unfold inside the test run.
-    [run] = plan_round(r1, sandbox_params={"game_plan": {"first_stop_after": 60, "stop_interval": 60, "min_alive": 1}})
+    # The planner makes one run per team (one here) with the team's latest upload.
+    [run] = plan_round(r1)
     assert run.team == alpha and run.upload_id == upload.pk
 
-    power, flow_clock = FakePower(), Clock()
-    conductor = make_conductor(power, flow_clock)
-    for _ in range(6):  # PENDING -> PREPARING -> CHECKING -> DEPLOYING -> ARMED
-        conductor.tick()
-        fake_agent(run, sha)
-        run.refresh_from_db()
-        if run.state == RoundRun.State.ARMED:
-            break
-    assert run.state == RoundRun.State.ARMED
-    assert run.virtual_machines.count() == 4  # the sandbox was "built" (VMs registered)
-    start_vm = run.virtual_machines.get(vm_identifier=run.sandbox_params["start_vm"])  # the entry VM
-    assert start_vm.ctf_flag_hash == sha(start_vm.vm_identifier)  # its secret released up front
-
-    flow_clock.advance(11)  # the fuse burns down; the worm starts
-    conductor.tick()
+    # One tick runs the attempt start to finish: PREPARING -> CHECKING -> RUNNING (the
+    # gameplan's execute()) -> ENDING -> TEARING_DOWN -> FINISHED.
+    assert conductor.tick() is True
     run.refresh_from_db()
-    assert run.state == RoundRun.State.RUNNING
-    assert run.events.filter(kind=RunEvent.Kind.WORM_STARTED).exists()
+    assert run.state == RoundRun.State.FINISHED, run.error
+    assert run.virtual_machines.count() == 2  # the sandbox was "built" (VMs registered)
+    start_vm = run.virtual_machines.get(vm_identifier=run.entrypoint)  # the entry VM
+    assert start_vm.ctf_flag_hash and run.events.filter(kind=RunEvent.Kind.WORM_STARTED).exists()
+    assert run.jobs.filter(kind=HostJob.Kind.TEARDOWN, state=HostJob.State.DONE).exists()  # the sandbox was torn down
+    assert run.virtual_machines.filter(ctf_flag_hash__isnull=True).count() == 0  # every flag back by the end
 
-    # The worm captures its start VM and logs a line during the run.
-    flow_clock.advance(30)
-    FlagCaptureAttempt.objects.create(team_uuid=str(alpha.uuid), vm_flag_hash=start_vm.ctf_flag_hash, created_at=flow_clock.now())
-    LoggingAttempt.objects.create(team_uuid=str(alpha.uuid), log_data={"event": "on the start vm"}, created_at=flow_clock.now())
+    # The worm captured its start VM and logged a line during the run.
+    during = run.worm_start_at + timedelta(seconds=30)
+    FlagCaptureAttempt.objects.create(team_uuid=str(alpha.uuid), vm_flag_hash=start_vm.ctf_flag_hash, created_at=during)
+    LoggingAttempt.objects.create(team_uuid=str(alpha.uuid), log_data={"event": "on the start vm"}, created_at=during)
     captures.process_flags(conductor.cfg["capture_grace"])
     captures.process_logs(conductor.cfg["capture_grace"])
-    assert FlagCapture.objects.filter(team=alpha, vm=start_vm).count() == 1
+    assert FlagCapture.published().filter(team=alpha, vm=start_vm).count() == 1
     assert run.events.filter(kind=RunEvent.Kind.CAPTURED, vm=start_vm).exists()
-    assert Logging.objects.filter(team=alpha, round=r1).count() == 1
-
-    drive(conductor, run, run, max_ticks=80, clock=flow_clock, step=30)  # game plan -> ENDING -> TEARING_DOWN -> FINISHED
-    assert run.state == RoundRun.State.FINISHED
-    assert run.jobs.filter(kind=HostJob.Kind.TEARDOWN, state=HostJob.State.DONE).exists()  # the sandbox was torn down
-    assert run.virtual_machines.filter(ctf_flag_hash__isnull=True).count() == 0  # every secret released by the end
+    assert Logging.objects.filter(team=alpha, round=r1, run=run).count() == 1
 
     # ---- STEP 11: the user sees the results (score) and the run's logs ---------
     raw_token = "tok-alpha_" + "z" * 32
@@ -374,7 +362,7 @@ def _due_round_with_teams(names, upload_for=()):
     return rnd, teams
 
 
-def test_a_team_that_never_uploaded_is_skipped(db_clean):
+def test_a_team_that_never_uploaded_is_skipped(db_clean, gameplans):
     """Skipping the upload step (step 9) means the round skips that team with a
     reason, instead of trying to run nothing."""
     from core.models.rounds import RoundRun
@@ -384,43 +372,38 @@ def test_a_team_that_never_uploaded_is_skipped(db_clean):
     [run] = plan_round(rnd)
     assert run.upload_id is None
 
-    conductor = make_conductor(FakePower(), Clock())
+    conductor, _agent, _clock = make_conductor(gameplans)
     conductor.tick()
     run.refresh_from_db()
     assert run.state == RoundRun.State.SKIPPED and "upload" in run.error
 
 
-def test_two_teams_run_one_after_another(db_clean):
+def test_two_teams_run_one_after_another(db_clean, gameplans):
     """Step 10 'for each team': runs are sequenced (one sandbox at a time), each
     prepared, run and torn down before the next -- here two teams, both finish."""
     from core.models.rounds import HostJob, RoundRun
     from orchestrator.rounds.planner import plan_round
 
     rnd, teams = _due_round_with_teams(["alpha", "bravo"], upload_for=["alpha", "bravo"])
-    runs = sorted(plan_round(rnd, sandbox_params={"game_plan": {"first_stop_after": 60, "stop_interval": 60, "min_alive": 1}}), key=lambda r: r.position)
+    rnd.gameplan, rnd.team_duration = "two.py", 600
+    rnd.save()
+    runs = sorted(plan_round(rnd), key=lambda r: r.position)
     assert [r.position for r in runs] == [0, 1]
 
-    power, flow_clock = FakePower(), Clock()
-    conductor = make_conductor(power, flow_clock)
-    terminal = {RoundRun.State.FINISHED, RoundRun.State.FAILED, RoundRun.State.SKIPPED}
-    for _ in range(400):
-        conductor.tick()
-        flow_clock.advance(30)
-        for run in runs:
-            # Real builds generate fresh flags even when VM names are reused.
-            fake_agent(run, lambda name, run_id=run.pk: sha(f"{run_id}:{name}"))
-            run.refresh_from_db()
-        if all(run.state in terminal for run in runs):
-            break
+    conductor, _agent, _clock = make_conductor(gameplans)
+    while conductor.tick():
+        pass
+    for run in runs:
+        run.refresh_from_db()
     assert all(run.state == RoundRun.State.FINISHED for run in runs)
-    # Each run built and tore down its own sandbox.
+    # Each run prepared its sandbox (the second rolled it back) and tore it down.
     for run in runs:
         assert run.jobs.filter(kind=HostJob.Kind.PREPARE, state=HostJob.State.DONE).exists()
         assert run.jobs.filter(kind=HostJob.Kind.TEARDOWN, state=HostJob.State.DONE).exists()
     # Only one sandbox ever existed at a time: the second run did not prepare
-    # until the first had torn down (positions are strictly ordered).
+    # until the first had torn down.
     first, second = runs
-    assert first.finished_at is not None and second.finished_at is not None
+    assert first.jobs.get(kind=HostJob.Kind.TEARDOWN).id < second.jobs.get(kind=HostJob.Kind.PREPARE).id
 
 
 def test_a_key_cannot_be_registered_by_two_teams(db_clean):

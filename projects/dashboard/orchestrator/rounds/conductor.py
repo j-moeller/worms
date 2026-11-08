@@ -273,14 +273,15 @@ class Conductor:
 
     def _teardown_pending(self) -> bool:
         """True while a sandbox teardown has not completed, so the host may still hold a
-        sandbox and the next attempt must not build over it. A FAILED attempt whose teardown
-        itself failed means the host is dirty: the queue holds until an operator clears it,
-        rather than applying a fresh sandbox over the leftovers (docs/07-security.md, S7)."""
-        if HostJob.objects.filter(kind=HostJob.Kind.TEARDOWN, state__in=[HostJob.State.QUEUED, HostJob.State.RUNNING]).exists():
+        sandbox and the next attempt must not build over it. An attempt (failed or finished)
+        whose last teardown itself failed means the host is dirty: the queue holds until an
+        operator clears it, rather than applying a fresh sandbox over the leftovers
+        (docs/07-security.md, S7)."""
+        teardowns = HostJob.objects.filter(kind=HostJob.Kind.TEARDOWN)
+        if teardowns.filter(state__in=[HostJob.State.QUEUED, HostJob.State.RUNNING]).exists():
             return True
-        for run in RoundRun.objects.filter(state=S.FAILED):
-            teardown = run.jobs.filter(kind=HostJob.Kind.TEARDOWN).order_by("-id").first()
-            if teardown is not None and teardown.state == HostJob.State.FAILED:
+        for job in teardowns.filter(state=HostJob.State.FAILED, run__state__in=[S.FAILED, S.FINISHED]).only("id", "run_id"):
+            if not teardowns.filter(run_id=job.run_id, id__gt=job.id).exclude(state=HostJob.State.FAILED).exists():
                 return True
         return False
 

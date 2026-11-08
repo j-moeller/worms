@@ -392,4 +392,4 @@ def test_events_stay_small(database):
         run(database, "dbuser_events_dashboard", "INSERT INTO account_events (kind, detail) VALUES ('created', %s)",
             (json.dumps({"big": "x" * 5000}),))  # fmt: skip
     with pytest.raises(psycopg2.errors.CheckViolation):
-        run(database, "dbuser_events_dashboard", "INSERT INTO login_events (outcome) VALUES ('anything')")
+        run(database, "dbuser_events_dashboard", "INSERT INTO login_events (outcome, not_recorded_before) VALUES ('anything', 0)")

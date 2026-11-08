@@ -66,7 +66,7 @@ def world(site):  # noqa: F811
     r2 = Round.objects.create(competition=comp, name="R2", seed=2, round_start=now - hours(0.1), round_end=now + hours(2))
     run = RoundRun.objects.create(
         round=r1, team=a, position=0, seed=1, state="finished", worm_start_at=start, ends_at=start + timezone.timedelta(minutes=10),
-        sandbox_params={"start_vm": "vm-start"}, topology={"secret_architecture": "ARCH-SECRET"},
+        entrypoint="vm-start", topology={"secret_architecture": "ARCH-SECRET"},
     )  # fmt: skip
     RoundRun.objects.create(round=r1, team=b, position=1, seed=1, state="skipped")
     vm = {}
@@ -288,7 +288,7 @@ def _entry_never_captured(world, **run):
     from core.models.rounds import RoundRun
     from core.models.vm import VirtualMachine
 
-    RoundRun.objects.filter(pk=world["run"].pk).update(sandbox_params={"start_vm": "vm-hidden"}, **run)
+    RoundRun.objects.filter(pk=world["run"].pk).update(entrypoint="vm-hidden", **run)
     VirtualMachine.objects.create(
         vm_identifier="vm-other", vm_maintenance_ip="10.4.0.99", round=world["r1"], run=world["run"], proxmox_vm_id=97799,
         addresses=["10.64.3.13"], networks=[{"name": "vmbr1003", "cidr": "10.64.3.0/24"}], ctf_flag_hash=sha("flag-vm-other"),
@@ -320,13 +320,14 @@ def test_the_entry_vm_is_visible_from_the_worms_start_without_a_capture(world):
     assert {n["label"] for n in tl["nodes"]} == {"vm-start", "vm-pivot", "vm-hidden"}
 
 
-@pytest.mark.parametrize("started", ["armed", "preparing"])
-def test_the_entry_vm_stays_hidden_until_the_worm_starts(world, started):
+@pytest.mark.parametrize("state, worm_start", [("preparing", None), ("running", 5), ("running", 0)])
+def test_the_entry_vm_stays_hidden_until_the_attempt_has_finished(world, state, worm_start):
+    """Nothing of an attempt is shown to its team before it has finished, not even where its
+    worm starts: no start time yet, one still to come, or the worm just started."""
     from django.utils import timezone
 
-    # Armed: the start time is known but has not come. Preparing: there is none yet.
-    fields = {"state": started, "worm_start_at": world["now"] + timezone.timedelta(minutes=5) if started == "armed" else None}
-    _entry_never_captured(world, **fields)
+    start = None if worm_start is None else world["now"] + timezone.timedelta(minutes=worm_start)
+    _entry_never_captured(world, state=state, worm_start_at=start)
 
     doc = build(world, audience="team", flows=True)
 
@@ -337,14 +338,6 @@ def test_the_entry_vm_stays_hidden_until_the_worm_starts(world, started):
     text = "\n".join(walk(doc))
     for word in ("vm-hidden", "10.64.2.12", "10.64.2.0/24", str(world["vm"]["vm-hidden"].uuid)):
         assert word not in text, word
-
-
-def test_the_entry_vm_is_visible_at_the_moment_the_worm_starts(world):
-    _entry_never_captured(world, state="armed", worm_start_at=world["now"])
-
-    tl = build(world, audience="team")["timeline"]
-
-    assert tl["run"]["start_vm"] == "vm-hidden"
 
 
 def test_staff_see_everything(world):
@@ -585,8 +578,11 @@ def test_clock(world):
     live = RoundRun.objects.create(round=world["r2"], team=world["a"], position=0, seed=1, state="running",
                                    worm_start_at=now - timezone.timedelta(minutes=3))  # fmt: skip
     RunEvent.objects.create(run=live, ts=now - timezone.timedelta(minutes=4), kind="state", data={"state": "preparing"})
-    running = build(world, rnd="r2", audience="team")
+    running = build(world, rnd="r2", audience="staff")
     assert running["clock"]["t_max"] == running["clock"]["now"] == 180.0
+    # Its team sees nothing of it before it has finished.
+    withheld = build(world, rnd="r2", audience="team")["timeline"]
+    assert withheld["run"]["withheld"] is True and withheld["events"] == []
 
 
 def test_log_records_are_only_the_teams_own_in_the_round(world):

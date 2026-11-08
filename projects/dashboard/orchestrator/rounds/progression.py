@@ -218,7 +218,7 @@ def _live(team, rnd, now, audience, infra, flow_limit):
         # or did only counts once the attempt is over and no failure threw it away.
         zero, tl = run.worm_start_at or run.created_at, _empty_timeline()
         tl["run"] = _run_info(run, zero)
-        tl["run"]["withheld"] = True
+        tl["run"].update(withheld=True, start_vm=None)  # not even where the worm starts
     else:
         zero = run.worm_start_at or run.created_at
         tl = timeline.build(run, flow_limit=flow_limit, infra=infra)

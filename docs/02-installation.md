@@ -180,6 +180,7 @@ Without them the platform has to be rebuilt. Nothing backs up the database ([6](
 | New SSH or 8006 connections time out after the firewall step | §2.4, from an open session or the console |
 | `got timeout`, `zfs create` timed out, storage lock, `Timeout (12s) waiting for privilege escalation prompt` | Run it again (a busy node) |
 | `Warning: sch_htb: quantum of class ... is big` when a devbox starts | Harmless: the kernel's note on the devbox NICs' rate limit. The build starts the devboxes at its end whether it succeeded or not: look for `== setup complete` or the first `fatal:` above |
+| Every dashboard page answers 500 after `worms build dashboard` (`column ... does not exist`) | The code needs a migration only the orchestrator runs: `worms build dashboard -- --limit dashboard,orchestrator,database`. The CLI now refuses this case |
 | `unknown job kind: 'gameplans'` in the orchestrator's journal | The node still runs the old round agent: the build stopped before its playbook. Run `worms build` again |
 | `dataset already exists` | A leftover volume: `pvesm free <storage>:<volume>` |
 | `known_hosts has lines OpenTofu's Proxmox provider cannot read` | Delete the lines it names from `/root/.ssh/known_hosts` |

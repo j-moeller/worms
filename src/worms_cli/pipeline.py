@@ -288,7 +288,19 @@ class Pipeline:
         """The dashboard's code and settings only: its Django play on its VM. No internet
         window, no package steps (pip would hang without internet), so the devboxes keep
         running; the dashboard restarts. Not for a change that adds a table, a role or a
-        grant: that is `worms build provision` (docs/03-manage-py.md)."""
+        grant: only the orchestrator migrates and the database VM grants, so new code
+        would meet an old schema (HTTP 500 on every page). Refused while the database
+        lacks a migration of this checkout, unless the orchestrator and the database are
+        included (docs/03-manage-py.md)."""
+        if "orchestrator" not in self.ansible_args:
+            pending = self.runner.pending_migrations()
+            if pending:
+                raise BuildError(
+                    f"the database lacks {len(pending)} migration(s) of this checkout ({', '.join(pending)}): "
+                    "the dashboard's new code would fail on every page. Migrate with the orchestrator and grant "
+                    "on the database too (no round may be running: the conductor restarts):\n"
+                    "  worms build dashboard -- --limit dashboard,orchestrator,database"
+                )
         self.inventory()
         self._ansible("SetupDbAndDashboard.yml", "--limit", "dashboard", "--skip-tags", "packages")
 

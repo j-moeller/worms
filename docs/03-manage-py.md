@@ -120,7 +120,7 @@ Source: [`pipeline.py`](../src/worms_cli/pipeline.py).
 | `inventory`, `show-config` | Regenerates the Ansible inventory / prints the hosts Ansible will contact |
 | `configure` | The 14 playbooks, **without** the internet window, rollback or snapshot |
 | `provision` | `configure` wrapped like `all`: rollback, window, offline, snapshot. Use it after a rotation or a code change |
-| `dashboard` | Redeploys the dashboard VM only (`SetupDbAndDashboard.yml --limit dashboard --skip-tags packages`). Devboxes keep running. Not for a new table, role or grant |
+| `dashboard` | Redeploys the dashboard VM only (`SetupDbAndDashboard.yml --limit dashboard --skip-tags packages`). Devboxes keep running. Only the orchestrator migrates and the database VM grants: it refuses while the database lacks a migration of the checkout ([`build.py`](../src/worms_cli/build.py), `pending_migrations`). Then `worms build dashboard -- --limit dashboard,orchestrator,database` (the last `--limit` wins; the conductor restarts, so not during a round) |
 | `offline` | `SetupDNS` and `SetupPrivateInternet` in offline mode |
 | `internet-allow`, `internet-deny` | Opens or closes the internet window by hand |
 | `round-reset-services` | Rolls the 11 service VMs back to `clean` (refused while a sandbox exists) |

@@ -28,6 +28,21 @@ class Runner:
         self.session = for_config(config)
         self._node_ready = False
 
+    def pending_migrations(self) -> list[str]:
+        """The checkout's Django migrations the deployed database has not applied (read
+        with the CLI's database access, django_setup)."""
+        from worms_cli import django_setup
+
+        try:
+            django_setup.setup(self.config)
+        except django_setup.NotConfigured as exc:
+            raise BuildError(f"cannot check the database's migrations: {exc}") from None
+        from django.db import connection
+        from django.db.migrations.executor import MigrationExecutor
+
+        executor = MigrationExecutor(connection)
+        return [f"{m.app_label}.{m.name}" for m, _ in executor.migration_plan(executor.loader.graph.leaf_nodes())]
+
     def _run(self, argv, label: str, where: str, env, check: bool, quiet: bool) -> int:
         if not quiet:
             label = label if len(label) < 100 else label[:97] + "..."

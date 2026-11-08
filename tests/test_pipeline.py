@@ -63,6 +63,9 @@ class Recorder:
         self.config = config
         self.calls = []
 
+    def pending_migrations(self):
+        return []  # the deployed database is up to date
+
     def vms(self):
         return Recorder.node_vms
 

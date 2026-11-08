@@ -247,7 +247,7 @@ PYTHONPATH=src python3 -c "from gameplan import loader, runtime; print(runtime.v
 
 As of 2026-11-08. The gameplan rework is uncommitted and not yet deployed.
 
-- **Testing.** No round has run on a real node yet. `tests/test_rounds.py` and several dashboard tests still test the old conductor.
+- **Testing.** No round has run on a real node yet. The conductor's tests run it against a fake Proxmox and a fake round agent ([`tests/test_rounds.py`](../tests/test_rounds.py)).
 - **Shared services.** The service VMs are rolled back only when a sandbox is built, i.e. the first attempt of a round. What one team's worm does to them stays for later attempts.
 - **Operations.**
   - Nothing clears a failed-teardown hold.

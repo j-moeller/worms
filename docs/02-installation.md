@@ -178,7 +178,9 @@ Without them the platform has to be rebuilt. Nothing backs up the database ([6](
 | `PROXMOX_VE_SSH_... is set in your environment` | `unset` it |
 | tofu cannot find a `.qcow2`; errors about `snippets`, `import`, `local-zfs-sandbox` | §2.5, §2.3 |
 | New SSH or 8006 connections time out after the firewall step | §2.4, from an open session or the console |
-| `got timeout`, `zfs create` timed out, storage lock | Run it again |
+| `got timeout`, `zfs create` timed out, storage lock, `Timeout (12s) waiting for privilege escalation prompt` | Run it again (a busy node) |
+| `Warning: sch_htb: quantum of class ... is big` when a devbox starts | Harmless: the kernel's note on the devbox NICs' rate limit. The build starts the devboxes at its end whether it succeeded or not: look for `== setup complete` or the first `fatal:` above |
+| `unknown job kind: 'gameplans'` in the orchestrator's journal | The node still runs the old round agent: the build stopped before its playbook. Run `worms build` again |
 | `dataset already exists` | A leftover volume: `pvesm free <storage>:<volume>` |
 | `known_hosts has lines OpenTofu's Proxmox provider cannot read` | Delete the lines it names from `/root/.ssh/known_hosts` |
 | `Run Django migrations` fails, output hidden | `worms build provision -- --limit orchestrator -e hide_secrets=false` (prints secrets) |

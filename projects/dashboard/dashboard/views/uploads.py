@@ -144,7 +144,7 @@ def download(request: HttpRequest, team: Team, content_hash: str):
 def _check_zip(uploaded) -> str | None:
     """Why this file cannot run as a worm, or None. The round agent unpacks
     the zip and starts `bash main.sh` from its top level
-    (docs/worm-contract.md)."""
+    (docs/08-user-guide.md)."""
     uploaded.seek(0)
     try:
         with zipfile.ZipFile(uploaded) as archive:

@@ -4,7 +4,7 @@ Staff create student accounts one by one or from a CSV (core/accounts.py),
 reset a forgotten password to a new one-time password, deactivate an account,
 and put a user into a team. A one-time password is shown once, in the
 response to the request that made it (never stored, never cached). Each reset
-is recorded in password_resets (docs/accounts.md).
+is recorded in password_resets (docs/07-security.md).
 
 Staff accounts are not made here: the dashboard's database role cannot create
 or promote one (setup_db_permissions); `worms admin create-staff` on the

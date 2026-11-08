@@ -10,7 +10,7 @@
 # distinct per-team address for each devbox-gw. So one team's devbox cannot
 # spend the round's (or another team's) request/connection budget here; the
 # per-team application buckets and the per-VM host limits sit behind this
-# (docs/security-assessment.md, S5).
+# (docs/07-security.md, S5).
 limit_req_zone $binary_remote_addr zone=sandbox_api_req:1m rate={{ sandbox_api_nginx_rate_per_second }}r/s;
 limit_conn_zone $binary_remote_addr zone=sandbox_api_conn:1m;
 
@@ -53,7 +53,7 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto https;
         # The real client (the sandbox-gw / per-team devbox-gw SNAT source).
-        # The app maps a known devbox-gw address to its team (docs/devbox.md).
+        # The app maps a known devbox-gw address to its team (docs/04-dev-environment.md).
         proxy_set_header X-Client-IP $remote_addr;
         proxy_connect_timeout 2s;
         proxy_send_timeout 10s;

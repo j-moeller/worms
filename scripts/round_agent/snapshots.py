@@ -2,7 +2,7 @@
 
 A round's sandbox is built once and every team's run starts from its snapshot; a devbox reset
 rolls the team's three VMs back; a new round's sandbox is built on service VMs rolled back to
-the snapshot `worms build` took of them (src/worms_cli/pipeline.py takes those). docs/rounds.md.
+the snapshot `worms build` took of them (src/worms_cli/pipeline.py takes those). docs/05-live-environment.md.
 
 A snapshot is only as clean as the moment it is taken. Team code is assumed hostile and root
 on its VM, so every snapshot here is taken before any team code or team key has reached the

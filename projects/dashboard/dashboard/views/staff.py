@@ -5,7 +5,7 @@ Only database records are managed here -- accounts, teams, the registration
 window, round definitions -- with the dashboard's own, column-scoped
 database role (setup_db_permissions). Nothing here builds or changes
 infrastructure: the sandboxes of a round are built by the round agent on the
-Proxmox host when the round starts (docs/rounds.md), devboxes are provisioned
+Proxmox host when the round starts (docs/05-live-environment.md), devboxes are provisioned
 from the console (`worms devbox provision`), and the platform itself with
 `worms build`.
 """

@@ -10,7 +10,7 @@ django_db_user: django_dashboard
 django_db_password: "{{ vault_django_dashboard_password }}"
 django_secret_key: "{{ vault_dashboard_secret_key }}"
 django_allowed_hosts: "{{ tls_dns_name }}"
-# The team API (/api/v1/, docs/team_api.md) is served here, rate-limited by nginx.
+# The team API (/api/v1/, docs/08-user-guide.md) is served here, rate-limited by nginx.
 nginx_team_api: true
 # Sign-in attempts per client address (staff pages are on this site too).
 nginx_login_rate: 10r/m

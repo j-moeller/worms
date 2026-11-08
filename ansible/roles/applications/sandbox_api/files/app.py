@@ -61,7 +61,7 @@ TEAM_BAN_SECONDS = env_int("TEAM_BAN_SECONDS", 300)
 # The round agent writes the running team's uuid here at deploy; read per
 # request (cached by mtime). No file / empty => no active round.
 CURRENT_TEAM_FILE = os.environ.get("CURRENT_TEAM_FILE", "/etc/sandbox-api/current-team")
-# Devbox attribution (docs/devbox.md): `<source-ip> <team-uuid>` per line,
+# Devbox attribution (docs/04-dev-environment.md): `<source-ip> <team-uuid>` per line,
 # written when devboxes are provisioned. A request whose source address (the
 # team's ipfilter-pinned devbox gateway) is listed is a DEVBOX submission for
 # that team -- attributed by address, concurrent with and independent of the

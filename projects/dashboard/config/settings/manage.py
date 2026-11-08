@@ -7,7 +7,7 @@ and we never duplicate its schema or the leaderboard formula in the CLI.
 Both apps are installed (every model is available) and the database connection
 comes from the environment (WORMS_DB_* / DB_*): the CLI sets it from the vault
 (the admin role; from a laptop through an SSH tunnel via the node), or from
-explicit WORMS_DB_* settings; see docs/management.md.
+explicit WORMS_DB_* settings; see docs/03-manage-py.md.
 """
 
 import os

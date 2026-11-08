@@ -168,7 +168,7 @@ class Platform:
         return bad
 
     def mirror_filters_on_devbox_ports(self) -> int:
-        """Devbox traffic is not mirrored to the monitor, by design (docs/monitoring.md)."""
+        """Devbox traffic is not mirrored to the monitor, by design (docs/06-background-processes.md)."""
         filters = 0
         for port in Path("/sys/class/net").iterdir():
             if not re.match(r"(tap|fwpr)\d+", port.name) or not (port / "master").exists():
@@ -182,7 +182,7 @@ class Platform:
 
     def browser(self, action: str, **fields) -> dict:
         if not self.node_bin:
-            raise RuntimeError("Node.js with Playwright is needed (docs/testing.md)")
+            raise RuntimeError("Node.js with Playwright is needed (docs/03-manage-py.md)")
         request = {
             "action": action, "public_name": self.public_name, "dashboard_ip": self.dashboard_ip,
             "out": str(self.out), "login_spacing_ms": LOGIN_SPACING_MS, **fields,
@@ -254,7 +254,7 @@ def _quote(text: str) -> str:
 
 
 class Report:
-    """The protocol of a run, in the same form as docs/archive/e2e-run-*/protocol.md: written after
+    """The protocol of a run, in the same form as the run protocols once kept in docs/archive/ (git history): written after
     every row, so a run that dies still leaves everything so far."""
 
     def __init__(self, out: Path):

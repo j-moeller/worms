@@ -1,7 +1,7 @@
 ---
 # Configure the trusted devbox SSH gateway: write the per-team confined
 # authorized_keys (restrict + port-forwarding + permitopen to each team's own
-# devbox VMs). The hardened sshd itself is set by cloud-init. See docs/devbox.md.
+# devbox VMs). The hardened sshd itself is set by cloud-init. See docs/04-dev-environment.md.
 
 # A VM that was just built refuses SSH until it has booted, and gathering facts
 # would then fail before the wait for cloud-init below can run.

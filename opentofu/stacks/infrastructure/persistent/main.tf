@@ -3,7 +3,7 @@ terraform {
     proxmox = {
       source = "bpg/proxmox"
       # The version each stack has run with on worms-dev; a fresh `tofu init`
-      # would otherwise take the newest (docs/fresh-install.md).
+      # would otherwise take the newest (docs/02-installation.md).
       version = "0.113.1"
     }
   }
@@ -59,7 +59,7 @@ locals {
       user_data_file_id = local.platform.cloud_init.postgresql.file_id
       # The whole platform shares this one database. Sized for the monitor's
       # network_flows/network_events and the always-on devbox logs, which grow
-      # for the length of the competition (docs/security-assessment.md, S1/D1).
+      # for the length of the competition (docs/07-security.md, S1/D1).
       disk_size = 100
       nics = [
         { bridge = local.nw.core.name, cidr = "${local.infrastructure_ips.database}/24", gateway = local.host_ips.core },
@@ -75,7 +75,7 @@ locals {
 
     dashboard = {
       user_data_file_id = local.platform.cloud_init.django.file_id
-      ram               = 1024 # gunicorn + nginx; ballooning floor 512 (docs/resources.md)
+      ram               = 1024 # gunicorn + nginx; ballooning floor 512 (docs/01-components.md)
       # The worm uploads live here (dashboard_media_root), up to 2 GiB per team
       # (UPLOAD_TEAM_QUOTA). A larger disk is grown in place; role django_app then grows
       # the filesystem.

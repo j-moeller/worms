@@ -1,4 +1,4 @@
-# SUPERSEDED by worms-mirror (ansible role host_network, docs/monitoring.md).
+# SUPERSEDED by worms-mirror (ansible role host_network, docs/06-background-processes.md).
 # Do not run this script:
 #   * vmbr4 is now the sandbox MANAGEMENT bridge: mirroring into it would copy
 #     the sandbox traffic onto a management network.

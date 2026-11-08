@@ -2,7 +2,7 @@
 
 Staff create, rename and resize teams and move people in and out of them.
 Building a new team's devbox is infrastructure work and stays on the console
-(`worms devbox provision`, docs/devbox.md); this page says when one is
+(`worms devbox provision`, docs/04-dev-environment.md); this page says when one is
 missing. A team is deleted here only while nothing refers to it; a team with
 history (uploads, runs, access tokens, a devbox) is deleted with `worms teams
 delete`, which removes it with everything it owns.

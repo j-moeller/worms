@@ -156,7 +156,7 @@ def test_devbox_reconfigure_needs_the_token(api, team):
 
 def test_devbox_reset_does_not_pile_up_rebuilds(api, team):
     """A second reset while a rebuild is still queued neither enqueues another
-    job nor bumps the version again (docs/security-assessment.md, D2)."""
+    job nor bumps the version again (docs/07-security.md, D2)."""
     from core.models.rounds import HostJob
 
     assert reset(api, team).json()["rebuild_enqueued"] is True

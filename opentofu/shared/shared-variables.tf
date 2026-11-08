@@ -88,11 +88,11 @@ variable "llm_access_ip" {
 # =============================================================================
 locals {
   # Bridge names. vmbr1* is reserved for the generated sandbox networks and
-  # vmbr9* for the generated devbox networks (docs/devbox.md), so the host
+  # vmbr9* for the generated devbox networks (docs/04-dev-environment.md), so the host
   # firewall can match each family with a prefix; infrastructure bridges avoid
   # both. Devbox and sandbox share only the services bridge (both reach
   # scoring/logging/private-internet there, never each other -- see the host
-  # nftables ruleset and docs/devbox.md).
+  # nftables ruleset and docs/04-dev-environment.md).
   bridges = {
     dmz          = "vmbr20"
     core         = "vmbr21"
@@ -208,7 +208,7 @@ locals {
     wikipedia       = { group = "pi_wikipedia", tcp = "8888", udp = null }
   }
 
-  # Trusted SSH gateway (docs/devbox.md): teams reach it (host DNAT) and it
+  # Trusted SSH gateway (docs/04-dev-environment.md): teams reach it (host DNAT) and it
   # jumps them into their own devbox VMs over the port-isolated devbox SSH
   # fabric. It is hardened infrastructure, NOT part of the untrusted devbox.
   ssh_gateway_ips = {

@@ -1,5 +1,5 @@
 ---
-# The trusted devbox SSH gateway (docs/devbox.md). Teams SSH in and ProxyJump
+# The trusted devbox SSH gateway (docs/04-dev-environment.md). Teams SSH in and ProxyJump
 # to their OWN devbox VMs; the gateway forwards only the SSH tty. The hardened
 # sshd is set by cloud-init (ssh-gateway.tftpl); this role manages the per-key
 # authorization, which is what actually confines each team.

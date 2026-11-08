@@ -24,7 +24,7 @@ output "infrastructure" {
     management_ips       = local.management_ips
     private_internet_ips = local.private_internet_ips
     services_ports       = local.private_internet_ports
-    # Devbox (docs/devbox.md): the trusted SSH gateway and the services-bridge
+    # Devbox (docs/04-dev-environment.md): the trusted SSH gateway and the services-bridge
     # block reserved for the per-team devbox gateways' SNAT source.
     ssh_gateway_ips       = local.ssh_gateway_ips
     devbox_services_block = local.devbox_services_block

@@ -1,4 +1,4 @@
-"""The team API (dashboard/api.py, docs/team_api.md) through the dashboard's
+"""The team API (dashboard/api.py, docs/08-user-guide.md) through the dashboard's
 real URL configuration and middleware, against PostgreSQL with the real
 migrations.
 

@@ -71,7 +71,7 @@
 
 # Clients only read: with --restrict-modify root, nobody but root can create
 # users or indexes or upload, and root's password stays in the vault
-# (docs/security-assessment.md, S2). devpi-init leaves root without a password.
+# (docs/07-security.md, S2). devpi-init leaves root without a password.
 - name: Apply the service settings before securing it
   ansible.builtin.meta: flush_handlers
 

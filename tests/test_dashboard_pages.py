@@ -130,7 +130,7 @@ def test_todos_counts_the_runs_that_deploy_an_upload(site, team_upload):  # noqa
 def test_anonymous_requests_create_no_session(site):  # noqa: F811
     """An anonymous, cookie-less request must not write a django_session row:
     the dev/prod toggle is only for logged-in users, and creating a session per
-    request would fill the shared database disk (docs/security-assessment.md, D1).
+    request would fill the shared database disk (docs/07-security.md, D1).
     """
     from django.contrib.sessions.models import Session
 

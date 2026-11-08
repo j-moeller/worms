@@ -58,7 +58,7 @@ resource "proxmox_virtual_environment_vm" "infrastructure" {
   cpu { cores = var.cpu }
   # Ballooning: the host may reclaim down to the floor (ram_min, default
   # half the ceiling) when it is under memory pressure. Lets the node run
-  # more VMs than the sum of their ceilings (docs/resources.md).
+  # more VMs than the sum of their ceilings (docs/01-components.md).
   memory {
     dedicated = var.ram
     floating  = var.ram_min != null ? var.ram_min : max(256, floor(var.ram / 2))
@@ -79,7 +79,7 @@ resource "proxmox_virtual_environment_vm" "infrastructure" {
   # management bridge cannot reach each other at layer 2 (defense in depth behind
   # the per-VM firewall). Left commented because attaching a hookscript needs the
   # provider to act as root@pam; the provisioning API token cannot. Enable when
-  # applying with root@pam credentials (docs/security-assessment.md, S4).
+  # applying with root@pam credentials (docs/07-security.md, S4).
   # hook_script_file_id = var.hookscript_file_id
 
   initialization {

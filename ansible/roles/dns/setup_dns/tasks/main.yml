@@ -58,7 +58,7 @@
 
 # BIND logs every query (see named.conf.options); its own channel bounds the
 # file, so a query flood from a sandbox/devbox cannot fill the disk and take
-# DNS down for everyone (docs/security-assessment.md, S8).
+# DNS down for everyone (docs/07-security.md, S8).
 - name: Create the BIND query-log directory
   ansible.builtin.file:
     path: /var/log/named

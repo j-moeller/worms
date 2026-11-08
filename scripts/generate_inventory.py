@@ -179,7 +179,7 @@ def build_inventory(infrastructure: dict, stacks: dict, sandbox: dict, controlle
     proxmox["api_port"] = int(proxmox["api_port"])
 
     # Addressing (and, for devboxes, the trusted SSH gateway and the services block
-    # reserved for the per-team devbox gateways: docs/devbox.md).
+    # reserved for the per-team devbox gateways: docs/04-dev-environment.md).
     group_vars = {key: infrastructure[key] for key in PLATFORM_KEYS}
     group_vars["proxmox"] = proxmox
 

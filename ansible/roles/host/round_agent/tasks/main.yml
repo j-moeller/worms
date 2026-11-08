@@ -24,7 +24,7 @@
   notify: Restart round agent
   tags: [agent-sync]
 
-# The node's event tables (docs/monitoring.md, "Event tables").
+# The node's event tables (docs/07-security.md, "Audit trail").
 - name: Install the node's events account
   ansible.builtin.template:
     src: events.env.j2

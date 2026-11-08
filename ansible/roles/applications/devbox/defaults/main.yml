@@ -1,5 +1,5 @@
 ---
-# Devbox VM configuration (docs/devbox.md). The VMs are untrusted; this role
+# Devbox VM configuration (docs/04-dev-environment.md). The VMs are untrusted; this role
 # only sets what the team needs: the team's own SSH keys (so they can log in
 # through the gateway) and the usual tools. The internal CA is installed by
 # ca_distribute (SetupDevbox.yml) so a worm can reach scoring/logging over

@@ -47,7 +47,7 @@ def join_team(request: HttpRequest, uuid: uuid.UUID, competition: Competition):
     with transaction.atomic():
         # Lock the user, then the team: two joins at once can neither overfill
         # a team nor put one person into two teams of the competition
-        # (docs/security-assessment.md, D4).
+        # (docs/07-security.md, D4).
         User.objects.select_for_update().get(pk=request.user.pk)
         team = get_object_or_404(Team.objects.select_for_update(), uuid=uuid, competition=competition)
         if TeamMembership.objects.filter(user=request.user, team__competition=competition).exists():
@@ -73,7 +73,7 @@ def leave_team(request: HttpRequest, uuid, competition: Competition):
         messages.error(request, f"You are not in {team.name}.")
         return redirect("team_registration")
     # Removes the keys this member registered and re-pushes the rest, so the
-    # departing member loses devbox access (docs/security-assessment.md).
+    # departing member loses devbox access (docs/07-security.md).
     remove_member(team, request.user)
     events.team("left", request=request, team=team)
     messages.success(request, f"You left {team.name}.")

@@ -19,7 +19,7 @@
 # deleting and recreating ~/.ssh (which it could do if it owned its home). sshd
 # accepts a root-owned home for a non-root user under StrictModes. The account
 # needs no writable home (no shell, no onward known_hosts). See
-# docs/security-assessment.md (S3) and docs/devbox.md.
+# docs/07-security.md (S3) and docs/04-dev-environment.md.
 - name: Lock the team user's home to root (not writable by the team)
   ansible.builtin.file:
     path: "~{{ ssh_gateway_user }}"

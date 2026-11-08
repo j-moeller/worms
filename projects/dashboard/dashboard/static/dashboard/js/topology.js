@@ -1,8 +1,8 @@
 /* The round player: the TOPOLOGY view (staff) and the PROGRESSION page
  * (a team), one script for both. It replays a round progression
- * (orchestrator/rounds/progression.py, docs/progression.md) like a video.
+ * (orchestrator/rounds/progression.py, docs/08-user-guide.md) like a video.
  *
- * Staff (data-audience="staff"; docs/progression.md):
+ * Staff (data-audience="staff"; docs/08-user-guide.md):
  *   data-model        the live infrastructure model (dashboard/infra_view.py)
  *   data-runs         rounds of the current competition and their runs (the tabs)
  *   data-progression  one run's progression; the all-zero uuid in the URL is

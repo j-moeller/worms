@@ -1,5 +1,5 @@
 """Worm uploads end to end on the dashboard side: where the file lands (the
-one directory the round agent reads, docs/rounds.md) and what is accepted.
+one directory the round agent reads, docs/05-live-environment.md) and what is accepted.
 
 The deploy used to have nothing to fetch: MEDIA_ROOT was unset, so Django
 wrote into the service's read-only source tree (and a redeploy's rsync would
@@ -133,7 +133,7 @@ def test_what_cannot_run_is_refused(team_site, data, message):
 
 
 def test_a_team_cannot_store_more_than_its_quota(team_site, monkeypatch):
-    """One team cannot fill the dashboard's disk (docs/security-assessment.md, D11):
+    """One team cannot fill the dashboard's disk (docs/07-security.md, D11):
     what its uploads keep stored is capped, and the same bytes again cost nothing."""
     from django.conf import settings
 

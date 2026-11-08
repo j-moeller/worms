@@ -72,14 +72,14 @@ OPTIONAL = {"topology-token"}
 SUPERSEDED = {"proxmox_api_token"}
 # The WORMS SSH key (generated; `worms secrets set ssh-key` imports one): the
 # one key the platform logs in with, to every VM and to root on the node, used by
-# OpenTofu, Ansible, the CLI and the round agent (docs/accounts.md §4). Never
+# OpenTofu, Ansible, the CLI and the round agent (docs/07-security.md, "Secrets"). Never
 # replaced by a new one once VMs exist: they authorize this one (vms_deployed).
 SSH_KEY = "vault_worms_ssh_key"
 SSH_PUBLIC_KEY = "vault_worms_ssh_public_key"
 
 PROXMOX_TOKEN = re.compile(r"^[^@\s]+@[^!\s]+![^=\s]+=\S+$")
 HEADER = (
-    "# The WORMS vault: every secret of the platform (docs/accounts.md §4).\n"
+    "# The WORMS vault: every secret of the platform (docs/07-security.md#secrets).\n"
     "# Issue the Proxmox tokens with `worms secrets issue <name>`; everything else\n"
     "# is generated when missing and never rotated. Do not edit by hand.\n"
 )

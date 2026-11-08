@@ -41,7 +41,7 @@ def require_token(scope):
 
 
 # ---------------------------------------------------------------------------
-# Devbox reset (dashboard) -- docs/devbox.md
+# Devbox reset (dashboard) -- docs/04-dev-environment.md
 # ---------------------------------------------------------------------------
 
 
@@ -85,7 +85,7 @@ def devbox_reset(request: HttpRequest, team_uuid):
 @require_POST
 def devbox_reconfigure(request: HttpRequest, team_uuid):
     """Re-push every team's SSH keys to the devbox VMs and the gateway without
-    rebuilding any VM (docs/devbox.md): enqueued when a team adds or removes a
+    rebuilding any VM (docs/04-dev-environment.md): enqueued when a team adds or removes a
     key, or leaves. `team_uuid` is the team that triggered it (for logging and
     de-duplication); the job itself carries the whole competition's teams,
     because the gateway's authorized_keys is rewritten wholesale.

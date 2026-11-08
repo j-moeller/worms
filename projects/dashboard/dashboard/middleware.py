@@ -86,7 +86,7 @@ view_as_log = logging.getLogger("dashboard.view_as")
 
 # "View as": the admin sees the dashboard as another user does, read only. The state lives
 # only in the server-side session, under this key, and only dashboard/views/view_as.py sets
-# it. Nothing in a request can name a user to become. See docs/accounts.md.
+# it. Nothing in a request can name a user to become. See docs/07-security.md.
 VIEW_AS_SESSION_KEY = "_view_as"
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # All that can be done while viewing as someone: everything else that is not a read is refused,
@@ -96,7 +96,7 @@ VIEW_AS_ALLOWED_WRITES = frozenset({"view_as_stop", "logout", "set_environment"}
 
 def is_admin(user) -> bool:
     """The dashboard admin: the one superuser. Staff are not. The dashboard's database role
-    cannot set this flag, so no page can grant it (docs/security-assessment.md)."""
+    cannot set this flag, so no page can grant it (docs/07-security.md)."""
     return user.is_authenticated and user.is_active and user.is_superuser
 
 
@@ -168,12 +168,12 @@ class UserMetadataMiddleware:
         # in it: the admin back from viewing as a student, or a student who left their team.
         # Default rather than require the key: EnvironmentTransitionMiddleware only sets it for
         # authenticated users, so reading it must not assume it exists and must not itself create
-        # a session (docs/security-assessment.md, D1). The default is the dev view: a team member
+        # a session (docs/07-security.md, D1). The default is the dev view: a team member
         # first sees their devbox.
         request.is_dev_environment = bool(request.session.get("is_dev_environment", True)) and request.team is not None
 
         if request.is_dev_environment:
-            # The team's devbox: always on, reset by the team, no rounds (docs/devbox.md).
+            # The team's devbox: always on, reset by the team, no rounds (docs/04-dev-environment.md).
             request.rounds = Round.objects.none()
             request.competition_state = CompetitionState("devbox")
         else:
@@ -197,7 +197,7 @@ class EnvironmentTransitionMiddleware:
         # Only authenticated users have a dev/prod view to toggle. Touching the
         # session for anonymous requests would write a django_session row for
         # every cookie-less request (e.g. a crawler or a flood), filling the
-        # shared database disk for no reason (docs/security-assessment.md, D1).
+        # shared database disk for no reason (docs/07-security.md, D1).
         if request.path.startswith(API_PREFIX) or not request.user.is_authenticated:
             return self.get_response(request)
         # Switching between the two views is a POST (views/environment.py),

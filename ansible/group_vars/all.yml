@@ -4,12 +4,12 @@
 # SECRETS LIVE IN group_vars/vault.yml (ansible-vault encrypted) and are
 # referenced here as {{ vault_* }}. There are NO plaintext passwords in this
 # file or anywhere in version control. The `worms` CLI keeps the encrypted
-# vault (src/worms_cli/secrets.py; docs/accounts.md section 4).
+# vault (src/worms_cli/secrets.py; docs/07-security.md section 4).
 # -----------------------------------------------------------------------------
 
 # The one external address sandbox and devbox VMs may send to, on TCP 443: the LLM
 # endpoint, teachllm.mlsec.tu-berlin.de (security group llm-access,
-# docs/security-assessment.md). `worms` passes it to OpenTofu as TF_VAR_llm_access_ip.
+# docs/07-security.md). `worms` passes it to OpenTofu as TF_VAR_llm_access_ip.
 llm_access_ip: 141.23.117.34
 # Its name, the one outside name the private DNS answers (roles/dns/setup_dns).
 llm_access_name: teachllm.mlsec.tu-berlin.de
@@ -92,12 +92,12 @@ postgresql_users:
     password: "{{ vault_dbuser_scoring_password }}"
     cidr: "{{ infrastructure_ips.scoring }}/32"
     conn_limit: 8   # sandbox-facing: bounded (app pool: 4)
-  # Round agent on the Proxmox host (docs/rounds.md): job queue only.
+  # Round agent on the Proxmox host (docs/05-live-environment.md): job queue only.
   - name: round_agent
     password: "{{ vault_round_agent_db_password }}"
     cidr: "{{ proxmox.host }}/32"
     conn_limit: 4
-  # The event tables (core/models/events.py, docs/monitoring.md): one account per
+  # The event tables (core/models/events.py, docs/06-background-processes.md): one account per
   # writing component, used for nothing else, INSERT only. The console writes as
   # the admin.
   - name: dbuser_events_dashboard

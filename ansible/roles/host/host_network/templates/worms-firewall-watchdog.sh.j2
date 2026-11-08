@@ -6,7 +6,7 @@
 # If it is not running, or a running sandbox/devbox VM has no rules in the guest
 # ruleset, hard-stop ALL such VMs (qm stop kills the QEMU process; no guest
 # cooperation needed). Devbox VMs are always-on but just as untrusted as the
-# sandbox, so an uncontained one is stopped too (docs/security-assessment.md).
+# sandbox, so an uncontained one is stopped too (docs/07-security.md).
 # The same while internet access is allowed and any of them runs.
 # Run every {{ host_fw_watchdog_interval }} by worms-firewall-watchdog.timer.
 set -u
@@ -26,7 +26,7 @@ fail() {
     qm stop "$vmid" --skiplock 1 &
   done
   wait
-  # platform_events (docs/monitoring.md): only when VMs were stopped, so a condition that
+  # platform_events (docs/06-background-processes.md): only when VMs were stopped, so a condition that
   # lasts does not add a row every 15 s. Best effort, bounded in time.
   if [ -n "$vms" ] && [ -x "{{ host_audit_command }}" ]; then
     timeout 20 "{{ host_audit_command }}" event watchdog_stopped --data "$(python3 -c \

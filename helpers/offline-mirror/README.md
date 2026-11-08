@@ -1,6 +1,6 @@
 # Offline mirror for the private internet
 
-**This workflow cannot run as written** (`docs/status.md`, private internet). It needs a helper
+**This workflow cannot run as written** (`docs/06-background-processes.md`, "DNS and private internet"). It needs a helper
 client on the services bridge while the internet window is open, and none can exist: only the
 sandbox and devbox gateways and VMs may reach devpi and the registry, the window is refused while
 any of them runs, the private-internet VMs reach only the apt cache, and the node has no address

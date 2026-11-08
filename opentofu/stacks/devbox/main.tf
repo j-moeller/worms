@@ -1,5 +1,5 @@
 # =============================================================================
-# Devbox stack (docs/devbox.md): the team-personalised, always-on clones of the
+# Devbox stack (docs/04-dev-environment.md): the team-personalised, always-on clones of the
 # sandbox VMs, plus the trusted SSH gateway teams use to reach them.
 #
 # Per team (data in generated_devboxes*.tf, written by scripts/generate_devbox.py
@@ -24,7 +24,7 @@ terraform {
     proxmox = {
       source = "bpg/proxmox"
       # The version each stack has run with on worms-dev; a fresh `tofu init`
-      # would otherwise take the newest (docs/fresh-install.md).
+      # would otherwise take the newest (docs/02-installation.md).
       version = "0.118.0"
     }
   }
@@ -192,7 +192,7 @@ module "devbox_vm" {
 
   # Team code is assumed hostile and root on these VMs. This CPU offers no hardware
   # virtualisation, so they get no /dev/kvm and cannot drive the node's nested-KVM code
-  # (docs/security-assessment.md). Never "host" or "max". The same as a sandbox VM.
+  # (docs/07-security.md). Never "host" or "max". The same as a sandbox VM.
   cpu_type = "x86-64-v3"
   # As the operator set it on the running VMs on 2026-11-05.
   ram_min = 512
@@ -276,7 +276,7 @@ resource "proxmox_virtual_environment_vm" "ssh_gateway" {
   cpu { cores = 1 }
   memory {
     dedicated = 512
-    floating  = 256 # ballooning: sshd jump host, reclaimable (docs/resources.md)
+    floating  = 256 # ballooning: sshd jump host, reclaimable (docs/01-components.md)
   }
 
   agent { enabled = false }

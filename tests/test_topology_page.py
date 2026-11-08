@@ -465,7 +465,7 @@ def test_hostile_file_is_contained(replayed):
 # --- the PROGRESSION page: a team's view ------------------------------------------
 
 TEAM_DRIVER = REPO / "tests" / "browser" / "progression_page.js"
-# What a team must never see in its view (docs/progression.md).
+# What a team must never see in its view (docs/08-user-guide.md).
 INTERNALS = ["vmbr", "sandbox-gw", "devbox-gw", "worms-pve", "Proxmox", "database", "orchestrator", "dashboard", "monitor",
              "syslog", "Firewall", "firewall", "Security groups", "Rules", "NICs", "VMID", "10.4.0.", "sandbox-vm2"]
 

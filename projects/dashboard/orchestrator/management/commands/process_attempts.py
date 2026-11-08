@@ -40,7 +40,7 @@ class Command(BaseCommand):
         # Submissions that arrived before their flag's hash was stored.
         flags += captures.process_late_releases(grace_seconds=grace)
         logs = captures.process_logs(grace_seconds=grace)
-        # Devbox attempts (always-on, source-attributed; docs/devbox.md).
+        # Devbox attempts (always-on, source-attributed; docs/04-dev-environment.md).
         dev_flags = captures.process_devbox_flags()
         dev_logs = captures.process_devbox_logs()
         # Reconcile devbox VM records from completed devbox host jobs, so the

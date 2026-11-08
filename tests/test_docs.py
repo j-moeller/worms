@@ -1,9 +1,8 @@
 """The commands the documentation tells you to run: the CLI has to accept them.
 
 The CLI replaced most of the Makefile, and the docs went on naming targets that
-were gone and arguments that were refused, because nothing checked. Dated run logs
-and research notes (docs/archive/) are records of what was typed at the time, and
-stay as they are.
+were gone and arguments that were refused, because nothing checked. The dated run logs that
+were kept in docs/archive/ are in the git history.
 """
 
 from __future__ import annotations

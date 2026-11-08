@@ -35,7 +35,7 @@ variable "cpu_type" {
 
   validation {
     condition     = !contains(["host", "max"], var.cpu_type)
-    error_message = "A team's VM must not get hardware virtualisation: no /dev/kvm (docs/security-assessment.md)."
+    error_message = "A team's VM must not get hardware virtualisation: no /dev/kvm (docs/07-security.md)."
   }
 }
 

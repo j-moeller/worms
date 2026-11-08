@@ -3,7 +3,7 @@ terraform {
     proxmox = {
       source = "bpg/proxmox"
       # The version each stack has run with on worms-dev; a fresh `tofu init`
-      # would otherwise take the newest (docs/fresh-install.md).
+      # would otherwise take the newest (docs/02-installation.md).
       version = "0.113.1"
     }
   }
@@ -63,7 +63,7 @@ module "dns" {
   proxmox_instance            = var.proxmox_instance
   name                        = "dns"
   cpu                         = 1
-  ram                         = 512 # bind9; ballooning floor 256 (docs/resources.md)
+  ram                         = 512 # bind9; ballooning floor 256 (docs/01-components.md)
   network_cidr                = "${local.services_ips.dns}/24"
   maintenance_network_cidr    = "${local.management_ips.dns}/24"
   maintenance_network_gateway = local.host_ips.mgmt_exposed
@@ -88,7 +88,7 @@ module "sandbox_apis" {
   source = "../../../modules/infrastructure_vm"
 
   for_each = toset(["scoring", "logging"])
-  ram      = 512 # Flask (1 worker) + nginx; ballooning floor 256 (docs/resources.md)
+  ram      = 512 # Flask (1 worker) + nginx; ballooning floor 256 (docs/01-components.md)
 
   proxmox_instance = var.proxmox_instance
   name             = each.key
@@ -100,7 +100,7 @@ module "sandbox_apis" {
   firewall_rules = [
     { group = local.sg.sandbox_api, iface = "net0" },
     # Devbox submissions arrive on the same services NIC, from the per-team
-    # devbox gateways' SNAT block (docs/devbox.md).
+    # devbox gateways' SNAT block (docs/04-dev-environment.md).
     { group = local.sg.devbox_api, iface = "net0" },
     { group = local.sg.db_client, iface = "net1" },
     { group = local.sg.provisioning, iface = "net1" },

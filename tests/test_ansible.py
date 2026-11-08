@@ -242,7 +242,7 @@ def test_a_team_key_can_jump_through_the_ssh_gateway_but_run_nothing(render):
 
 def test_a_code_deploy_can_skip_everything_that_needs_the_internet():
     """With devboxes up the internet window stays closed, and pip then hangs for minutes
-    (docs/management.md). `--skip-tags packages` must leave out every package step."""
+    (docs/03-manage-py.md). `--skip-tags packages` must leave out every package step."""
     tasks = yaml.safe_load((ANSIBLE / "roles/applications/django_app/tasks/main.yml").read_text())
     installers = [t for t in tasks if "ansible.builtin.pip" in t or "ansible.builtin.apt" in t]
     assert len(installers) == 3
@@ -289,7 +289,7 @@ def test_devpi_only_lets_root_modify_and_root_has_a_generated_password(render):
 
 
 def test_the_node_turns_nesting_off_for_every_vm():
-    """The second lock behind the team VMs' CPU type (docs/security-assessment.md)."""
+    """The second lock behind the team VMs' CPU type (docs/07-security.md)."""
     tasks = yaml.safe_load((ANSIBLE / "roles/host/host_network/tasks/main.yml").read_text())
     task = next(t for t in tasks if t["name"] == "Turn off nested virtualisation")
     content = task["ansible.builtin.copy"]["content"]
@@ -345,7 +345,7 @@ def test_host_firewall_publishes_the_devbox_ssh_gateway(render, tmp_path):
     """With the devbox SSH gateway published, the host DNATs teams to it and
     SNATs that same connection to its own fabric address, so the gateway sees
     only the host as the SSH source -- a devbox VM on vmbr7 cannot pose as a
-    team to it (docs/security-assessment.md, devbox isolation)."""
+    team to it (docs/07-security.md, devbox isolation)."""
     require("nft")
     inventory = yaml.safe_load((ANSIBLE / "inventory.yml").read_text())
     assert inventory["all"]["children"]["proxmox_host"]["hosts"]["proxmox.local"]["host_publish_ssh_gateway"] is True
@@ -487,7 +487,7 @@ NGINX_DJANGO = "ansible/roles/web/nginx_tls_django"
 
 
 def test_dashboard_nginx_rate_limits_the_team_api(render):
-    """The team API (docs/team_api.md) is rate-limited by nginx per client
+    """The team API (docs/08-user-guide.md) is rate-limited by nginx per client
     address and per token, GET only, before Django -- on the dashboard only."""
     dashboard = yaml.safe_load((REPO / "ansible" / "group_vars" / "dashboard.yml").read_text())
     orchestrator = yaml.safe_load((REPO / "ansible" / "group_vars" / "orchestrator.yml").read_text())
@@ -529,7 +529,7 @@ def test_dashboard_nginx_limits_sign_ins(render, tmp_path):
 def test_sandbox_api_nginx_limits_are_per_source(render):
     """The sandbox API's nginx limits are keyed on the source address (the SNAT
     gateway), so one team's devbox-gw cannot spend the round's (sandbox-gw's) or
-    another team's budget (docs/security-assessment.md, S5)."""
+    another team's budget (docs/07-security.md, S5)."""
     conf = render("ansible/roles/applications/sandbox_api", "nginx-site.j2", tls_dns_name="scoring.worms.internal")
     assert "limit_req_zone $binary_remote_addr zone=sandbox_api_req" in conf
     assert "limit_conn_zone $binary_remote_addr zone=sandbox_api_conn" in conf

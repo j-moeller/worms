@@ -1,4 +1,4 @@
-# One devbox VM (A/B/C) or a per-team devbox gateway (docs/devbox.md). Same
+# One devbox VM (A/B/C) or a per-team devbox gateway (docs/04-dev-environment.md). Same
 # containment as a sandbox VM (own storage, CPU/NIC/disk caps, no guest agent,
 # SSH-only, hard stop) with ipfilter pinning every NIC to its own address.
 #
@@ -43,7 +43,7 @@ resource "proxmox_virtual_environment_vm" "vm" {
     units = var.limits.cpu_units
     type  = var.cpu_type
   }
-  # Ballooning (docs/resources.md): reclaimable down to ram_min under pressure.
+  # Ballooning (docs/01-components.md): reclaimable down to ram_min under pressure.
   memory {
     dedicated = var.ram
     floating  = var.ram_min
@@ -61,7 +61,7 @@ resource "proxmox_virtual_environment_vm" "vm" {
   # cannot reach each other at layer 2 -- only the gateway and the host. Left
   # commented because attaching a hookscript needs the provider to act as
   # root@pam; the provisioning API token cannot. Enable when applying with
-  # root@pam credentials (docs/security-assessment.md, S4; docs/devbox.md).
+  # root@pam credentials (docs/07-security.md, S4; docs/04-dev-environment.md).
   # hook_script_file_id = var.hookscript_file_id
 
   initialization {

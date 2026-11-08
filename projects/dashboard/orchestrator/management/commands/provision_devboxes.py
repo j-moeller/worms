@@ -1,4 +1,4 @@
-"""Provision every team's devbox (docs/devbox.md).
+"""Provision every team's devbox (docs/04-dev-environment.md).
 
 Ensures each team of the current competition has a Devbox row with a stable
 index and services-source address, then enqueues a single devbox_provision

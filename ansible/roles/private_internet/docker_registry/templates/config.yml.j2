@@ -6,7 +6,7 @@ storage:
     rootdirectory: {{ docker_registry_data_dir }}
 {% if not (internet_enabled | bool) %}
   # Filled while internet access is allowed; read-only from then on: a client
-  # cannot plant an image for later rounds (docs/security-assessment.md, S2).
+  # cannot plant an image for later rounds (docs/07-security.md, S2).
   maintenance:
     readonly:
       enabled: true

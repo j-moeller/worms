@@ -3,11 +3,11 @@ students' own join/leave (dashboard/views/teams.py) and the staff pages
 (dashboard/views/staff_teams.py, staff_users.py).
 
 A member who leaves or is removed loses the devbox SSH keys they registered,
-and the remaining keys are re-pushed (docs/devbox.md), so their access ends.
+and the remaining keys are re-pushed (docs/04-dev-environment.md), so their access ends.
 The re-push goes through the orchestrator (the dashboard cannot enqueue host
 jobs) and is best effort: the next provision or reset repeats it. Building a
 devbox for a new team is infrastructure work and is not done from here: the
-operator runs `worms devbox provision` (docs/devbox.md).
+operator runs `worms devbox provision` (docs/04-dev-environment.md).
 """
 
 from __future__ import annotations

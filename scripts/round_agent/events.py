@@ -1,6 +1,6 @@
 """The node's event tables: SSH logins through the devbox gateway
 (ssh_gateway_logins), and the internet window and the firewall watchdog
-(platform_events). docs/monitoring.md, "Event tables"; the dashboard writes its
+(platform_events). docs/07-security.md, "Audit trail"; the dashboard writes its
 own (projects/dashboard/core/events.py).
 
     worms-audit event internet_allowed [--data '{"by": "Internet.yml"}'] [--actor NAME]

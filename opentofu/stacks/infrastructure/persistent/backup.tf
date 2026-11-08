@@ -1,4 +1,4 @@
-# Nightly backups of the VMs that hold state (docs/backup.md). A first version,
+# Nightly backups of the VMs that hold state (docs/06-background-processes.md). A first version,
 # off by default: it is created only when backup_storage names a Proxmox storage
 # with the `backup` content type, e.g. `local` (/var/lib/vz/dump):
 #
@@ -8,7 +8,7 @@
 # a snapshot backup of a running VM is crash-consistent: PostgreSQL recovers
 # from it as from a power cut. A storage on the node's own pool only protects
 # against mistakes (a wipe, a bad migration), not against losing the disk:
-# copy the dumps off the node as well (docs/backup.md).
+# copy the dumps off the node as well (docs/06-background-processes.md).
 
 variable "backup_storage" {
   description = "Proxmox storage for the nightly backups of the stateful VMs; empty = no backup job."

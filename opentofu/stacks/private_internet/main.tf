@@ -3,7 +3,7 @@ terraform {
     proxmox = {
       source = "bpg/proxmox"
       # The version each stack has run with on worms-dev; a fresh `tofu init`
-      # would otherwise take the newest (docs/fresh-install.md).
+      # would otherwise take the newest (docs/02-installation.md).
       version = "0.113.1"
     }
   }
@@ -131,7 +131,7 @@ locals {
     wikipedia = {
       cpu               = 1
       cpu_type          = null
-      ram               = 1024 # kiwix-serve mmaps the ZIM; ballooning floor 512 (docs/resources.md)
+      ram               = 1024 # kiwix-serve mmaps the ZIM; ballooning floor 512 (docs/01-components.md)
       disk_size         = 5
       data_disk_size    = 20
       user_data_file_id = local.platform.cloud_init.wikipedia.file_id

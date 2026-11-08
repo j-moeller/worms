@@ -1,4 +1,4 @@
-"""Reconcile the database from completed devbox host jobs (docs/devbox.md).
+"""Reconcile the database from completed devbox host jobs (docs/04-dev-environment.md).
 
 The round agent builds the devboxes (devbox_provision / devbox_rebuild host
 jobs) and reports the result (the VMs, their SSH-fabric addresses, the per-team
@@ -65,7 +65,7 @@ def request_rebuild(team):
     without deleting any records) and enqueue a rebuild host job, which rebuilds its VMs and
     rewrites their tokens. Returns (job, enqueued). Rebuilds never pile up: if one is queued or
     running, that one comes back with enqueued False and the version stays
-    (docs/security-assessment.md, D2). Without a devbox there is nothing to rebuild: (None,
+    (docs/07-security.md, D2). Without a devbox there is nothing to rebuild: (None,
     False), with the version bumped all the same, as a reset always did.
 
     A rebuild carries every team's keys, so it takes the devbox-job queue lock that key

@@ -336,7 +336,7 @@ def test_failed_prepare_job_fails_the_run_without_teardown(one_run):
 
 def test_next_run_waits_for_the_previous_teardown(one_run):
     """A failed run tears its sandbox down asynchronously; the next run must not
-    build over it until that teardown has completed (docs/security-assessment.md,
+    build over it until that teardown has completed (docs/07-security.md,
     S7)."""
     from core.models.competition import Round
     from core.models.rounds import HostJob, RoundRun
@@ -706,7 +706,7 @@ def test_attempt_processing_commands(one_run, command):
     assert FlagCapture.objects.filter(team=one_run["team"], vm=vm).count() == 1
 
 
-# --- deploy timing, failure, late releases (docs/rounds.md) ------------------------
+# --- deploy timing, failure, late releases (docs/05-live-environment.md) ------------------------
 
 
 def _to_deploying(conductor, run):

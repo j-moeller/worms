@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# A minimal WORMS worm (docs/worm-contract.md).
+# A minimal WORMS worm (docs/08-user-guide.md).
 #
 # Rename to main.sh, zip it, upload it on the dashboard. It runs as `bash main.sh`
 # in /home/debian/worm on a sandbox VM, as the `debian` user. This one reads its own

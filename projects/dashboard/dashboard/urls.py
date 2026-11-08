@@ -34,7 +34,7 @@ urlpatterns = [
     #
     path("admin/", admin.site.urls),
     #
-    # A team's rounds, replayed (docs/progression.md).
+    # A team's rounds, replayed (docs/08-user-guide.md).
     path("progression/", progression.progression_page, name="progression"),
     path("progression/rounds/", progression.team_rounds, name="progression_rounds"),
     path("progression/rounds/<int:round_id>/", progression.team_document, name="progression_data"),
@@ -71,7 +71,7 @@ urlpatterns = [
     path("rounds/<uuid:uuid>/progression/flows/", progression.run_flows, name="run_progression_flows"),
     path("rounds/<uuid:uuid>/progression/logs/<uuid:ref>/", progression.run_log, name="run_progression_log"),
     path("rounds/<uuid:uuid>/progression/download/", progression.run_download, name="run_progression_download"),
-    # Team API (bearer token; docs/team_api.md).
+    # Team API (bearer token; docs/08-user-guide.md).
     path("api/v1/rounds/", api.rounds, name="api_rounds"),
     path("api/v1/rounds/<int:round_id>/scoring/", api.round_scoring, name="api_round_scoring"),
     path("api/v1/rounds/<int:round_id>/logging/", api.round_logging, name="api_round_logging"),

@@ -31,7 +31,7 @@ def setup(config) -> None:
     if not db_env:
         raise NotConfigured(
             "no database configured: no vault in this checkout (set WORMS_SSH=root@<node> "
-            "in ~/.worms/config, then `worms secrets`). See docs/management.md."
+            "in ~/.worms/config, then `worms secrets`). See docs/03-manage-py.md."
         )
 
     dashboard_src = config.repo_root / "projects" / "dashboard"
@@ -54,7 +54,7 @@ def setup(config) -> None:
     except ModuleNotFoundError as exc:  # pragma: no cover
         raise NotConfigured(
             "Django is not installed in this environment (pip install django "
-            "psycopg2-binary). See docs/management.md."
+            "psycopg2-binary). See docs/03-manage-py.md."
         ) from exc
 
     django.setup()

@@ -42,7 +42,7 @@ all:
     monitor:
     sandbox_gw:
     sandbox:
-    # Devbox (docs/devbox.md): the untrusted per-team VMs, their per-team
+    # Devbox (docs/04-dev-environment.md): the untrusted per-team VMs, their per-team
     # gateways, and the trusted shared SSH gateway.
     devbox:
     devbox_gw:

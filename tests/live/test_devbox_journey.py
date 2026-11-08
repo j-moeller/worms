@@ -7,13 +7,13 @@
     a user resets the devbox and signs in again: everything they changed is gone.
 
 It needs a deployed platform on the Proxmox node, and it takes about an hour and a half, so it runs
-only with --live (docs/testing.md):
+only with --live (docs/03-manage-py.md):
 
     .venv-test/bin/pytest tests/live --live
 
 It writes a protocol and screenshots to --live-out, and never a password. The steps build on
 each other: a step whose prerequisite failed is skipped and says so. It leaves the teams and
-devboxes in place to look at; docs/testing.md says how to get back to the base state.
+devboxes in place to look at; docs/03-manage-py.md says how to get back to the base state.
 """
 
 from __future__ import annotations
@@ -226,7 +226,7 @@ def test_04_admin_builds_devboxes(journey):
         job = wait_for("the devbox build", finished, BUILD_TIMEOUT)
         if job["state"] == "done" or "got timeout" not in (job["error"] or ""):
             break
-        # A known fault on this disk (F5 in docs/archive/e2e-run-2026-11-03/protocol.md), for which the
+        # A known fault on this disk (F5 in the 2026-11-03 run protocol, docs/archive/ in the git history), for which the
         # documented answer is to run it again. Reported, but it does not fail the journey.
         journey.report.row(f"Attempt {attempt} hit the `zfs create` timeout", "Known fault, F5: retry", (job["error"] or "")[-160:], True)
     check("The build job", "Done", f"{job['state']} on attempt {attempt}, from {job['started_at']} to {job['finished_at']} {job['error'] or ''}", job["state"] == "done")
@@ -383,7 +383,7 @@ def test_10_database_holds_what_an_administrator_expects(journey):
         check(f"Database: `{team}`", "3 keys, 3 captures and 3 logs at version 1", f"keys {t['ssh_keys']}, captures {t['captures']}, logs {t['logs']}", t["ssh_keys"] == 3 and t["captures"] == {"1": 3} and t["logs"] == {"1": 3})
     jobs = {j["kind"] for j in db["jobs"]}
     check("Database: host jobs", "The build and the key pushes", sorted(jobs), {"devbox_provision", "devbox_reconfigure"} <= jobs)
-    # Devbox bridges are not mirrored, by design (docs/monitoring.md).
+    # Devbox bridges are not mirrored, by design (docs/06-background-processes.md).
     check("Database: `network_flows` on devbox addresses", "None, by design", db["flows_touching_devboxes"], db["flows_touching_devboxes"] == 0)
     check("Node: mirror filters on devbox ports", "None, by design", p.mirror_filters_on_devbox_ports(), p.mirror_filters_on_devbox_ports() == 0)
     heartbeat = db["zeek_heartbeat"]

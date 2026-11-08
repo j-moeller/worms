@@ -89,7 +89,7 @@
     mode: "0640"
     force: false
 
-# Devbox source -> team map (docs/devbox.md). Created empty; the host writes it
+# Devbox source -> team map (docs/04-dev-environment.md). Created empty; the host writes it
 # when devboxes are provisioned. force:false so re-provisioning never clobbers it.
 - name: Create the devbox-teams file
   ansible.builtin.copy:

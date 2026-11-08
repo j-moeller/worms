@@ -2,7 +2,7 @@
 # worms-platform
 #
 # All functionality now lives in the `worms` CLI (src/manage.py); this Makefile
-# is only a thin entry point. See docs/management.md and `worms --help`.
+# is only a thin entry point. See docs/03-manage-py.md and `worms --help`.
 #
 #   make            Build and configure the entire infrastructure end to end
 #                   (idempotent): = `worms build`. Runs on the Proxmox node (or

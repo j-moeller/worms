@@ -10,7 +10,7 @@
 
 # Sandbox and devbox VMs are assumed hostile and rooted. Their CPU type already hides hardware
 # virtualisation from them. This is the second lock: with nesting off, no VM can get it from this
-# node, whatever its config says (docs/security-assessment.md). It applies when the module next
+# node, whatever its config says (docs/07-security.md). It applies when the module next
 # loads, so after a node restart, or with every VM stopped and kvm_intel reloaded.
 - name: Turn off nested virtualisation
   ansible.builtin.copy:
@@ -68,7 +68,7 @@
           Nothing listens on port {{ host_operator_ssh_port }} on this node, and this ruleset
           forwards port 22 from {{ host_wan_interface }} to the devbox SSH gateway: operators
           would lose SSH. Add "Port 22" and "Port {{ host_operator_ssh_port }}" to sshd and allow
-          {{ host_operator_ssh_port }} in the Proxmox firewall first (docs/fresh-install.md, 2.5).
+          {{ host_operator_ssh_port }} in the Proxmox firewall first (docs/02-installation.md, 2.5).
 
 - name: Install nftables ruleset
   ansible.builtin.template:

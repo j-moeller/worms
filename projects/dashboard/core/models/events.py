@@ -1,5 +1,5 @@
 """Event tables for a forensic investigation: who did what, when, from where
-(core/events.py writes them; docs/monitoring.md, "Event tables").
+(core/events.py writes them; docs/07-security.md, "Audit trail").
 
 One table per kind of event, each with the columns that kind needs. Only the
 important events, so they stay small: tens to a few hundred rows a day.

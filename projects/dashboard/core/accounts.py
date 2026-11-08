@@ -4,7 +4,7 @@ and `manage.py create_users`.
 
 Every account is created with a random one-time password and
 `must_change_password`, so the dashboard holds the user on the
-change-password page at the first login (docs/accounts.md). The password is
+change-password page at the first login (docs/07-security.md). The password is
 returned once, to be shown once; only its hash is stored.
 
 Writes use `update_fields`: the public dashboard's database role may only

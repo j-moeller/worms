@@ -10,11 +10,11 @@ host_wan_interface: vmbr0
 host_publish_dashboard: false
 
 # DNAT <WAN>:<ssh_gateway_public_port> -> devbox SSH gateway:22, so teams can
-# reach the gateway and jump into their devbox VMs (docs/devbox.md). Off by
+# reach the gateway and jump into their devbox VMs (docs/04-dev-environment.md). Off by
 # default; turn on where the devbox is deployed.
 host_publish_ssh_gateway: false
 # The node's own sshd for operators. When the gateway takes port 22, the play refuses to
-# publish it unless sshd already listens here (docs/fresh-install.md, 2.5).
+# publish it unless sshd already listens here (docs/02-installation.md, 2.5).
 host_operator_ssh_port: "{{ worms_environment.operator_ssh_port }}"  # group_vars/all.yml: worms_environments
 
 host_nft_file: /etc/worms/worms.nft
@@ -22,7 +22,7 @@ host_nft_file: /etc/worms/worms.nft
 # Internet access for the VMs (tasks/internet.yml, playbook Internet.yml).
 # The flag exists while access is allowed (tmpfs); the sandbox stack checks it.
 host_internet_flag: /run/worms/internet-allowed
-# Records the node's events (role round_agent installs it; docs/monitoring.md).
+# Records the node's events (role round_agent installs it; docs/06-background-processes.md).
 # Missing before the first SetupRoundAgent.yml: then nothing is recorded.
 host_audit_command: /usr/local/sbin/worms-audit
 host_internet_group: /cluster/firewall/groups/provisioning

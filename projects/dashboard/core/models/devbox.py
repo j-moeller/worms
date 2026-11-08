@@ -2,7 +2,7 @@
 
 Each team gets its own three untrusted VMs (A-B, B-C) they can SSH into
 (through a locked-down gateway) and attack freely, separately from the
-competition rounds. See docs/devbox.md.
+competition rounds. See docs/04-dev-environment.md.
 
 Design points reflected here:
 
@@ -18,7 +18,7 @@ Design points reflected here:
   source address of its devbox gateway (`Devbox.services_source_ip`), which is
   ipfilter-pinned, so one team cannot submit as another and devbox traffic
   never interferes with the single running round (which is attributed
-  separately, by the current-team file). See docs/devbox.md.
+  separately, by the current-team file). See docs/04-dev-environment.md.
 """
 
 import base64
@@ -122,7 +122,7 @@ class DevboxSSHKey(models.Model):
     # UNIQUE across every team: the same public key may belong to only one team.
     # sshd matches a key to the first authorized_keys line, so a key shared by
     # two teams would let one inherit the other's gateway confinement and log in
-    # to its VMs (docs/security-assessment.md, D7). A digest keeps the unique
+    # to its VMs (docs/07-security.md, D7). A digest keeps the unique
     # index small whatever the key size. Set from public_key on save().
     key_fingerprint = models.CharField(max_length=64, default="", editable=False)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="devbox_ssh_keys")

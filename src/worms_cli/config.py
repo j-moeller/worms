@@ -12,7 +12,7 @@ A config file is simple `KEY=value` lines (no quoting, `#` comments).
   NO_COLOR            set: no colours in the output
 
 Overrides for development and tests (normally derived from the vault and the
-platform stack; docs/accounts.md §4):
+platform stack; docs/03-manage-py.md):
   WORMS_DB_HOST/PORT/NAME/USER/PASSWORD/SSLMODE/SSLROOTCERT
   WORMS_PROXMOX_USER/TOKEN_NAME/TOKEN_VALUE/NODE/VERIFY_SSL
 """

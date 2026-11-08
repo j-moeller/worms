@@ -1,5 +1,5 @@
 #cloud-config
-# Per-team devbox gateway (docs/devbox.md): routes the team's devbox VMs out to
+# Per-team devbox gateway (docs/04-dev-environment.md): routes the team's devbox VMs out to
 # the services bridge (scoring/logging/private-internet) and SNATs them to this
 # gateway's single services address, which the scoring/logging servers map to
 # the team. Assumed compromised; the authoritative limits are the Proxmox
@@ -68,7 +68,7 @@ write_files:
 %{ for cidr in devbox_segments ~}
           ip saddr ${cidr} ip daddr $SERVICES tcp dport { ${services_tcp_ports} } accept
           ip saddr ${cidr} ip daddr $SERVICES udp dport { ${services_udp_ports} } accept
-          # The only way out: the LLM endpoint, towards the host (docs/security-assessment.md).
+          # The only way out: the LLM endpoint, towards the host (docs/07-security.md).
           ip saddr ${cidr} ip daddr $LLM tcp dport 443 accept
 %{ endfor ~}
         }

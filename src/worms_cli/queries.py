@@ -43,7 +43,7 @@ def competition_overview() -> dict:
 
 
 def run_overview() -> dict:
-    """Round-orchestration run states (docs/rounds.md), if any."""
+    """Round-orchestration run states (docs/05-live-environment.md), if any."""
     from core.models.rounds import HostJob, RoundRun
 
     by_state: dict[str, int] = {}

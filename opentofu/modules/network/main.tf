@@ -46,7 +46,7 @@ locals {
       address = "${var.host_ips.mgmt_sandbox}/${split("/", var.networks.mgmt_sandbox)[1]}"
       comment = "Management (SSH host -> VM) for sandbox VMs and sandbox-gw. Ports isolated."
     }
-    # Devbox (docs/devbox.md). The untrusted devbox VMs and their gateways get
+    # Devbox (docs/04-dev-environment.md). The untrusted devbox VMs and their gateways get
     # their own maintenance bridge, never shared with the infrastructure's.
     mgmt_devbox = {
       address = "${var.host_ips.mgmt_devbox}/${split("/", var.networks.mgmt_devbox)[1]}"

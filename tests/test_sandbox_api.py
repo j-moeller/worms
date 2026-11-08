@@ -154,7 +154,7 @@ def test_devbox_submission_attributed_by_source(database, team, load_app):
 def test_unknown_source_is_refused(database, team, load_app):
     # Fail closed: a source that is neither a known devbox gateway nor the
     # sandbox gateway is refused, never silently attributed to the running
-    # round (docs/security-assessment.md, S5).
+    # round (docs/07-security.md, S5).
     client, _ = load_app(
         "scoring", database.env("dbuser_scoring"),
         team_uuid=team["uuid"], devbox_map={"10.3.64.7": str(uuid.uuid4())},

@@ -1,4 +1,4 @@
-"""The worm contract (docs/worm-contract.md): the sample worm runs under bash and
+"""The worm contract (docs/08-user-guide.md): the sample worm runs under bash and
 what it sends is accepted by the real scoring API, and the dashboard no longer
 tells teams to send a field the servers ignore."""
 
@@ -48,7 +48,7 @@ def run_the_worm(tmp_path) -> list[tuple[str, str]]:
 def test_the_sample_worm_posts_its_flag_and_one_log(tmp_path):
     source = WORM.read_text()
     assert "/etc/worms/flag" in source
-    assert "team_api_token" not in source  # scoring and logging ignore it (docs/rounds.md)
+    assert "team_api_token" not in source  # scoring and logging ignore it (docs/05-live-environment.md)
     (scoring_url, scoring_body), (logging_url, logging_body) = run_the_worm(tmp_path)
     assert scoring_url == "https://scoring.worms.internal/submit"
     assert json.loads(scoring_body) == {"vm_flag": FLAG}

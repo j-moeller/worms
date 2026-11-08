@@ -288,7 +288,7 @@ class Pipeline:
         """The dashboard's code and settings only: its Django play on its VM. No internet
         window, no package steps (pip would hang without internet), so the devboxes keep
         running; the dashboard restarts. Not for a change that adds a table, a role or a
-        grant: that is `worms build provision` (docs/management.md)."""
+        grant: that is `worms build provision` (docs/03-manage-py.md)."""
         self.inventory()
         self._ansible("SetupDbAndDashboard.yml", "--limit", "dashboard", "--skip-tags", "packages")
 

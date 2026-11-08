@@ -1,5 +1,5 @@
 ---
-# Round agent on the Proxmox host (docs/rounds.md). Pulls host_jobs from the
+# Round agent on the Proxmox host (docs/05-live-environment.md). Pulls host_jobs from the
 # database and executes the privileged round operations. Runs as root from its
 # workspace on the node, synced from the controller's checkout
 # (tasks/workspace.yml).
@@ -59,7 +59,7 @@ round_agent_db_password: "{{ vault_round_agent_db_password }}"
 round_agent_db_sslrootcert: "{{ round_agent_repo_root }}/ansible/pki/worms/ca.crt"
 
 # OpenTofu from the agent (sandbox / devbox stacks): the inputs the CLI gives
-# tofu on the controller, from the same vault (docs/accounts.md §4). The WORMS
+# tofu on the controller, from the same vault (docs/02-installation.md, "Controller on a laptop"). The WORMS
 # SSH key (vault) is loaded into an ssh-agent around the service
 # (worms-node-run), because the bpg provider uploads snippets over SSH with
 # `agent = true`; its .pub is what cloud-init puts on the sandbox and devbox
@@ -70,7 +70,7 @@ round_agent_tofu_api_token: "{{ vault_tofu_proxmox_api_token }}"
 round_agent_tofu_node: "{{ proxmox.node }}"
 round_agent_ssh_key: /etc/worms/ssh/worms
 
-# The node's event tables (scripts/round_agent/events.py, docs/monitoring.md):
+# The node's event tables (scripts/round_agent/events.py, docs/06-background-processes.md):
 # `worms-audit event ...` for the internet window and the firewall watchdog, and
 # a timer that records the SSH gateway's team logins, as the node's own events
 # account (not the agent's role), from its own 0600 file. The gateway's address

@@ -240,7 +240,7 @@ def cmd_teams(config, args) -> int:
 def cmd_devbox(config, args) -> int:
     """`worms devbox provision`: give every team of the current competition a
     devbox and enqueue the provision host job; the round agent on the node
-    builds them (docs/devbox.md). Teams are created on the dashboard, which
+    builds them (docs/04-dev-environment.md). Teams are created on the dashboard, which
     builds no infrastructure; run this after adding teams. `worms devbox
     reconfigure`: push what the service VMs and the gateway must know again."""
     if args.devbox_action == "reconfigure":
@@ -321,7 +321,7 @@ def _console() -> str:
 
 def cmd_audit(config, args) -> int:
     """`worms audit`: the event tables as one timeline, newest first. Only the admin reads
-    them: the dashboard's and the node's accounts may only append (docs/monitoring.md)."""
+    them: the dashboard's and the node's accounts may only append (docs/06-background-processes.md)."""
     _with_db(config)
     from worms_cli import queries
 
@@ -338,7 +338,7 @@ def cmd_admin(config, args) -> int:
     admin, printed once here (stdout), never stored (manage.py
     reset_admin_password). `worms admin create-staff EMAIL`: a staff (tutor)
     account with a one-time password -- the public dashboard manages student
-    accounts but cannot create staff (docs/accounts.md)."""
+    accounts but cannot create staff (docs/07-security.md)."""
     _with_db(config)
     from core.models.user import User
     from django.core.management import call_command
@@ -666,7 +666,7 @@ SECTIONS = (
     Section(
         "develop and test",
         "For working on the code. `test` runs offline, anywhere; `simulate` runs on the deployed platform, "
-        "where it creates a test team and removes it afterwards (docs/testing.md).",
+        "where it creates a test team and removes it afterwards (docs/03-manage-py.md).",
         commands=(
             ("test [-- <pytest args>]", "run the offline test suite (.venv-test + pytest)"),
             ("simulate", pipeline.COMPONENTS["simulate"][1]),
@@ -759,8 +759,8 @@ def build_parser() -> argparse.ArgumentParser:
         usage="worms [-h] [--config FILE] <command> ...",
         description=f"{__doc__}\n{_commands_overview()}",
         epilog="Configuration (env or ~/.worms/config, no secrets): src/worms_cli/config.py;\n"
-        "secrets: src/worms_cli/secrets.py; docs/accounts.md §4. Run `worms <command>\n"
-        "--help` for details, and see docs/management.md for how it fits together.",
+        "secrets: src/worms_cli/secrets.py, docs/07-security.md#secrets.\n"
+        "Run `worms <command> --help` for details; docs/03-manage-py.md for the whole.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--config", metavar="FILE", help="path to a KEY=value config file (default ~/.worms/config)")

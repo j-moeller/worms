@@ -3,7 +3,7 @@
 In the development environment (the dev/prod toggle in the nav), the home page
 shows the team's devbox instead of the leaderboard: its VMs, how to connect and
 the reset button. A reset rebuilds the devbox and clears the score by bumping the
-team's devbox version (docs/devbox.md). The profile has the dev score, the reset
+team's devbox version (docs/04-dev-environment.md). The profile has the dev score, the reset
 button too and the SSH keys (the last two are handled here), and the progression
 page has the logs.
 
@@ -129,7 +129,7 @@ def devbox_home(request: HttpRequest, team: Team):
 @user_in_team_required
 def devbox_reset(request: HttpRequest, team: Team):
     """Reset the team's devbox: rebuild its VMs and clear the score by bumping
-    the team's devbox version (docs/devbox.md). The reset goes through the
+    the team's devbox version (docs/04-dev-environment.md). The reset goes through the
     orchestrator (the dashboard role may not bump the version); in DEBUG
     (sqlite, no orchestrator) it bumps locally so the flow is usable. A failure
     is reported to the user instead of being shown as success. It returns to the page
@@ -264,7 +264,7 @@ _SSH_TYPES = (
 # by the round agent as root), so a `{{...}}`/`{%...%}` in the comment would be
 # evaluated there (template injection). The agent's validator enforces the same
 # (scripts/round_agent/validation.py); this is the first gate. See
-# docs/security-assessment.md.
+# docs/07-security.md.
 _SSH_COMMENT = re.compile(r"^[A-Za-z0-9._@/+:,-]{1,200}$")
 
 

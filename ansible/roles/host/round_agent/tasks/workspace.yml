@@ -1,5 +1,5 @@
 ---
-# The round agent's workspace on the node (docs/accounts.md §4): what the agent
+# The round agent's workspace on the node (docs/02-installation.md, "Controller on a laptop"): what the agent
 # runs from -- the sandbox and devbox stacks (their state is the node's and
 # stays here), the OpenTofu modules, the scripts, the CLI and the playbooks it
 # runs -- plus the CA certificate and the platform/firewall state those two

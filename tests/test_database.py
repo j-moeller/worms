@@ -278,7 +278,7 @@ def test_privileges_reapply_cleanly(database, render):
     insert_flow(database, "dbuser_network_monitor", uid="Creapply")
 
 
-# --- round orchestration (docs/rounds.md) -------------------------------------
+# --- round orchestration (docs/05-live-environment.md) -------------------------------------
 
 
 def test_orchestrator_requests_host_jobs_but_cannot_fake_results(database):
@@ -328,7 +328,7 @@ def test_orchestrator_processes_attempts(database):
     denied(database, "django_orchestrator", "DELETE FROM flag_capture_attempts")
 
 
-# --- the event tables (core/models/events.py, docs/monitoring.md) ---------------------------
+# --- the event tables (core/models/events.py, docs/06-background-processes.md) ---------------------------
 
 DASHBOARD_EVENTS = {
     "login_events": ("outcome, username, client_ip, not_recorded_before", ("ok", "someone", "192.0.2.7", 0)),

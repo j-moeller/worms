@@ -74,7 +74,7 @@ resource "proxmox_virtual_environment_vm" "monitor" {
   cpu { cores = var.cpu }
   # Ballooning: the host may reclaim down to the floor (ram_min, default
   # half the ceiling) when it is under memory pressure. Lets the node run
-  # more VMs than the sum of their ceilings (docs/resources.md).
+  # more VMs than the sum of their ceilings (docs/01-components.md).
   memory {
     dedicated = var.ram
     floating  = var.ram_min != null ? var.ram_min : max(256, floor(var.ram / 2))

@@ -303,7 +303,7 @@ def test_leaving_a_team_removes_the_members_keys(site, team_upload, monkeypatch)
 
 def test_devbox_key_fingerprint_is_unique_across_teams(db_clean):
     """The DB itself refuses the same key under two teams (the race-proof guard
-    behind the dashboard's own check; docs/security-assessment.md D7). The
+    behind the dashboard's own check; docs/07-security.md D7). The
     fingerprint ignores the free-text comment."""
     import base64
 

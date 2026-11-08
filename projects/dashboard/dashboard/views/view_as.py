@@ -1,4 +1,4 @@
-"""View as: the admin sees the dashboard as another user does, read only (docs/accounts.md).
+"""View as: the admin sees the dashboard as another user does, read only (docs/07-security.md).
 
 Only these two views change the state, and only the real, active admin can start it. It does
 not sign anyone in: the session stays the admin's, so last_login, the user's own sessions and

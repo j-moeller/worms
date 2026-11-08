@@ -38,7 +38,7 @@ def test_fixture_matches_shared_variables(tofu_copy, tmp_path):
     run("apply", "-auto-approve", "-input=false", *(arg for k, v in inputs.items() for arg in ("-var", f"{k}={v}")))
     fresh = json.loads(run("output", "-json").stdout)["infrastructure"]["value"]
     committed = json.loads((FIXTURES / "platform-outputs.json").read_text())["infrastructure"]["value"]
-    assert fresh == committed, "regenerate tests/fixtures/platform-outputs.json (see docs/testing.md)"
+    assert fresh == committed, "regenerate tests/fixtures/platform-outputs.json (see docs/03-manage-py.md)"
 
 
 def test_format(tofu_copy):
@@ -69,7 +69,7 @@ def test_devbox_ssh_gateway_accepts_ssh_only_from_the_host():
     """The shared SSH gateway shares vmbr7 with every team's devbox VMs. Its
     inbound SSH is pinned to the host's fabric address (teams arrive SNATed to
     it), so a devbox VM cannot open a connection to the gateway even if its own
-    output policy were bypassed (docs/security-assessment.md, devbox isolation).
+    output policy were bypassed (docs/07-security.md, devbox isolation).
     """
     firewall = (OPENTOFU / "stacks" / "firewall" / "main.tf").read_text()
     group = _security_group(firewall, "devbox_ssh_gateway")
@@ -126,7 +126,7 @@ def test_a_devbox_reset_keeps_the_operators_memory_floor():
 def test_no_team_vm_is_offered_hardware_virtualisation():
     """Sandbox and devbox VMs are assumed hostile and rooted. `host` and `max` pass VMX on to them,
     which gives root /dev/kvm and a way into the node's nested-KVM code. Measured on 2026-11-05: with
-    `host`, /dev/kvm opened; with x86-64-v3, kvm_intel refuses to load (docs/security-assessment.md)."""
+    `host`, /dev/kvm opened; with x86-64-v3, kvm_intel refuses to load (docs/07-security.md)."""
     agent = (REPO / "scripts" / "round_agent" / "handlers.py").read_text()
     expected = re.search(r'^TEAM_VM_CPU = "(.+)"$', agent, re.M).group(1)
     assert expected not in {"host", "max"}

@@ -1,5 +1,5 @@
 """An upload in the dev view resets the team's devbox and then runs on VM A
-(orchestrator/rounds/devbox_runs.py, docs/devbox.md), and never enters a round.
+(orchestrator/rounds/devbox_runs.py, docs/04-dev-environment.md), and never enters a round.
 
 The page through the dashboard's real URLs and role, the scheduling as the orchestrator's real
 role, each with its real grants. The agent's part is in test_round_agent.py.

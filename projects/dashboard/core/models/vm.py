@@ -8,7 +8,7 @@ from django.db.models import Q
 
 
 class VirtualMachine(models.Model):
-    """A sandbox VM. With round orchestration (docs/rounds.md) every team run
+    """A sandbox VM. With round orchestration (docs/05-live-environment.md) every team run
     builds its own sandbox, so names, management addresses and Proxmox VMIDs
     repeat across runs: they are unique per run only."""
 

@@ -1,5 +1,5 @@
 """A team's round progression (orchestrator/rounds/progression.py,
-docs/progression.md): the document, what a team may see of it, the Dev
+docs/08-user-guide.md): the document, what a team may see of it, the Dev
 variant, the clock, log records, the zip, and the endpoints that serve it
 (team API, the PROGRESSION page and its data, the staff player's).
 

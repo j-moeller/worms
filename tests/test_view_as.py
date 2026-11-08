@@ -1,4 +1,4 @@
-"""View as: the admin sees the dashboard as another user does, read only (docs/accounts.md).
+"""View as: the admin sees the dashboard as another user does, read only (docs/07-security.md).
 
 The priority is that nobody else can get this, and that it cannot be forged. These tests go
 through the dashboard's real middleware, with CSRF checks on, and try to.

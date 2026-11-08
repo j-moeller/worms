@@ -1,4 +1,4 @@
-"""Writes the event tables (core/models/events.py, docs/monitoring.md, "Event tables").
+"""Writes the event tables (core/models/events.py, docs/07-security.md, "Audit trail").
 
 One function per table. Each writes one row with a plain INSERT: the writing
 accounts may insert but not read (RETURNING would need SELECT), and the

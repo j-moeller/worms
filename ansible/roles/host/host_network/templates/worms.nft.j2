@@ -12,7 +12,7 @@
 #   services or mirror bridges; the host has no address on them.
 # * The one way out for the sandbox and the devboxes: their gateways, from their
 #   own management addresses, to the LLM endpoint on TCP 443 and nowhere else
-#   (docs/security-assessment.md, "LLM endpoint"). Not gated by internet_wan.
+#   (docs/07-security.md, "Firewalls"). Not gated by internet_wan.
 # * INPUT from VM bridges: replies to host-initiated connections (SSH) and
 #   orchestrator -> Proxmox API only.
 # * The mirror bridge is receive-only for the monitor (bridge table below,
@@ -123,7 +123,7 @@ table inet worms {
 {% endif %}
 {% if host_publish_ssh_gateway | default(false) and ssh_gateway_ips.devbox_ssh is defined %}
     # Teams reach the trusted devbox SSH gateway (host DNAT on the WAN). The
-    # gateway jumps them into their own devbox VMs over vmbr7 (docs/devbox.md).
+    # gateway jumps them into their own devbox VMs over vmbr7 (docs/04-dev-environment.md).
     iifname "{{ host_wan_interface }}" oifname "{{ b.devbox_ssh }}" ip daddr {{ ssh_gateway_ips.devbox_ssh }} tcp dport 22 ct status dnat accept comment "internet -> devbox SSH gateway"
 {% endif %}
 
@@ -207,7 +207,7 @@ table bridge worms_bridge {
   }
 
   # Devbox gets its own per-VM rate sets (same limits as sandbox), so devbox
-  # and sandbox never share a rate budget (docs/devbox.md).
+  # and sandbox never share a rate budget (docs/04-dev-environment.md).
   set devbox_services_syn {
     type ipv4_addr
     size 65535
@@ -256,7 +256,7 @@ table bridge worms_bridge {
     # Devbox/sandbox isolation on the shared services bridge: the SNAT sources
     # (sandbox-gw and the per-team devbox gateways) may reach the service VMs,
     # never one another. Without this, two gateways sit in the same services
-    # subnet and could exchange traffic on a services port (docs/devbox.md).
+    # subnet and could exchange traffic on a services port (docs/04-dev-environment.md).
 {% if devbox_services_block %}
     ip saddr { {{ services_ips.sandbox_gw }}, {{ devbox_services_block }} } ip daddr { {{ services_ips.sandbox_gw }}, {{ devbox_services_block }} } counter drop comment "no gateway<->gateway: devbox/sandbox isolation"
 {% endif %}

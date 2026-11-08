@@ -19,7 +19,7 @@ What is faked -- exactly as tests/test_rounds.py fakes it, because there is no
 Proxmox host here -- is the host side: VM power (FakePower) and the round agent
 (fake_agent completes each host job the way the real agent would). The live SSH
 jump onto a devbox and the real tofu/ansible build are the human protocol's job
-(docs/archive/e2e_test_protocol.md); this asserts that every piece of code those steps
+(docs/archive/e2e_test_protocol.md, in the git history); this asserts that every piece of code those steps
 drive is present and wired.
 
 Offline part of `worms test`. DB-backed (django_env/db_clean via the `site`

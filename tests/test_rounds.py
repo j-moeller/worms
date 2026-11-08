@@ -1,17 +1,14 @@
-"""Round orchestration: the game plan generator, the planner and the
-conductor state machine driven end to end against the test database with a
-fake Proxmox (power) and a fake round agent (host jobs).
-
-Nothing here talks to a real Proxmox host; the agent side is simulated exactly
-as the real one behaves, so this exercises the conductor's whole lifecycle,
-the game plan timing, secret release and capture processing.
+"""Round orchestration against the test database: the planner, and the conductor running each
+team's attempt by the round's gameplan (src/gameplan), with a fake Proxmox (power) and a fake
+round agent that answers host jobs as the real one does (scripts/round_agent/handlers.py,
+the sandbox described by the real gameplan build). An attempt the infrastructure fails is
+run again; only a finished attempt's captures count (docs/05-live-environment.md).
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import os
 import sys
 
 import pytest
@@ -23,174 +20,46 @@ pytest.importorskip("psycopg2")
 
 DASHBOARD = REPO / "projects" / "dashboard"
 sys.path.insert(0, str(DASHBOARD))
+sys.path.insert(0, str(REPO / "src"))  # the gameplan framework, as the orchestrator's GAMEPLAN_LIB has it
+
+# Two VMs on one network. vm1's flag is gone while the worm starts on vm0; a minute later vm0
+# is stopped and vm1's flag comes back.
+GAMEPLAN = '''
+from gameplan import BasicVM, Gameplan
 
 
-# --- game plan ---------------------------------------------------------------
-
-
-def test_gameplan_is_deterministic_and_well_formed():
-    from orchestrator.rounds import gameplan
-
-    vms = [f"vm{i}" for i in range(6)]
-    a = gameplan.generate(vms, seed=42, duration=3600)
-    b = gameplan.generate(vms, seed=42, duration=3600)
-    assert [(s.action, s.vm, s.at_seconds, s.after) for s in a.steps] == [
-        (s.action, s.vm, s.at_seconds, s.after) for s in b.steps
-    ]
-    assert a.start_vm == b.start_vm
-    # Every VM's secret is released exactly once.
-    released = [s.vm for s in a.steps if s.action == "release_secret"]
-    assert sorted(released) == sorted(vms)
-    # The start VM's secret is released before the start (at_seconds None).
-    start_release = next(s for s in a.steps if s.action == "release_secret" and s.vm == a.start_vm)
-    assert start_release.at_seconds is None
-
-
-def test_gameplan_delayed_secret_follows_a_stop():
-    from orchestrator.rounds import gameplan
-
-    plan = gameplan.generate([f"vm{i}" for i in range(6)], seed=7, duration=3600)
-    stops = {s.position for s in plan.steps if s.action == "stop_vm"}
-    delayed = [s for s in plan.steps if s.action == "release_secret" and s.at_seconds is not None]
-    assert delayed, "expected some secrets to be delayed"
-    for step in delayed:
-        assert step.after, f"delayed secret for {step.vm} has no precondition"
-        assert set(step.after) & stops, "a delayed secret must follow a stop"
-
-
-def test_gameplan_keeps_min_alive():
-    from orchestrator.rounds import gameplan
-
-    plan = gameplan.generate([f"vm{i}" for i in range(5)], seed=1, duration=3600, params={"min_alive": 2})
-    assert sum(1 for s in plan.steps if s.action == "stop_vm") <= 3
-
-
-def test_gameplan_single_vm():
-    from orchestrator.rounds import gameplan
-
-    plan = gameplan.generate(["only"], seed=1, duration=3600)
-    assert plan.start_vm == "only"
-    assert [s.action for s in plan.steps] == ["release_secret"]
-
-
-# --- fakes for the conductor --------------------------------------------------
-
-
-class FakePower:
+class Two(Gameplan):
     def __init__(self):
-        self.stopped, self.started = [], []
-        self.state = {}
+        self.round_duration = 600
+        self.vm0 = BasicVM()
+        self.vm1 = BasicVM()
+        self.register_network([self.vm0, self.vm1])
+        self.set_worm_entrypoint(self.vm0)
 
-    def stop(self, vm):
-        self.stopped.append(vm.vm_identifier)
-        self.state[vm.vm_identifier] = "stopped"
-
-    def start(self, vm):
-        self.started.append(vm.vm_identifier)
-        self.state[vm.vm_identifier] = "running"
-
-    def status(self, vm):
-        return self.state.get(vm.vm_identifier, "running")
-
-
-def fake_agent(run, sha):
-    """Complete every queued host job the way the real agent would."""
-    from core.models.rounds import HostJob
-    from django.utils import timezone
-
-    for job in run.jobs.filter(state=HostJob.State.QUEUED):
-        result = {}
-        if job.kind == HostJob.Kind.PREPARE:
-            result = {
-                "topology": {
-                    "nodes": [{"id": "network-1000", "label": "vmbr1000", "type": "network", "cidr": "10.64.0.0/24"}],
-                    "edges": [],
-                },
-                "sandbox_definition": "locals { seed = 0 }",
-                "vms": [
-                    {
-                        "name": f"sandbox-vm{i}",
-                        "maintenance_ip": f"10.4.0.{10 + i}",
-                        "vmid": 900 + i,
-                        "addresses": [f"10.64.0.{10 + i}"],
-                        "networks": [{"name": "vmbr1000", "cidr": "10.64.0.0/24"}],
-                    }
-                    for i in range(4)
-                ],
-            }
-        elif job.kind == HostJob.Kind.CHECK:
-            result = {"ok": True, "failures": []}
-        elif job.kind == HostJob.Kind.DEPLOY:
-            result = {"released": [{"vm": vm, "flag_hash": sha(vm)} for vm in job.params["initial_secrets"]]}
-        elif job.kind == HostJob.Kind.RELEASE_SECRETS:
-            result = {"released": [{"vm": vm, "flag_hash": sha(vm)} for vm in job.params["vms"]]}
-        elif job.kind == HostJob.Kind.TEARDOWN:
-            result = {"destroyed": True}
-        job.state = HostJob.State.DONE
-        job.result = result
-        job.finished_at = timezone.now()
-        job.save()
+    def execute(self):
+        flag = self.remove_flag(self.vm1)
+        self.deploy_worm()
+        self.wait(60)
+        self.vm0.stop()
+        self.add_flag(flag)
+'''
 
 
-def sha(name):
-    return hashlib.sha256(name.encode()).hexdigest()
+def sha(text):
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
-@pytest.fixture
-def one_run(db_clean):
-    """A competition with one team that uploaded, a due round, and its run."""
-    from core.models.competition import ApplicationSetting, Competition, Round
-    from core.models.team import AccessTokens, Team, TeamMembership
-    from core.models.user import User
-    from core.models.worms import MalwareArtifact, Upload
-    from django.utils import timezone
-    from orchestrator.rounds.planner import plan_round
-
-    competition = Competition.objects.create(name="c", registration_starts_at=timezone.now(), registration_ends_at=timezone.now())
-    ApplicationSetting.objects.create(key="current", current_competition=competition)
-    user = User.objects.create(username="u")
-    team = Team.objects.create(name="team-a", competition=competition)
-    TeamMembership.objects.create(user=user, team=team)
-    token = "tok-a"
-    AccessTokens.objects.create(name="t", access_token_hash=hashlib.sha256(token.encode()).hexdigest(), team=team, created_by=user)
-    artifact = MalwareArtifact.objects.create(content_hash="abc", storage_key="k")
-    past = timezone.now() - timezone.timedelta(minutes=1)
-    # Upload before the round's deadline (round_start).
-    Upload.objects.create(artifact=artifact, user=user, team=team, created_at=past - timezone.timedelta(minutes=5))
-    round = Round.objects.create(seed=5, name="R1", competition=competition, round_start=past, round_end=past + timezone.timedelta(days=1))
-    # Short game-plan intervals so stops and delayed secrets happen within the
-    # 600 s test round (the conductor's round_duration below).
-    runs = plan_round(round, sandbox_params={"game_plan": {"first_stop_after": 60, "stop_interval": 60, "min_alive": 1}})
-    return {"round": round, "team": team, "token": token, "run": runs[0]}
+def flag_hash(run_uuid, vm):
+    """The flag the fake agent places: a new one per attempt and VM."""
+    return sha(f"{run_uuid}:{vm}")
 
 
-def drive(conductor, run, agent_run, max_ticks=200, clock=None, step=10):
-    """Tick the conductor until the run is finished, running the fake agent
-    between ticks and letting a little time pass each tick. Returns the number
-    of ticks."""
-    from core.models.rounds import RoundRun
-
-    for i in range(max_ticks):
-        conductor.tick()
-        if clock is not None:
-            clock.advance(step)
-        fake_agent(agent_run, sha)
-        agent_run.refresh_from_db()
-        run.refresh_from_db()
-        if run.state in (RoundRun.State.FINISHED, RoundRun.State.FAILED, RoundRun.State.SKIPPED):
-            return i + 1
-    raise AssertionError(f"run did not finish: {run.state}")
-
-
-def make_conductor(power, clock):
-    from orchestrator.rounds.conductor import Conductor
-
-    conductor = Conductor(power=power, now=clock.now)
-    conductor.cfg = {**conductor.cfg, "worm_start_delay": 10, "round_duration": 600, "end_drain": 5}
-    return conductor
+# --- fakes ---------------------------------------------------------------------------
 
 
 class Clock:
+    """The conductor's clock: its sleeps pass time at once."""
+
     def __init__(self):
         from django.utils import timezone
 
@@ -199,293 +68,421 @@ class Clock:
     def now(self):
         return self.t
 
+    def sleep(self, seconds):
+        self.advance(seconds)
+
     def advance(self, seconds):
         from django.utils import timezone
 
         self.t += timezone.timedelta(seconds=seconds)
 
 
-def test_conductor_runs_a_full_round(one_run):
-    from core.models.rounds import GamePlanStep, RoundRun, RunEvent
+class FakePower:
+    def __init__(self, broken=()):
+        self.stopped, self.started = [], []
+        self.state = {}
+        self.broken = set(broken)  # VMs whose power control fails
 
-    run = one_run["run"]
-    power, clock = FakePower(), Clock()
-    conductor = make_conductor(power, clock)
+    def _check(self, vm):
+        from orchestrator.rounds.power import PowerError
 
-    # Prepare, check, deploy.
-    for _ in range(6):
-        conductor.tick()
-        fake_agent(run, sha)
-        run.refresh_from_db()
-        if run.state == RoundRun.State.ARMED:
-            break
-    assert run.state == RoundRun.State.ARMED
-    assert run.virtual_machines.count() == 4
-    assert run.steps.count() > 0
-    # The full topology and the generated OpenTofu config are saved on the run.
-    assert run.topology.get("nodes") and run.sandbox_definition == "locals { seed = 0 }"
-    # Start VM's secret is released at deploy.
-    start_vm = run.virtual_machines.get(vm_identifier=run.sandbox_params["start_vm"])
-    assert start_vm.ctf_flag_hash == sha(start_vm.vm_identifier)
+        if vm.vm_identifier in self.broken:
+            raise PowerError("the API refused")
 
-    # Fuse: worm starts.
-    clock.advance(11)
-    conductor.tick()
-    run.refresh_from_db()
-    assert run.state == RoundRun.State.RUNNING
-    assert run.events.filter(kind=RunEvent.Kind.WORM_STARTED).exists()
+    def stop(self, vm, wait=False):
+        self._check(vm)
+        self.stopped.append(vm.vm_identifier)
+        self.state[vm.vm_identifier] = "stopped"
 
-    # Run the game plan to the end, letting time pass gradually (30 s/tick)
-    # so the game plan's stops and delayed-secret jobs unfold before the end.
-    drive(conductor, run, run, max_ticks=80, clock=clock, step=30)
-    assert run.state == RoundRun.State.FINISHED
-    # Every game-plan stop happened (the end-drain also stops the rest).
-    plan_stops = {s.vm.vm_identifier for s in run.steps.filter(action=GamePlanStep.Action.STOP_VM)}
-    assert plan_stops and plan_stops.issubset(set(power.stopped))
-    assert run.events.filter(kind=RunEvent.Kind.VM_STOPPED).count() >= len(plan_stops)
-    assert run.virtual_machines.filter(ctf_flag_hash__isnull=True).count() == 0
-    assert not run.steps.filter(state=GamePlanStep.State.PENDING).exists()
+    def start(self, vm, wait=False):
+        self._check(vm)
+        self.started.append(vm.vm_identifier)
+        self.state[vm.vm_identifier] = "running"
+
+    def shutdown(self, vm, timeout=60):
+        self.stop(vm)
+
+    def suspend(self, vm):
+        self.state[vm.vm_identifier] = "paused"
+
+    def resume(self, vm):
+        self.state[vm.vm_identifier] = "running"
+
+    def status(self, vm):
+        return self.state.get(vm.vm_identifier, "running")
 
 
-def test_capture_is_recorded_when_a_released_secret_is_submitted(one_run):
-    from core.models.rounds import RoundRun, RunEvent
-    from core.models.scoring import FlagCapture, FlagCaptureAttempt
+class Agent:
+    """The round agent: every host job answered at once, as the real one answers it. `fail`
+    makes a kind of job fail (a number of times, or always); `hold` leaves it queued (the agent
+    has not got to it); `armed_at` is what a deploy job reports."""
 
-    run = one_run["run"]
-    power, clock = FakePower(), Clock()
-    conductor = make_conductor(power, clock)
-    for _ in range(6):
-        conductor.tick()
-        fake_agent(run, sha)
-        run.refresh_from_db()
-        if run.state == RoundRun.State.ARMED:
-            break
-    clock.advance(11)
-    conductor.tick()
-    run.refresh_from_db()
+    def __init__(self, directory, clock):
+        self.directory, self.clock = directory, clock
+        self.fail, self.hold, self.armed_at = {}, set(), None
 
-    # The worm submits the start VM's flag during the run, recorded with the
-    # running team's uuid (as the scoring API now does), created_at on the
-    # conductor's clock so it is live.
-    from orchestrator.rounds import captures
+    def request(self, run, kind, **params):
+        from core.models.rounds import HostJob
 
-    vm = run.virtual_machines.get(vm_identifier=run.sandbox_params["start_vm"])
-    clock.advance(30)
-    FlagCaptureAttempt.objects.create(
-        team_uuid=str(one_run["team"].uuid),
-        vm_flag_hash=vm.ctf_flag_hash,
-        created_at=clock.now(),
-    )
-    captures.process_flags(conductor.cfg["capture_grace"])
-    assert FlagCapture.objects.filter(team=one_run["team"], vm=vm).count() == 1
-    assert run.events.filter(kind=RunEvent.Kind.CAPTURED, vm=vm).exists()
+        job = HostJob.objects.create(run=run, kind=kind, params=params)
+        if kind not in self.hold:
+            self.answer(job)
+        return job
 
-    # A second submission of the same flag does not count twice.
-    FlagCaptureAttempt.objects.create(
-        team_uuid=str(one_run["team"].uuid),
-        vm_flag_hash=vm.ctf_flag_hash,
-        created_at=clock.now(),
-    )
-    captures.process_flags(conductor.cfg["capture_grace"])
-    assert FlagCapture.objects.filter(team=one_run["team"], vm=vm).count() == 1
+    def run(self, run, kind, **params):
+        from core.models.rounds import HostJob
+        from gameplan.definition import RoundError
 
+        job = self.request(run, kind, **params)
+        if job.state != HostJob.State.DONE:
+            raise RoundError(f"{kind} job failed: {job.error}")
+        return job.result
 
-def test_wrong_team_does_not_capture(one_run):
-    import uuid as uuidlib
+    def answer(self, job):
+        from core.models.rounds import HostJob
+        from django.utils import timezone
 
-    from core.models.scoring import FlagCapture, FlagCaptureAttempt
-    from orchestrator.rounds import captures
+        left = self.fail.get(job.kind, 0)
+        if left:
+            self.fail[job.kind] = left if left is True else left - 1
+            job.state, job.error = HostJob.State.FAILED, f"the {job.kind} job failed: its log on the node says why"
+        else:
+            job.state, job.result = HostJob.State.DONE, self.result(job)
+        job.finished_at = timezone.now()
+        job.save()
 
-    run = one_run["run"]
-    power, clock = FakePower(), Clock()
-    conductor = make_conductor(power, clock)
-    for _ in range(6):
-        conductor.tick()
-        fake_agent(run, sha)
-        run.refresh_from_db()
-        if run.state == "armed":
-            break
-    clock.advance(11)
-    conductor.tick()
-    run.refresh_from_db()
-    vm = run.virtual_machines.get(vm_identifier=run.sandbox_params["start_vm"])
-    # Some other team's uuid: the flag is right but the team's run does not own
-    # this VM, so it is not scored.
-    FlagCaptureAttempt.objects.create(team_uuid=str(uuidlib.uuid4()), vm_flag_hash=vm.ctf_flag_hash, created_at=clock.now())
-    captures.process_flags(conductor.cfg["capture_grace"])
-    assert FlagCapture.objects.count() == 0
+    def spec(self, name):
+        from gameplan import loader
+        from gameplan.runtime import instantiate
 
+        loaded = loader.load(self.directory, name)
+        return loaded, instantiate(loaded.cls).spec()
 
-def test_failed_prepare_job_fails_the_run_without_teardown(one_run):
-    from core.models.rounds import HostJob, RoundRun
+    def result(self, job):
+        from core.models.rounds import HostJob
+        from gameplan import build, loader
 
-    run = one_run["run"]
-    power, clock = FakePower(), Clock()
-    conductor = make_conductor(power, clock)
-    conductor.tick()  # -> PREPARING, prepare job queued
-    run.refresh_from_db()
-    job = run.jobs.get(kind=HostJob.Kind.PREPARE)
-    job.state, job.error = HostJob.State.FAILED, "no storage"
-    job.save()
-    conductor.tick()
-    run.refresh_from_db()
-    assert run.state == RoundRun.State.FAILED
-    # Nothing was built, so no teardown job.
-    assert not run.jobs.filter(kind=HostJob.Kind.TEARDOWN).exists()
+        K, params, run = HostJob.Kind, job.params, job.run
+        if job.kind == K.GAMEPLANS:
+            return {"gameplans": [{"file": name, "sha256": loader.read(self.directory, name)[1], "valid": True}
+                                  for name in loader.available(self.directory)]}  # fmt: skip
+        if job.kind == K.PREPARE:
+            loaded, spec = self.spec(params["gameplan"])
+            assert loaded.sha256 == params["gameplan_sha256"]  # the node runs only the pinned version
+            networks = build.vm_networks(spec)
+            return {
+                "topology": build.topology(spec),
+                "entrypoint": spec["entrypoint"],
+                "released": [{"vm": vm["name"], "flag_hash": flag_hash(run.uuid, vm["name"])} for vm in spec["vms"]],
+                "vms": [{"name": vm["name"], "maintenance_ip": vm["maintenance"].split("/")[0], "vmid": 900 + i,
+                         "addresses": [nic["address"].split("/")[0] for nic in vm["nics"]],
+                         "networks": networks.get(vm["name"], [])}
+                        for i, vm in enumerate(spec["vms"])],
+            }  # fmt: skip
+        if job.kind == K.CHECK:
+            return {"ok": True, "failures": []}
+        if job.kind == K.DEPLOY:
+            armed = self.armed_at if self.armed_at is not None else self.clock.now().isoformat()
+            return {"start_vm": params["start_vm"], "armed_at": armed}
+        if job.kind == K.REMOVE_FLAGS:
+            return {"removed": params["vms"], "failed": []}
+        if job.kind == K.PLACE_FLAGS:
+            return {"released": [{"vm": vm, "flag_hash": flag_hash(run.uuid, vm)} for vm in params["vms"]], "failed": []}
+        if job.kind == K.TEARDOWN:
+            return {"destroyed": not params["keep"], "kept": params["keep"]}
+        return {}
 
 
-def test_next_run_waits_for_the_previous_teardown(one_run):
-    """A failed run tears its sandbox down asynchronously; the next run must not
-    build over it until that teardown has completed (docs/07-security.md,
-    S7)."""
-    from core.models.competition import Round
-    from core.models.rounds import HostJob, RoundRun
-    from django.utils import timezone
-    from orchestrator.rounds.planner import plan_round
-
-    run1 = one_run["run"]
-    past = timezone.now() - timezone.timedelta(minutes=1)
-    round2 = Round.objects.create(
-        seed=6, name="R2", competition=one_run["round"].competition,
-        round_start=past, round_end=past + timezone.timedelta(days=1),
-    )  # fmt: skip
-    run2 = plan_round(round2)[0]
-
-    power, clock = FakePower(), Clock()
-    conductor = make_conductor(power, clock)
-
-    conductor.tick()  # run1 -> PREPARING
-    fake_agent(run1, sha)  # prepare done
-    conductor.tick()  # run1 -> CHECKING
-    run1.refresh_from_db()
-    conductor.fail(run1, "boom")  # FAILED + teardown queued
-    assert run1.jobs.filter(kind=HostJob.Kind.TEARDOWN, state=HostJob.State.QUEUED).exists()
-
-    # The teardown is still pending: run2 must stay PENDING.
-    conductor.tick()
-    run2.refresh_from_db()
-    assert run2.state == RoundRun.State.PENDING
-
-    # Teardown completes -> run2 may start.
-    fake_agent(run1, sha)
-    conductor.tick()
-    run2.refresh_from_db()
-    assert run2.state == RoundRun.State.PREPARING
+# --- fixtures ------------------------------------------------------------------------
 
 
-def _second_team(one_run, upload=True):
+@pytest.fixture
+def gameplans(tmp_path, request):
+    """The orchestrator's gameplans: two.py."""
+    from django.test import override_settings
+
+    (tmp_path / "two.py").write_text(GAMEPLAN)
+    settings = override_settings(GAMEPLAN_DIR=str(tmp_path), GAMEPLAN_LIB=str(REPO / "src"))
+    settings.enable()
+    request.addfinalizer(settings.disable)
+    return tmp_path
+
+
+def make_team(competition, name, upload_before=None):
     from core.models.team import Team, TeamMembership
     from core.models.user import User
     from core.models.worms import MalwareArtifact, Upload
-    from django.utils import timezone
 
-    user = User.objects.create(username="u2")
-    team = Team.objects.create(name="team-b", competition=one_run["round"].competition)
+    user = User.objects.create(username=f"u-{name}")
+    team = Team.objects.create(name=name, competition=competition)
     TeamMembership.objects.create(user=user, team=team)
-    if upload:
-        artifact = MalwareArtifact.objects.create(content_hash="def", storage_key="k2")
-        Upload.objects.create(artifact=artifact, user=user, team=team, created_at=one_run["round"].round_start - timezone.timedelta(minutes=5))
+    if upload_before is not None:
+        artifact = MalwareArtifact.objects.create(content_hash=sha(name), storage_key=f"k-{name}")
+        Upload.objects.create(artifact=artifact, user=user, team=team, created_at=upload_before)
     return team
 
 
-def _round_runs(one_run, second_upload=True):
-    from core.models.rounds import RoundRun
-    from orchestrator.rounds.planner import plan_round
-
-    _second_team(one_run, upload=second_upload)
-    RoundRun.objects.all().delete()
-    return plan_round(one_run["round"], sandbox_params={"game_plan": {"first_stop_after": 60, "stop_interval": 60, "min_alive": 1}})
-
-
-def test_the_runs_of_a_round_share_its_sandbox(one_run):
-    """Built once from the round's seed and rolled back for every team: the same sandbox for
-    all, and the teardown in between keeps it."""
-    from core.models.rounds import HostJob
-
-    first, second = _round_runs(one_run)
-    power, clock = FakePower(), Clock()
-    conductor = make_conductor(power, clock)
-    drive(conductor, first, first, clock=clock)
-    drive(conductor, second, second, clock=clock)
-    prepares = HostJob.objects.filter(kind=HostJob.Kind.PREPARE).order_by("id")
-    assert [job.params["seed"] for job in prepares] == [one_run["round"].seed] * 2
-    assert first.seed != second.seed  # each run's game plan is still its own
-    teardowns = HostJob.objects.filter(kind=HostJob.Kind.TEARDOWN).order_by("id")
-    assert [(job.run_id, job.params["keep"]) for job in teardowns] == [(first.id, True), (second.id, False)]
-
-
-def test_no_sandbox_is_kept_for_a_run_that_has_nothing_to_run(one_run):
-    from core.models.rounds import HostJob
-
-    first, _second = _round_runs(one_run, second_upload=False)
-    power, clock = FakePower(), Clock()
-    drive(make_conductor(power, clock), first, first, clock=clock)
-    assert [job.params["keep"] for job in first.jobs.filter(kind=HostJob.Kind.TEARDOWN)] == [False]
-
-
-def test_a_sandbox_kept_for_a_run_that_is_then_skipped_is_destroyed(one_run):
-    """The round ran out of time for the next team: nothing is left to roll the sandbox back."""
-    from core.models.rounds import HostJob, RoundRun
-
-    first, second = _round_runs(one_run)
-    power, clock = FakePower(), Clock()
-    conductor = make_conductor(power, clock)
-    drive(conductor, first, first, clock=clock)
-    RoundRun.objects.filter(pk=second.pk).update(state=RoundRun.State.SKIPPED)
-    assert conductor.tick() is True
-    final = first.jobs.filter(kind=HostJob.Kind.TEARDOWN).order_by("-id").first()
-    assert final.params == {"keep": False} and final.state == HostJob.State.QUEUED
-    assert conductor.tick() is False  # it waits for that teardown, and asks for no other
-    fake_agent(first, sha)
-    assert conductor.tick() is False
-    assert first.jobs.filter(kind=HostJob.Kind.TEARDOWN).count() == 2
-
-
-def test_run_without_upload_is_skipped(db_clean):
+@pytest.fixture
+def one_run(db_clean, gameplans):
+    """A competition with one team that uploaded, a round past its deadline (two.py, 600 s per
+    team), and the team's run."""
     from core.models.competition import ApplicationSetting, Competition, Round
-    from core.models.rounds import RoundRun
-    from core.models.team import Team
     from django.utils import timezone
     from orchestrator.rounds.planner import plan_round
 
     competition = Competition.objects.create(name="c", registration_starts_at=timezone.now(), registration_ends_at=timezone.now())
     ApplicationSetting.objects.create(key="current", current_competition=competition)
-    Team.objects.create(name="no-upload", competition=competition)
     past = timezone.now() - timezone.timedelta(minutes=1)
-    round = Round.objects.create(seed=1, name="R1", competition=competition, round_start=past, round_end=past + timezone.timedelta(days=1))
-    run = plan_round(round)[0]
-    assert run.upload_id is None
-
-    power, clock = FakePower(), Clock()
-    conductor = make_conductor(power, clock)
-    conductor.tick()
-    run.refresh_from_db()
-    assert run.state == RoundRun.State.SKIPPED
+    team = make_team(competition, "team-a", upload_before=past - timezone.timedelta(minutes=5))
+    round_obj = Round.objects.create(seed=5, name="R1", competition=competition, round_start=past,
+                                     round_end=past + timezone.timedelta(days=1), gameplan="two.py", team_duration=600)  # fmt: skip
+    [run] = plan_round(round_obj)
+    return {"round": round_obj, "team": team, "run": run, "competition": competition}
 
 
-def test_timeline_export(one_run):
+def make_conductor(gameplans, power=None, clock=None):
+    from orchestrator.rounds.conductor import Conductor
+
+    clock = clock or Clock()
+    agent = Agent(gameplans, clock)
+    conductor = Conductor(power=power or FakePower(), now=clock.now, sleep=clock.sleep, jobs=agent)
+    conductor.cfg = {**conductor.cfg, "worm_start_delay": 10, "end_drain": 5}
+    return conductor, agent, clock
+
+
+def attempts(round_obj, team):
     from core.models.rounds import RoundRun
+
+    return list(RoundRun.objects.filter(round=round_obj, team=team).order_by("attempt"))
+
+
+@pytest.fixture
+def ran(one_run, gameplans):
+    """The team's first attempt, run start to finish."""
+    from core.models.rounds import RoundRun
+
+    conductor, agent, clock = make_conductor(gameplans)
+    assert conductor.tick() is True
+    run = RoundRun.objects.get(pk=one_run["run"].pk)
+    assert run.state == RoundRun.State.FINISHED, run.error
+    return {**one_run, "run": run, "conductor": conductor, "agent": agent, "clock": clock}
+
+
+# --- the conductor ---------------------------------------------------------------------
+
+
+def test_conductor_runs_a_full_round(one_run, gameplans):
+    """A round without a gameplan waits for one; then the team's attempt runs start to finish."""
+    from core.models.competition import Round
+    from core.models.rounds import HostJob, RoundRun, RunEvent
+
+    run, round_obj = one_run["run"], one_run["round"]
+    power = FakePower()
+    conductor, agent, clock = make_conductor(gameplans, power)
+
+    Round.objects.filter(pk=round_obj.pk).update(gameplan="")
+    assert conductor.tick() is False and conductor.tick() is False
+    run.refresh_from_db()
+    assert run.state == RoundRun.State.PENDING and not run.jobs.exists()
+    Round.objects.filter(pk=round_obj.pk).update(gameplan="two.py")
+
+    start = clock.now()
+    assert conductor.tick() is True
+    run.refresh_from_db()
+    assert run.state == RoundRun.State.FINISHED, run.error
+    # Pinned: this version of the gameplan, for every attempt still to come.
+    assert run.gameplan_sha256 == sha(GAMEPLAN) and run.duration == 600
+    assert Round.objects.get(pk=round_obj.pk).gameplan_status == "ok"
+    kinds = list(run.jobs.order_by("id").values_list("kind", flat=True))
+    assert kinds == ["prepare", "check", "remove_flags", "deploy", "place_flags", "teardown"]
+    assert run.jobs.get(kind=HostJob.Kind.TEARDOWN).params["keep"] is False
+    # The sandbox as built, for the replay.
+    assert run.entrypoint == "sandbox-vm0" and run.topology["nodes"]
+    assert sorted(run.virtual_machines.values_list("vm_identifier", flat=True)) == ["sandbox-vm0", "sandbox-vm1"]
+    # The worm started after its fuse; the run lasted its duration from then.
+    assert run.worm_start_at == start + clock_delta(10)
+    assert run.ends_at == run.worm_start_at + clock_delta(600)
+    # The gameplan's stop, then every VM at the end; vm1's flag is the one placed back.
+    assert power.stopped[0] == "sandbox-vm0" and set(power.stopped[1:]) == {"sandbox-vm0", "sandbox-vm1"}
+    vm1 = run.virtual_machines.get(vm_identifier="sandbox-vm1")
+    assert vm1.ctf_flag_hash == flag_hash(run.uuid, "sandbox-vm1")
+    events = list(run.events.order_by("id").values_list("kind", flat=True))
+    for kind in (RunEvent.Kind.FLAG_REMOVED, RunEvent.Kind.WORM_DEPLOYED, RunEvent.Kind.WORM_STARTED,
+                 RunEvent.Kind.VM_STOPPED, RunEvent.Kind.SECRET_RELEASED):  # fmt: skip
+        assert kind in events, kind
+    states = [e.data["state"] for e in run.events.filter(kind=RunEvent.Kind.STATE).order_by("id")]
+    assert states == ["preparing", "checking", "running", "ending", "tearing_down", "finished"]
+    assert conductor.tick() is False  # nothing left
+
+
+def test_capture_is_recorded_when_a_released_secret_is_submitted(ran):
+    from core.models.rounds import RunEvent
+    from core.models.scoring import FlagCapture, FlagCaptureAttempt
+    from orchestrator.rounds import captures
+
+    run, team = ran["run"], ran["team"]
+    vm = run.virtual_machines.get(vm_identifier="sandbox-vm0")
+    FlagCaptureAttempt.objects.create(team_uuid=str(team.uuid), vm_flag_hash=vm.ctf_flag_hash,
+                                      created_at=run.worm_start_at + clock_delta(30))  # fmt: skip
+    captures.process_flags(ran["conductor"].cfg["capture_grace"])
+    assert FlagCapture.objects.filter(team=team, vm=vm).count() == 1
+    assert FlagCapture.published().filter(team=team, vm=vm).count() == 1
+    assert run.events.filter(kind=RunEvent.Kind.CAPTURED, vm=vm).exists()
+
+    # A second submission of the same flag does not count twice.
+    FlagCaptureAttempt.objects.create(team_uuid=str(team.uuid), vm_flag_hash=vm.ctf_flag_hash,
+                                      created_at=run.worm_start_at + clock_delta(40))  # fmt: skip
+    captures.process_flags(ran["conductor"].cfg["capture_grace"])
+    assert FlagCapture.objects.filter(team=team, vm=vm).count() == 1
+
+
+def test_wrong_team_does_not_capture(ran):
+    import uuid as uuidlib
+
+    from core.models.scoring import FlagCapture, FlagCaptureAttempt
+    from orchestrator.rounds import captures
+
+    run = ran["run"]
+    vm = run.virtual_machines.get(vm_identifier="sandbox-vm0")
+    # Some other team's uuid: the flag is right but the team's run does not own this VM.
+    FlagCaptureAttempt.objects.create(team_uuid=str(uuidlib.uuid4()), vm_flag_hash=vm.ctf_flag_hash,
+                                      created_at=run.worm_start_at + clock_delta(30))  # fmt: skip
+    captures.process_flags(ran["conductor"].cfg["capture_grace"])
+    assert FlagCapture.objects.count() == 0
+
+
+def test_a_failed_attempt_is_thrown_away_and_the_team_runs_again(one_run, gameplans):
+    """An attempt the infrastructure fails is thrown away (its sandbox torn down) and the
+    team's worm runs again, at most max_retries more times; the next attempt finishes."""
+    from core.models.rounds import HostJob, RoundRun
+
+    conductor, agent, clock = make_conductor(gameplans)
+    agent.fail[HostJob.Kind.PREPARE] = 1
+    assert conductor.tick() is True
+    first, second = attempts(one_run["round"], one_run["team"])
+    assert first.state == RoundRun.State.FAILED and "prepare job failed" in first.error
+    assert first.jobs.filter(kind=HostJob.Kind.TEARDOWN).exists()  # it may have built half a sandbox
+    assert (second.state, second.attempt, second.upload_id) == (RoundRun.State.PENDING, 1, first.upload_id)
+    assert second.gameplan_sha256 == first.gameplan_sha256
+    assert conductor.tick() is True
+    second.refresh_from_db()
+    assert second.state == RoundRun.State.FINISHED, second.error
+
+    # Never more than max_retries more: in the next round every check fails.
+    from core.models.competition import Round
+    from orchestrator.rounds.planner import plan_round
+
+    r2 = Round.objects.create(seed=6, name="R2", competition=one_run["competition"], round_start=one_run["round"].round_start,
+                              round_end=one_run["round"].round_end, gameplan="two.py", team_duration=600)  # fmt: skip
+    plan_round(r2)
+    agent.fail[HostJob.Kind.CHECK] = True
+    while conductor.tick():
+        pass
+    runs = attempts(r2, one_run["team"])
+    assert [r.state for r in runs] == [RoundRun.State.FAILED] * (conductor.cfg["max_retries"] + 1)
+
+
+def test_next_run_waits_for_the_previous_teardown(one_run, gameplans):
+    """A failed attempt tears its sandbox down asynchronously; the next must not build over it
+    until that teardown has completed (docs/07-security.md, S7)."""
+    from core.models.rounds import HostJob, RoundRun
+
+    conductor, agent, clock = make_conductor(gameplans)
+    agent.fail[HostJob.Kind.CHECK] = 1
+    agent.hold = {HostJob.Kind.TEARDOWN}
+    assert conductor.tick() is True
+    first, second = attempts(one_run["round"], one_run["team"])
+    assert first.state == RoundRun.State.FAILED
+    teardown = first.jobs.get(kind=HostJob.Kind.TEARDOWN)
+    assert teardown.state == HostJob.State.QUEUED
+
+    # The teardown is still pending: the retry waits.
+    assert conductor.tick() is False
+    second.refresh_from_db()
+    assert second.state == RoundRun.State.PENDING
+
+    # Teardown done -> the retry runs.
+    agent.hold = set()
+    agent.answer(teardown)
+    assert conductor.tick() is True
+    second.refresh_from_db()
+    assert second.state == RoundRun.State.FINISHED
+
+
+def _two_teams(one_run, second_upload=True):
+    from core.models.rounds import RoundRun
+    from django.utils import timezone
+    from orchestrator.rounds.planner import plan_round
+
+    deadline = one_run["round"].round_start
+    make_team(one_run["competition"], "team-b", upload_before=deadline - timezone.timedelta(minutes=5) if second_upload else None)
+    RoundRun.objects.all().delete()
+    return plan_round(one_run["round"])
+
+
+def test_the_runs_of_a_round_share_its_sandbox(one_run, gameplans):
+    """Built once from the round's gameplan and rolled back for every team: the same sandbox
+    for all, and the teardown in between keeps it."""
+    from core.models.rounds import HostJob
+
+    first, second = _two_teams(one_run)
+    conductor, agent, clock = make_conductor(gameplans)
+    assert conductor.tick() is True and conductor.tick() is True
+    prepares = HostJob.objects.filter(kind=HostJob.Kind.PREPARE).order_by("id")
+    assert [(job.params["gameplan"], job.params["gameplan_sha256"]) for job in prepares] == [("two.py", sha(GAMEPLAN))] * 2
+    teardowns = HostJob.objects.filter(kind=HostJob.Kind.TEARDOWN).order_by("id")
+    assert [(job.run_id, job.params["keep"]) for job in teardowns] == [(first.id, True), (second.id, False)]
+
+
+def test_no_sandbox_is_kept_for_a_run_that_has_nothing_to_run(one_run, gameplans):
+    from core.models.rounds import HostJob
+
+    first = next(run for run in _two_teams(one_run, second_upload=False) if run.upload_id)
+    conductor, agent, clock = make_conductor(gameplans)
+    while conductor.tick():
+        pass
+    assert [job.params["keep"] for job in first.jobs.filter(kind=HostJob.Kind.TEARDOWN)] == [False]
+
+
+def test_a_sandbox_kept_for_a_run_that_is_then_skipped_is_destroyed(one_run, gameplans):
+    """The next team's run was given up: nothing is left to roll the sandbox back."""
+    from core.models.rounds import HostJob, RoundRun
+
+    first, second = _two_teams(one_run)
+    conductor, agent, clock = make_conductor(gameplans)
+    assert conductor.tick() is True
+    RoundRun.objects.filter(pk=second.pk).update(state=RoundRun.State.SKIPPED)
+    agent.hold = {HostJob.Kind.TEARDOWN}
+    assert conductor.tick() is True
+    final = first.jobs.filter(kind=HostJob.Kind.TEARDOWN).order_by("-id").first()
+    assert final.params == {"keep": False, "run_uuid": str(first.uuid)} and final.state == HostJob.State.QUEUED
+    assert conductor.tick() is False  # it waits for that teardown, and asks for no other
+    agent.answer(final)
+    assert conductor.tick() is False
+    assert first.jobs.filter(kind=HostJob.Kind.TEARDOWN).count() == 2
+
+
+def test_run_without_upload_is_skipped(one_run, gameplans):
+    from core.models.rounds import RoundRun
+
+    _first, second = sorted(_two_teams(one_run, second_upload=False), key=lambda r: r.upload_id is None)
+    assert second.upload_id is None
+    conductor, agent, clock = make_conductor(gameplans)
+    while conductor.tick():
+        pass
+    second.refresh_from_db()
+    assert second.state == RoundRun.State.SKIPPED and second.error == "no upload before the round's start"
+    assert not second.jobs.exists()
+
+
+def test_timeline_export(ran):
     from orchestrator.rounds import timeline
 
-    run = one_run["run"]
-    power, clock = FakePower(), Clock()
-    conductor = make_conductor(power, clock)
-    for _ in range(6):
-        conductor.tick()
-        fake_agent(run, sha)
-        run.refresh_from_db()
-        if run.state == RoundRun.State.ARMED:
-            break
-    clock.advance(11)
-    conductor.tick()
-    clock.advance(600)
-    drive(conductor, run, run, max_ticks=80, clock=clock, step=10)
-
-    data = timeline.build(run)
-    assert len(data["nodes"]) == 4
-    assert data["run"]["start_vm"]
+    data = timeline.build(ran["run"])
+    assert len(data["nodes"]) == 2
+    assert data["run"]["start_vm"] == "sandbox-vm0"
     kinds = {e["kind"] for e in data["events"]}
-    assert "state" in kinds and "vm_stopped" in kinds and "secret_released" in kinds
+    assert {"state", "vm_stopped", "secret_released", "flag_removed"} <= kinds
     # The event timeline is ordered by t.
     ts = [e["t"] for e in data["events"]]
     assert ts == sorted(ts)
@@ -498,51 +495,40 @@ def test_timeline_export(one_run):
     assert data["run"]["t_min"] <= 0 <= data["run"]["t_max"]
 
 
-def test_timeline_maps_flows_and_derives_submissions(one_run):
-    """The player's data: flows to scoring / the private internet are mapped
-    to infrastructure nodes through the live snapshot's address index; flag
-    submissions and logs become events on scoring / logging, attributed to the
-    VM that connected just before (the server itself only sees sandbox-gw)."""
+def test_timeline_maps_flows_and_derives_submissions(ran):
+    """The player's data: flows to scoring / the private internet are mapped to infrastructure
+    nodes through the live snapshot's address index; flag submissions and logs become events on
+    scoring / logging, attributed to the VM that connected just before (the server itself only
+    sees sandbox-gw)."""
     import infra_fixture
     from core.models.logging import LoggingAttempt
     from core.models.monitoring import NetworkFlow
-    from core.models.rounds import RoundRun
     from core.models.scoring import FlagCaptureAttempt
     from dashboard.infra_view import address_index, analyze
     from django.core.management import call_command
     from django.utils import timezone
     from orchestrator.rounds import timeline
 
-    run = one_run["run"]
-    power, clock = FakePower(), Clock()
-    conductor = make_conductor(power, clock)
-    for _ in range(6):
-        conductor.tick()
-        fake_agent(run, sha)
-        run.refresh_from_db()
-        if run.state == RoundRun.State.ARMED:
-            break
-    clock.advance(11)
-    conductor.tick()
-    run.refresh_from_db()
+    run, team = ran["run"], ran["team"]
     start = run.worm_start_at
     at = lambda s: start + timezone.timedelta(seconds=s)  # noqa: E731
     vm0 = run.virtual_machines.get(vm_identifier="sandbox-vm0")
     vm1 = run.virtual_machines.get(vm_identifier="sandbox-vm1")
+    ip0, ip1 = vm0.addresses[0], vm1.addresses[0]
 
     def flow(uid, s, src, dst, dport, **kw):
         NetworkFlow.objects.create(uid=uid, ts=at(s), src_ip=src, dst_ip=dst, src_port=40000, dst_port=dport,
-                                   transport="tcp", conn_state="SF", duration=0.5, **kw)
+                                   transport="tcp", conn_state="SF", duration=0.5, **kw)  # fmt: skip
 
-    flow("C1", 5, "10.64.0.10", "10.64.0.11", 22)  # vm0 -> vm1 (lan)
-    flow("C2", 7, "10.64.0.11", "10.2.0.14", 443, service="ssl")  # vm1 -> scoring
-    flow("C3", 8, "10.64.0.10", "10.2.0.20", 3142)  # vm0 -> apt-cache
-    flow("C4", 9, "10.64.0.10", "10.2.0.15", 443)  # vm0 -> logging
+    flow("C1", 5, ip0, ip1, 22)  # vm0 -> vm1 (lan)
+    flow("C2", 7, ip1, "10.2.0.14", 443, service="ssl")  # vm1 -> scoring
+    flow("C3", 8, ip0, "10.2.0.20", 3142)  # vm0 -> apt-cache
+    flow("C4", 9, ip0, "10.2.0.15", 443)  # vm0 -> logging
     flow("C5", 6, "10.99.0.1", "10.99.0.2", 80)  # not this run
-    FlagCaptureAttempt.objects.create(team_uuid=str(one_run["team"].uuid), vm_flag_hash=vm0.ctf_flag_hash or sha("sandbox-vm0"), created_at=at(7.5))
-    FlagCaptureAttempt.objects.create(team_uuid=str(one_run["team"].uuid), vm_flag_hash="0" * 64, created_at=at(20))
+    FlagCaptureAttempt.objects.create(team_uuid=str(team.uuid), vm_flag_hash=vm0.ctf_flag_hash, created_at=at(7.5))
+    FlagCaptureAttempt.objects.create(team_uuid=str(team.uuid), vm_flag_hash="0" * 64, created_at=at(20))
     FlagCaptureAttempt.objects.create(team_uuid="someone-else", vm_flag_hash="1" * 64, created_at=at(21))
-    log = LoggingAttempt.objects.create(team_uuid=str(one_run["team"].uuid), log_data={"msg": "<img src=x onerror=alert(1)>"}, created_at=at(9.2))
+    log = LoggingAttempt.objects.create(team_uuid=str(team.uuid), log_data={"msg": "<img src=x onerror=alert(1)>"}, created_at=at(9.2))
     call_command("process_attempts", "--once", "--grace", "120")
 
     infra = address_index(analyze(infra_fixture.snapshot()))
@@ -569,8 +555,8 @@ def test_timeline_maps_flows_and_derives_submissions(one_run):
     logs = [e for e in data["events"] if e["kind"] == "log_received"]
     assert len(logs) == 1 and logs[0]["node"] == "role:logging"
     assert logs[0]["data"]["source_vm"] == str(vm0.uuid) and logs[0]["data"]["stored"]
-    # A log is a reference to its record (fetched on demand), with its size:
-    # the record itself is not in the timeline.
+    # A log is a reference to its record (fetched on demand), with its size: the record itself
+    # is not in the timeline.
     assert logs[0]["data"]["log"]["ref"] == str(log.uuid) and logs[0]["data"]["log"]["size"] > 20
     assert "onerror" not in json.dumps(data)
 
@@ -578,8 +564,8 @@ def test_timeline_maps_flows_and_derives_submissions(one_run):
     bare = {f["uid"]: f for f in timeline.build(run)["flows"]}
     assert bare["C2"]["dst"] == "ip:10.2.0.14" and bare["C2"]["kind"] == "other"
 
-    # The browser test's synthetic timeline (tests/topology_fixtures.py) has
-    # exactly this schema, so the page is tested against what is served.
+    # The browser test's synthetic timeline (tests/topology_fixtures.py) has exactly this
+    # schema, so the page is tested against what is served.
     import topology_fixtures
 
     fx = topology_fixtures.timeline()
@@ -594,13 +580,10 @@ def test_timeline_maps_flows_and_derives_submissions(one_run):
         assert set(real["data"]) == set(synthetic["data"]), kind
 
 
-def test_topology_endpoints_are_staff_only_and_serve_the_player(one_run, request):
-    """/topology/data/, /topology/runs/ and the run's progression: staff only;
-    the model comes from the stored snapshot; the runs feed the round/team
-    tabs; the progression resolves service addresses through the live
-    snapshot."""
-    import json as _json
-
+def test_topology_endpoints_are_staff_only_and_serve_the_player(ran, request):
+    """/topology/data/, /topology/runs/ and the run's progression: staff only; the model comes
+    from the stored snapshot; the runs feed the round/team tabs; the progression resolves
+    service addresses through the live snapshot."""
     from django.test import override_settings
 
     urls = override_settings(ROOT_URLCONF="dashboard.urls")  # the progression links to its flows / logs
@@ -609,7 +592,6 @@ def test_topology_endpoints_are_staff_only_and_serve_the_player(one_run, request
 
     import infra_fixture
     from core.models.monitoring import NetworkFlow
-    from core.models.rounds import RoundRun
     from core.models.topology import TopologySnapshot
     from core.models.user import User
     from dashboard.views import progression as progression_views
@@ -618,15 +600,7 @@ def test_topology_endpoints_are_staff_only_and_serve_the_player(one_run, request
     from django.test import RequestFactory
     from django.utils import timezone
 
-    run = one_run["run"]
-    power, clock = FakePower(), Clock()
-    conductor = make_conductor(power, clock)
-    for _ in range(6):
-        conductor.tick()
-        fake_agent(run, sha)
-        run.refresh_from_db()
-        if run.state == RoundRun.State.ARMED:
-            break
+    run = ran["run"]
     staff = User.objects.create(username="staff", is_staff=True)
     student = User.objects.create(username="student")
     factory = RequestFactory()
@@ -638,166 +612,60 @@ def test_topology_endpoints_are_staff_only_and_serve_the_player(one_run, request
 
     # No snapshot yet: a clear 503, not a crash.
     response = call(topology_views.topology_data, staff)
-    assert response.status_code == 503 and "collect_topology" in _json.loads(response.content)["error"]
+    assert response.status_code == 503 and "collect_topology" in json.loads(response.content)["error"]
 
     TopologySnapshot.objects.create(source="proxmox", data=infra_fixture.snapshot(), collected_at=timezone.now())
     topology_views._cache.clear()
 
     for view, args in [(topology_views.topology_data, ()), (topology_views.topology_runs, ()),
-                       (progression_views.run_document, (run.uuid,)), (progression_views.run_flows, (run.uuid,))]:
+                       (progression_views.run_document, (run.uuid,)), (progression_views.run_flows, (run.uuid,))]:  # fmt: skip
         assert call(view, student, *args).status_code == 403
         assert call(view, AnonymousUser(), *args).status_code == 302  # to the login
         assert call(view, staff, *args).status_code == 200
 
-    data = _json.loads(call(topology_views.topology_data, staff).content)
+    data = json.loads(call(topology_views.topology_data, staff).content)
     assert {"nodes", "edges", "groups", "networks", "collected_at", "stale"} <= set(data)
     assert data["stale"] is False
     # Devbox groups carry their team's name (VM names only have t<team id>).
-    t1 = next(g for g in data["groups"] if g.get("team") == f"t{one_run['team'].id}")
+    t1 = next(g for g in data["groups"] if g.get("team") == f"t{ran['team'].id}")
     assert t1["team_name"] == "team-a" and t1["label"] == "Devbox team-a"
 
-    runs = _json.loads(call(topology_views.topology_runs, staff).content)
+    runs = json.loads(call(topology_views.topology_runs, staff).content)
     assert runs["rounds"][0]["name"] == "R1"
     assert runs["rounds"][0]["runs"][0] == {
         "uuid": str(run.uuid), "team": "team-a", "state": run.state, "position": run.position,
         "worm_start_at": run.worm_start_at.isoformat(),
-    }
+    }  # fmt: skip
 
-    NetworkFlow.objects.create(uid="V1", ts=run.worm_start_at + timezone.timedelta(seconds=3), src_ip="10.64.0.10",
-                               dst_ip="10.2.0.14", dst_port=443, transport="tcp")
-    doc = _json.loads(call(progression_views.run_document, staff, run.uuid).content)
+    ip0 = run.virtual_machines.get(vm_identifier="sandbox-vm0").addresses[0]
+    NetworkFlow.objects.create(uid="V1", ts=run.worm_start_at + timezone.timedelta(seconds=3), src_ip=ip0,
+                               dst_ip="10.2.0.14", dst_port=443, transport="tcp")  # fmt: skip
+    doc = json.loads(call(progression_views.run_document, staff, run.uuid).content)
     assert doc["format"] == "worms-progression" and doc["audience"] == "staff" and "flows" not in doc["timeline"]
     assert doc["network"]["count"] == 1 and doc["network"]["url"].endswith(f"/rounds/{run.uuid}/progression/flows/")
-    flows = _json.loads(call(progression_views.run_flows, staff, run.uuid).content)["flows"]
+    flows = json.loads(call(progression_views.run_flows, staff, run.uuid).content)["flows"]
     assert flows[0]["dst"] == "vm:104" and flows[0]["kind"] == "scoring"
 
 
 @pytest.mark.parametrize("command", ["process_captures", "process_attempts"])
-def test_attempt_processing_commands(one_run, command):
-    """manage.py process_captures / process_attempts --once turn a pending
-    attempt into a capture (both are the single-pass entry points; the daemon
-    just loops the latter)."""
-    from core.models.rounds import RoundRun
+def test_attempt_processing_commands(ran, command):
+    """manage.py process_captures / process_attempts --once turn a pending attempt into a
+    capture (both are the single-pass entry points; the daemon just loops the latter)."""
     from core.models.scoring import FlagCapture, FlagCaptureAttempt
     from django.core.management import call_command
 
-    run = one_run["run"]
-    power, clock = FakePower(), Clock()
-    conductor = make_conductor(power, clock)
-    for _ in range(6):
-        conductor.tick()
-        fake_agent(run, sha)
-        run.refresh_from_db()
-        if run.state == RoundRun.State.ARMED:
-            break
-    clock.advance(11)
-    conductor.tick()
-    run.refresh_from_db()
-    vm = run.virtual_machines.get(vm_identifier=run.sandbox_params["start_vm"])
-    FlagCaptureAttempt.objects.create(
-        team_uuid=str(one_run["team"].uuid),
-        vm_flag_hash=vm.ctf_flag_hash,
-        created_at=clock.now(),
-    )
-    args = ["--grace", str(conductor.cfg["capture_grace"])]
+    run = ran["run"]
+    vm = run.virtual_machines.get(vm_identifier="sandbox-vm0")
+    FlagCaptureAttempt.objects.create(team_uuid=str(ran["team"].uuid), vm_flag_hash=vm.ctf_flag_hash,
+                                      created_at=run.worm_start_at + clock_delta(30))  # fmt: skip
+    args = ["--grace", str(ran["conductor"].cfg["capture_grace"])]
     if command == "process_attempts":
         args.append("--once")
     call_command(command, *args)
-    assert FlagCapture.objects.filter(team=one_run["team"], vm=vm).count() == 1
+    assert FlagCapture.objects.filter(team=ran["team"], vm=vm).count() == 1
 
 
-# --- deploy timing, failure, late releases (docs/05-live-environment.md) ------------------------
-
-
-def _to_deploying(conductor, run):
-    from core.models.rounds import RoundRun
-
-    for _ in range(6):
-        conductor.tick()
-        run.refresh_from_db()
-        if run.state == RoundRun.State.DEPLOYING:
-            return
-        fake_agent(run, sha)
-    raise AssertionError(run.state)
-
-
-def _running(one_run):
-    from core.models.rounds import RoundRun
-
-    run = one_run["run"]
-    power, clock = FakePower(), Clock()
-    conductor = make_conductor(power, clock)
-    for _ in range(6):
-        conductor.tick()
-        fake_agent(run, sha)
-        run.refresh_from_db()
-        if run.state == RoundRun.State.ARMED:
-            break
-    clock.advance(11)
-    conductor.tick()
-    run.refresh_from_db()
-    assert run.state == RoundRun.State.RUNNING
-    return run, power, clock, conductor
-
-
-def test_the_worm_start_is_dated_from_when_the_agent_armed_it(one_run):
-    """The fuse starts on the VM when the agent arms it, not when the conductor
-    notices the deploy job is done (that lag cost early captures)."""
-    from core.models.rounds import HostJob, RoundRun
-    from django.utils import timezone
-
-    run = one_run["run"]
-    power, clock = FakePower(), Clock()
-    conductor = make_conductor(power, clock)
-    _to_deploying(conductor, run)
-    armed = clock.now() - timezone.timedelta(seconds=4)
-    job = run.jobs.get(kind=HostJob.Kind.DEPLOY)
-    job.state, job.result = HostJob.State.DONE, {"released": [], "armed_at": armed.isoformat()}
-    job.save()
-    conductor.tick()
-    run.refresh_from_db()
-    assert run.state == RoundRun.State.ARMED
-    assert run.worm_start_at == armed + timezone.timedelta(seconds=10)  # worm_start_delay in make_conductor
-    assert run.ends_at == run.worm_start_at + timezone.timedelta(seconds=600)
-
-
-@pytest.mark.parametrize("armed_at", ["", "yesterday", "2000-01-01T00:00:00+00:00", "2999-01-01T00:00:00+00:00",
-                                      "2026-01-01T00:00:00"])  # fmt: skip
-def test_an_implausible_armed_at_is_ignored(one_run, armed_at):
-    from core.models.rounds import HostJob
-    from django.utils import timezone
-
-    run = one_run["run"]
-    power, clock = FakePower(), Clock()
-    conductor = make_conductor(power, clock)
-    _to_deploying(conductor, run)
-    job = run.jobs.get(kind=HostJob.Kind.DEPLOY)
-    job.state, job.result = HostJob.State.DONE, {"released": [], "armed_at": armed_at}
-    job.save()
-    conductor.tick()
-    run.refresh_from_db()
-    assert run.worm_start_at == clock.now() + timezone.timedelta(seconds=10)
-
-
-def test_a_failed_run_stops_its_vms_and_scores_no_more(one_run):
-    from core.models.rounds import HostJob, RoundRun
-    from core.models.scoring import FlagCapture, FlagCaptureAttempt
-    from orchestrator.rounds import captures
-
-    run, power, clock, conductor = _running(one_run)
-    clock.advance(30)
-    conductor.fail(run, "power control: boom")
-    run.refresh_from_db()
-    assert run.state == RoundRun.State.FAILED and run.finished_at == clock.now()
-    assert run.ends_at == clock.now()
-    assert set(power.stopped) == set(run.virtual_machines.values_list("vm_identifier", flat=True))
-    assert run.jobs.filter(kind=HostJob.Kind.TEARDOWN, state=HostJob.State.QUEUED).exists()
-    # A flag submitted after the failure (and its grace) does not count.
-    vm = run.virtual_machines.get(vm_identifier=run.sandbox_params["start_vm"])
-    FlagCaptureAttempt.objects.create(team_uuid=str(one_run["team"].uuid), vm_flag_hash=vm.ctf_flag_hash,
-                                      created_at=clock.now() + clock_delta(conductor.cfg["capture_grace"] + 1))  # fmt: skip
-    captures.process_flags(conductor.cfg["capture_grace"])
-    assert not FlagCapture.objects.filter(vm=vm).exists()
+# --- deploy timing, failure, late releases (docs/05-live-environment.md) ---------------------
 
 
 def clock_delta(seconds):
@@ -806,101 +674,132 @@ def clock_delta(seconds):
     return timezone.timedelta(seconds=seconds)
 
 
-def test_a_flag_submitted_before_its_hash_was_stored_still_counts(one_run):
-    """The agent writes a secret into the VM before the conductor stores its
-    hash; a worm quick enough to submit in between is credited afterwards."""
+def test_the_worm_start_is_dated_from_when_the_agent_armed_it(one_run, gameplans):
+    """The fuse starts on the VM when the agent arms it, not when the conductor notices the
+    deploy job is done (that lag cost early captures)."""
+    from core.models.rounds import RoundRun
+
+    conductor, agent, clock = make_conductor(gameplans)
+    armed = clock.now() - clock_delta(4)
+    agent.armed_at = armed.isoformat()
+    conductor.tick()
+    run = RoundRun.objects.get(pk=one_run["run"].pk)
+    assert run.worm_start_at == armed + clock_delta(10)  # worm_start_delay in make_conductor
+    assert run.ends_at == run.worm_start_at + clock_delta(600)
+
+
+@pytest.mark.parametrize("armed_at", ["", "yesterday", "2000-01-01T00:00:00+00:00", "2999-01-01T00:00:00+00:00",
+                                      "2026-01-01T00:00:00"])  # fmt: skip
+def test_an_implausible_armed_at_is_ignored(one_run, gameplans, armed_at):
+    from core.models.rounds import RoundRun
+
+    conductor, agent, clock = make_conductor(gameplans)
+    start = clock.now()
+    agent.armed_at = armed_at
+    conductor.tick()
+    run = RoundRun.objects.get(pk=one_run["run"].pk)
+    assert run.worm_start_at == start + clock_delta(10)
+
+
+def test_a_failed_run_stops_its_vms_and_scores_no_more(one_run, gameplans):
+    """Power control fails during execute(): the attempt is thrown away, its VMs stopped and
+    its window closed; what it captured never counts; the team's worm runs again."""
+    from core.models.rounds import HostJob, RoundRun
+    from core.models.scoring import FlagCapture, FlagCaptureAttempt
+    from orchestrator.rounds import captures
+
+    power = FakePower()
+    conductor, agent, clock = make_conductor(gameplans, power)
+
+    def broken_stop(vm, wait=False):
+        from orchestrator.rounds.power import PowerError
+
+        if wait:  # the gameplan's stop (the end and a failure stop without waiting)
+            raise PowerError("the API refused")
+        FakePower.stop(power, vm)
+
+    power.stop = broken_stop
+    conductor.tick()
+    first, second = attempts(one_run["round"], one_run["team"])
+    assert first.state == RoundRun.State.FAILED and "power control" in first.error
+    assert first.ends_at == first.finished_at == first.worm_start_at + clock_delta(60)
+    assert set(power.stopped) == {"sandbox-vm0", "sandbox-vm1"}
+    assert first.jobs.filter(kind=HostJob.Kind.TEARDOWN).exists()
+    assert second.state == RoundRun.State.PENDING
+
+    vm = first.virtual_machines.get(vm_identifier="sandbox-vm0")
+    # During the attempt: recorded for staff, never published.
+    FlagCaptureAttempt.objects.create(team_uuid=str(one_run["team"].uuid), vm_flag_hash=vm.ctf_flag_hash,
+                                      created_at=first.worm_start_at + clock_delta(30))  # fmt: skip
+    # After its end and the grace: not even recorded.
+    FlagCaptureAttempt.objects.create(team_uuid=str(one_run["team"].uuid), vm_flag_hash=vm.ctf_flag_hash,
+                                      created_at=first.ends_at + clock_delta(conductor.cfg["capture_grace"] + 1))  # fmt: skip
+    captures.process_flags(conductor.cfg["capture_grace"])
+    assert FlagCapture.objects.filter(vm=vm).count() == 1
+    assert not FlagCapture.published().filter(vm=vm).exists()
+
+
+def test_a_flag_submitted_before_its_hash_was_stored_still_counts(ran):
+    """The agent writes a flag into the VM before the conductor stores its hash; a worm quick
+    enough to submit in between is credited afterwards."""
     from core.models.rounds import RunEvent
     from core.models.scoring import FlagCapture, FlagCaptureAttempt
     from django.utils import timezone
     from orchestrator.rounds import captures
 
-    run, power, clock, conductor = _running(one_run)
-    vm = run.virtual_machines.filter(ctf_flag_hash__isnull=True).first()
+    run, conductor = ran["run"], ran["conductor"]
+    vm = run.virtual_machines.get(vm_identifier="sandbox-vm1")
+    vm.ctf_flag_hash = None  # removed, and its new hash not stored yet
+    vm.save()
     secret_hash = sha("delayed-" + vm.vm_identifier)
-    submitted = FlagCaptureAttempt.objects.create(
-        team_uuid=str(one_run["team"].uuid), vm_flag_hash=secret_hash, created_at=clock.now()
-    )
+    submitted = FlagCaptureAttempt.objects.create(team_uuid=str(ran["team"].uuid), vm_flag_hash=secret_hash,
+                                                  created_at=run.worm_start_at + clock_delta(70))  # fmt: skip
     captures.process_flags(conductor.cfg["capture_grace"])  # no VM has this hash yet
     submitted.refresh_from_db()
     assert submitted.processed and not FlagCapture.objects.filter(vm=vm).exists()
 
-    vm.ctf_flag_hash, vm.secret_released_at = secret_hash, timezone.now()  # the release job's result arrives
+    vm.ctf_flag_hash, vm.secret_released_at = secret_hash, timezone.now()  # the place_flags result arrives
     vm.save()
     assert captures.process_late_releases(conductor.cfg["capture_grace"]) == 1
     capture = FlagCapture.objects.get(vm=vm)
-    assert capture.flag_capture_attempt_id == submitted.id and capture.team == one_run["team"]
+    assert capture.flag_capture_attempt_id == submitted.id and capture.team == ran["team"]
     assert run.events.filter(kind=RunEvent.Kind.CAPTURED, vm=vm).exists()
     assert captures.process_late_releases(conductor.cfg["capture_grace"]) == 0  # once
 
 
-def test_late_releases_never_credit_another_team(one_run):
+def test_late_releases_never_credit_another_team(ran):
     import uuid as uuidlib
 
     from core.models.scoring import FlagCapture, FlagCaptureAttempt
     from django.utils import timezone
     from orchestrator.rounds import captures
 
-    run, power, clock, conductor = _running(one_run)
-    vm = run.virtual_machines.filter(ctf_flag_hash__isnull=True).first()
+    run = ran["run"]
+    vm = run.virtual_machines.get(vm_identifier="sandbox-vm1")
     secret_hash = sha("other-" + vm.vm_identifier)
     FlagCaptureAttempt.objects.create(team_uuid=str(uuidlib.uuid4()), vm_flag_hash=secret_hash,
-                                      created_at=clock.now(), processed=True)  # fmt: skip
+                                      created_at=run.worm_start_at + clock_delta(70), processed=True)  # fmt: skip
     vm.ctf_flag_hash, vm.secret_released_at = secret_hash, timezone.now()
     vm.save()
-    assert captures.process_late_releases(conductor.cfg["capture_grace"]) == 0
+    assert captures.process_late_releases(ran["conductor"].cfg["capture_grace"]) == 0
     assert not FlagCapture.objects.filter(vm=vm).exists()
 
 
-def test_a_submission_just_before_the_dated_start_counts(one_run):
-    """The start is dated by the host's clock, submissions by the database's:
-    the grace applies at the start as at the end."""
+def test_a_submission_just_before_the_dated_start_counts(ran):
+    """The start is dated by the host's clock, submissions by the database's: the grace
+    applies at the start as at the end."""
     from core.models.scoring import FlagCapture, FlagCaptureAttempt
     from orchestrator.rounds import captures
 
-    run, power, clock, conductor = _running(one_run)
-    vm = run.virtual_machines.get(vm_identifier=run.sandbox_params["start_vm"])
-    FlagCaptureAttempt.objects.create(team_uuid=str(one_run["team"].uuid), vm_flag_hash=vm.ctf_flag_hash,
+    run = ran["run"]
+    vm = run.virtual_machines.get(vm_identifier="sandbox-vm0")
+    FlagCaptureAttempt.objects.create(team_uuid=str(ran["team"].uuid), vm_flag_hash=vm.ctf_flag_hash,
                                       created_at=run.worm_start_at - clock_delta(20))  # fmt: skip
-    captures.process_flags(conductor.cfg["capture_grace"])
+    captures.process_flags(ran["conductor"].cfg["capture_grace"])
     assert FlagCapture.objects.filter(vm=vm).count() == 1
 
 
-# --- the round's end and the team's own uploads -----------------------------------
-
-
-def test_a_run_that_cannot_finish_before_the_round_ends_is_skipped(one_run):
-    from core.models.rounds import HostJob, RoundRun
-
-    run, round_obj = one_run["run"], one_run["round"]
-    power, clock = FakePower(), Clock()
-    conductor = make_conductor(power, clock)
-    # 10 s fuse + 600 s run + 5 s drain + 900 s overhead > what is left.
-    round_obj.round_end = clock.now() + clock_delta(conductor.slot_seconds(run) - 1)
-    round_obj.save()
-    conductor.tick()
-    run.refresh_from_db()
-    assert run.state == RoundRun.State.SKIPPED and "not enough time left" in run.error
-    assert not run.jobs.filter(kind=HostJob.Kind.PREPARE).exists()
-
-    run.state, run.error = RoundRun.State.PENDING, ""
-    run.save()
-    round_obj.round_end = clock.now() + clock_delta(conductor.slot_seconds(run) + 1)
-    round_obj.save()
-    conductor.tick()
-    run.refresh_from_db()
-    assert run.state == RoundRun.State.PREPARING
-
-
-def test_a_team_without_an_upload_is_skipped_with_the_reason(one_run):
-    from core.models.rounds import RoundRun
-
-    run = one_run["run"]
-    run.upload = None
-    run.save()
-    conductor = make_conductor(FakePower(), Clock())
-    conductor.tick()
-    run.refresh_from_db()
-    assert run.state == RoundRun.State.SKIPPED and run.error == "no upload before the round's start"
+# --- the team's own uploads --------------------------------------------------------------
 
 
 def test_the_entry_is_the_teams_own_latest_upload(db_clean):

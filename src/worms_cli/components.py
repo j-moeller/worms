@@ -182,9 +182,10 @@ def plan(requested, exists, rebuild=False, pending_migrations=lambda: []) -> Pla
             result.steps.append((name, "dependency"))
     if "orchestrator" in result.names() and "database" not in result.names():
         result.notes.append("the database's grants are applied again after the orchestrator's migrations")
-    # Only the orchestrator migrates and the database grants: new dashboard code needs both.
+    # Only the orchestrator migrates and the database grants: new dashboard code needs both, and
+    # the database's grants need the tables the migrations make.
     configured = set(result.names("create", "recreate", "reconfigure", "dependency"))
-    if "dashboard" in configured and "orchestrator" not in configured:
+    if configured & {"dashboard", "database"} and "orchestrator" not in configured:
         pending = pending_migrations()
         if pending:
             result.notes.append(f"the database lacks {len(pending)} migration(s) of this checkout ({', '.join(pending)})")

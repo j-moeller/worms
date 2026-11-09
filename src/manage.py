@@ -1056,9 +1056,9 @@ def _components_overview() -> str:
         textwrap.fill("A component that exists is configured again (no internet window: packages are skipped, unless "
                       "--packages); one that is missing is created, and so is a missing dependency, after the plan is "
                       "shown and you agree. --rebuild destroys the component's VM and builds it again. Service VMs are "
-                      "configured from their snapshot and snapshotted again, with the devboxes off meanwhile. A "
-                      "dashboard whose code needs migrations brings the orchestrator (which migrates) and the "
-                      "database (grants) along.", HELP_WIDTH),  # fmt: skip
+                      "configured from their snapshot and snapshotted again, with the devboxes off meanwhile. While "
+                      "the database lacks a migration of this checkout, the dashboard and the database bring the "
+                      "orchestrator (which migrates) along, and the database (grants).", HELP_WIDTH),  # fmt: skip
     ])  # fmt: skip
 
 

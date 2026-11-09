@@ -146,7 +146,7 @@ Groups: `infrastructure` (the platform's own VMs), `private-internet`, `services
 3. **Builds:**
    - A VM that is created or recreated needs packages, so the internet window opens and the devboxes are shut down meanwhile. A VM that exists is configured without packages (`--skip-tags packages`) and without the window, unless `--packages`.
    - Service VMs are rolled back to `clean` first and snapshotted again at the end, with the devboxes off meanwhile (as `worms build` does).
-   - Only the orchestrator migrates and the database VM grants: configuring the orchestrator includes the database's plays; a dashboard whose code needs a migration the database lacks brings both into the plan ([`build.py`](../src/worms_cli/build.py), `pending_migrations`). Not during a round: the conductor restarts.
+   - Only the orchestrator migrates and the database VM grants: configuring the orchestrator includes the database's plays; while the database lacks a migration of the checkout, building the dashboard or the database brings the orchestrator (and the database) into the plan ([`build.py`](../src/worms_cli/build.py), `pending_migrations`). Not during a round: the conductor restarts.
 
 **`worms build` (everything), in order:**
 1. secrets → init → platform → firewall → host network.

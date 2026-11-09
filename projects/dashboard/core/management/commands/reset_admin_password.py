@@ -1,6 +1,6 @@
 """Give the admin account a new one-time password.
 
-    worms admin reset-password            # the CLI (src/manage.py) runs this
+    worms admin-reset-password            # the CLI (src/manage.py) runs this
     manage.py reset_admin_password [--username admin]
 
 The password is random, written once to stdout (the operator's terminal) and

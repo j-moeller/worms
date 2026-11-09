@@ -48,7 +48,7 @@ postgresql_table_privileges:
     # registration window and development competition, rounds. Column-scoped:
     # username, is_staff and is_superuser are never updated here, and the
     # accounts it inserts can be neither (postgresql_account_guard_roles);
-    # staff accounts are made on the console (`worms admin create-staff`).
+    # staff accounts are made on the console (`worms admin-create-staff`).
     # Teams and rounds are deleted only while nothing refers to them (the
     # foreign keys refuse it otherwise; no cascade rights).
     - privs: INSERT
@@ -146,7 +146,7 @@ postgresql_table_privileges:
   # component has an account of its own, used for nothing else. It may INSERT
   # only into its component's tables and only the columns it fills: created_at
   # and written_by (current_user) are the database's, so no row is backdated or
-  # claims another writer. Nobody reads them but the admin (`worms audit`).
+  # claims another writer. Nobody reads them but the admin (`worms status audit`).
   dbuser_events_dashboard:
     - privs: INSERT (outcome, user_uuid, username, client_ip, not_recorded_before)
       tables: [login_events]

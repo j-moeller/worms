@@ -1,5 +1,5 @@
 ---
-# End-to-end simulation of the running platform (`worms simulate`).
+# End-to-end simulation of the running platform (`worms test --live`).
 #
 # Plays a sandbox VM: submits a flag to scoring and a log to logging (through
 # sandbox-gw, DNS, nginx/TLS, the API, into the database), makes traffic to a
@@ -30,8 +30,8 @@
 # the run and deleted at the end with everything submitted with that token.
 # The recorded flows are real observations and stay (random high ports).
 #
-#   worms simulate                         (= ansible-playbook Simulate.yml)
-#   worms build simulate -- -e sim_wait_seconds=600
+#   worms test --live                         (= ansible-playbook Simulate.yml)
+#   worms test --live -- -e sim_wait_seconds=600
 #
 # Every check is reported (PASS/FAIL) at the end; the run fails if one failed.
 

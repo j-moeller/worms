@@ -3,7 +3,7 @@
 # into the database. Run after SetupDbAndDashboard.yml (tables and the
 # INSERT-only grants; the shipper retries until they exist) and
 # DistributeCA.yml (the database certificate is verified). Zeek is installed
-# from the internet (worms build provision). The host side (worms-mirror, copying the
+# from the internet (worms build). The host side (worms-mirror, copying the
 # sandbox bridges to the mirror bridge) is SetupHostNetwork.yml.
 - name: Configure the network monitor
   hosts: network_monitor_hosts

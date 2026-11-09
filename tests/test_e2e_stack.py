@@ -118,7 +118,7 @@ def _orchestrator_dispatch(path):
 
 
 def _provision_devbox(team, index=0):
-    """What `worms devbox provision` + the round agent leave in the database: a
+    """What `worms build devbox` + the round agent leave in the database: a
     Devbox and its three VMs (A/B/C) with tokens. The host build is faked (no
     Proxmox), exactly as the sandbox agent is faked elsewhere in this file."""
     from core.models.devbox import Devbox, DevboxVM
@@ -208,7 +208,7 @@ def test_end_to_end_competition_journey(site, monkeypatch, gameplans):  # noqa: 
     r1.refresh_from_db()
     assert r1.gameplan == "two.py"
 
-    # A devbox exists for the team (what `worms devbox provision` leaves behind).
+    # A devbox exists for the team (what `worms build devbox` leaves behind).
     _provision_devbox(alpha, index=0)
 
     # ---- STEP 4: a user logs in and registers an SSH key for the devbox --------

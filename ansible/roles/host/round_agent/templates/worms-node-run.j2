@@ -13,4 +13,4 @@ cd {{ round_agent_repo_root }}/"$1"
 set -a
 . {{ round_agent_env_file }}
 set +a
-exec ssh-agent sh -c 'ssh-add -q "$0" || { echo "worms-node-run: cannot load the WORMS key $0 into ssh-agent: re-run SetupRoundAgent.yml (worms build configure)" >&2; exit 1; }; exec sh -c "$1"' {{ round_agent_ssh_key }} "$2"
+exec ssh-agent sh -c 'ssh-add -q "$0" || { echo "worms-node-run: cannot load the WORMS key $0 into ssh-agent: re-run SetupRoundAgent.yml (worms build round-agent)" >&2; exit 1; }; exec sh -c "$1"' {{ round_agent_ssh_key }} "$2"

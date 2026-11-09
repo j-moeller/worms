@@ -5,7 +5,7 @@
     <p class="page-head__kicker">Staff · Users</p>
     <h1 class="page-head__title">{{ subject.username }}</h1>
     <p class="page-head__lead">
-        {% if subject.is_superuser %}The dashboard admin: managed on the console (<code>worms admin reset-password</code>), not here.
+        {% if subject.is_superuser %}The dashboard admin: managed on the console (<code>worms admin-reset-password</code>), not here.
         {% elif not manageable %}{% if subject.pk == request.user.pk %}Your own account: change your password on your <a href="{% url 'profile' %}">profile</a>.{% else %}A staff account: only the admin manages it.{% endif %}
         {% elif not subject.is_active %}Deactivated: cannot sign in.
         {% elif subject.must_change_password %}Has not replaced the one-time password yet.

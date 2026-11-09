@@ -93,7 +93,7 @@ def test_makefile_is_a_thin_wrapper_over_the_cli():
     assert "src/manage.py" in makefile
     assert "$(WORMS) build" in makefile
     assert "$(WORMS) destroy" in makefile
-    assert "$(WORMS) destroy-all" in makefile
+    assert "$(WORMS) destroy --all" in makefile
     assert "tofu" not in makefile and "ansible" not in makefile
 
 

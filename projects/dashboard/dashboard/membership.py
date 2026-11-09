@@ -7,7 +7,7 @@ and the remaining keys are re-pushed (docs/04-dev-environment.md), so their acce
 The re-push goes through the orchestrator (the dashboard cannot enqueue host
 jobs) and is best effort: the next provision or reset repeats it. Building a
 devbox for a new team is infrastructure work and is not done from here: the
-operator runs `worms devbox provision` (docs/04-dev-environment.md).
+operator runs `worms build devbox` (docs/04-dev-environment.md).
 """
 
 from __future__ import annotations

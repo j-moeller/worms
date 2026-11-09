@@ -245,13 +245,12 @@ class Executor:
                 thread.join(PIPE_GRACE)
         return proc.returncode, "".join(captured[proc.stdout]), "".join(captured[proc.stderr])
 
-    def worms(self, component, timeout=3600, args=None):
-        """Run a build component through the worms CLI (src/manage.py), which is
-        where the former Makefile logic now lives. `args` are passed through to
-        ansible-playbook (after `--`)."""
+    def worms(self, step, timeout=3600, args=None):
+        """Run a pipeline step through the worms CLI (src/manage.py, `worms step`: never
+        interactive). `args` are passed through to ansible-playbook (after `--`)."""
         import shlex
 
-        argv = ["python3", "src/manage.py", "build", component]
+        argv = ["python3", "src/manage.py", "step", step]
         if args:
             argv += ["--", *shlex.split(args)]
         return self.run(argv, timeout=timeout, stream=True)

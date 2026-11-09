@@ -30,11 +30,15 @@ DOCS = [
 SHELL_OPERATORS = {"<", ">", "|", "&&", ";", "2>&1"}
 
 
-def parser():
+def cli():
     spec = importlib.util.spec_from_file_location("worms_manage", REPO / "src" / "manage.py")
-    cli = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(cli)
-    return cli.build_parser()
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def parser():
+    return cli().build_parser()
 
 
 def documented_commands(text):
@@ -60,13 +64,13 @@ def arguments(command):
     return words
 
 
-def refusal(argv, build=parser()):
-    """Why the CLI refuses these arguments. A missing argument is fine: prose names
-    `worms secrets issue` without saying which token."""
+def refusal(argv, build=parser(), split=cli()._split):
+    """Why the CLI refuses these arguments (what follows `--` is the tools', as main() has
+    it). A missing argument is fine: prose names `worms secrets issue` without saying which token."""
     err = io.StringIO()
     try:
         with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
-            build.parse_args(argv)
+            build.parse_args(split(argv)[0])
     except SystemExit:
         message = err.getvalue()
         if "invalid choice" in message or "unrecognized arguments" in message:
@@ -86,9 +90,10 @@ def test_the_cli_accepts_what_the_docs_say_to_run(doc):
 
 
 def test_the_check_would_catch_the_mistakes_it_is_for():
-    for command in ("worms simulate -- -e x=1", "worms internet-deny", "worms test -k shipper", "worms --dry-run status"):
+    for command in ("worms simulate -- -e x=1", "worms internet-deny", "worms test -k shipper", "worms --dry-run status",
+                    "worms devbox provision"):  # fmt: skip
         assert refusal(arguments(command)), command
-    for command in ("worms build simulate -- -e x=1", "worms test -- -k shipper", 'worms teams delete "Neural Net"  # x',
+    for command in ("worms test --live -- -e x=1", "worms test -- -k shipper", 'worms delete-team "Neural Net"  # x',
                     "worms secrets set ssh-key < key", "worms secrets issue"):  # fmt: skip
         assert refusal(arguments(command)) is None, command
     assert arguments("worms build <component>") is None
@@ -96,7 +101,7 @@ def test_the_check_would_catch_the_mistakes_it_is_for():
 
 def test_nothing_names_a_make_target_that_is_gone():
     targets = set(re.findall(r"^([a-z_]+):", (REPO / "Makefile").read_text(), re.M))
-    gone = (set(pipeline.COMPONENTS) | {"test", "debug", "apply"}) - targets
+    gone = (set(pipeline.STEPS) | {"test", "debug", "apply", "provision", "configure", "simulate"}) - targets
     pattern = re.compile(rf"\bmake ({'|'.join(sorted(gone, key=len, reverse=True))})\b")
     files = [
         *DOCS,

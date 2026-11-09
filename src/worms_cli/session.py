@@ -17,7 +17,7 @@ of the build uses that agent and nothing else: the CLI's to the node, OpenTofu's
 Proxmox provider (snippet uploads), Ansible to the node and the VMs, rsync. Your
 own keys, a forwarded agent and ~/.ssh/id_* are never offered (IdentityFile=none,
 IdentityAgent=SSH_AUTH_SOCK, SSH_AUTH_SOCK = the WORMS agent). Root on the node
-has to accept the key: `worms node trust`, once, with your own login, says so
+has to accept the key: `worms trust-node`, once, with your own login, says so
 when it does not (check_node).
 """
 
@@ -174,7 +174,7 @@ class Session:
 
     def values(self) -> dict:
         """The vault, complete (Vault.check): a missing secret is an error that says how to
-        fix it, never generated on the side (`worms build secrets` does that)."""
+        fix it, never generated on the side (`worms secrets` does that)."""
         if self._values is None:
             try:
                 values = self.vault.load()
@@ -341,7 +341,7 @@ class Session:
             if proc.returncode != 0:
                 raise SessionError(
                     f"cannot log in to root@127.0.0.1 port {port} with the WORMS key: {proc.stderr.strip()[:200].rstrip('.')}. "
-                    "OpenTofu, Ansible and the round agent log in with it. Let it in once: `worms node trust`; "
+                    "OpenTofu, Ansible and the round agent log in with it. Let it in once: `worms trust-node`; "
                     f"if it is in and this still fails, sshd does not listen on {port} "
                     "(ansible/group_vars/all.yml, worms_environments: operator_ssh_port)"
                 )
@@ -353,7 +353,7 @@ class Session:
         if proc.returncode != 0:
             raise SessionError(
                 f"cannot log in to {self.config.ssh} with the WORMS key: {proc.stderr.strip()[:200].rstrip('.')}. "
-                "The build logs in with that key only. Let it in once, with your own login: `worms node trust`."
+                "The build logs in with that key only. Let it in once, with your own login: `worms trust-node`."
             )
         self._node_ok = True
 

@@ -6,7 +6,7 @@ host job carrying the full team list (slug, index, uuid and the team's
 registered SSH keys). The round agent builds/updates the devbox stack and the
 SSH gateway and reports the VMs back; it is idempotent, so this is safe to run
 whenever teams change: after staff create teams on the dashboard, the
-operator runs it (`worms devbox provision`).
+operator runs it (`worms build devbox`).
 
     manage.py provision_devboxes            # enqueue a provision job
 

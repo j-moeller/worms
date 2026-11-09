@@ -10,7 +10,7 @@ there.
     manage.py init --admin-username admin
 
 The admin account is created with login disabled (no password). Give it a
-one-time password with `worms admin reset-password` (manage.py
+one-time password with `worms admin-reset-password` (manage.py
 reset_admin_password): printed once on that terminal, changed at the first
 login.
 
@@ -102,7 +102,7 @@ class Command(BaseCommand):
         admin.save(using=using)
         self.stdout.write(
             f"admin: created {username} (is_staff=True, is_superuser=True), login disabled "
-            "until `worms admin reset-password`"
+            "until `worms admin-reset-password`"
         )
 
     # -- competition ---------------------------------------------------------

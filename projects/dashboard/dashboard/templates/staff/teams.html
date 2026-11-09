@@ -9,7 +9,7 @@
 {% include "staff/_tabs.html" with section="teams" %}
 
 {% if without_devbox %}
-<p class="alert alert--warn">{{ without_devbox }} team{{ without_devbox|pluralize }} {{ without_devbox|pluralize:"has,have" }} no devbox yet. Devboxes are built on the Proxmox host: run <code>worms devbox provision</code> on the console.</p>
+<p class="alert alert--warn">{{ without_devbox }} team{{ without_devbox|pluralize }} {{ without_devbox|pluralize:"has,have" }} no devbox yet. Devboxes are built on the Proxmox host: run <code>worms build devbox</code> on the console.</p>
 {% endif %}
 
 <div class="grid grid--2">

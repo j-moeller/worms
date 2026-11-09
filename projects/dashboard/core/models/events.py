@@ -13,7 +13,7 @@ How they are protected (setup_db_permissions):
   current_user). No writer may supply either, so no row can be backdated or
   claim another writer.
 - No service may read, change or delete a row; only the admin reads them
-  (`worms audit`).
+  (`worms status audit`).
 - Plain values instead of foreign keys: a row outlives the accounts and teams it
   names. Never a password, hash or token.
 """
@@ -21,7 +21,7 @@ How they are protected (setup_db_permissions):
 from django.db import models
 from django.db.models.functions import Now
 
-# Every event table, for `worms reset-database` (which keeps them) and the grants.
+# Every event table, for `worms reset database` (which keeps them) and the grants.
 EVENT_TABLES = (
     "login_events", "password_events", "impersonation_events", "account_events", "team_events",
     "credential_events", "competition_events", "ssh_gateway_logins", "platform_events",

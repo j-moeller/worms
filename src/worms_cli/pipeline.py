@@ -131,13 +131,13 @@ class Pipeline:
     # -- running steps -----------------------------------------------------------
 
     def plan(self, method_name: str) -> list[Step]:
-        """The steps of a component (COMPONENTS): its own plan, or the method as one step."""
+        """The steps of a step (STEPS) or a whole build: its own plan, or the method as one step."""
         builder = getattr(self, f"_plan_{method_name}", None)
         return builder() if builder else [Step(method_name.replace("_", " "), getattr(self, method_name))]
 
-    def run_component(self, component: str) -> None:
-        """`worms build <component>`."""
-        self._execute(self.plan(COMPONENTS[component][0]))
+    def run_step(self, step: str) -> None:
+        """`worms step <step>`."""
+        self._execute(self.plan(STEPS[step][0]))
 
     def _execute(self, steps: list[Step]) -> None:
         """Run the steps in order, each in the conditions it needs; on a failure, leave
@@ -251,9 +251,6 @@ class Pipeline:
         self.inventory()
         self._ansible("SetupHostNetwork.yml")
 
-    def infrastructure(self):
-        self._execute(self._plan_infrastructure())
-
     def _plan_infrastructure(self) -> list[Step]:
         # A failed apply still regenerates the inventory, so it matches the state.
         return [
@@ -275,38 +272,15 @@ class Pipeline:
     def show_config(self):
         self.runner.python("scripts/generate_inventory.py", "--show")
 
-    def configure(self):
-        self._execute(self._plan_configure())
-
     def _plan_configure(self) -> list[Step]:
         return [
             Step("inventory", self.inventory),
             *(Step(playbook, partial(self._ansible, playbook)) for playbook in CONFIGURE_PLAYBOOKS),
         ]
 
-    def dashboard(self):
-        """The dashboard's code and settings only: its Django play on its VM. No internet
-        window, no package steps (pip would hang without internet), so the devboxes keep
-        running; the dashboard restarts. Not for a change that adds a table, a role or a
-        grant: only the orchestrator migrates and the database VM grants, so new code
-        would meet an old schema (HTTP 500 on every page). Refused while the database
-        lacks a migration of this checkout, unless the orchestrator and the database are
-        included (docs/03-manage-py.md)."""
-        if "orchestrator" not in self.ansible_args:
-            pending = self.runner.pending_migrations()
-            if pending:
-                raise BuildError(
-                    f"the database lacks {len(pending)} migration(s) of this checkout ({', '.join(pending)}): "
-                    "the dashboard's new code would fail on every page. Migrate with the orchestrator and grant "
-                    "on the database too (no round may be running: the conductor restarts):\n"
-                    "  worms build dashboard -- --limit dashboard,orchestrator,database"
-                )
-        self.inventory()
-        self._ansible("SetupDbAndDashboard.yml", "--limit", "dashboard", "--skip-tags", "packages")
-
     def offline(self):
         if self.runner.flag_exists(INTERNET_FLAG):
-            raise BuildError(f"internet access is still allowed ({INTERNET_FLAG}): run `worms build internet-deny`")
+            raise BuildError(f"internet access is still allowed ({INTERNET_FLAG}): run `worms internet disable`")
         self._ansible("SetupDNS.yml")
         self._ansible("SetupPrivateInternet.yml")
 
@@ -323,7 +297,7 @@ class Pipeline:
         try:
             self.internet_deny()
         except BuildError as exc:
-            raise BuildError("!!! INTERNET ACCESS IS STILL ALLOWED: run `worms build internet-deny` -- " + str(exc)) from exc
+            raise BuildError("!!! INTERNET ACCESS IS STILL ALLOWED: run `worms internet disable` -- " + str(exc)) from exc
 
     def online(self, step):
         """Run `step` with internet access allowed, then deny it again whatever
@@ -355,14 +329,6 @@ class Pipeline:
         self.show_config()
         print(output.color("== setup complete (internet access denied) ==", "green"))
 
-    def provision(self):
-        """Ansible only: configure under the internet window, then offline; the
-        service VMs from their snapshot to a new one."""
-        self._execute(self._plan_provision())
-
-    def _plan_provision(self) -> list[Step]:
-        return self._on_clean_services(self._plan_configure())
-
     def _on_clean_services(self, steps: list[Step]) -> list[Step]:
         """`steps` under the internet window, on service VMs rolled back to their
         snapshot, which is then taken again: what they changed is kept, and
@@ -376,8 +342,9 @@ class Pipeline:
             Step("snapshot the service VMs", self._snapshot_after_build, scope=(DEVBOXES_OFF,)),
         ]
 
-    def _roll_back_for_build(self) -> None:
-        self.data["services_before"] = [vm["vmid"] for vm in self._service_vms()]
+    def _roll_back_for_build(self, recreated=()) -> None:
+        """`recreated`: VMs this build recreates, which count as new (their snapshot is taken again)."""
+        self.data["services_before"] = [vm["vmid"] for vm in self._service_vms() if vm["name"] not in recreated]
         self.data["services_reset"] = sorted(self._roll_back_services())
 
     def _snapshot_after_build(self) -> None:
@@ -394,7 +361,10 @@ class Pipeline:
             return True
 
     def _service_vms(self) -> list[dict]:
-        return sorted((vm for vm in self.runner.vms() if vm.get("pool") in SERVICE_POOLS), key=lambda vm: vm["vmid"])
+        """The service VMs; during a build of some components (build_components), only theirs."""
+        only = self.data.get("service_names")
+        return sorted((vm for vm in self.runner.vms() if vm.get("pool") in SERVICE_POOLS and (only is None or vm["name"] in only)),
+                      key=lambda vm: vm["vmid"])  # fmt: skip
 
     def _refuse_vms_in(self, pools: tuple, why: str) -> None:
         names = sorted(vm["name"] for vm in self.runner.vms() if vm.get("pool") in pools)
@@ -439,7 +409,7 @@ class Pipeline:
         start = f"qm start {' '.join(str(vmid) for vmid in off)}"
         if self.runner.flag_exists(INTERNET_FLAG):
             raise BuildError(
-                f"the devbox VMs stay off while internet access is allowed: start them after `worms build internet-deny` ({start})"
+                f"the devbox VMs stay off while internet access is allowed: start them after `worms internet disable` ({start})"
             )
         failed = [vmid for vmid in off if self.runner.node_sh(f"qm start {vmid}", check=False) != 0]
         if failed:  # `qm start` also fails on a VM that runs already
@@ -472,7 +442,7 @@ class Pipeline:
         if left:
             output.warn(
                 f"no snapshot of {', '.join(left)}: up before this build without one, so team VMs may have reached "
-                "them. A reset needs one on every service VM: `worms build rebuild-services`"
+                "them. A reset needs one on every service VM: `worms build services --rebuild`"
             )
 
     def snapshot_services(self):
@@ -486,7 +456,7 @@ class Pipeline:
         """Return the service VMs to their snapshot, by hand: the round agent does
         it itself before it builds a round's sandbox. Nothing is rebuilt and no
         internet is needed, so devbox VMs can stay. What only lives on these VMs
-        goes with it: the devbox map, which `worms build` then has the round agent
+        goes with it: the devbox map, which `worms reset services` then has the round agent
         write again (src/manage.py)."""
         self._refuse_vms_in(("sandbox",), "Refusing to reset during a round: sandbox VMs exist")
         vms = self._service_vms()
@@ -495,7 +465,7 @@ class Pipeline:
         if missing or not vms:
             raise BuildError(
                 f"nothing was reset: no snapshot on {', '.join(missing) or 'any service VM'}. "
-                "Make one with `worms build rebuild-services`"
+                "Make one with `worms build services --rebuild`"
             )
         oldest = min(snapshots.values(), key=lambda snapshot: snapshot["snaptime"])
         taken = datetime.fromtimestamp(oldest["snaptime"]).isoformat(sep=" ", timespec="minutes")
@@ -505,28 +475,79 @@ class Pipeline:
         self._wait_for(vms)
         self.services_rolled_back = True
 
-    def rebuild_services(self):
-        """Rebuild the service VMs from nothing and snapshot them: the first
-        snapshot of VMs that have been up without one, or when a VM no longer
-        builds the same. The devbox VMs are off from the destroy to the snapshot;
-        refused while a sandbox exists, before destroying anything."""
-        self._execute(self._plan_rebuild_services())
+    # -- `worms build <component>`: some components (worms_cli/components.py) ---
 
-    def _plan_rebuild_services(self) -> list[Step]:
-        off, window = (DEVBOXES_OFF,), (DEVBOXES_OFF, INTERNET)
-        return [
-            Step("destroy infrastructure/ephemeral", partial(self._destroy_services, "infrastructure/ephemeral"), scope=off),
-            Step("destroy private_internet", partial(self._destroy_services, "private_internet"), scope=off),
-            Step("apply private_internet", partial(self._apply, "private_internet"), scope=window),
-            Step("apply infrastructure/ephemeral", partial(self._apply, "infrastructure/ephemeral"), scope=window),
-            *(replace(step, scope=window) for step in self._plan_configure()),
-            Step("offline: DNS and the caches", self.offline, scope=off),
-            Step("snapshot the service VMs", partial(self._snapshot_services, lambda vm: True), scope=off),
-        ]
+    def build_components(self, plan, packages: bool = False) -> None:
+        """Build the plan's components (components.plan): their stacks, their VMs (`tofu apply
+        -target`, `-replace` to recreate), their share of the configuration (`--limit`), node
+        plays. Packages need the internet window: when a VM is new or recreated, or with
+        `packages`. Service VMs are configured from their snapshot and snapshotted again, with
+        the devboxes off (as a full build does)."""
+        self._execute(self._plan_components(plan, packages))
 
-    def _destroy_services(self, stack: str) -> None:
-        self.services_rolled_back = True
-        self._destroy(stack)
+    def _plan_components(self, plan, packages: bool) -> list[Step]:
+        from worms_cli.components import COMPONENTS
+
+        actions = dict(plan.steps)
+        chosen = [COMPONENTS[name] for name, _ in plan.steps]
+        vms = [c for c in chosen if c.kind == "vm"]
+        new = [c for c in vms if actions[c.name] in ("create", "recreate", "dependency")]
+        services = [c for c in vms if c.service]
+        window = bool(new) or (packages and bool(vms))
+        steps = [Step("secrets", self.secrets)]
+        for c in chosen:
+            if c.kind == "stack":
+                steps += [Step(f"init {c.stack}", partial(self.runner.tofu, c.stack, "init", "-input=false")),
+                          Step(f"apply {c.stack}", getattr(self, c.name.replace("-", "_")))]  # fmt: skip
+        if "host-network" in actions:
+            steps.append(Step("host network", self.host_network))
+        if vms:
+            scope = (DEVBOXES_OFF, INTERNET) if window else ((DEVBOXES_OFF,) if services else ())
+            if services:
+                # Before OpenTofu: a VM it creates (or recreates) was not up before, and gets its
+                # first snapshot at the end.
+                self.data["service_names"] = {c.name for c in services}
+                recreated = tuple(c.name for c in services if actions[c.name] == "recreate")
+                steps.append(Step(f"roll {', '.join(c.name for c in services)} back to their snapshot",
+                                  partial(self._roll_back_for_build, recreated), scope=(DEVBOXES_OFF,)))  # fmt: skip
+            for stack in dict.fromkeys(c.stack for c in new):
+                targets = [c for c in new if c.stack == stack]
+                steps += [Step(f"init {stack}", partial(self.runner.tofu, stack, "init", "-input=false"), scope=scope),
+                          Step(f"apply {stack}: {', '.join(c.name for c in targets)}",
+                               partial(self._apply_targets, stack, targets, [c for c in targets if actions[c.name] == "recreate"]),
+                               scope=scope, on_failure=self._inventory_after_failed_apply)]  # fmt: skip
+            steps.append(Step("inventory", self.inventory, scope=scope))
+            hosts = [c.group for c in vms]
+            if "orchestrator" in actions and "database" not in actions:
+                hosts.append("database")  # its grants, for the tables the migrations add
+            limit = ",".join([*hosts, "localhost"])
+            extra = ("--limit", limit) if window else ("--limit", limit, "--skip-tags", "packages")
+            for playbook in CONFIGURE_PLAYBOOKS:
+                if playbook != "SetupRoundAgent.yml":
+                    steps.append(Step(f"{playbook} ({limit})", partial(self._ansible, playbook, *extra), scope=scope))
+            offline = [c.group for c in vms if c.name == "dns" or c.stack == "private_internet"]
+            if window and offline:
+                steps.append(Step("offline: DNS and the caches", partial(self._offline_hosts, ",".join(offline)),
+                                  scope=(DEVBOXES_OFF,) if services else ()))  # fmt: skip
+            if services:
+                steps.append(Step("snapshot them again", self._snapshot_after_build,
+                                  scope=(DEVBOXES_OFF,)))  # fmt: skip
+        if "round-agent" in actions:
+            steps.append(Step("round agent", partial(self._ansible, "SetupRoundAgent.yml")))
+        return steps
+
+    def _apply_targets(self, stack: str, targets, recreate) -> None:
+        """`tofu apply` of just these VMs of `stack` (and what they need), recreating `recreate`."""
+        self._facts_fresh = False
+        args = [f"-target={shlex.quote(c.module)}" for c in targets]
+        args += [f"-replace={shlex.quote(f'{c.module}.{c.resource}')}" for c in recreate]
+        self.runner.tofu(stack, "apply", "-auto-approve", "-parallelism=1", "-input=false", *args)
+
+    def _offline_hosts(self, limit: str) -> None:
+        if self.runner.flag_exists(INTERNET_FLAG):
+            raise BuildError(f"internet access is still allowed ({INTERNET_FLAG}): run `worms internet disable`")
+        self._ansible("SetupDNS.yml", "--limit", limit, user_args=False)
+        self._ansible("SetupPrivateInternet.yml", "--limit", limit, user_args=False)
 
     # -- rounds / devbox -----------------------------------------------------
 
@@ -592,40 +613,17 @@ class Pipeline:
         self.runner.node_sh("qm list | awk 'NR>1 {print $1}' | xargs -r -I {} qm destroy {}", check=False)
 
 
-# component name -> (Pipeline method name, one-line help). `worms build` with no
-# component runs the full pipeline (build_all).
-COMPONENTS: dict[str, tuple[str, str]] = {
-    "all": ("build_all", "full idempotent end-to-end setup (the default)"),
-    "secrets": ("secrets", "generate the missing management secrets; fails on a missing token"),
+# `worms step <name>`: single steps of the pipeline, for the round agent (it runs them in its
+# workspace, never interactively) and for troubleshooting. name -> (method, one-line help).
+STEPS: dict[str, tuple[str, str]] = {
     "init": ("init", "tofu init every stack"),
-    "platform": ("platform", "bridges, images, cloud-init, pools, hookscript"),
-    "firewall": ("firewall", "Proxmox cluster/node firewall + security groups"),
-    "host-network": ("host_network", "host nftables/sysctls (SetupHostNetwork.yml)"),
-    "infrastructure": ("infrastructure", "create the base infrastructure VMs"),
-    "inventory": ("inventory", "regenerate the Ansible inventory from OpenTofu"),
+    "inventory": ("inventory", "regenerate the Ansible inventory from the OpenTofu stacks"),
     "show-config": ("show_config", "print the hosts Ansible will contact"),
-    "configure": ("configure", "Ansible configuration of all VMs"),
-    "provision": ("provision", "configure under the internet window (devboxes off), then offline; services re-snapshotted"),
-    "offline": ("offline", "switch DNS/caches to offline (internet denied)"),
-    "dashboard": ("dashboard", "redeploy the dashboard only: its code and settings (devboxes keep running)"),
-    "internet-allow": ("internet_allow", "open the internet window by hand (refused while a sandbox VM exists or a devbox VM runs)"),
-    "internet-deny": ("internet_deny", "close the internet window by hand, if a build reports it still open"),
-    "round-reset-services": (
-        "round_reset_services",
-        "return the ephemeral + private-internet VMs to their snapshot (the round agent does it each round)",
-    ),
-    "rebuild-services": (
-        "rebuild_services",
-        "rebuild those VMs from nothing, and snapshot them (devboxes off meanwhile; no sandbox)",
-    ),
-    "snapshot-services": (
-        "snapshot_services",
-        "snapshot those VMs as they are, as what a reset returns to (with no devbox or sandbox VM left)",
-    ),
-    "round-configure-sandbox": ("round_configure_sandbox", "configure freshly built sandbox VMs (CA)"),
-    "devbox": ("devbox", "build + configure the team devboxes and SSH gateway"),
-    "devbox-apply": ("devbox_apply", "apply the devbox stack only"),
-    "devbox-configure": ("devbox_configure", "configure devbox VMs + SSH gateway only"),
-    "ping": ("ping", "one line per host: can Ansible reach it?"),
-    "simulate": ("simulate", "end-to-end simulation against the deployed platform"),
+    "ping": ("ping", "one line per VM: can Ansible reach it?"),
+    "offline": ("offline", "switch DNS and the caches to offline (internet denied)"),
+    "snapshot-services": ("snapshot_services",
+                          "snapshot the service VMs as they are, as what a reset returns to (no team VM may exist)"),
+    "round-configure-sandbox": ("round_configure_sandbox", "configure a round's freshly built sandbox VMs (round agent)"),
+    "devbox-apply": ("devbox_apply", "apply the devbox stack (round agent)"),
+    "devbox-configure": ("devbox_configure", "configure the devbox VMs and the SSH gateway (round agent)"),
 }

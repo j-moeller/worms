@@ -14,9 +14,9 @@
   ansible.builtin.assert:
     that: round_agent_unset | length == 0
     fail_msg: >-
-      Not set: {{ round_agent_unset | join(', ') }}. Run this through `worms` (`worms build configure`, which adds
+      Not set: {{ round_agent_unset | join(', ') }}. Run this through `worms` (`worms build round-agent`, which adds
       the vault; by hand: ansible-playbook -e @group_vars/vault.yml SetupRoundAgent.yml), with the vault complete
-      (`worms build secrets`) and the Proxmox token issued (`worms secrets issue proxmox-token`).
+      (`worms secrets`) and the Proxmox token issued (`worms secrets issue proxmox-token`).
     quiet: true
   vars:
     round_agent_required:

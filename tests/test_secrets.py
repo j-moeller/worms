@@ -144,7 +144,7 @@ ENTERED = {"vault_proxmox_api_token_value", "vault_proxmox_readonly_api_token_va
 
 
 def test_build_secrets_provides_every_vault_variable(tmp_path):
-    """`worms build secrets` in a fresh checkout yields every vault_* variable
+    """`worms secrets` in a fresh checkout yields every vault_* variable
     the Ansible side refers to (the Proxmox tokens are entered by the operator,
     so they may be absent or empty), and a second run changes nothing."""
     import re
@@ -162,10 +162,11 @@ def test_build_secrets_provides_every_vault_variable(tmp_path):
     env = {"PATH": str(bin_dir), "HOME": str(tmp_path / "home"), "WORMS_REPO_ROOT": str(root), "NO_COLOR": "1"}
 
     def build_secrets():
-        proc = subprocess.run([sys.executable, str(root / "src" / "manage.py"), "build", "secrets"], env=env,
+        proc = subprocess.run([sys.executable, str(root / "src" / "manage.py"), "secrets"], env=env,
                               capture_output=True, text=True)  # fmt: skip
-        # The generated ones are written; then it stops on the entered tokens, which are not.
-        assert proc.returncode == 1 and "`worms secrets issue proxmox-token`" in proc.stderr, proc.stdout + proc.stderr
+        # The generated ones are written; the entered tokens are not, and it says so.
+        token = next(line for line in proc.stdout.splitlines() if line.startswith("proxmox-token"))
+        assert proc.returncode == 0 and "MISSING" in token, proc.stdout + proc.stderr
         return (root / "ansible" / "group_vars" / "vault.yml").read_text()
 
     first = build_secrets()

@@ -38,7 +38,7 @@ laptop ──22 (prod) / 2222 (dev)──► node DNAT ──► devbox-ssh-gate
 - **Firewall.** The gateway accepts 22 only from the node's DNAT address. A devbox VM's fabric NIC accepts 22 only from the gateway.
 - **Recording.** The node's collector writes every gateway login, with the key's fingerprint and the client's public address, to `ssh_gateway_logins` once a minute (`worms-audit-gateway.timer`).
 
-**Key lifecycle** ([`views/devbox.py`](../projects/dashboard/dashboard/views/devbox.py), [`membership.py`](../projects/dashboard/dashboard/membership.py)):
+**Key lifecycle** ([`ssh_keys.py`](../projects/dashboard/core/ssh_keys.py), [`views/devbox.py`](../projects/dashboard/dashboard/views/devbox.py), [`membership.py`](../projects/dashboard/dashboard/membership.py)). Members add keys on their profile; operators with `worms devbox-add-key` and `worms devbox-remove-key`, under the same rules:
 - Validation:
   - one OpenSSH public key line of a known type;
   - the comment matches `[A-Za-z0-9._@/+:,-]`;
@@ -50,9 +50,10 @@ laptop ──22 (prod) / 2222 (dev)──► node DNAT ──► devbox-ssh-gate
 
 | Action | Who | Host job | What the round agent does ([`handlers.py`](../scripts/round_agent/handlers.py)) |
 |---|---|---|---|
-| Provision | operator: `worms devbox provision` | `devbox_provision` | Generates `generated_devboxes.tf` for every team, applies the stack, snapshots each new VM as `clean` after its first boot (before any team key), configures, writes tokens and the attribution map |
-| Reset | team: **Reset devbox** button; or a dev upload | `devbox_rebuild` | Rolls A, B and C back to `clean` (VMs without a snapshot are replaced), configures again, writes new tokens, updates the map |
-| Keys | dashboard, on any key or membership change | `devbox_reconfigure` | Pushes keys and the attribution map |
+| Provision | operator: `worms build devbox` | `devbox_provision` | Generates `generated_devboxes.tf` for every team, applies the stack, snapshots each new VM as `clean` after its first boot (before any team key), configures, writes tokens and the attribution map |
+| Reset | team: **Reset devbox** button; a dev upload; operator: `worms reset devbox <team>` | `devbox_rebuild` | Rolls A, B and C back to `clean` (VMs without a snapshot are replaced), configures again, writes new tokens, updates the map |
+| Rebuild | operator: `worms build devbox --rebuild [--team NAME]` | `devbox_rebuild` (`fresh`) | Replaces A, B and C, snapshots them after their first boot, and goes on as a reset |
+| Keys | dashboard, on any key or membership change; `worms devbox-add-key`, `worms devbox-remove-key` | `devbox_reconfigure` | Pushes keys and the attribution map |
 | Dev run | a dev upload | `devbox_deploy` | Places the zip on A and arms `main.sh` |
 
 - **Version.** A reset bumps the team's `devbox_version` at once, so the dev score and logs start over. Nothing is deleted.
@@ -83,8 +84,12 @@ PENDING → RESETTING → DEPLOYING → ARMED → RUNNING → FINISHED
 ## Operations
 
 ```sh
-worms devbox provision                  # new teams; idempotent
-worms devbox reconfigure                # push keys and the map again
+worms build devbox                      # new teams; idempotent
+worms status devboxes                   # every team's devbox and keys
+worms devbox-add-key alpha ~/alpha.pub  # a key for team alpha (removed again: worms devbox-remove-key alpha <name>)
+worms reset devbox alpha                # its VMs back to their snapshot, as its Reset button
+worms devbox-reconfigure                # push keys and the map again
+worms login ssh-gateway-t1              # a shell on team t1's gateway (`worms login --help` lists the VMs)
 tail -F /var/log/worms/jobs/latest.log  # on the node: the running job
 ```
 

@@ -7,9 +7,9 @@ response to the request that made it (never stored, never cached). Each reset
 is recorded in password_resets (docs/07-security.md).
 
 Staff accounts are not made here: the dashboard's database role cannot create
-or promote one (setup_db_permissions); `worms admin create-staff` on the
+or promote one (setup_db_permissions); `worms admin-create-staff` on the
 console does. The admin manages existing staff accounts (password,
-deactivation); nobody manages the admin here (`worms admin reset-password`).
+deactivation); nobody manages the admin here (`worms admin-reset-password`).
 """
 
 from __future__ import annotations

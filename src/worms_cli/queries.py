@@ -265,3 +265,83 @@ def event_rows(hours: int = 24, kind: str | None = None, limit: int = 200) -> li
         rows = [r for r in rows if r[1][1].startswith(kind)]
     rows.sort(key=lambda r: r[0], reverse=True)
     return [r[1] for r in rows[:limit]]
+
+
+def team(name: str):
+    """The current competition's team of that name (ValueError if there is none)."""
+    return _get_team(_require_competition(), name)
+
+
+# -- rounds, host jobs, devboxes, gameplans (`worms status <topic>`) -----------
+
+
+def _when(ts) -> str:
+    return ts.strftime("%Y-%m-%d %H:%M") if ts else "—"
+
+
+def round_rows() -> list[list[str]]:
+    """The current competition's rounds: window, gameplan and its check, attempts by state."""
+    from collections import Counter
+
+    from core.models.competition import Round
+    from core.models.rounds import RoundRun
+
+    rows = []
+    for rnd in Round.objects.filter(competition=_require_competition()).order_by("round_start", "id"):
+        states = Counter(RoundRun.objects.filter(round=rnd).values_list("state", flat=True))
+        rows.append([
+            rnd.name, _when(rnd.round_start), _when(rnd.round_end), rnd.gameplan or "(none yet)",
+            rnd.gameplan_status or "—", f"{rnd.team_duration // 60} min",
+            ", ".join(f"{state}: {n}" for state, n in sorted(states.items())) or "not planned",
+        ])  # fmt: skip
+    return rows
+
+
+def job_rows(limit: int = 30) -> list[list[str]]:
+    """The newest host jobs (the round agent's work), newest first."""
+    from core.models.rounds import HostJob
+
+    rows = []
+    for job in HostJob.objects.select_related("run__team").order_by("-id")[:limit]:
+        who = job.run.team.name if job.run else (job.params or {}).get("team_uuid", "")[:8]
+        rows.append([str(job.id), job.kind, job.state, who, _when(job.requested_at), _when(job.finished_at),
+                     (job.error or "").replace("\n", " ")[:80]])  # fmt: skip
+    return rows
+
+
+def devbox_rows() -> list[list[str]]:
+    """Every team: its devbox (index, version, VMs) and its SSH keys (name, fingerprint)."""
+    from core.models.devbox import Devbox, DevboxSSHKey
+    from core.models.team import Team
+
+    rows = []
+    for t in Team.objects.filter(competition=_require_competition()).order_by("name"):
+        box = Devbox.objects.filter(team=t).first()
+        keys = [f"{k.name or '(no name)'} {k.key_fingerprint[:16]}" for k in DevboxSSHKey.objects.filter(team=t).order_by("id")]
+        devbox = f"t{t.id}: index {box.index}, version {t.devbox_version}, {box.vms.count()} VMs" if box else "none"
+        rows.append([t.name, devbox, "; ".join(keys) or "no key"])
+    return rows
+
+
+def gameplan_rows(repo_root) -> list[list[str]]:
+    """The gameplans: what the orchestrator and the node found (the `gameplans` table), and this
+    checkout's own check of each file (src/gameplan, the dry run): why one is invalid."""
+    import sys
+
+    from core.models.rounds import GameplanFile
+
+    sys.path.insert(0, str(repo_root / "src"))
+    from gameplan import loader, runtime
+
+    deployed = {g.filename: g for g in GameplanFile.objects.all()}
+    names = sorted(set(deployed) | set(loader.available(repo_root / "gameplans")))
+    rows = []
+    for name in names:
+        row = deployed.get(name)
+        there = ("valid" if row.valid else "INVALID") + f" ({_when(row.checked_at)})" if row else "not deployed"
+        try:
+            problems = runtime.validate(loader.load(repo_root / "gameplans", name).cls) if name in loader.available(repo_root / "gameplans") else ["not in this checkout"]
+        except Exception as exc:  # noqa: BLE001  (a file that does not load is a problem like any other)
+            problems = [f"{type(exc).__name__}: {exc}"]
+        rows.append([name, there, "ok" if not problems else "; ".join(problems)[:200]])
+    return rows

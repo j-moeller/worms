@@ -249,7 +249,7 @@ def test_teams_and_members(staff_site, monkeypatch):
     team = Team.objects.get(name="Neural Net")
     # Creating a team builds no infrastructure: the console provisions devboxes.
     assert calls == [] and not Devbox.objects.filter(team=team).exists()
-    assert "worms devbox provision" in text(get(staff_site, "/staff/teams/"))
+    assert "worms build devbox" in text(get(staff_site, "/staff/teams/"))
     dup = post(staff_site, "/staff/teams/", {"name": "neural net", "max_members": 2}, page="/staff/teams/")
     assert "already exists" in text(dup)
 

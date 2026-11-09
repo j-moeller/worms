@@ -100,9 +100,9 @@ class Runner:
         on this machine."""
         inventory = self.repo_root / "ansible" / "inventory.generated.yml"
         if not inventory.exists():
-            raise BuildError("no ansible/inventory.generated.yml: run `worms build inventory` first")
+            raise BuildError("no ansible/inventory.generated.yml: run `worms step inventory` first")
         if "ansible_connection: local" in inventory.read_text():
-            raise BuildError("ansible/inventory.generated.yml was written on the node: run `worms build inventory` here")
+            raise BuildError("ansible/inventory.generated.yml was written on the node: run `worms step inventory` here")
 
     # The tools the pipeline drives.
 

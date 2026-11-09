@@ -32,16 +32,16 @@ worms secrets issue proxmox-token          # OpenTofu and the round agent
 worms secrets issue orchestrator-token     # sandbox VM power, for rounds
 worms secrets issue topology-token         # the topology page and `worms status`
 worms secrets                              # generates everything else
-worms node trust                           # root on the node accepts the WORMS key
+worms trust-node                           # root on the node accepts the WORMS key
 worms build                                # = make: everything, idempotent
-worms admin reset-password                 # one-time password for `admin`
+worms admin-reset-password                 # one-time password for `admin`
 ```
 
-`worms --help` lists every command by purpose, and `worms build --list` the build's steps.
+`worms --help` lists the verbs by purpose, and `worms build --help` the components and what each needs.
 
 ## Tests
 
 ```sh
 worms test          # offline suite: no Proxmox needed
-worms simulate      # on the node: the deployed platform end to end, PASS/FAIL report
+worms test --live      # on the node: the deployed platform end to end, PASS/FAIL report
 ```

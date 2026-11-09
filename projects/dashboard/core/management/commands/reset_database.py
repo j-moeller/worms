@@ -10,7 +10,7 @@ the default competition).
 
 Writes go through the migrator connection where configured (it owns the
 tables); a superuser role (the admin) also works. Intended for development and
-for re-running a competition from scratch, driven by `worms reset-database`.
+for re-running a competition from scratch, driven by `worms reset database`.
 """
 
 from django.core.management import call_command

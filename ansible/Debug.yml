@@ -2,7 +2,7 @@
 # Connection diagnostics for one VM or group, step by step, so a failure shows
 # WHERE it breaks (each step runs even if an earlier one failed):
 #
-#   worms debug database                      (or dns_hosts, or database.worms.internal)
+#   worms step debug database                      (or dns_hosts, or database.worms.internal)
 #   cd ansible && ansible-playbook Debug.yml -e target=database -vvv   (full SSH trace)
 #
 #   1. what Ansible resolved (address, user, VMID, OpenTofu stack): no connection

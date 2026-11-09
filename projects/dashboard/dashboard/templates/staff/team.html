@@ -110,7 +110,7 @@
     <header class="panel__head"><h2 class="panel__title" id="delete-title">Delete</h2></header>
     <div class="panel__body">
         {% if history %}
-        <p>{{ team.name }} has {{ history|join:", " }}, so it is kept here. <code>worms teams delete</code> on the console removes it with everything it owns.</p>
+        <p>{{ team.name }} has {{ history|join:", " }}, so it is kept here. <code>worms delete-team</code> on the console removes it with everything it owns.</p>
         {% else %}
         <details class="confirm">
             <summary class="btn btn--danger">Delete team</summary>

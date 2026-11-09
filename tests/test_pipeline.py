@@ -25,31 +25,33 @@ OFFLINE = [("ansible", "SetupDNS.yml"), ("ansible", "SetupPrivateInternet.yml")]
 INIT = [("tofu", s, "init") for s in ("platform", "firewall", "infrastructure/persistent",
                                       "infrastructure/ephemeral", "sandbox", "devbox", "private_internet")]  # fmt: skip
 
-# component -> the tofu/ansible steps, in order.
+# A step (`worms step`), the whole build (`worms build`) or a component build -> the tofu and
+# ansible steps, in order.
+CONFIGURE_VMS = [step for step in CONFIGURE if step != ("ansible", "SetupRoundAgent.yml")]
 EXPECTED = {
-    "platform": [("tofu", "platform", "apply")],
-    "firewall": [("tofu", "firewall", "apply")],
-    "host-network": [("ansible", "SetupHostNetwork.yml")],
-    "infrastructure": [("tofu", "private_internet", "apply"), ("tofu", "infrastructure/persistent", "apply"),
-                       ("tofu", "infrastructure/ephemeral", "apply")],
-    "configure": CONFIGURE,
-    "provision": [ALLOW, *CONFIGURE, DENY, *OFFLINE],
     "offline": OFFLINE,
-    "dashboard": [("ansible", "SetupDbAndDashboard.yml")],
-    "internet-allow": [ALLOW],
-    "internet-deny": [DENY],
     "round-configure-sandbox": [("ansible", "SetupSandbox.yml")],
     "devbox-apply": [("tofu", "devbox", "apply")],
     "devbox-configure": [("ansible", "SetupSSHGateway.yml"), ("ansible", "SetupDevbox.yml")],
-    "devbox": [("tofu", "devbox", "apply"), ("ansible", "SetupSSHGateway.yml"), ("ansible", "SetupDevbox.yml")],
-    "rebuild-services": [("tofu", "infrastructure/ephemeral", "destroy"), ("tofu", "private_internet", "destroy"),
-                         ALLOW, ("tofu", "private_internet", "apply"), ("tofu", "infrastructure/ephemeral", "apply"),
-                         *CONFIGURE, DENY, *OFFLINE],
-    "simulate": [("ansible", "Simulate.yml")],
     "all": [*INIT, ("tofu", "platform", "apply"), ("tofu", "firewall", "apply"), ("ansible", "SetupHostNetwork.yml"),
             ALLOW, ("tofu", "private_internet", "apply"), ("tofu", "infrastructure/persistent", "apply"),
             ("tofu", "infrastructure/ephemeral", "apply"), *CONFIGURE, DENY, *OFFLINE],
+    # `worms build dashboard`: it exists, so its configuration again, without the window.
+    "dashboard": CONFIGURE_VMS,
+    # `worms build scoring` without a scoring VM: created, in the window.
+    "scoring": [ALLOW, ("tofu", "infrastructure/ephemeral", "init"), ("tofu", "infrastructure/ephemeral", "apply"),
+                *CONFIGURE_VMS, DENY],
+    # `worms build platform host-network`: a stack and a node play.
+    "platform host-network": [("tofu", "platform", "init"), ("tofu", "platform", "apply"), ("ansible", "SetupHostNetwork.yml")],
 }  # fmt: skip
+
+
+def build(pipe, names, rebuild=False, missing=()):
+    """`worms build <names>` on `pipe`: everything there but `missing`."""
+    from worms_cli import components
+
+    plan = components.plan(components.expand(names), lambda c: c.name not in missing, rebuild=rebuild)
+    pipe.build_components(plan)
 
 
 class Recorder:
@@ -108,22 +110,26 @@ class Recorder:
 def run(monkeypatch):
     monkeypatch.setattr(pipeline, "Runner", Recorder)
 
-    def _run(component):
+    def _run(name):
         pipe = pipeline.Pipeline(config=None)
-        getattr(pipe, pipeline.COMPONENTS[component][0])()
+        if name == "all":
+            pipe.build_all()
+        elif name in pipeline.STEPS:
+            pipe.run_step(name)
+        else:
+            build(pipe, name.split(), missing=("scoring",))
         return [c for c in pipe.runner.calls if c[0] in ("tofu", "ansible")]
 
     return _run
 
 
-@pytest.mark.parametrize("component", sorted(EXPECTED))
-def test_component_steps(run, component):
-    assert run(component) == EXPECTED[component]
+@pytest.mark.parametrize("name", sorted(EXPECTED))
+def test_component_steps(run, name):
+    assert run(name) == EXPECTED[name]
 
 
-def test_every_component_is_covered():
-    assert set(pipeline.COMPONENTS) - set(EXPECTED) <= {"secrets", "init", "inventory", "show-config", "ping",
-                                                        "round-reset-services", "snapshot-services"}  # fmt: skip
+def test_every_step_is_covered():
+    assert set(pipeline.STEPS) - set(EXPECTED) <= {"init", "inventory", "show-config", "ping", "snapshot-services"}
 
 
 def test_failed_step_still_closes_the_window(monkeypatch):
@@ -132,7 +138,7 @@ def test_failed_step_still_closes_the_window(monkeypatch):
     try:
         pipe = pipeline.Pipeline(config=None)
         with pytest.raises(BuildError):
-            pipe.provision()
+            build(pipe, ["scoring"], missing=("scoring",))
         steps = [c for c in pipe.runner.calls if c[0] == "ansible"]
         assert steps[-1] == DENY
         assert ("ansible", "SetupSandboxApi.yml") not in steps  # stopped at the failure
@@ -162,7 +168,7 @@ def test_the_cleanup_after_a_failed_step_says_the_build_is_stopping(monkeypatch,
     monkeypatch.setattr(Recorder, "fail_on", ("tofu", "private_internet"))
     pipe = pipeline.Pipeline(config=None)
     with pytest.raises(BuildError, match="private_internet"):
-        pipe.online(pipe.infrastructure)  # build_all's window, without its `tofu init` (which fails here first)
+        pipe.online(lambda: pipe._execute(pipe._plan_infrastructure()))  # build_all's window, without its `tofu init`
     assert [c for c in pipe.runner.calls if c[0] == "ansible"][-1] == DENY
     err = capsys.readouterr().err
     assert "stopping the build: regenerating the inventory" in err
@@ -179,7 +185,7 @@ def test_a_failed_inventory_after_a_failed_apply_keeps_the_applys_error(monkeypa
 
     monkeypatch.setattr(pipe, "inventory", inventory)
     with pytest.raises(BuildError, match="private_internet"):
-        pipe.infrastructure()
+        pipe._execute(pipe._plan_infrastructure())
 
 
 def test_a_limit_never_skips_the_internet_window(monkeypatch):
@@ -193,7 +199,7 @@ def test_a_limit_never_skips_the_internet_window(monkeypatch):
             return super().ansible(playbook, *args, **kwargs)
 
     monkeypatch.setattr(pipeline, "Runner", Args)
-    pipeline.Pipeline(config=None, ansible_args="--limit dashboard").provision()
+    pipeline.Pipeline(config=None, ansible_args="--limit dashboard").build_all()
     assert len(seen["Internet.yml"]) == 2
     assert not any("--limit dashboard" in args for args in seen["Internet.yml"])
     assert "--limit dashboard" in seen["SetupDbAndDashboard.yml"][0]
@@ -205,7 +211,7 @@ def test_facts_are_dropped_whenever_vms_may_have_changed(monkeypatch):
     no play sees the facts (MACs, addresses) of a VM that was rebuilt."""
     monkeypatch.setattr(pipeline, "Runner", Recorder)
     pipe = pipeline.Pipeline(config=None)
-    pipe.rebuild_services()
+    build(pipe, ["services"], rebuild=True)
     calls = [c for c in pipe.runner.calls if c[0] in ("tofu", "ansible", "flush facts")]
     first_playbook = next(i for i, c in enumerate(calls) if c[0] == "ansible")
     assert calls[first_playbook - 1] == ("flush facts",)
@@ -243,7 +249,7 @@ def _names_a_real_command(message):
     cli = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(cli)
     command = re.search(r"`worms ([^`]+)`", message).group(1)
-    return cli.build_parser().parse_args(command.split())
+    return cli.build_parser().parse_args(cli._split(command.split())[0])
 
 
 def test_a_window_left_open_names_the_command_that_closes_it(monkeypatch):
@@ -252,7 +258,7 @@ def test_a_window_left_open_names_the_command_that_closes_it(monkeypatch):
     pipe.runner.flag_exists = lambda path: True
     with pytest.raises(BuildError) as still_open:
         pipe.offline()
-    assert _names_a_real_command(str(still_open.value)).component == "internet-deny"
+    assert _names_a_real_command(str(still_open.value)).state == "disable"
 
 
 def test_a_failed_close_names_the_command_that_closes_it(monkeypatch):
@@ -266,7 +272,7 @@ def test_a_failed_close_names_the_command_that_closes_it(monkeypatch):
     with pytest.raises(BuildError) as failed:
         pipe.online(lambda: None)
     assert "STILL ALLOWED" in str(failed.value)
-    assert _names_a_real_command(str(failed.value)).component == "internet-deny"
+    assert _names_a_real_command(str(failed.value)).state == "disable"
 
 
 # --- the service VMs: reset, snapshot, rebuild ---------------------------------------
@@ -306,17 +312,23 @@ def test_a_reset_rolls_back_the_services_and_nothing_else(node):
 
 
 def test_a_reset_waits_for_each_vm_by_its_inventory_group(monkeypatch, node):
-    """`docker-registry` is the group `docker_registry`, and a wrong --limit waits for nothing."""
+    """`docker-registry` is the group `docker_registry`, and a wrong --limit waits for nothing.
+    A component build configures by those groups too, with the CA's host (localhost), and the
+    database's grants after the orchestrator's migrations; packages only in the window."""
     seen = []
     original = Recorder.ansible
 
     def ansible(self, playbook, *args, **kwargs):
-        seen.append(args)
+        seen.append((playbook, args))
         return original(self, playbook, *args, **kwargs)
 
     monkeypatch.setattr(Recorder, "ansible", ansible)
     node.round_reset_services()
-    assert seen == [("--limit", "docker_registry,scoring")]
+    assert seen == [("WaitForVMs.yml", ("--limit", "docker_registry,scoring"))]
+    seen.clear()
+    build(node, ["orchestrator", "docker-registry"])
+    limits = {args for playbook, args in seen if playbook == "SetupDbAndDashboard.yml"}
+    assert limits == {("--limit", "orchestrator,docker_registry,database,localhost", "--skip-tags", "packages")}
 
 
 def test_a_reset_leaves_devboxes_running(node, monkeypatch):
@@ -340,7 +352,8 @@ def test_a_reset_touches_nothing_if_any_vm_lacks_a_snapshot(node, monkeypatch):
     with pytest.raises(BuildError, match="nothing was reset.*docker-registry") as refused:
         node.round_reset_services()
     assert steps(node) == []
-    assert _names_a_real_command(str(refused.value)).component == "rebuild-services"
+    named = _names_a_real_command(str(refused.value))
+    assert (named.components, named.rebuild) == (["services"], True)
 
 
 def test_a_reset_without_any_service_vm_says_so(node, monkeypatch):
@@ -384,20 +397,23 @@ def test_a_rebuild_is_refused_during_a_round_before_it_destroys_anything(node, m
     destroys, which left the services gone."""
     monkeypatch.setattr(Recorder, "node_vms", [*SERVICES, SANDBOX])
     with pytest.raises(BuildError, match="Refusing to open the internet window.*sandbox-1"):
-        node.rebuild_services()
+        build(node, ["services"], rebuild=True)
     assert steps(node) == []
 
 
 STOPPED_DEVBOX = {**DEVBOX, "vmid": 117, "name": "devbox-t1-b", "status": "stopped"}
 
 
-@pytest.mark.parametrize("component", ["rebuild-services", "provision", "all"])
+@pytest.mark.parametrize("component", ["services --rebuild", "services", "all"])
 def test_running_devboxes_are_off_for_the_whole_window(node, monkeypatch, component):
     """No team VM runs while the services can reach the internet (docs/IMPORTANT), and none
     from the rollback to the new snapshot, which must hold nothing a team did. One that was
     off stays off."""
     monkeypatch.setattr(Recorder, "node_vms", [*SERVICES, DEVBOX, STOPPED_DEVBOX])
-    getattr(node, pipeline.COMPONENTS[component][0])()
+    if component == "all":
+        node.build_all()
+    else:
+        build(node, ["services"], rebuild=component.endswith("--rebuild"))
     calls = steps(node)
     off, on = calls.index(("node", "qm shutdown 116 --timeout 120 --forceStop 1")), calls.index(("node", "qm start 116"))
     window = [i for i, c in enumerate(calls) if c[:2] == ("ansible", "Internet.yml")]
@@ -411,7 +427,7 @@ def test_devboxes_stay_off_while_the_window_is_left_open(node, monkeypatch, caps
     monkeypatch.setattr(Recorder, "node_vms", [*SERVICES, DEVBOX])
     monkeypatch.setattr(Recorder, "flag_exists", lambda self, path: True, raising=False)
     with pytest.raises(BuildError):
-        node.provision()  # offline() refuses: the flag is still there
+        node.build_all()  # offline() refuses: the flag is still there
     assert ("node", "qm start 116") not in steps(node)
     assert "qm start 116" in capsys.readouterr().err
 
@@ -421,14 +437,14 @@ def test_a_failed_build_starts_the_devboxes_again(node, monkeypatch):
     monkeypatch.setattr(Recorder, "node_vms", [*SERVICES, DEVBOX])
     monkeypatch.setattr(Recorder, "fail_on", ("ansible", "SetupDNS.yml"))
     with pytest.raises(BuildError):
-        node.provision()
+        node.build_all()
     assert steps(node)[-1] == ("node", "qm start 116")
 
 
-def test_provision_configures_clean_services_and_snapshots_them_again(node):
-    """A snapshot that kept up with every provision: what it changed stays, and since the VMs
+def test_a_build_configures_clean_services_and_snapshots_them_again(node):
+    """A snapshot that kept up with every build: what it changed stays, and since the VMs
     were rolled back first, nothing a team VM did."""
-    node.provision()
+    node.build_all()
     calls = steps(node)
     rollbacks = [i for i, c in enumerate(calls) if c[0] == "node" and "rollback" in c[1]]
     configure = calls.index(("ansible", "SetupDbAndDashboard.yml"))
@@ -445,10 +461,10 @@ def test_a_vm_up_without_a_snapshot_gets_none_and_the_build_says_why(node, monke
     warnings = []
     monkeypatch.setattr(pipeline.output, "warn", warnings.append)
     monkeypatch.setattr(Recorder, "node_snapshots", {111: A_SNAPSHOT})
-    node.provision()
+    node.build_all()
     snapshotted = {c[1].split()[2] for c in steps(node) if c[0] == "node" and c[1].startswith("qm snapshot")}
     assert snapshotted == {"111"}
-    assert len(warnings) == 1 and "docker-registry" in warnings[0] and "rebuild-services" in warnings[0]
+    assert len(warnings) == 1 and "docker-registry" in warnings[0] and "services --rebuild" in warnings[0]
 
 
 def test_a_vm_the_build_created_is_snapshotted(node, monkeypatch):

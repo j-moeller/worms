@@ -45,7 +45,7 @@ django_extra_env:
   # REST API callers (orchestrator/api.py).
   ORCHESTRATOR_DASHBOARD_TOKEN: "{{ vault_orchestrator_dashboard_token }}"
 # Post-migration init: the admin account (is_staff + superuser, login disabled
-# until `worms admin reset-password`) and the default competition
+# until `worms admin-reset-password`) and the default competition
 # "WORMS <year>". Idempotent; see core/.../commands/init.py.
 django_post_migrate_commands:
   - init

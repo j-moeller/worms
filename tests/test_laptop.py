@@ -130,7 +130,7 @@ def test_preflight_logs_in_like_the_provider_and_says_what_to_do(checkout, monke
     assert calls == [["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "IdentityFile=none",
                       "-o", "IdentityAgent=SSH_AUTH_SOCK", NODE, "true"]]  # fmt: skip
     message = str(error.value)
-    assert "Permission denied (publickey)" in message and "WORMS key" in message and "worms node trust" in message
+    assert "Permission denied (publickey)" in message and "WORMS key" in message and "worms trust-node" in message
 
 
 def probing_with(monkeypatch, checkout, returncode):
@@ -234,7 +234,7 @@ def test_laptop_refuses_an_inventory_written_on_the_node(checkout, recorded):
     with pytest.raises(build.BuildError, match="written on the node"):
         runner(checkout).ansible("SetupHostNetwork.yml")
     inventory.unlink()
-    with pytest.raises(build.BuildError, match="worms build inventory"):
+    with pytest.raises(build.BuildError, match="worms step inventory"):
         runner(checkout).ansible("SetupHostNetwork.yml")
     assert not recorded.calls
 

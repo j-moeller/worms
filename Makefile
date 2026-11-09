@@ -10,10 +10,8 @@
 #   make destroy    Destroy the VM stacks (keeps the firewall and platform).
 #   make destroy_all Destroy everything (VM stacks, firewall, platform).
 #
-# Everything else the Makefile used to do is a CLI command or `worms build
-# <component>` (see `worms build --list`): secrets, platform, firewall,
-# host-network, infrastructure, inventory, configure/provision, the internet
-# window, round/devbox builds, ping, debug, simulate, test.
+# Everything else is a `worms` verb (`worms --help`): status, show, login,
+# build <component> (`worms build --help`), internet, reset, test, step, ...
 # =============================================================================
 
 WORMS = python3 src/manage.py
@@ -27,4 +25,4 @@ destroy:
 	$(WORMS) destroy --yes
 
 destroy_all:
-	$(WORMS) destroy-all --yes
+	$(WORMS) destroy --all --yes

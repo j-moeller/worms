@@ -10,7 +10,7 @@
       - pki_ca_passphrase is defined
       - pki_ca_passphrase | length >= 16
     fail_msg: >-
-      vault_pki_ca_passphrase is missing or too short. Run `worms build secrets`
+      vault_pki_ca_passphrase is missing or too short. Run `worms secrets`
       (adds missing keys to the vault) and pass -e @group_vars/vault.yml.
     quiet: true
   no_log: "{{ hide_secrets }}"

@@ -139,7 +139,7 @@ def test_00_base_state(journey):
     try:
         if check_wipe_allowed(journey.wipe, p.node):
             proc = p.worms("reset-database", "--yes", timeout=300)
-            check("`worms reset-database --yes`", "Exit 0", f"exit {proc.returncode}", proc.returncode == 0)
+            check("`worms reset database --yes`", "Exit 0", f"exit {proc.returncode}", proc.returncode == 0)
     except NotBaseState as exc:
         pytest.fail(str(exc), pytrace=False)
     db = p.database()
@@ -168,7 +168,7 @@ def test_01_admin_signs_in(journey):
     journey.report.stage("Stage 1: the administrator creates users and teams", "the base state")
     proc = p.worms("admin", "reset-password", "--yes")
     otp = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
-    check("`worms admin reset-password --yes`", "A one-time password, printed once", f"exit {proc.returncode}, {len(otp)} characters", proc.returncode == 0 and len(otp) >= 16)
+    check("`worms admin-reset-password --yes`", "A one-time password, printed once", f"exit {proc.returncode}, {len(otp)} characters", proc.returncode == 0 and len(otp) >= 16)
     journey.admin_password = Member("x", "x", "x").password
     r = p.browser("admin_first_login", otp=otp, password=journey.admin_password)
     check("Sign in with a wrong password", "Refused", f"{r['wrong']}, {r['wrongPath']}", r["wrong"] == 401 and r["wrongPath"] == "/login/")
@@ -201,9 +201,9 @@ def test_03_admin_creates_users(journey):
     for member in journey.members:
         member.otp = r["passwords"].get(member.email, "")
     teams = p.worms("teams").stdout
-    check("`worms teams`", "Each team at 3/3", " ".join(line.split()[1] for line in teams.splitlines() if line.split()[:1] and line.split()[0] in TEAMS), all(f"{t}" in teams for t in TEAMS) and teams.count("3/3") == 3)
+    check("`worms status teams`", "Each team at 3/3", " ".join(line.split()[1] for line in teams.splitlines() if line.split()[:1] and line.split()[0] in TEAMS), all(f"{t}" in teams for t in TEAMS) and teams.count("3/3") == 3)
     users_out = p.worms("users").stdout
-    check("`worms users`", "9 users with a one-time password", users_out.count("one-time pw"), users_out.count("one-time pw") == 9)
+    check("`worms status users`", "9 users with a one-time password", users_out.count("one-time pw"), users_out.count("one-time pw") == 9)
     journey.passed("users")
 
 
@@ -217,7 +217,7 @@ def test_04_admin_builds_devboxes(journey):
     for attempt in range(1, BUILD_ATTEMPTS + 1):
         before = len([j for j in p.database()["jobs"] if j["kind"] == "devbox_provision"])
         proc = p.worms("devbox", "provision")
-        check(f"`worms devbox provision`, attempt {attempt}", "A host job", proc.stdout.strip().splitlines()[-1][:100] if proc.stdout.strip() else proc.stderr[-200:], proc.returncode == 0 and "devbox_provision" in proc.stdout)
+        check(f"`worms build devbox`, attempt {attempt}", "A host job", proc.stdout.strip().splitlines()[-1][:100] if proc.stdout.strip() else proc.stderr[-200:], proc.returncode == 0 and "devbox_provision" in proc.stdout)
 
         def finished():
             jobs = [j for j in p.database()["jobs"] if j["kind"] == "devbox_provision"]

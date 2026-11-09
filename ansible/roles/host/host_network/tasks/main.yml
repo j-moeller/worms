@@ -42,7 +42,7 @@
     fail_msg: >-
       host_publish_ssh_gateway is set, but the inventory has no ssh_gateway_ips.devbox_ssh:
       apply the platform stack again (`worms build platform`) and regenerate the inventory
-      (`worms build inventory`).
+      (`worms step inventory`).
     quiet: true
 
 - name: Create configuration directory

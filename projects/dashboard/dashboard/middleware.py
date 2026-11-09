@@ -172,17 +172,11 @@ class UserMetadataMiddleware:
         # first sees their devbox.
         request.is_dev_environment = bool(request.session.get("is_dev_environment", True)) and request.team is not None
 
-        if request.is_dev_environment:
-            # The team's devbox: always on, reset by the team, no rounds (docs/04-dev-environment.md).
-            request.rounds = Round.objects.none()
-            request.competition_state = CompetitionState("devbox")
-        else:
-            request.rounds = Round.objects.filter(
-                competition=request.competition
-            ).order_by("round_start")
-            request.competition_state = get_competition_state(
-                request.time_now, request.competition, request.rounds
-            )
+        # The competition's state (registration, the next round, a round in progress): the
+        # header's badge, the same in the Dev view, where the devbox has no rounds of its own,
+        # and in the Live view.
+        request.rounds = Round.objects.filter(competition=request.competition).order_by("round_start")
+        request.competition_state = get_competition_state(request.time_now, request.competition, request.rounds)
 
         request.is_debug_mode = settings.DEBUG
 

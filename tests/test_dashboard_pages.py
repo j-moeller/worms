@@ -142,15 +142,15 @@ def test_anonymous_requests_create_no_session(site):  # noqa: F811
     assert Session.objects.count() == 1
 
 
-def test_no_round_banner_without_a_round_or_in_the_dev_view(django_env):
+def test_no_round_banner_without_a_round_and_the_same_in_both_views(site, team_upload):  # noqa: F811
     """A competition without a registration window and without rounds is not a running
-    round (it used to show "ROUND IN PROGRESS (DEV)"), and the Dev view, the devbox, has
-    no rounds at all: neither gets a banner."""
+    round (it used to show "ROUND IN PROGRESS (DEV)"): no banner. With a round, the banner
+    is the competition's, the same in the Live view and the Dev view (which had none)."""
     from datetime import timedelta
 
     from core import clock
-    from core.models.competition import Competition, Round
-    from dashboard.middleware import CompetitionState, get_competition_state
+    from core.models.competition import ApplicationSetting, Competition, Round
+    from dashboard.middleware import get_competition_state
     from dashboard.views.util import get_competition_state_presentation
 
     now = clock.now()
@@ -158,7 +158,18 @@ def test_no_round_banner_without_a_round_or_in_the_dev_view(django_env):
     state = get_competition_state(now, comp, [])
     assert state.state == "no_rounds"
     assert get_competition_state_presentation(state, comp).label == ""
-    assert get_competition_state_presentation(CompetitionState("devbox"), comp).label == ""
+
+    Round.objects.create(competition=ApplicationSetting.get_current_competition(), name="Round 1", seed=1,
+                         round_start=now + timedelta(days=1), round_end=now + timedelta(days=2))  # fmt: skip
+
+    def banner():
+        page = site.get("/", **proxied(HOST)).content.decode()
+        found = re.search(r'class="site-status__label">([^<]*)<', page)
+        return found.group(1) if found else None
+
+    live = banner()  # team_upload signed in to the Live view
+    view(site, "dev")
+    assert live and banner() == live
 
     running = Round(competition=comp, name="R1", round_start=now - timedelta(hours=1), round_end=now + timedelta(hours=1))
     state = get_competition_state(now, comp, [running])

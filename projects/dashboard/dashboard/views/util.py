@@ -103,8 +103,8 @@ def get_competition_state_presentation(
             warning=False,
         )
 
-    elif state.state in ("devbox", "no_rounds"):
-        # The Dev view (the devbox has no rounds), or no round defined yet: no banner.
+    elif state.state == "no_rounds":
+        # No round defined yet: no banner.
         return CompetitionPresentation(
             key=state.state,
             label="",

@@ -158,8 +158,8 @@ def team(kind: str, *, request=None, actor=None, team=None, team_name=None, memb
     }, using)  # fmt: skip
 
 
-def credential(kind: str, *, request, team, name=None, public_key=None) -> bool:
-    actor_uuid, actor_name = _actor(request, None)
+def credential(kind: str, *, request=None, actor=None, team, name=None, public_key=None) -> bool:
+    actor_uuid, actor_name = _actor(request, actor)
     return _insert("credential_events", {
         "kind": kind, "actor_uuid": actor_uuid, "actor_username": actor_name, "client_ip": client_ip(request),
         "team_uuid": str(team.uuid), "team_name": _text(team.name), "name": _text(name),

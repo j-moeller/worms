@@ -579,7 +579,7 @@ def test_services_without_a_snapshot_are_left_as_they_are_and_reported():
     ex.clean = {111}
     result = _prepare(ex)
     assert not any("rollback" in step for step in ex.qm_steps())
-    assert "not reset" in result["services"] and "apt-cache" in result["services"] and "rebuild-services" in result["services"]
+    assert "not reset" in result["services"] and "apt-cache" in result["services"] and "services --rebuild" in result["services"]
 
 
 def test_the_devboxes_come_back_when_the_build_fails():
@@ -1197,7 +1197,7 @@ def test_round_agent_env_renders(render):
 
 def test_the_agent_is_the_node_whatever_roots_worms_config_says(render, tmp_path, monkeypatch):
     """A /root/.worms/config with WORMS_SSH on the node (laptop mode) made the
-    agent's `worms build devbox-apply` fail with "no ansible/inventory.generated.yml"
+    agent's `worms step devbox-apply` fail with "no ansible/inventory.generated.yml"
     (2026-11-06, production). The agent's environment empties it."""
     env = render("ansible/roles/host/round_agent", "round-agent.env.j2", **AGENT_ENV_VARS)
     sys.path.insert(0, str(REPO / "src"))

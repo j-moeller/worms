@@ -60,7 +60,7 @@ def provisioned_team_specs(competition) -> list[dict]:
     return [team_spec(team, indices[team.id]) for team in Team.objects.filter(competition=competition).order_by("id") if team.id in indices]
 
 
-def request_rebuild(team):
+def request_rebuild(team, fresh=False):
     """Bump the team's devbox version (which immediately clears its dev score and logs,
     without deleting any records) and enqueue a rebuild host job, which rebuilds its VMs and
     rewrites their tokens. Returns (job, enqueued). Rebuilds never pile up: if one is queued or
@@ -69,7 +69,10 @@ def request_rebuild(team):
     False), with the version bumped all the same, as a reset always did.
 
     A rebuild carries every team's keys, so it takes the devbox-job queue lock that key
-    updates take too: a later rebuild cannot undo a revocation."""
+    updates take too: a later rebuild cannot undo a revocation.
+
+    `fresh`: the team's VMs are built again from nothing (`worms build devbox --rebuild`),
+    not rolled back to their snapshot (a reset)."""
     with serialized_resource("devbox-jobs", "queue"):
         Team.objects.select_for_update().get(pk=team.pk)
         existing = HostJob.objects.filter(
@@ -92,6 +95,7 @@ def request_rebuild(team):
                 "team_uuid": str(team.uuid),
                 "devbox_version": team.devbox_version,
                 "teams": provisioned_team_specs(team.competition),
+                **({"fresh": True} if fresh else {}),
             },
         )
     return job, True
@@ -111,7 +115,7 @@ def _next_free_index(used):
 def request_reconfigure(competition):
     """Enqueue a devbox_reconfigure host job: the round agent pushes every team's
     SSH keys and the source->team map again, from what the database says. Needed
-    after a reset of the service VMs (`worms devbox reconfigure`), which takes the
+    after a reset of the service VMs (`worms devbox-reconfigure`), which takes the
     map off scoring and logging. Touches no VM's disk and no token.
 
     Returns the job, or None when no devbox is provisioned or a queued job
@@ -138,7 +142,7 @@ def provision(competition):
     services-source address, and enqueue one devbox_provision host job with
     the full team list. The agent's provisioning is idempotent, so this is
     safe whenever teams change (`manage.py provision_devboxes`, run by the
-    operator as `worms devbox provision`). Indices are assigned once and kept.
+    operator as `worms build devbox`). Indices are assigned once and kept.
 
     Returns (spec, job): job is None when a queued provision job already
     carries exactly this spec (nothing new to build)."""

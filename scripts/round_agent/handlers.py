@@ -207,7 +207,7 @@ def _reset_services(ex, cfg):
     vms = [vm for pool in SERVICE_POOLS for vm in snapshots.pool_vms(ex, pool)]
     missing = sorted(vm["name"] for vm in vms if not snapshots.has_clean(ex, vm))
     if not vms or missing:
-        return f"not reset: no clean snapshot on {', '.join(missing) or 'any service VM'} (`worms build rebuild-services`)"
+        return f"not reset: no clean snapshot on {', '.join(missing) or 'any service VM'} (`worms build services --rebuild`)"
     snapshots.roll_back(ex, vms)
     snapshots.wait_for_ssh(ex, cfg.get("service_hosts") or [cfg["scoring_host"], cfg["logging_host"]])
     _restore_devbox_map(ex, cfg)
@@ -777,7 +777,8 @@ def devbox_rebuild(ex, cfg, params):
     """Give one team a fresh devbox and new tokens, without touching other teams. The team's
     version has already been bumped by the orchestrator (which clears the dashboard score). Its
     three VMs go back to the snapshot taken before the team was ever on them; VMs without one
-    (built before snapshots) are replaced instead, and snapshotted for the next time."""
+    (built before snapshots), or all three when `fresh` (`worms build devbox --rebuild`), are
+    replaced instead, and snapshotted for the next time."""
     teams = params["teams"]
     slug = next((t["slug"] for t in teams if t["team_uuid"] == params["team_uuid"]), None)
     if slug is None:
@@ -785,7 +786,7 @@ def devbox_rebuild(ex, cfg, params):
 
     ex.generate_devbox(teams, ex.repo_root / DEVBOX_GENERATED)
     vms = _team_vms(ex, slug)
-    if len(vms) == len(DEVBOX_ROLES) and all(snapshots.has_clean(ex, vm) for vm in vms):
+    if not params.get("fresh") and len(vms) == len(DEVBOX_ROLES) and all(snapshots.has_clean(ex, vm) for vm in vms):
         _refuse_while_internet(cfg, "start a devbox")
         snapshots.roll_back(ex, vms)
         ips = {info["vmid"]: info["maintenance_ip"] for info in _devbox_vms(ex).values()}

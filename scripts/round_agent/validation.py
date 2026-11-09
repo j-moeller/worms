@@ -207,10 +207,14 @@ def devbox_provision(params):
 
 
 def devbox_rebuild(params):
+    fresh = params.get("fresh", False)
+    if not isinstance(fresh, bool):
+        raise Invalid("fresh must be true or false")
     return {
         "team_uuid": team_uuid(params.get("team_uuid")),
         "devbox_version": integer(params.get("devbox_version", 1), "devbox_version", 1, 2**31 - 1),
         "teams": devbox_teams(params.get("teams")),
+        "fresh": fresh,
     }
 
 

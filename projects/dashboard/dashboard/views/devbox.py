@@ -13,9 +13,8 @@ only runs when request.is_dev_environment is set.
 
 from __future__ import annotations
 
-import re
-
 from core import events
+from core.ssh_keys import MAX_KEYS_PER_TEAM as MAX_KEYS
 from core.models.devbox import Devbox, DevboxCapture, DevboxSSHKey, DevboxVM
 from core.models.worms import Upload
 from core.membership import membership_change
@@ -220,8 +219,8 @@ def devbox_add_ssh_key(request: HttpRequest, team: Team):
             messages.info(request, "Your team already has that key.")
             retry = True
         else:
-            if DevboxSSHKey.objects.filter(team=team).count() >= 64:
-                messages.error(request, "Your team already has 64 SSH keys; remove an unused key first.")
+            if DevboxSSHKey.objects.filter(team=team).count() >= MAX_KEYS:
+                messages.error(request, f"Your team already has {MAX_KEYS} SSH keys; remove an unused key first.")
                 return redirect("profile")
             try:
                 with transaction.atomic():
@@ -247,40 +246,8 @@ def devbox_delete_ssh_key(request: HttpRequest, team: Team, key_id: int):
     return redirect("profile")
 
 
-# Accept only a single OpenSSH public key line of a known type, bounded length.
-_SSH_TYPES = (
-    "ssh-ed25519",
-    "ssh-rsa",
-    "ecdsa-sha2-nistp256",
-    "ecdsa-sha2-nistp384",
-    "ecdsa-sha2-nistp521",
-    "sk-ssh-ed25519@openssh.com",
-    "sk-ecdsa-sha2-nistp256@openssh.com",
-)
-
-
-# A key comment is restricted to a safe charset. A registered key is rendered
-# through Jinja on the Proxmox host (the devbox + gateway authorized_keys, run
-# by the round agent as root), so a `{{...}}`/`{%...%}` in the comment would be
-# evaluated there (template injection). The agent's validator enforces the same
-# (scripts/round_agent/validation.py); this is the first gate. See
-# docs/07-security.md.
-_SSH_COMMENT = re.compile(r"^[A-Za-z0-9._@/+:,-]{1,200}$")
-
-
 def _valid_ssh_key(value: str) -> bool:
-    if not value or "\n" in value or len(value) > 8192:
-        return False
-    parts = value.split(" ")
-    # type + base64 blob, then at most a one-token comment (no spaces).
-    if len(parts) < 2 or len(parts) > 3 or parts[0] not in _SSH_TYPES or len(parts[1]) < 20:
-        return False
-    import base64
+    """One OpenSSH public key line we accept (core/ssh_keys.py: also the console's rules)."""
+    from core import ssh_keys
 
-    try:
-        base64.b64decode(parts[1], validate=True)
-    except Exception:
-        return False
-    if len(parts) == 3 and not _SSH_COMMENT.match(parts[2]):
-        return False
-    return True
+    return ssh_keys.valid(value)

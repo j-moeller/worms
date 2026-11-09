@@ -11,8 +11,10 @@
   ansible.builtin.apt:
     name: [python3, python3-venv, python3-pip, nginx, fail2ban, git, curl, acl, openssl, ca-certificates]
     state: present
-    update_cache: true
-    cache_valid_time: 3600
+    # Only while internet access is allowed: a configuration run without it (`worms build
+    # <component>` of a VM that exists) finds the package installed, and must not wait on mirrors.
+    update_cache: "{{ internet_enabled | bool }}"
+    cache_valid_time: "{{ 3600 if internet_enabled | bool else omit }}"
 
 # Earlier versions ran the apps as flask.service.
 - name: Remove the old flask service

@@ -29,14 +29,14 @@ def _own_row(result: dict, team: Team) -> dict:
 
 
 def _live_performance(request: HttpRequest, team: Team) -> dict | None:
-    """The team's results overall, or in one started round (?round=<id>), in the leaderboard's
+    """The team's results overall, or in one started round (?round=<uuid>), in the leaderboard's
     own numbers. VM counts only: which VMs a team has not captured stays hidden."""
     competition, now = request.active_competition, request.time_now
     rounds = get_rounds(competition) if competition is not None else []
     started = [r for r in rounds if r.round_start is not None and r.round_start <= now]
     if not started:
         return None
-    selected = next((r for r in started if str(r.id) == request.GET.get("round")), None)
+    selected = next((r for r in started if str(r.uuid) == request.GET.get("round")), None)
     tabs = leaderboard_tabs(request, rounds, now, selected)
     tabs[0]["name"] = "Overall"
 

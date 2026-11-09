@@ -351,7 +351,7 @@ def test_create_a_round(staff_site):
     created = Round.objects.get(name="R1")
     assert created.competition == competition() and created.seed >= 0
     assert (created.gameplan, created.team_duration) == ("", 3600)
-    page = text(get(staff_site, f"/staff/rounds/{created.pk}/"))
+    page = text(get(staff_site, f"/staff/rounds/{created.uuid}/"))
     assert "Nothing is built until it starts" in page and f"seed {created.seed}" in page
     assert "Choose its gameplan before then" in page and "none yet" in page
 
@@ -431,8 +431,8 @@ def test_edit_and_delete_before_the_runs_exist(staff_site):
 
     post(staff_site, "/staff/rounds/", round_data(), page="/staff/rounds/")
     r1 = Round.objects.get(name="R1")
-    edited = post(staff_site, f"/staff/rounds/{r1.pk}/", round_data(name="R1b", team_duration=50, seed=42),
-                  page=f"/staff/rounds/{r1.pk}/")  # fmt: skip
+    edited = post(staff_site, f"/staff/rounds/{r1.uuid}/", round_data(name="R1b", team_duration=50, seed=42),
+                  page=f"/staff/rounds/{r1.uuid}/")  # fmt: skip
     assert edited.status_code == 302, text(edited)[:1500]
     r1.refresh_from_db()
     assert (r1.name, r1.seed, r1.team_duration, r1.gameplan) == ("R1b", 42, 3000, "")
@@ -443,8 +443,8 @@ def test_edit_and_delete_before_the_runs_exist(staff_site):
     with as_role("postgres"):  # runs are the conductor's
         run = RoundRun.objects.create(round=r1, team=team, position=0, seed=1, duration=3000)
     valid_gameplan()
-    added = post(staff_site, f"/staff/rounds/{r1.pk}/", round_data(name="R1b", team_duration=50, seed=42,
-                 gameplan="round_one.py"), page=f"/staff/rounds/{r1.pk}/")  # fmt: skip
+    added = post(staff_site, f"/staff/rounds/{r1.uuid}/", round_data(name="R1b", team_duration=50, seed=42,
+                 gameplan="round_one.py"), page=f"/staff/rounds/{r1.uuid}/")  # fmt: skip
     assert added.status_code == 302, text(added)[:1500]
     r1.refresh_from_db()
     assert r1.gameplan == "round_one.py"
@@ -452,17 +452,17 @@ def test_edit_and_delete_before_the_runs_exist(staff_site):
     # Once an attempt has started it is read-only and kept.
     with as_role("postgres"):
         RoundRun.objects.filter(pk=run.pk).update(state=RoundRun.State.PREPARING)
-    assert "can no longer change" in text(get(staff_site, f"/staff/rounds/{r1.pk}/"))
-    post(staff_site, f"/staff/rounds/{r1.pk}/", round_data(name="nope"), page=f"/staff/rounds/{r1.pk}/")
+    assert "can no longer change" in text(get(staff_site, f"/staff/rounds/{r1.uuid}/"))
+    post(staff_site, f"/staff/rounds/{r1.uuid}/", round_data(name="nope"), page=f"/staff/rounds/{r1.uuid}/")
     r1.refresh_from_db()
     assert r1.name == "R1b"
-    post(staff_site, f"/staff/rounds/{r1.pk}/delete/")
+    post(staff_site, f"/staff/rounds/{r1.uuid}/delete/")
     assert Round.objects.filter(pk=r1.pk).exists()
 
     post(staff_site, "/staff/rounds/", round_data(name="R9", round_start=round_data()["round_end"],
                                                     round_end="2099-01-01T00:00"), page="/staff/rounds/")  # fmt: skip
     r9 = Round.objects.get(name="R9")
-    assert post(staff_site, f"/staff/rounds/{r9.pk}/delete/").status_code == 302
+    assert post(staff_site, f"/staff/rounds/{r9.uuid}/delete/").status_code == 302
     assert not Round.objects.filter(pk=r9.pk).exists()
 
 

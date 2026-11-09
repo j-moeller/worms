@@ -193,6 +193,8 @@ def exercise_student_journey(config):
                              "print(json.dumps(User.objects.get(username='journey.alice@example.test').pk))")
     assert admin.post(f"/staff/teams/{teams['Journey Blue']}/members/", {"user": alice_id}).status_code == 302
 
+    # A new session starts in the Dev view: the round entry is uploaded in the Live view.
+    assert alice.post("/environment/", {"environment": "live"}).status_code == 302
     assert alice.get("/upload/").status_code == 200
     # The form says which view it came from (main's uploads: Live and Dev share a session).
     live = {"environment": "live"}
@@ -208,18 +210,17 @@ def exercise_student_journey(config):
     assert len(list(Path(config["media_root"]).rglob("*.zip"))) == 1
 
     start = now + timedelta(days=1)
+    # Its window only: the gameplan can be chosen later.
     data = {"environment": "live", "name": "Journey Round", "round_start": stamp(start),
-        "round_end": stamp(start + timedelta(hours=8)), "seed": 123,
-        "vms": 8, "networks": 4, "sites": 1, "max_interfaces": 3, "vm_ram": 512,
-        "worm_start_delay": 5, "run_duration": 60, "initial_fraction": 0.5,
-        "first_stop_after": 10, "stop_interval": 10, "min_alive": 2, "restart_after": ""}
+        "round_end": stamp(start + timedelta(hours=8)), "seed": 123, "gameplan": "", "team_duration": 60}
     invalid = admin.post("/staff/rounds/", {**data, "round_end": stamp(start - timedelta(hours=1))})
     assert invalid.status_code == 200 and "end after" in invalid.text
     r = admin.post("/staff/rounds/", data)
     assert r.status_code == 302, r.text
-    round_id = int(r.headers["Location"].split("/")[-2])
+    round_uuid = r.headers["Location"].split("/")[-2]
     assert admin.get(r.headers["Location"]).status_code == 200
-    # Substitute a running sandbox: no host job or infrastructure operation.
+    # Substitute an attempt (finished, still in its scoring window: only a finished attempt's
+    # results are shown): no host job or infrastructure operation.
     fixture = django_command(config, f'''
 import hashlib, json
 from datetime import timedelta
@@ -232,13 +233,13 @@ now = timezone.now()
 comp = ApplicationSetting.get_current_competition()
 comp.registration_ends_at = now - timedelta(minutes=1)
 comp.save(update_fields=['registration_ends_at'])
-r = Round.objects.get(pk={round_id})
+r = Round.objects.get(uuid='{round_uuid}')
 r.round_start, r.round_end = now - timedelta(minutes=5), now + timedelta(hours=1)
 r.save(update_fields=['round_start', 'round_end'])
 out = {{}}
 for position, name in enumerate(['Journey Blue', 'Journey Red'], start=1):
     team = Team.objects.get(name=name)
-    run = RoundRun.objects.create(round=r, team=team, position=position, seed=123, state='running',
+    run = RoundRun.objects.create(round=r, team=team, position=position, seed=123, state='finished',
         worm_start_at=now-timedelta(minutes=1), ends_at=now+timedelta(minutes=10))
     flag = 'FLAG{{local-only-' + name + '}}'
     vm = VirtualMachine.objects.create(round=r, run=run, vm_identifier='fixture-'+name,
@@ -271,12 +272,12 @@ print(json.dumps(out))
     assert counts == [2, 2]
     assert alice.get("/").status_code == 200
     assert alice.get("/progression/").status_code == 200
-    doc = alice.get(f"/progression/rounds/{round_id}/")
+    doc = alice.get(f"/progression/rounds/{round_uuid}/")
     assert doc.status_code == 200, doc.text
     assert doc.json()["logs"]["count"] == 1
     refs = django_command(config, "from core.models.logging import LoggingAttempt\nimport json\n"
                           "print(json.dumps(dict(LoggingAttempt.objects.values_list('team_uuid', 'uuid')), default=str))")
-    base = f"/progression/rounds/{round_id}"
+    base = f"/progression/rounds/{round_uuid}"
     own = alice.get(f"{base}/logs/{refs[blue['team']]}/")
     assert own.status_code == 200 and own.json()["data"] == payload
     assert alice.get(f"{base}/logs/{refs[red['team']]}/").status_code == 404

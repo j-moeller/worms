@@ -100,17 +100,17 @@ def test_live_overall_adds_up_the_rounds(site, rounds):  # noqa: F811
 
 
 def test_live_shows_one_round_on_request(site, rounds):  # noqa: F811
-    panel = _team_panel(site, f"?round={rounds['first'].id}")
+    panel = _team_panel(site, f"?round={rounds['first'].uuid}")
     assert _stat(3, 8) in panel and "VMs captured in Round 1" in panel
     assert "<dd>2 of 2</dd>" in panel and "<dd>18</dd>" in panel
     assert panel.count('class="pip is-on"') == 3 and panel.count('class="pip"') == 5
 
 
 def test_live_tabs_offer_overall_and_each_started_round(site, rounds):  # noqa: F811
-    panel = _team_panel(site, f"?round={rounds['first'].id}")
+    panel = _team_panel(site, f"?round={rounds['first'].uuid}")
     assert '<a class="round-tabs__tab" href="/profile/">Overall</a>' in panel
-    assert f'href="/profile/?round={rounds["first"].id}" aria-current="page">Round 1</a>' in panel
-    assert f'href="/profile/?round={rounds["second"].id}">Round 2</a>' in panel
+    assert f'href="/profile/?round={rounds["first"].uuid}" aria-current="page">Round 1</a>' in panel
+    assert f'href="/profile/?round={rounds["second"].uuid}">Round 2</a>' in panel
     assert "Round 3" not in panel
 
 
@@ -120,12 +120,12 @@ def test_live_falls_back_to_overall_for_an_unknown_round(site, rounds, query):  
 
 
 def test_live_does_not_show_a_round_that_has_not_started(site, rounds):  # noqa: F811
-    assert _stat(4, 16) in _team_panel(site, f"?round={rounds['later'].id}")
+    assert _stat(4, 16) in _team_panel(site, f"?round={rounds['later'].uuid}")
 
 
 def test_live_names_no_vm(site, rounds):  # noqa: F811
     """A team may see only the VMs it captured, and this panel needs none of their names."""
-    assert "secret-vm" not in _get(site, "/profile/") and "secret-vm" not in _get(site, f"/profile/?round={rounds['first'].id}")
+    assert "secret-vm" not in _get(site, "/profile/") and "secret-vm" not in _get(site, f"/profile/?round={rounds['first'].uuid}")
 
 
 def test_live_before_any_round(site, team_upload):  # noqa: F811
@@ -307,9 +307,9 @@ def test_the_download_commands_fit_the_view(site, team_upload):  # noqa: F811
 
 def test_the_download_commands_use_the_rounds_real_id(site, rounds):  # noqa: F811
     first = rounds["first"]
-    page = _get(site, f"/progression/?round={first.id}")
+    page = _get(site, f"/progression/?round={first.uuid}")
     panel = _code(page.split('id="data-api-title"', 1)[1])
-    assert f"/api/v1/rounds/{first.id}/scoring/" in panel and f"/api/v1/rounds/{first.id}/progression.zip" in panel
+    assert f"/api/v1/rounds/{first.uuid}/scoring/" in panel and f"/api/v1/rounds/{first.uuid}/progression.zip" in panel
     assert "/rounds/ID/" not in panel and "These commands are for Round 1" in panel
 
 

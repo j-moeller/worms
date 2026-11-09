@@ -201,9 +201,9 @@ def test_end_to_end_competition_journey(site, monkeypatch, gameplans):  # noqa: 
     assert (r1.gameplan, r1.team_duration) == ("", 600)
     conductor, agent, flow_clock = make_conductor(gameplans)
     conductor.check_gameplans(force=True)
-    picked = _post(site, f"/staff/rounds/{r1.pk}/", _round_form(name="R1", seed=r1.seed, gameplan="two.py",
+    picked = _post(site, f"/staff/rounds/{r1.uuid}/", _round_form(name="R1", seed=r1.seed, gameplan="two.py",
                    round_start=r1.round_start.strftime("%Y-%m-%dT%H:%M"), round_end=r1.round_end.strftime("%Y-%m-%dT%H:%M")),
-                   page=f"/staff/rounds/{r1.pk}/")  # fmt: skip
+                   page=f"/staff/rounds/{r1.uuid}/")  # fmt: skip
     assert picked.status_code == 302, _text(picked)[:1500]
     r1.refresh_from_db()
     assert r1.gameplan == "two.py"
@@ -318,21 +318,21 @@ def test_end_to_end_competition_journey(site, monkeypatch, gameplans):  # noqa: 
         response = site.get(path, HTTP_AUTHORIZATION=f"Bearer {raw_token}", **proxied(HOST))
         return response, json.loads(response.content)
 
-    response, scoring = api(f"/api/v1/rounds/{r1.id}/scoring/")
+    response, scoring = api(f"/api/v1/rounds/{r1.uuid}/scoring/")
     assert response.status_code == 200
     assert scoring["summary"]["captured"] == 1
     assert any(item["result"] == "captured" and item["flag_hash"] == start_vm.ctf_flag_hash for item in scoring["items"])
 
-    response, logging = api(f"/api/v1/rounds/{r1.id}/logging/")
+    response, logging = api(f"/api/v1/rounds/{r1.uuid}/logging/")
     assert response.status_code == 200 and len(logging["items"]) == 1
 
-    response, progression = api(f"/api/v1/rounds/{r1.id}/progression/")
+    response, progression = api(f"/api/v1/rounds/{r1.uuid}/progression/")
     assert response.status_code == 200
     assert progression["team"] == {"uuid": str(alpha.uuid), "name": "alpha"} and progression["audience"] == "team"
 
     # The signed-in progression page serves the same document, and the board (the
     # production home) shows the team with its score.
-    page = site.get(f"/progression/rounds/{r1.id}/", **proxied(HOST))
+    page = site.get(f"/progression/rounds/{r1.uuid}/", **proxied(HOST))
     assert page.status_code == 200
     board = site.get("/", **proxied(HOST))
     assert board.status_code == 200 and "alpha" in board.content.decode()

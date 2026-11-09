@@ -34,8 +34,8 @@ WITH competition AS (
     FROM team, account
     RETURNING team_id
 ), round AS (
-    INSERT INTO rounds (seed, name, competition_id, round_start, round_end, created_at)
-    SELECT 0, 'simulation-' || %(run_id)s, team.competition_id,
+    INSERT INTO rounds (uuid, seed, name, competition_id, round_start, round_end, created_at)
+    SELECT gen_random_uuid(), 0, 'simulation-' || %(run_id)s, team.competition_id,
            now() - interval '2 minutes', now() + interval '30 minutes', now()
     FROM team
     RETURNING id

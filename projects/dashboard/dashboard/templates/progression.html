@@ -20,7 +20,7 @@ its bar).{% endcomment %}
 {% if environment == "live" %}
 <nav class="round-tabs" aria-label="Rounds" data-progression-tabs>
     {% for item in rounds %}
-    <a class="round-tabs__tab" href="?round={{ item.round.id }}"{% if item.round.id == selected.id %} aria-current="page"{% endif %}>{{ item.round.name }} <span class="badge{% if item.state == 'active' %} badge--accent{% endif %}">{{ item.state }}</span></a>
+    <a class="round-tabs__tab" href="?round={{ item.round.uuid }}"{% if item.round.id == selected.id %} aria-current="page"{% endif %}>{{ item.round.name }} <span class="badge{% if item.state == 'active' %} badge--accent{% endif %}">{{ item.state }}</span></a>
     {% endfor %}
 </nav>
 {% endif %}
@@ -81,10 +81,10 @@ browser test can load it with fixture data; the endpoints come from here.{% endc
      data-environment="{{ environment }}"
      {% if environment == "dev" %}data-progression="{% url 'progression_devbox' %}"
      data-download="{% url 'progression_devbox_download' %}"
-     {% else %}data-round="{{ selected.id|default:'' }}"
+     {% else %}data-round="{{ selected.uuid|default:'' }}"
      data-rounds="{% url 'progression_rounds' %}"
-     data-progression="{% url 'progression_data' 0 %}"
-     data-download="{% url 'progression_download' 0 %}"{% endif %}>
+     data-progression="{% url 'progression_data' '00000000-0000-0000-0000-000000000000' %}"
+     data-download="{% url 'progression_download' '00000000-0000-0000-0000-000000000000' %}"{% endif %}>
 {% include "topology/player.html" %}
 </div>
 <script src="{% static 'dashboard/js/topology.js' %}" defer></script>
@@ -94,7 +94,7 @@ browser test can load it with fixture data; the endpoints come from here.{% endc
 <section class="panel" aria-labelledby="data-api-title">
     <header class="panel__head"><h2 class="panel__title" id="data-api-title">Download your results</h2></header>
     <div class="panel__body prose">
-        {% with base=request.scheme|add:"://"|add:request.get_host round_id=selected.id|default:"ID" %}
+        {% with base=request.scheme|add:"://"|add:request.get_host round_id=selected.uuid|default:"ID" %}
         {% if environment == "dev" %}
         <p>Use these commands to retrieve your devbox's progression so far, as JSON or as a zip with every log record. You need a token from <a href="{% url 'profile' %}">your profile</a>.</p>
         {% else %}
@@ -138,7 +138,7 @@ with open("progression.zip", "wb") as file:
 
 TOKEN = "<span class="code-var">...</span>"   # a token of your team
 BASE = "{{ base }}"
-ROUND = <span class="code-var">{{ round_id }}</span>   # a round's id: get("/api/v1/rounds/") lists them
+ROUND = "<span class="code-var">{{ round_id }}</span>"   # a round's id (a uuid): get("/api/v1/rounds/") lists them
 
 def get(path):
     request = urllib.request.Request(BASE + path, headers={"Authorization": f"Bearer {TOKEN}"})

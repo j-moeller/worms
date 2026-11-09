@@ -159,43 +159,43 @@ def test_rounds_are_the_teams_own(api):
     assert [r["name"] for r in body["rounds"]] == ["R1"]  # not the other competition's
     r1 = body["rounds"][0]
     assert r1["run"]["state"] == "finished" and r1["competition"] == "main"
-    assert r1["scoring"] == f"/api/v1/rounds/{api['r1'].id}/scoring/"
+    assert r1["scoring"] == f"/api/v1/rounds/{api['r1'].uuid}/scoring/"
 
 
 def test_other_competitions_round_is_not_found(api):
-    for rid in (api["r_other"].id, 999999):
+    for rid in (api["r_other"].uuid, "00000000-0000-4000-8000-000000000999"):
         for kind in ("scoring", "logging"):
             response, body = api["get"](f"/api/v1/rounds/{rid}/{kind}/")
             assert response.status_code == 404 and body["error"]["code"] == "not_found"
 
 
 def test_scoring_results_and_scope(api):
-    items, _ = walk(api["get"], f"/api/v1/rounds/{api['r1'].id}/scoring/", 500)
+    items, _ = walk(api["get"], f"/api/v1/rounds/{api['r1'].uuid}/scoring/", 500)
     results = [(i["result"], i["vm"]) for i in items]
     assert results[:3] == [("captured", "vm0"), ("duplicate", "vm0"), ("invalid", None)]
     assert results[3:] == [("invalid", None)] * 5
     assert len(items) == 8  # no devbox, out-of-window or other-team submissions
-    response, body = api["get"](f"/api/v1/rounds/{api['r1'].id}/scoring/")
+    response, body = api["get"](f"/api/v1/rounds/{api['r1'].uuid}/scoring/")
     assert body["summary"] == {"captured": 1, "vms": 3}
     # Team B sees only its own (none: its run never started).
-    response, body = api["get"](f"/api/v1/rounds/{api['r1'].id}/scoring/", token=TOKEN_B)
+    response, body = api["get"](f"/api/v1/rounds/{api['r1'].uuid}/scoring/", token=TOKEN_B)
     assert body["items"] == [] and body["run"]["state"] == "pending" and body["summary"]["captured"] == 0
 
 
 def test_scoring_paging_is_complete_across_identical_timestamps(api):
-    everything, _ = walk(api["get"], f"/api/v1/rounds/{api['r1'].id}/scoring/", 500)
-    paged, pages = walk(api["get"], f"/api/v1/rounds/{api['r1'].id}/scoring/", 2)
+    everything, _ = walk(api["get"], f"/api/v1/rounds/{api['r1'].uuid}/scoring/", 500)
+    paged, pages = walk(api["get"], f"/api/v1/rounds/{api['r1'].uuid}/scoring/", 2)
     assert pages == 4
     assert [i["id"] for i in paged] == [i["id"] for i in everything]
     assert len({i["id"] for i in paged}) == len(paged)
 
 
 def test_logging_items_paging_and_scope(api):
-    items, pages = walk(api["get"], f"/api/v1/rounds/{api['r1'].id}/logging/", 7)
+    items, pages = walk(api["get"], f"/api/v1/rounds/{api['r1'].uuid}/logging/", 7)
     assert pages == 5 and len(items) == 30
     assert [i["log"]["i"] for i in items] == list(range(30))
     assert all("team" not in i["log"] for i in items)  # never team B's
-    response, body = api["get"](f"/api/v1/rounds/{api['r1'].id}/logging/", token=TOKEN_B)
+    response, body = api["get"](f"/api/v1/rounds/{api['r1'].uuid}/logging/", token=TOKEN_B)
     assert [i["log"] for i in body["items"]] == [{"team": "b"}]
 
 
@@ -203,18 +203,18 @@ def test_page_byte_budget(api, monkeypatch):
     from dashboard import api as api_module
 
     monkeypatch.setattr(api_module, "MAX_PAGE_BYTES", 600)  # ~4 log items
-    response, body = api["get"](f"/api/v1/rounds/{api['r1'].id}/logging/?limit=200")
+    response, body = api["get"](f"/api/v1/rounds/{api['r1'].uuid}/logging/?limit=200")
     assert 1 <= body["page"]["count"] < 10 and body["page"]["next_cursor"]
-    items, _ = walk(api["get"], f"/api/v1/rounds/{api['r1'].id}/logging/", 200)
+    items, _ = walk(api["get"], f"/api/v1/rounds/{api['r1'].uuid}/logging/", 200)
     assert len(items) == 30
     # A single item over the budget is still returned (one per page).
     monkeypatch.setattr(api_module, "MAX_PAGE_BYTES", 10)
-    response, body = api["get"](f"/api/v1/rounds/{api['r1'].id}/logging/?limit=200")
+    response, body = api["get"](f"/api/v1/rounds/{api['r1'].uuid}/logging/?limit=200")
     assert body["page"]["count"] == 1
 
 
 def test_bad_parameters(api):
-    base = f"/api/v1/rounds/{api['r1'].id}"
+    base = f"/api/v1/rounds/{api['r1'].uuid}"
     for query in ("limit=0", "limit=501", "limit=abc", "limit=-1"):
         response, body = api["get"](f"{base}/scoring/?{query}")
         assert response.status_code == 400 and body["error"]["code"] == "bad_limit", query

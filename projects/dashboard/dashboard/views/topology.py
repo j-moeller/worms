@@ -126,7 +126,7 @@ def topology_runs(request: HttpRequest):
         entry = rounds.setdefault(
             run.round_id,
             {
-                "id": run.round_id,
+                "id": str(run.round.uuid),
                 "name": run.round.name,
                 "round_start": run.round.round_start.isoformat() if run.round.round_start else None,
                 "round_end": run.round.round_end.isoformat() if run.round.round_end else None,

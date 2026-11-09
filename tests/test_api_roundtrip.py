@@ -396,11 +396,11 @@ def expected_rounds(world, team):
             info = {"state": run["state"], "position": run["position"], "attempt": 1, "worm_start_at": iso(run["zero"]),
                     "ends_at": iso(run["zero"] + timedelta(seconds=600))}  # fmt: skip
         out.append({
-            "id": rnd.id, "name": rnd.name,
+            "id": str(rnd.uuid), "name": rnd.name,
             "competition": "main",
             "start": iso(rnd.round_start), "end": iso(rnd.round_end), "run": info,
-            "scoring": f"/api/v1/rounds/{rnd.id}/scoring/", "logging": f"/api/v1/rounds/{rnd.id}/logging/",
-            "progression": f"/api/v1/rounds/{rnd.id}/progression/", "download": f"/api/v1/rounds/{rnd.id}/progression.zip",
+            "scoring": f"/api/v1/rounds/{rnd.uuid}/scoring/", "logging": f"/api/v1/rounds/{rnd.uuid}/logging/",
+            "progression": f"/api/v1/rounds/{rnd.uuid}/progression/", "download": f"/api/v1/rounds/{rnd.uuid}/progression.zip",
         })  # fmt: skip
     return {"team": {"uuid": str(team.uuid), "name": team.name}, "rounds": out}
 
@@ -594,7 +594,7 @@ def test_scoring_is_exactly_what_was_submitted(world):
         for key in LIVE_ROUNDS:
             rnd = world["rounds"][key]
             items, summary = expected_scoring(world, team, rnd)
-            path = f"/api/v1/rounds/{rnd.id}/scoring/"
+            path = f"/api/v1/rounds/{rnd.uuid}/scoring/"
             one, _, body = walk(world, path, name, 500)
             paged, pages, _ = walk(world, path, name, 3)
             assert one == items, (name, key)
@@ -611,7 +611,7 @@ def test_logging_is_exactly_what_was_logged(world):
         for key in LIVE_ROUNDS:
             rnd = world["rounds"][key]
             items = expected_logging(world, team, rnd)
-            path = f"/api/v1/rounds/{rnd.id}/logging/"
+            path = f"/api/v1/rounds/{rnd.uuid}/logging/"
             one, _, _ = walk(world, path, name, 200)
             paged, pages, _ = walk(world, path, name, 2)
             assert one == items and paged == items, (name, key)  # byte for byte, unicode and all
@@ -625,7 +625,7 @@ def test_progression_is_exactly_what_happened_to_the_team(world):
         for key in LIVE_ROUNDS:
             rnd = world["rounds"][key]
             want = expected_live(world, team, rnd)
-            response, doc = get(world, f"/api/v1/rounds/{rnd.id}/progression/", name)
+            response, doc = get(world, f"/api/v1/rounds/{rnd.uuid}/progression/", name)
             assert response.status_code == 200
             tl = doc["timeline"]
             assert set(doc) == {"format", "version", "generated_at", "audience", "environment", "round", "team", "clock", "scene",
@@ -682,7 +682,7 @@ def test_log_records_are_exactly_the_teams_and_nothing_else(world):
             want = expected_live(world, team, rnd)
             mine = {g["uuid"] for g in want["logs"]}
             for g in ledger.logs:
-                response, body = get(world, f"/api/v1/rounds/{rnd.id}/progression/logs/{g['uuid']}/", name)
+                response, body = get(world, f"/api/v1/rounds/{rnd.uuid}/progression/logs/{g['uuid']}/", name)
                 if g["uuid"] in mine:
                     assert response.status_code == 200
                     assert body == {"ref": g["uuid"], "received_at": iso(g["ts"]), "data": g["data"]}
@@ -696,8 +696,8 @@ def test_zip_holds_exactly_the_progression(world):
         for key in ("R1",):
             rnd = world["rounds"][key]
             want = expected_live(world, team, rnd)
-            _, doc = get(world, f"/api/v1/rounds/{rnd.id}/progression/", name)
-            response, _ = get(world, f"/api/v1/rounds/{rnd.id}/progression.zip", name)
+            _, doc = get(world, f"/api/v1/rounds/{rnd.uuid}/progression/", name)
+            response, _ = get(world, f"/api/v1/rounds/{rnd.uuid}/progression.zip", name)
             assert response.status_code == 200 and response["Content-Type"] == "application/zip"
             archive = zipfile.ZipFile(io.BytesIO(response.content))
             members = {f"logs/{g['uuid']}.json" for g in want["logs"]} | {"progression.json", "README.txt"}
@@ -722,7 +722,7 @@ def test_zip_holds_exactly_the_progression(world):
             text = "\n".join(archive.read(m).decode() for m in archive.namelist())
             assert_nothing_of_others(world, text, name, want.get("hidden", []))
 
-            lean = zipfile.ZipFile(io.BytesIO(get(world, f"/api/v1/rounds/{rnd.id}/progression.zip?logs=0&network=0", name)[0].content))
+            lean = zipfile.ZipFile(io.BytesIO(get(world, f"/api/v1/rounds/{rnd.uuid}/progression.zip?logs=0&network=0", name)[0].content))
             assert sorted(lean.namelist()) == ["README.txt", "progression.json"]
 
 
@@ -731,9 +731,9 @@ def test_other_competitions_rounds_are_not_there(world):
     paths = ["scoring/", "logging/", "progression/", "progression/flows/", "progression.zip"]
     for name in TEAMS:
         for path in paths:
-            assert get(world, f"/api/v1/rounds/{rx.id}/{path}", name)[0].status_code == 404
+            assert get(world, f"/api/v1/rounds/{rx.uuid}/{path}", name)[0].status_code == 404
     for path in paths:
-        assert get(world, f"/api/v1/rounds/{r1.id}/{path}", "charlie")[0].status_code == 404
+        assert get(world, f"/api/v1/rounds/{r1.uuid}/{path}", "charlie")[0].status_code == 404
 
 
 def test_the_page_serves_the_same_document(world):
@@ -747,8 +747,8 @@ def test_the_page_serves_the_same_document(world):
         session["is_dev_environment"] = False  # the Live view: a new session starts in Dev
         session.save()
         rnd = world["rounds"]["R1"]
-        page = json.loads(client.get(f"/progression/rounds/{rnd.id}/", **proxied(HOST)).content)
-        _, api = get(world, f"/api/v1/rounds/{rnd.id}/progression/", name)
+        page = json.loads(client.get(f"/progression/rounds/{rnd.uuid}/", **proxied(HOST)).content)
+        _, api = get(world, f"/api/v1/rounds/{rnd.uuid}/progression/", name)
         same = lambda d: {k: v for k, v in d.items() if k not in ("generated_at", "logs", "network")}  # noqa: E731
         assert same(page) == same(api)
         assert {**page["logs"], "url": None} == {**api["logs"], "url": None}

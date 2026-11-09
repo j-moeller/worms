@@ -114,7 +114,7 @@
             <summary class="btn btn--danger">Delete round</summary>
             <div class="confirm__body">
                 <p>{{ round.name }} is deleted. Possible only while it has no runs.</p>
-                <form method="post" action="{% url 'staff_round_delete' round.pk %}">{% csrf_token %}<button type="submit" class="btn btn--primary btn--danger btn--sm">Delete {{ round.name }}</button></form>
+                <form method="post" action="{% url 'staff_round_delete' round.uuid %}">{% csrf_token %}<button type="submit" class="btn btn--primary btn--danger btn--sm">Delete {{ round.name }}</button></form>
             </div>
         </details>
     </div>

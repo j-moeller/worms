@@ -1,3 +1,4 @@
+import uuid
 from typing import Optional
 
 from core import clock
@@ -82,6 +83,9 @@ class ApplicationSetting(models.Model):
 
 
 class Round(models.Model):
+    # What URLs and the team API name a round by: not the primary key, which says how many
+    # rounds the database has seen.
+    uuid = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     seed = models.BigIntegerField()
     round_start = models.DateTimeField(null=True, blank=True)
     round_end = models.DateTimeField(null=True, blank=True)

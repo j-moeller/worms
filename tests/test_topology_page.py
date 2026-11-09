@@ -45,13 +45,14 @@ pytestmark = pytest.mark.skipif(not _playwright_available(), reason="Node.js Pla
 
 
 ZERO = "00000000-0000-0000-0000-000000000000"
+R1, R3 = topology_fixtures.ROUND_UUID[1], topology_fixtures.ROUND_UUID[3]
 STAFF_DATA = (
     "data-audience='staff' data-model='/model' data-runs='/runs' data-refresh-ms='700' "
     f"data-progression='/rounds/{ZERO}/progression/' data-download='/rounds/{ZERO}/progression/download/'"
 )
 TEAM_DATA = (
-    "hidden data-audience='team' data-environment='live' data-round='1' data-rounds='/progression/rounds/' "
-    "data-progression='/progression/rounds/0/' data-download='/progression/rounds/0/download/' data-refresh-ms='600000'"
+    f"hidden data-audience='team' data-environment='live' data-round='{topology_fixtures.ROUND_UUID[1]}' data-rounds='/progression/rounds/' "
+    f"data-progression='/progression/rounds/{ZERO}/' data-download='/progression/rounds/{ZERO}/download/' data-refresh-ms='600000'"
 )
 
 
@@ -475,8 +476,8 @@ def team_page(tmp_path_factory):
     work = tmp_path_factory.mktemp("progression-page")
     (work / "page.html").write_text(page_html(TEAM_DATA))
     (work / "team_rounds.json").write_text(json.dumps(topology_fixtures.team_rounds()))
-    (work / "team1.json").write_text(json.dumps(topology_fixtures.team_progression(1)))
-    (work / "team3.json").write_text(json.dumps(topology_fixtures.team_progression(3)))
+    (work / "team1.json").write_text(json.dumps(topology_fixtures.team_progression(topology_fixtures.ROUND_UUID[1])))
+    (work / "team3.json").write_text(json.dumps(topology_fixtures.team_progression(topology_fixtures.ROUND_UUID[3])))
     (work / "team_flows.json").write_text(json.dumps(topology_fixtures.team_flows()))
     (work / "log.json").write_text(json.dumps(topology_fixtures.log_record()))
     shots = work / "shots"
@@ -583,9 +584,9 @@ def test_team_page_replaces_the_no_script_parts(team_page):
     assert c["title"] == "// PROGRESSION" and c["auxHidden"]
     assert [t.split("\n")[0].strip() for t in c["tabs"]] == ["R1", "R2", "Dev week"]
     assert "Infrastructure" not in " ".join(c["tabs"])
-    assert c["liveState"]["round"] == 1 and c["liveState"]["flowsLoaded"]
+    assert c["liveState"]["round"] == R1 and c["liveState"]["flowsLoaded"]
     # The progression first, its connections after it; no staff endpoint.
-    assert c["requestsAtLoad"][:3] == ["/progression/rounds/", "/progression/rounds/1/", "/progression/rounds/1/flows/"]
+    assert c["requestsAtLoad"][:3] == ["/progression/rounds/", f"/progression/rounds/{R1}/", f"/progression/rounds/{R1}/flows/"]
 
 
 def test_team_scene_has_no_infrastructure(team_page):
@@ -611,10 +612,10 @@ def test_team_playback_log_and_download(team_page):
     c = team_page["checks"]
     assert c["played"]["dots"] > 0
     assert topology_fixtures.XSS in c["logSide"] and c["xss"] is False and c["imgs"] == 0
-    assert c["logRequests"] == [f"/progression/rounds/1/logs/{topology_fixtures.LOG_REF}/"]
-    assert c["zip"] == {"full": "/progression/rounds/1/download/?logs=1&network=1",
-                        "noNetwork": "/progression/rounds/1/download/?logs=1&network=0"}
-    assert c["hash"].startswith("#round=1&t=")
+    assert c["logRequests"] == [f"/progression/rounds/{R1}/logs/{topology_fixtures.LOG_REF}/"]
+    assert c["zip"] == {"full": f"/progression/rounds/{R1}/download/?logs=1&network=1",
+                        "noNetwork": f"/progression/rounds/{R1}/download/?logs=1&network=0"}
+    assert c["hash"].startswith(f"#round={R1}&t=")
     assert "Live" in c["summary"] and "2 captured" in c["summary"]
     assert "the round is running" in c["meta"]
 
@@ -629,9 +630,9 @@ def test_team_dev_round_shows_the_devbox_without_traffic(team_page):
     assert "group:sandbox" not in dev["groups"] and "group:devbox:own" in dev["groups"]
     assert dev["devboxMembers"] == ["devbox-t1-a", "devbox-t1-b", "devbox-t1-c"]
     assert "lan devbox" in dev["edgeKinds"]
-    assert c["devRequests"] == ["/progression/rounds/3/"]  # no flows to fetch
+    assert c["devRequests"] == [f"/progression/rounds/{R3}/"]  # no flows to fetch
     assert "not recorded" in c["devSummary"] and "Dev" in c["devSummary"]
-    assert c["devNetworkDisabled"] and c["devZip"] == "/progression/rounds/3/download/?logs=1&network=0"
+    assert c["devNetworkDisabled"] and c["devZip"] == f"/progression/rounds/{R3}/download/?logs=1&network=0"
     # The round's start and now are on the track.
     assert any("edge" in m for m in c["devMarks"]) and any("now" in m for m in c["devMarks"])
     # At 5000 s, A was captured (3600 s), B not yet (9000 s).
@@ -642,6 +643,6 @@ def test_team_dev_round_shows_the_devbox_without_traffic(team_page):
 
 def test_running_round_refreshes_in_place(team_page):
     r = team_page["checks"]["refresh"]
-    assert r["restored"] == {"round": 3, "t": 6000}
+    assert r["restored"] == {"round": R3, "t": 6000}
     assert r["fetchesAfter"] > r["fetchesBefore"]
-    assert r["round"] == 3 and abs(r["t"] - 6000) < 1e-6 and r["selected"] == "node"
+    assert r["round"] == R3 and abs(r["t"] - 6000) < 1e-6 and r["selected"] == "node"

@@ -51,7 +51,7 @@ def test_staff_cannot_change_parameters_after_planning_started_during_form_valid
 
     def edit():
         try:
-            return post(clients[0], f"/staff/rounds/{round.pk}/", round_data(name=round.name, seed=999))
+            return post(clients[0], f"/staff/rounds/{round.uuid}/", round_data(name=round.name, seed=999))
         finally:
             connection.close()
 

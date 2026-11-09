@@ -103,7 +103,7 @@ def rounds(request: HttpRequest):
                     events.competition("round_created", request=request, round_id=created.pk, detail={"name": created.name})
                     note = "" if created.gameplan else " It waits for a gameplan: choose one before its first attempt."
                     messages.success(request, f"Round {created.name} created. Its runs are planned when it starts.{note}")
-                    return redirect("staff_round", round_id=created.pk)
+                    return redirect("staff_round", round_uuid=created.uuid)
 
     def listing(competition):
         rows = []
@@ -147,9 +147,9 @@ def _attempt_started(round_obj) -> bool:
 
 
 @staff_required
-def round_detail(request: HttpRequest, round_id):
+def round_detail(request: HttpRequest, round_uuid):
     comp = request.competition
-    round_obj = get_object_or_404(Round, pk=round_id, competition=comp)
+    round_obj = get_object_or_404(Round, uuid=round_uuid, competition=comp)
     now = clock.now()
     runs = list(
         RoundRun.objects.filter(round=round_obj)
@@ -185,11 +185,11 @@ def round_detail(request: HttpRequest, round_id):
                         round_obj = get_object_or_404(Round, pk=round_obj.pk, competition=comp)
                         if _attempt_started(round_obj):
                             messages.error(request, "An attempt of the round has started; it can no longer be changed.")
-                            return redirect("staff_round", round_id=round_obj.pk)
+                            return redirect("staff_round", round_uuid=round_obj.uuid)
                         if not started and ((round_obj.round_start is not None and round_obj.round_start <= clock.now())
                                             or RoundRun.objects.filter(round=round_obj).exists()):
                             messages.error(request, "The round has started meanwhile; reload before editing it.")
-                            return redirect("staff_round", round_id=round_obj.pk)
+                            return redirect("staff_round", round_uuid=round_obj.uuid)
                         _check_window(form, round_obj.competition, start, end, exclude=round_obj)
                         _check_fit(form, start, end, duration, Team.objects.filter(competition=round_obj.competition).count())
                         if not form.errors:
@@ -208,10 +208,10 @@ def round_detail(request: HttpRequest, round_id):
                                                               "team_duration", "gameplan_status"])  # fmt: skip
                             events.competition("round_updated", request=request, round_id=round_obj.pk, detail={"name": round_obj.name})
                             messages.success(request, f"Saved {round_obj.name}.")
-                            return redirect("staff_round", round_id=round_obj.pk)
+                            return redirect("staff_round", round_uuid=round_obj.uuid)
     elif request.method == "POST":
         messages.error(request, "An attempt of the round has started; it can no longer be changed.")
-        return redirect("staff_round", round_id=round_obj.pk)
+        return redirect("staff_round", round_uuid=round_obj.uuid)
 
     teams = Team.objects.filter(competition=round_obj.competition).count()
     return render_with_base_info(request, "staff/round.html", {
@@ -229,13 +229,13 @@ def round_detail(request: HttpRequest, round_id):
 
 @staff_required
 @require_POST
-def round_delete(request: HttpRequest, round_id):
+def round_delete(request: HttpRequest, round_uuid):
     comp = request.competition
-    round_obj = get_object_or_404(Round, pk=round_id, competition=comp)
+    round_obj = get_object_or_404(Round, uuid=round_uuid, competition=comp)
     with serialized_resource("round-plan", round_obj.pk):
         if RoundRun.objects.filter(round=round_obj).exists() or not delete_unreferenced(Round, round_obj.pk):
             messages.error(request, f"{round_obj.name} has runs and is kept.")
-            return redirect("staff_round", round_id=round_obj.pk)
-    events.competition("round_deleted", request=request, round_id=round_id, detail={"name": round_obj.name})
+            return redirect("staff_round", round_uuid=round_obj.uuid)
+    events.competition("round_deleted", request=request, round_id=round_obj.pk, detail={"name": round_obj.name})
     messages.success(request, f"Round {round_obj.name} deleted.")
     return redirect("staff_rounds")

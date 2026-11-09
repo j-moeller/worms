@@ -13,7 +13,7 @@
         <header class="panel__head"><h2 class="panel__title" id="now-title">Right now</h2></header>
         <div class="panel__body">
             {% if active_run %}
-            <p><strong>{{ active_run.team.name }}</strong> in <a href="{% url 'staff_round' active_run.round.pk %}">{{ active_run.round.name }}</a>: <span class="badge badge--state">{{ active_run.state }}</span>{% if active_run.state_changed_at %} since {{ active_run.state_changed_at|date:"H:i" }} UTC{% endif %}</p>
+            <p><strong>{{ active_run.team.name }}</strong> in <a href="{% url 'staff_round' active_run.round.uuid %}">{{ active_run.round.name }}</a>: <span class="badge badge--state">{{ active_run.state }}</span>{% if active_run.state_changed_at %} since {{ active_run.state_changed_at|date:"H:i" }} UTC{% endif %}</p>
             {% else %}
             <p class="empty">No run in progress.</p>
             {% endif %}
@@ -48,7 +48,7 @@
                 <tbody>
                     {% for row in live_rounds %}
                     <tr>
-                        <th scope="row"><a href="{% url 'staff_round' row.round.pk %}">{{ row.round.name }}</a> <span class="badge{% if row.status == 'active' %} badge--accent{% endif %}">{{ row.status }}</span></th>
+                        <th scope="row"><a href="{% url 'staff_round' row.round.uuid %}">{{ row.round.name }}</a> <span class="badge{% if row.status == 'active' %} badge--accent{% endif %}">{{ row.status }}</span></th>
                         <td>{{ row.round.round_start|date:"Y-m-d H:i" }} – {{ row.round.round_end|date:"H:i" }}</td>
                         <td>{% include "staff/_gameplan.html" with round=row.round %}</td>
                         <td>{% for state, count in row.states %}<span class="badge badge--state">{{ state }} {{ count }}</span> {% empty %}<span class="muted">planned at the start</span>{% endfor %}</td>

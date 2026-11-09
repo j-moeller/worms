@@ -155,8 +155,8 @@ def _team_info(team):
     return {"uuid": str(team.uuid), "name": team.name}
 
 
-def _round(team, round_id) -> Round:
-    rnd = Round.objects.filter(id=round_id, competition_id=team.competition_id).first()
+def _round(team, round_uuid) -> Round:
+    rnd = Round.objects.filter(uuid=round_uuid, competition_id=team.competition_id).first()
     if rnd is None:
         raise ApiError(404, "not_found", "No such round for your team.")
     return rnd
@@ -168,7 +168,7 @@ def _iso(ts):
 
 def _round_info(rnd, team):
     return {
-        "id": rnd.id,
+        "id": str(rnd.uuid),
         "name": rnd.name,
         "competition": "main",  # kept in the format; the devbox has no rounds
         "start": _iso(rnd.round_start),
@@ -238,7 +238,7 @@ def _page_info(name, rnd, limit, items, next_cursor):
         "limit": limit,
         "count": len(items),
         "next_cursor": next_cursor,
-        "next": f"{reverse(name, args=[rnd.id])}?limit={limit}&cursor={next_cursor}" if next_cursor else None,
+        "next": f"{reverse(name, args=[rnd.uuid])}?limit={limit}&cursor={next_cursor}" if next_cursor else None,
     }
 
 
@@ -256,10 +256,10 @@ def rounds(request, team):
             {
                 **_round_info(rnd, team),
                 "run": _run_info(runs.get(rnd.id)),
-                "scoring": reverse("api_round_scoring", args=[rnd.id]),
-                "logging": reverse("api_round_logging", args=[rnd.id]),
-                "progression": reverse("api_round_progression", args=[rnd.id]),
-                "download": reverse("api_round_progression_zip", args=[rnd.id]),
+                "scoring": reverse("api_round_scoring", args=[rnd.uuid]),
+                "logging": reverse("api_round_logging", args=[rnd.uuid]),
+                "progression": reverse("api_round_progression", args=[rnd.uuid]),
+                "download": reverse("api_round_progression_zip", args=[rnd.uuid]),
             }
             for rnd in rounds_
         ],
@@ -267,12 +267,12 @@ def rounds(request, team):
 
 
 @api_view
-def round_scoring(request, team, round_id):
+def round_scoring(request, team, round_uuid):
     """Every flag the team's sandbox submitted during its run in the round,
     oldest first, with the result: captured (scored), duplicate (that VM was
     already captured), not_counted, invalid, pending (not processed yet), and
     the VM -- if the team captured it in the round."""
-    rnd = _round(team, round_id)
+    rnd = _round(team, round_uuid)
     limit = _limit(request, "scoring")
     cursor = _decode_cursor(request, "s", 2)
     run = RoundRun.for_team(rnd, team)
@@ -332,10 +332,10 @@ def round_scoring(request, team, round_id):
 
 
 @api_view
-def round_logging(request, team, round_id):
+def round_logging(request, team, round_uuid):
     """Every log attributed to the team in the round (sent by its sandbox
     during its run), oldest first, with the record as the worm sent it."""
-    rnd = _round(team, round_id)
+    rnd = _round(team, round_uuid)
     limit = _limit(request, "logging")
     cursor = _decode_cursor(request, "l", 1)
     run = RoundRun.for_team(rnd, team)
@@ -369,35 +369,35 @@ def round_logging(request, team, round_id):
     }
 
 
-def _progression(team, round_id, flows=False):
+def _progression(team, round_uuid, flows=False):
     """The round's progression as the team sees it (audience "team"), its
     flows and log records linked to the API's own endpoints."""
-    rnd = _round(team, round_id)
+    rnd = _round(team, round_uuid)
     doc = progression.build(team, rnd, now=clock.now(), audience="team", infra=live_address_index(), flows=flows)
     zero = progression_views.ZERO_UUID
-    log_url = reverse("api_round_progression_log", args=[rnd.id, zero]).replace(zero, "{ref}")
-    return rnd, progression_views.with_links(doc, reverse("api_round_progression_flows", args=[rnd.id]), log_url)
+    log_url = reverse("api_round_progression_log", args=[rnd.uuid, zero]).replace(zero, "{ref}")
+    return rnd, progression_views.with_links(doc, reverse("api_round_progression_flows", args=[rnd.uuid]), log_url)
 
 
 @api_view
-def round_progression(request, team, round_id):
+def round_progression(request, team, round_uuid):
     """The round's progression (docs/08-user-guide.md): the clock (round start,
     end, now while it runs), the scene, every event; each log is a reference
     (logs.url), the connections are at network.url."""
-    return _progression(team, round_id)[1]
+    return _progression(team, round_uuid)[1]
 
 
 @api_view
-def round_progression_flows(request, team, round_id):
+def round_progression_flows(request, team, round_uuid):
     """The progression's connections, as the monitor recorded them (none for
     a development round: devbox traffic is not recorded)."""
-    return progression_views.flows_payload(_progression(team, round_id, flows=True)[1])
+    return progression_views.flows_payload(_progression(team, round_uuid, flows=True)[1])
 
 
 @api_view
-def round_progression_log(request, team, round_id, ref):
+def round_progression_log(request, team, round_uuid, ref):
     """One log record of the progression: {ref, received_at, data}."""
-    rnd = _round(team, round_id)
+    rnd = _round(team, round_uuid)
     record = progression.log_record(team, rnd, ref, now=clock.now())
     if record is None:
         raise ApiError(404, "not_found", "No such log in this round.")
@@ -405,7 +405,7 @@ def round_progression_log(request, team, round_id, ref):
 
 
 @api_view
-def round_progression_zip(request, team, round_id):
+def round_progression_zip(request, team, round_uuid):
     """Everything as one zip: progression.json, logs/<ref>.json (logs=1),
     network/flows.jsonl (network=1)."""
     try:
@@ -413,7 +413,7 @@ def round_progression_zip(request, team, round_id):
         network = progression_views.flag(request, "network")
     except progression_views.BadFlag as error:
         raise ApiError(400, "bad_flag", str(error)) from None
-    _, doc = _progression(team, round_id, flows=network)
+    _, doc = _progression(team, round_uuid, flows=network)
     return progression_views.zip_response(doc, logs)
 
 

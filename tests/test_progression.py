@@ -224,7 +224,7 @@ def test_document_shape(world):
     assert set(doc) == {"format", "version", "generated_at", "audience", "environment", "round", "team", "clock", "scene",
                         "timeline", "logs", "network"}
     assert doc["audience"] == "team" and doc["environment"] == "live"
-    assert doc["round"] == {"id": world["r1"].id, "name": "R1", "competition": "main", "start": world["r1"].round_start.isoformat(),
+    assert doc["round"] == {"id": str(world["r1"].uuid), "name": "R1", "competition": "main", "start": world["r1"].round_start.isoformat(),
                             "end": world["r1"].round_end.isoformat()}
     assert doc["team"] == {"uuid": str(world["a"].uuid), "name": "team-a"}
     # Logs are references; the flows are counted, not inline.
@@ -647,7 +647,7 @@ def test_fixtures_match_the_builder(world):
             assert set(real["scene"]) == set(fake["scene"])
             assert set(real["scene"]["groups"][0]) == set(fake["scene"]["groups"][0])
 
-    same_shape(build(world, audience="team"), topology_fixtures.team_progression(1))
+    same_shape(build(world, audience="team"), topology_fixtures.team_progression(topology_fixtures.ROUND_UUID[1]))
     _devbox_since(world)
     real, fake = _devbox_doc(world), topology_fixtures.devbox_progression()
     assert set(real) == set(fake) and real["round"] is None and fake["round"] is None
@@ -666,7 +666,7 @@ def api_get(world, path, token=TOKEN_A):
 
 
 def test_api_progression(world):
-    r1 = world["r1"].id
+    r1 = str(world["r1"].uuid)
     _, rounds = api_get(world, "/api/v1/rounds/")
     entry = next(r for r in rounds["rounds"] if r["id"] == r1)
     assert entry["progression"] == f"/api/v1/rounds/{r1}/progression/" and entry["download"] == f"/api/v1/rounds/{r1}/progression.zip"
@@ -706,14 +706,14 @@ def test_api_progression(world):
 def test_api_progression_scope(world):
     from core.models.competition import Competition, Round
 
-    r1 = world["r1"].id
+    r1 = str(world["r1"].uuid)
     _, doc = api_get(world, f"/api/v1/rounds/{r1}/progression/", token=TOKEN_B)
     assert doc["team"]["name"] == "team-b" and doc["timeline"]["nodes"] == []
     assert "vm-start" not in json.dumps(doc)
     response, _ = api_get(world, f"/api/v1/rounds/{r1}/progression/logs/{world['logs']['a'].uuid}/", token=TOKEN_B)
     assert response.status_code == 404
     elsewhere = Round.objects.create(competition=Competition.objects.create(name="x"), name="X", seed=9)
-    for path in (f"/api/v1/rounds/{elsewhere.id}/progression/", f"/api/v1/rounds/{elsewhere.id}/progression.zip"):
+    for path in (f"/api/v1/rounds/{elsewhere.uuid}/progression/", f"/api/v1/rounds/{elsewhere.uuid}/progression.zip"):
         assert api_get(world, path)[0].status_code == 404
     assert api_get(world, f"/api/v1/rounds/{r1}/progression/", token=None)[0].status_code == 401
     response = world["client"].post(f"/api/v1/rounds/{r1}/progression.zip", HTTP_AUTHORIZATION=f"Bearer {TOKEN_A}", **proxied(HOST))
@@ -738,27 +738,27 @@ def test_progression_page_and_navigation(world):
     assert 'href="/progression/"' in page and 'aria-current="page">Progression' in page
     assert "/captures/" not in page and "/logs/" not in page
     # Without JavaScript: the round links, the captured VMs, the downloads.
-    assert f'href="?round={world["r1"].id}"' in page and f'href="?round={world["r2"].id}"' in page
-    selected = get(f"/progression/?round={world['r1'].id}").content.decode()
+    assert f'href="?round={world["r1"].uuid}"' in page and f'href="?round={world["r2"].uuid}"' in page
+    selected = get(f"/progression/?round={world['r1'].uuid}").content.decode()
     assert "vm-start" in selected and "vm-pivot" in selected and "vm-hidden" not in selected
-    assert f'/progression/rounds/{world["r1"].id}/download/' in selected
-    assert 'data-audience="team"' in selected and 'data-progression="/progression/rounds/0/"' in selected
+    assert f'/progression/rounds/{world["r1"].uuid}/download/' in selected
+    assert 'data-audience="team"' in selected and 'data-progression="/progression/rounds/00000000-0000-0000-0000-000000000000/"' in selected
     for gone in ("/captures/", "/logs/"):
         assert get(gone).status_code == 404
 
     # The Dev view has no rounds: the devbox so far, whatever the address says.
     _devbox_since(world)
-    dev_page = as_user(world, world["student"], dev=True)(f"/progression/?round={world['r1'].id}").content.decode()
-    assert f'href="?round={world["r1"].id}"' not in dev_page and "Your devbox so far" in dev_page
+    dev_page = as_user(world, world["student"], dev=True)(f"/progression/?round={world['r1'].uuid}").content.decode()
+    assert f'href="?round={world["r1"].uuid}"' not in dev_page and "Your devbox so far" in dev_page
     assert "devbox-t1-a" in dev_page and "devbox-t1-b" not in dev_page
 
 
 def test_progression_data_for_the_team(world):
     get = as_user(world, world["student"])
-    r1 = world["r1"].id
+    r1 = str(world["r1"].uuid)
     rounds = json.loads(get("/progression/rounds/").content)
     assert rounds["environment"] == "live" and [r["name"] for r in rounds["rounds"]] == ["R1", "R2"]
-    assert rounds["rounds"][0]["run"] == "finished" and rounds["default"] == world["r2"].id
+    assert rounds["rounds"][0]["run"] == "finished" and rounds["default"] == str(world["r2"].uuid)
     doc = json.loads(get(f"/progression/rounds/{r1}/").content)
     assert doc["audience"] == "team" and doc["logs"]["url"] == f"/progression/rounds/{r1}/logs/{{ref}}/"
     assert_clean(doc, world)

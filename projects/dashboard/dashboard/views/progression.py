@@ -5,7 +5,7 @@ progression data behind it and behind the staff TOPOLOGY player
 Team (signed in; a round of the competition of the active environment, Live
 or Dev):
 
-    /progression/                                   the page (?round=<id>)
+    /progression/                                   the page (?round=<uuid>)
     /progression/rounds/                            the rounds (the player's tabs)
     /progression/rounds/<round>/                    the progression document
     /progression/rounds/<round>/flows/              its connections
@@ -107,10 +107,10 @@ def _rounds(request: HttpRequest):
     return list(Round.objects.filter(competition=competition).order_by("round_start", "id"))
 
 
-def _team_round(request: HttpRequest, round_id: int) -> Round:
+def _team_round(request: HttpRequest, round_uuid) -> Round:
     if request.competition is None or request.is_dev_environment:
         raise Http404("No such round.")
-    return get_object_or_404(Round.objects.select_related("competition"), id=round_id, competition=request.competition)
+    return get_object_or_404(Round.objects.select_related("competition"), uuid=round_uuid, competition=request.competition)
 
 
 def round_state(rnd: Round, now) -> str:
@@ -193,8 +193,8 @@ def progression_page(request: HttpRequest, team: Team):
         )
     rounds = _rounds(request)
     selected = None
-    if request.GET.get("round", "").isdigit():
-        selected = next((r for r in rounds if r.id == int(request.GET["round"])), None)
+    if request.GET.get("round"):
+        selected = next((r for r in rounds if str(r.uuid) == request.GET["round"]), None)
     selected = selected or default_round(rounds, now)
     return render_with_base_info(
         request,
@@ -205,9 +205,9 @@ def progression_page(request: HttpRequest, team: Team):
             "selected_state": round_state(selected, now) if selected else None,
             "summary": summary(team, selected, now) if selected else None,
             "links": {
-                "zip": reverse("progression_download", args=[selected.id]),
-                "events": reverse("progression_download", args=[selected.id]) + "?logs=0&network=0",
-                "json": reverse("progression_data", args=[selected.id]),
+                "zip": reverse("progression_download", args=[selected.uuid]),
+                "events": reverse("progression_download", args=[selected.uuid]) + "?logs=0&network=0",
+                "json": reverse("progression_data", args=[selected.uuid]),
             }
             if selected
             else None,
@@ -231,10 +231,10 @@ def team_rounds(request: HttpRequest, team: Team):
         {
             "environment": _environment(request),
             "team": {"uuid": str(team.uuid), "name": team.name},
-            "default": default.id if default else None,
+            "default": str(default.uuid) if default else None,
             "rounds": [
                 {
-                    "id": r.id,
+                    "id": str(r.uuid),
                     "name": r.name,
                     "start": r.round_start.isoformat() if r.round_start else None,
                     "end": r.round_end.isoformat() if r.round_end else None,
@@ -247,13 +247,13 @@ def team_rounds(request: HttpRequest, team: Team):
     )
 
 
-def _team_document(request, team, round_id, flows=False):
-    rnd = _team_round(request, round_id)
+def _team_document(request, team, round_uuid, flows=False):
+    rnd = _team_round(request, round_uuid)
     doc = progression.build(
         team, rnd, now=clock.now(), audience="team", infra=live_address_index(), flows=flows,
     )  # fmt: skip
-    log_url = reverse("progression_log", args=[rnd.id, ZERO_UUID]).replace(ZERO_UUID, "{ref}")
-    return rnd, with_links(doc, reverse("progression_flows", args=[rnd.id]), log_url)
+    log_url = reverse("progression_log", args=[rnd.uuid, ZERO_UUID]).replace(ZERO_UUID, "{ref}")
+    return rnd, with_links(doc, reverse("progression_flows", args=[rnd.uuid]), log_url)
 
 
 def _devbox_document(team):
@@ -296,22 +296,22 @@ def devbox_download(request: HttpRequest, team: Team):
 @never_cache
 @login_required
 @user_in_team_required
-def team_document(request: HttpRequest, round_id: int, team: Team):
-    return _json(_team_document(request, team, round_id)[1])
+def team_document(request: HttpRequest, round_uuid, team: Team):
+    return _json(_team_document(request, team, round_uuid)[1])
 
 
 @never_cache
 @login_required
 @user_in_team_required
-def team_flows(request: HttpRequest, round_id: int, team: Team):
-    return _json(flows_payload(_team_document(request, team, round_id, flows=True)[1]))
+def team_flows(request: HttpRequest, round_uuid, team: Team):
+    return _json(flows_payload(_team_document(request, team, round_uuid, flows=True)[1]))
 
 
 @never_cache
 @login_required
 @user_in_team_required
-def team_log(request: HttpRequest, round_id: int, ref, team: Team):
-    rnd = _team_round(request, round_id)
+def team_log(request: HttpRequest, round_uuid, ref, team: Team):
+    rnd = _team_round(request, round_uuid)
     record = progression.log_record(team, rnd, ref, now=clock.now())
     if record is None:
         return _json({"error": "No such log in this round."}, status=404)
@@ -321,12 +321,12 @@ def team_log(request: HttpRequest, round_id: int, ref, team: Team):
 @never_cache
 @login_required
 @user_in_team_required
-def team_download(request: HttpRequest, round_id: int, team: Team):
+def team_download(request: HttpRequest, round_uuid, team: Team):
     try:
         logs, network = flag(request, "logs"), flag(request, "network")
     except BadFlag as error:
         return _json({"error": str(error)}, status=400)
-    _, doc = _team_document(request, team, round_id, flows=network)
+    _, doc = _team_document(request, team, round_uuid, flows=network)
     return zip_response(doc, logs)
 
 

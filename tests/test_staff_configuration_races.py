@@ -36,7 +36,7 @@ def test_two_editors_cannot_move_rounds_into_the_same_window(site, app_roles, dj
         round_end=(target+timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M"))
     with as_role("django_dashboard"):
         responses = _race(django_env, "rounds", [r.pk for r in rounds], [
-            lambda: post(clients[0], f"/staff/rounds/{rounds[0].pk}/", {**data, "name": "edited first"}),
-            lambda: post(clients[1], f"/staff/rounds/{rounds[1].pk}/", {**data, "name": "edited second"}),
+            lambda: post(clients[0], f"/staff/rounds/{rounds[0].uuid}/", {**data, "name": "edited first"}),
+            lambda: post(clients[1], f"/staff/rounds/{rounds[1].uuid}/", {**data, "name": "edited second"}),
         ])
     assert sorted(r.status_code for r in responses) == [200, 302]

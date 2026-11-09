@@ -266,7 +266,7 @@ def leaderboard_tabs(request, rounds, now, selected):
             continue
         tabs.append({
             "name": round.name,
-            "url": f"{request.path}?round={round.id}",
+            "url": f"{request.path}?round={round.uuid}",
             "selected": selected is not None and round.id == selected.id,
             "active": round.is_active(now),
         })  # fmt: skip
@@ -279,13 +279,13 @@ def leaderboard(request: HttpRequest, competition: Competition):
     rounds = get_rounds(active_competition)
     now = request.time_now
 
-    # A ?round=<id> of a started round shows that round's ranking; otherwise
+    # A ?round=<uuid> of a started round shows that round's ranking; otherwise
     # the overall leaderboard over all rounds (the default "All" tab).
     requested = request.GET.get("round")
     selected = None
     if requested:
         selected = next(
-            (r for r in rounds if str(r.id) == requested and r.round_start is not None and r.round_start <= now),
+            (r for r in rounds if str(r.uuid) == requested and r.round_start is not None and r.round_start <= now),
             None,
         )
     tabs = leaderboard_tabs(request, rounds, now, selected)

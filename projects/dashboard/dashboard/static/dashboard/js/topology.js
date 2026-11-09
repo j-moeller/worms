@@ -55,7 +55,7 @@
         model: root.dataset.model,
         runs: root.dataset.runs,
         rounds: root.dataset.rounds,
-        round: Number(root.dataset.round) || null,
+        round: root.dataset.round || null,
         progression: root.dataset.progression,
         download: root.dataset.download,
         refreshMs: Number(root.dataset.refreshMs || 60000),
@@ -63,8 +63,8 @@
     // The team's page: its rounds, its scene; no infrastructure, no firewall.
     const TEAM = cfg.audience === "team";
     const DEVBOX = TEAM && !cfg.rounds;
-    // A round's URL from the page's template (round id 0 / the all-zero run uuid).
-    const roundUrl = (template, id) => (TEAM ? template.replace(/\/rounds\/0\//, `/rounds/${encodeURIComponent(id)}/`) : template.replace(ZERO_UUID, id));
+    // A round's (team) or a run's (staff) URL from the page's template: the all-zero uuid in its place.
+    const roundUrl = (template, id) => template.replace(ZERO_UUID, encodeURIComponent(id));
 
     // ------------------------------------------------------------------
     // DOM helpers (text only -- see SECURITY above)
@@ -393,7 +393,7 @@
             audience: p.audience === "team" ? "team" : "staff",
             environment: p.environment === "dev" ? "dev" : "live",
             generated_at: optTxt(p.generated_at, 64),
-            round: rd ? { id: num(rd.id), name: txt(rd.name, 256), competition: txt(rd.competition, 32), start: optTxt(rd.start, 64), end: optTxt(rd.end, 64) } : null,
+            round: rd ? { id: optTxt(rd.id, 64), name: txt(rd.name, 256), competition: txt(rd.competition, 32), start: optTxt(rd.start, 64), end: optTxt(rd.end, 64) } : null,
             team: tm ? { uuid: txt(tm.uuid, 64), name: txt(tm.name, 256) } : null,
             clock: {
                 t0: optTxt(c.t0, 64), round_start: time(c.round_start), round_end: time(c.round_end), now: time(c.now),
@@ -2764,7 +2764,7 @@
 
     function readHash() {
         const params = new URLSearchParams(location.hash.replace(/^#/, ""));
-        return { run: params.get("run"), round: Number(params.get("round")) || null, t: params.has("t") ? Number(params.get("t")) : undefined };
+        return { run: params.get("run"), round: params.get("round") || null, t: params.has("t") ? Number(params.get("t")) : undefined };
     }
 
     async function loadModel() {

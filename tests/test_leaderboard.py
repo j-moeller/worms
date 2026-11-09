@@ -100,7 +100,7 @@ def test_the_tabs_are_all_plus_every_started_round(site, board):  # noqa: F811
 
 
 def test_an_unknown_or_unstarted_round_falls_back_to_all(site, board):  # noqa: F811
-    for query in (f"?round={board['r3'].id}", "?round=999", "?round=notanumber"):
+    for query in (f"?round={board['r3'].uuid}", "?round=999", "?round=notanumber"):
         page = _get(site, "/" + query)
         assert _current_tab(page) == "All"
         assert ">Ranking</h2>" in page
@@ -124,7 +124,7 @@ def test_the_default_is_the_overall_ranking_with_badges(site, board):  # noqa: F
 
 
 def test_no_running_badge_anywhere(site, board):  # noqa: F811
-    for path in ("/", f"/?round={board['r1'].id}", f"/?round={board['r2'].id}"):
+    for path in ("/", f"/?round={board['r1'].uuid}", f"/?round={board['r2'].uuid}"):
         page = _get(site, path)
         assert "badge--state" not in page
         assert not re.search(r">\s*running\s*<", page)
@@ -134,7 +134,7 @@ def test_no_running_badge_anywhere(site, board):  # noqa: F811
 
 
 def test_a_finished_round_tab_ranks_by_captured_vms_and_stars_the_winner(site, board):  # noqa: F811
-    page = _get(site, f"/?round={board['r1'].id}")
+    page = _get(site, f"/?round={board['r1'].uuid}")
     assert _current_tab(page) == "R1"
     assert "Final." in page
     assert _rows(page) == [
@@ -147,7 +147,7 @@ def test_a_finished_round_tab_ranks_by_captured_vms_and_stars_the_winner(site, b
 
 
 def test_a_running_round_tab_flames_the_leader(site, board):  # noqa: F811
-    page = _get(site, f"/?round={board['r2'].id}")
+    page = _get(site, f"/?round={board['r2'].uuid}")
     assert _current_tab(page) == "R2"
     assert "provisional" in page
     assert _rows(page)[0] == ["01", f"dogs {FLAME}", "2 / 6", "25"]

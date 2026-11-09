@@ -11,6 +11,9 @@ const { chromium } = require("playwright");
 const [pagePath, fixtures, shots] = process.argv.slice(2);
 const read = (name) => fs.readFileSync(path.join(fixtures, name), "utf8");
 const ORIGIN = "http://worms.test";
+// The rounds' uuids, as in tests/topology_fixtures.py (ROUND_UUID).
+const R1 = "a1000000-0000-4000-8000-000000000001";
+const R3 = "a1000000-0000-4000-8000-000000000003";
 
 const errors = [];
 const out = { errors, checks: {} };
@@ -34,10 +37,10 @@ const requests = [];
         }
         requests.push(url.pathname);
         if (url.pathname === "/progression/rounds/") return json(read("team_rounds.json"));
-        if (url.pathname === "/progression/rounds/1/") return json(read("team1.json"));
-        if (url.pathname === "/progression/rounds/1/flows/") return json(read("team_flows.json"));
-        if (url.pathname === "/progression/rounds/3/") return json(read("team3.json"));
-        if (/^\/progression\/rounds\/[13]\/logs\/[0-9a-f-]+\/$/.test(url.pathname)) return json(read("log.json"));
+        if (url.pathname === `/progression/rounds/${R1}/`) return json(read("team1.json"));
+        if (url.pathname === `/progression/rounds/${R1}/flows/`) return json(read("team_flows.json"));
+        if (url.pathname === `/progression/rounds/${R3}/`) return json(read("team3.json"));
+        if (url.pathname.startsWith(`/progression/rounds/${R1}/logs/`) || url.pathname.startsWith(`/progression/rounds/${R3}/logs/`)) return json(read("log.json"));
         return json(JSON.stringify({ error: "No such round." }), 404);
     });
     await context.route(/^https?:\/\/(?!worms\.test)/, (route) => route.abort());
@@ -171,15 +174,15 @@ const requests = [];
     fast.on("pageerror", (err) => errors.push(`pageerror: ${err.message}`));
     const fetched = [];
     fast.on("request", (r) => fetched.push(new URL(r.url()).pathname));
-    await fast.goto(`${ORIGIN}/page-fast#round=3&t=6000`);
-    await fast.waitForFunction(() => { const s = document.getElementById("topo").topoState; return s.timeline && s.roundId === 3; });
+    await fast.goto(`${ORIGIN}/page-fast#round=${R3}&t=6000`);
+    await fast.waitForFunction((r3) => { const s = document.getElementById("topo").topoState; return s.timeline && s.roundId === r3; }, R3);
     const restored = await fast.evaluate(() => { const s = document.getElementById("topo").topoState; return { round: s.roundId, t: s.t }; });
     const devA = await fast.evaluate(() => document.getElementById("topo").topoState.scene.order.find((n) => n.info && n.info.name === "devbox-t1-a").id);
     await fast.locator(`[data-node="${devA}"]`).click();
-    const fetchesBefore = fetched.filter((p) => p === "/progression/rounds/3/").length;
+    const fetchesBefore = fetched.filter((p) => p === `/progression/rounds/${R3}/`).length;
     await fast.waitForTimeout(1600);
     out.checks.refresh = await fast.evaluate(() => { const s = document.getElementById("topo").topoState; return { t: s.t, round: s.roundId, selected: s.selected && s.selected.type }; });
-    Object.assign(out.checks.refresh, { restored, fetchesBefore, fetchesAfter: fetched.filter((p) => p === "/progression/rounds/3/").length });
+    Object.assign(out.checks.refresh, { restored, fetchesBefore, fetchesAfter: fetched.filter((p) => p === `/progression/rounds/${R3}/`).length });
 
     console.log(JSON.stringify(out));
     await browser.close();

@@ -152,7 +152,7 @@ def _document(team, rnd, now, environment, clock, scene, tl, network):
         "round": None
         if rnd is None
         else {
-            "id": rnd.id,
+            "id": str(rnd.uuid),
             "name": rnd.name,
             "competition": "main",
             "start": _iso(rnd.round_start),

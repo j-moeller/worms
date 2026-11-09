@@ -80,7 +80,7 @@
                 <thead><tr><th scope="col">Round</th><th scope="col">State</th></tr></thead>
                 <tbody>
                     {% for run in runs %}
-                    <tr><th scope="row"><a href="{% url 'staff_round' run.round.pk %}">{{ run.round.name }}</a></th><td><span class="badge badge--state">{{ run.state }}</span></td></tr>
+                    <tr><th scope="row"><a href="{% url 'staff_round' run.round.uuid %}">{{ run.round.name }}</a></th><td><span class="badge badge--state">{{ run.state }}</span></td></tr>
                     {% empty %}
                     <tr><td colspan="2" class="empty">No runs yet.</td></tr>
                     {% endfor %}

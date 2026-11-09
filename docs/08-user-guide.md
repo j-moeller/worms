@@ -143,13 +143,13 @@ curl -sf -H "Authorization: Bearer $TOKEN" https://worms.mlsec.tu-berlin.de/api/
 
 | Endpoint | Returns |
 |---|---|
-| `GET /api/v1/rounds/` | `{team, rounds: [{id, name, start, end, run, scoring, logging, progression, download}]}`. `run` = `{state, position, attempt, worm_start_at, ends_at}` |
-| `GET /api/v1/rounds/<id>/scoring/?limit=&cursor=` | `{team, round, run, summary: {captured, vms}, items: [{id, submitted_at, flag_hash, result, vm}], page}`. `result`: `captured`, `duplicate`, `not_counted` (outside the run's window), `invalid`, `pending`. `vm` is named only if you captured it. Limit 1–500 (default 100) |
-| `GET /api/v1/rounds/<id>/logging/?limit=&cursor=` | `items: [{id, uuid, received_at, log}]`. Limit 1–200 (default 50) |
-| `GET /api/v1/rounds/<id>/progression/` | The replay document (below) |
-| `GET /api/v1/rounds/<id>/progression/flows/` | `{count, truncated, available, reason, flows}` |
-| `GET /api/v1/rounds/<id>/progression/logs/<ref>/` | `{ref, received_at, data}` |
-| `GET /api/v1/rounds/<id>/progression.zip?logs=0\|1&network=0\|1` | `progression.json`, `logs/<ref>.json`, `network/flows.jsonl` |
+| `GET /api/v1/rounds/` | `{team, rounds: [{id, name, start, end, run, scoring, logging, progression, download}]}`. A round's `id` is a UUID. `run` = `{state, position, attempt, worm_start_at, ends_at}` |
+| `GET /api/v1/rounds/<round id>/scoring/?limit=&cursor=` | `{team, round, run, summary: {captured, vms}, items: [{id, submitted_at, flag_hash, result, vm}], page}`. `result`: `captured`, `duplicate`, `not_counted` (outside the run's window), `invalid`, `pending`. `vm` is named only if you captured it. Limit 1–500 (default 100) |
+| `GET /api/v1/rounds/<round id>/logging/?limit=&cursor=` | `items: [{id, uuid, received_at, log}]`. Limit 1–200 (default 50) |
+| `GET /api/v1/rounds/<round id>/progression/` | The replay document (below) |
+| `GET /api/v1/rounds/<round id>/progression/flows/` | `{count, truncated, available, reason, flows}` |
+| `GET /api/v1/rounds/<round id>/progression/logs/<ref>/` | `{ref, received_at, data}` |
+| `GET /api/v1/rounds/<round id>/progression.zip?logs=0\|1&network=0\|1` | `progression.json`, `logs/<ref>.json`, `network/flows.jsonl` |
 | `GET /api/v1/devbox/progression/`, `…/logs/<ref>/`, `/api/v1/devbox/progression.zip?logs=0\|1` | The same for your devbox since its last reset (no traffic) |
 
 - **Before a round's run has finished.** `scoring` and `logging` return no items, and the progression is withheld (`timeline.run.withheld: true`).

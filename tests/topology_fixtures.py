@@ -45,12 +45,17 @@ def model() -> dict:
             "collection_error": "", "stale": False}
 
 
+# A round is named by its uuid (core/models/competition.py); tests/browser/progression_page.js
+# serves these same three.
+ROUND_UUID = {n: f"a1000000-0000-4000-8000-00000000000{n}" for n in (1, 2, 3)}
+
+
 def runs() -> dict:
     return {
         "competition": "WORMS 2026",
         "rounds": [
             {
-                "id": 1, "name": "R1", "round_start": "2026-10-24T10:00:00+00:00", "round_end": "2026-10-24T18:00:00+00:00",
+                "id": ROUND_UUID[1], "name": "R1", "round_start": "2026-10-24T10:00:00+00:00", "round_end": "2026-10-24T18:00:00+00:00",
                 "runs": [
                     {"uuid": RUN_UUID, "team": "team-a", "state": "finished", "position": 0, "worm_start_at": "2026-10-24T10:05:00+00:00"},
                     {"uuid": OTHER_RUN_UUID, "team": "team-b", "state": "pending", "position": 1, "worm_start_at": None},
@@ -170,7 +175,7 @@ def _envelope(audience, environment, rnd, clock, scene, tl, logs_url, network):
     }
 
 
-R1 = {"id": 1, "name": "R1", "competition": "main", "start": "2026-10-24T10:00:00+00:00", "end": "2026-10-24T18:00:00+00:00"}
+R1 = {"id": ROUND_UUID[1], "name": "R1", "competition": "main", "start": "2026-10-24T10:00:00+00:00", "end": "2026-10-24T18:00:00+00:00"}
 
 
 def progression() -> dict:
@@ -196,11 +201,11 @@ def flows() -> dict:
 
 def team_rounds() -> dict:
     return {
-        "environment": "live", "team": {"uuid": TEAM_UUID, "name": "team-a"}, "default": 1,
+        "environment": "live", "team": {"uuid": TEAM_UUID, "name": "team-a"}, "default": ROUND_UUID[1],
         "rounds": [
-            {"id": 1, "name": "R1", "start": R1["start"], "end": R1["end"], "state": "active", "run": "finished"},
-            {"id": 2, "name": "R2", "start": "2026-10-25T10:00:00+00:00", "end": "2026-10-25T18:00:00+00:00", "state": "upcoming", "run": None},
-            {"id": 3, "name": "Dev week", "start": "2026-10-20T00:00:00+00:00", "end": "2026-10-27T00:00:00+00:00", "state": "active", "run": None},
+            {"id": ROUND_UUID[1], "name": "R1", "start": R1["start"], "end": R1["end"], "state": "active", "run": "finished"},
+            {"id": ROUND_UUID[2], "name": "R2", "start": "2026-10-25T10:00:00+00:00", "end": "2026-10-25T18:00:00+00:00", "state": "upcoming", "run": None},
+            {"id": ROUND_UUID[3], "name": "Dev week", "start": "2026-10-20T00:00:00+00:00", "end": "2026-10-27T00:00:00+00:00", "state": "active", "run": None},
         ],
     }
 
@@ -222,7 +227,7 @@ def team_progression(round_id) -> dict | None:
     """Round 1: team-a's run as the team sees it (two captured VMs on
     "net-1"; the far ends remapped); round 3: its devbox in a dev round;
     round 2 (upcoming): fails (404)."""
-    if round_id == 1:
+    if round_id == ROUND_UUID[1]:
         v0, v1 = _uuid(0), _uuid(1)
         nodes = [
             {"id": v0, "label": "sandbox-vm0", "group": "sandbox", "addresses": ["10.64.0.10"],
@@ -266,11 +271,11 @@ def team_progression(round_id) -> dict | None:
             {"t0": "2026-10-24T10:05:00+00:00", "round_start": -300.0, "round_end": 28500.0, "now": 900.0, "finished": False,
              "t_min": -60.0, "t_max": 640.0},
             _scene({"id": "group:sandbox", "kind": "sandbox", "team": None, "label": "Sandbox", "gateway": None, "members": []}),
-            tl, "/progression/rounds/1/logs/{ref}/",
+            tl, f"/progression/rounds/{ROUND_UUID[1]}/logs/{{ref}}/",
             {"available": True, "reason": None, "count": len(team_flows()["flows"]), "truncated": False, "included": False,
-             "path": None, "url": "/progression/rounds/1/flows/"},
+             "path": None, "url": f"/progression/rounds/{ROUND_UUID[1]}/flows/"},
         )
-    if round_id == 3:
+    if round_id == ROUND_UUID[3]:
         a, b, c = (f"d0d00000-0000-4000-8000-00000000000{x}" for x in "abc")
         devbox = [{"id": v, "name": f"devbox-t1-{x}", "role": "devbox", "status": "running", "active": True, "devbox_role": x, "team": None}
                   for v, x in ((a, "a"), (b, "b"), (c, "c"))]
@@ -302,11 +307,11 @@ def team_progression(round_id) -> dict | None:
                  "gateway": None, "members": [a, b, c]}
         links = [{"id": f"lan:{x}->{y}", "source": x, "target": y, "kind": "lan", "verified": True, "label": None} for x, y in ((a, b), (b, c))]
         return _envelope(
-            "team", "dev", {"id": 3, "name": "Dev week", "competition": "development", "start": "2026-10-20T00:00:00+00:00",
+            "team", "dev", {"id": ROUND_UUID[3], "name": "Dev week", "competition": "development", "start": "2026-10-20T00:00:00+00:00",
                             "end": "2026-10-27T00:00:00+00:00"},
             {"t0": "2026-10-20T00:00:00+00:00", "round_start": 0.0, "round_end": 604800.0, "now": 14400.0, "finished": False,
              "t_min": 0.0, "t_max": 14400.0},
-            _scene(group, devbox, links), tl, "/progression/rounds/3/logs/{ref}/",
+            _scene(group, devbox, links), tl, f"/progression/rounds/{ROUND_UUID[3]}/logs/{{ref}}/",
             {"available": False, "reason": "The monitor records the sandbox only: devbox traffic is not recorded.", "count": 0,
              "truncated": False, "included": False, "path": None, "url": None},
         )
@@ -315,7 +320,7 @@ def team_progression(round_id) -> dict | None:
 
 def devbox_progression() -> dict:
     """The Dev view's document: the devbox so far, with no round (progression.build_devbox)."""
-    doc = team_progression(3)
+    doc = team_progression(ROUND_UUID[3])
     doc["round"] = None
     doc["clock"].update(round_start=None, round_end=None, finished=False)
     doc["logs"]["url"] = "/progression/devbox/logs/{ref}/"

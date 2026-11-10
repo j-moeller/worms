@@ -232,12 +232,13 @@ def test_existing_ssh_fingerprints_upgrade_atomically(cluster, collision):
     alternate = canonical[:-3] + 'B=='
     assert base64.b64decode(canonical) == base64.b64decode(alternate)
     values = [alternate, canonical] if collision else [alternate]
+    # The keys go in as SQL: the model is today's, the table still the one of 0004.
     seed = '''
 import hashlib
+from django.db import connection
 from core.models.user import User
 from core.models.team import Team
 from core.models.competition import Competition
-from core.models.devbox import DevboxSSHKey
 u=User.objects.create(username='ssh-owner')
 c=Competition.objects.create(name='keys')
 t=Team.objects.create(name='same team',competition=c)
@@ -246,8 +247,9 @@ t=Team.objects.create(name='same team',competition=c)
     seed += '''
 for encoded in values:
     key='ssh-ed25519 '+encoded
-    DevboxSSHKey.objects.bulk_create([DevboxSSHKey(team=t,created_by=u,public_key=key,
-        key_fingerprint=hashlib.sha256(key.encode()).hexdigest())])
+    with connection.cursor() as cursor:
+        cursor.execute("INSERT INTO devbox_ssh_keys (team_id, name, public_key, key_fingerprint, created_by_id, created_at) "
+                       "VALUES (%s, '', %s, %s, %s, now())", [t.id, key, hashlib.sha256(key.encode()).hexdigest(), u.id])
 '''
     proc = django(cluster, db, 'shell', '-c', seed)
     assert proc.returncode == 0, proc.stderr

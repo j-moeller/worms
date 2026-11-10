@@ -27,9 +27,9 @@ WITH competition AS (
     FROM competition
     RETURNING id, competition_id
 ), token AS (
-    INSERT INTO access_tokens (name, description, access_token_hash, team_id, created_by_id,
-                               revoked, created_at)
-    SELECT 'simulation-' || %(run_id)s, 'worms simulation, deleted afterwards',
+    INSERT INTO access_tokens (uuid, name, description, access_token_hash, team_id,
+                               created_by_id, revoked, created_at)
+    SELECT gen_random_uuid(), 'simulation-' || %(run_id)s, 'worms simulation, deleted afterwards',
            %(token_hash)s, team.id, account.id, false, now()
     FROM team, account
     RETURNING team_id

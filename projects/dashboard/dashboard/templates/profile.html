@@ -68,7 +68,7 @@
                     <th scope="row">{{ key.name|default:"(unnamed)" }}</th>
                     <td class="mono truncate" title="{{ key.public_key }}">{{ key.public_key }}</td>
                     <td class="row-action">
-                        <form method="post" action="{% url 'devbox_delete_ssh_key' key.id %}">{% csrf_token %}<button type="submit" class="btn btn--ghost btn--sm btn--danger">Remove</button></form>
+                        <form method="post" action="{% url 'devbox_delete_ssh_key' key.uuid %}">{% csrf_token %}<button type="submit" class="btn btn--ghost btn--sm btn--danger">Remove</button></form>
                     </td>
                 </tr>
                 {% empty %}
@@ -134,7 +134,7 @@
                             <summary class="btn btn--ghost btn--sm btn--danger">Revoke</summary>
                             <div class="confirm__body">
                                 <p>Revoke “{{ token.name }}”? Anything using it stops working.</p>
-                                <form method="post" action="{% url 'revoke_access_token' token_id=token.id %}">{% csrf_token %}<button type="submit" class="btn btn--danger btn--sm">Revoke</button></form>
+                                <form method="post" action="{% url 'revoke_access_token' token_uuid=token.uuid %}">{% csrf_token %}<button type="submit" class="btn btn--danger btn--sm">Revoke</button></form>
                             </div>
                         </details>
                         {% endif %}

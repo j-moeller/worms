@@ -115,6 +115,8 @@ class DevboxSSHKey(models.Model):
     accept it (through the gateway). Teams add and remove keys on the dashboard
     dev view."""
 
+    # Names the key in URLs (removing it), never the primary key.
+    uuid = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="devbox_ssh_keys")
     name = models.TextField(blank=True, default="")
     public_key = models.TextField()

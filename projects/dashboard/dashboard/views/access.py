@@ -58,11 +58,11 @@ def create_access_token(request: HttpRequest, team: Team, *, competition: Compet
 @user_in_team_required
 @require_competition_registration_inactive
 def revoke_access_token(
-    request: HttpRequest, team: Team, token_id: int, *, competition: Competition
+    request: HttpRequest, team: Team, token_uuid, *, competition: Competition
 ):
     access_token = get_object_or_404(
         AccessTokens,
-        id=token_id,
+        uuid=token_uuid,
         team=team,
     )
 

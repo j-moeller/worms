@@ -237,9 +237,9 @@ def devbox_add_ssh_key(request: HttpRequest, team: Team):
 @login_required
 @require_POST
 @user_in_team_required
-def devbox_delete_ssh_key(request: HttpRequest, team: Team, key_id: int):
-    key = DevboxSSHKey.objects.filter(id=key_id, team=team).first()
-    deleted, _ = DevboxSSHKey.objects.filter(id=key_id, team=team).delete()
+def devbox_delete_ssh_key(request: HttpRequest, team: Team, key_uuid):
+    key = DevboxSSHKey.objects.filter(uuid=key_uuid, team=team).first()
+    deleted, _ = DevboxSSHKey.objects.filter(uuid=key_uuid, team=team).delete()
     if deleted:
         events.credential("ssh_key_removed", request=request, team=team, name=key.name, public_key=key.public_key)
         _reconfigure_devbox(request, team, "removed")

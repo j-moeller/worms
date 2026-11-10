@@ -55,6 +55,8 @@ class Team(models.Model):
 
 
 class AccessTokens(models.Model):
+    # Names the token in URLs (revoking it), never the primary key.
+    uuid = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     name = models.TextField()
     description = models.TextField(default="")
     access_token_hash = models.TextField(unique=True)

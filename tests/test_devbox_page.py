@@ -112,7 +112,7 @@ def test_adding_and_removing_a_key_come_back_to_the_profile(site, team_upload, m
     assert (refused.status_code, refused["Location"]) == (302, "/profile/")
     assert "not a single-line" in _profile(site)
 
-    removed = _post(site, f"/devbox/ssh-keys/{DevboxSSHKey.objects.get(team=team).id}/delete/")
+    removed = _post(site, f"/devbox/ssh-keys/{DevboxSSHKey.objects.get(team=team).uuid}/delete/")
     assert (removed.status_code, removed["Location"]) == (302, "/profile/")
     profile = _profile(site)
     assert "me@laptop" not in profile and ">0 registered<" in profile

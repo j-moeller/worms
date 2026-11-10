@@ -270,7 +270,7 @@ def test_devbox_ssh_key_add_remove_and_reconfigure(site, team_upload, monkeypatc
     # Remove the key -> gone, and a reconfigure is requested.
     calls.clear()
     key = DevboxSSHKey.objects.get(team=team)
-    assert _post(site, f"/devbox/ssh-keys/{key.id}/delete/", {}).status_code == 302
+    assert _post(site, f"/devbox/ssh-keys/{key.uuid}/delete/", {}).status_code == 302
     assert DevboxSSHKey.objects.filter(team=team).count() == 0
     assert calls == [f"/devbox/{team.uuid}/reconfigure/"]
 

@@ -30,7 +30,7 @@ urlpatterns = [
     #
     path("devbox/reset/", devbox_reset, name="devbox_reset"),
     path("devbox/ssh-keys/add/", devbox_add_ssh_key, name="devbox_add_ssh_key"),
-    path("devbox/ssh-keys/<int:key_id>/delete/", devbox_delete_ssh_key, name="devbox_delete_ssh_key"),
+    path("devbox/ssh-keys/<uuid:key_uuid>/delete/", devbox_delete_ssh_key, name="devbox_delete_ssh_key"),
     #
     path("admin/", admin.site.urls),
     #
@@ -120,7 +120,7 @@ urlpatterns = [
         name="create_access_token",
     ),
     path(
-        "access-tokens/<int:token_id>/revoke/",
+        "access-tokens/<uuid:token_uuid>/revoke/",
         revoke_access_token,
         name="revoke_access_token",
     ),

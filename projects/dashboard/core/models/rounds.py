@@ -120,6 +120,7 @@ class HostJob(models.Model):
         REMOVE_FLAGS = "remove_flags"  # the gameplan's execute(): flags out, checked
         PLACE_FLAGS = "place_flags"  # new flags in, hashes back
         WRITE_FILE = "write_file"  # a file the gameplan declared, by its number
+        READ_FILE = "read_file"  # whether a file on a VM changed: its size and SHA-256, never its content
         TEARDOWN = "teardown"  # destroy the sandbox, or keep it powered off for the round's next run
         # Devbox (docs/04-dev-environment.md): provision/rebuild a team's devbox VMs and
         # (re)write their tokens; run is null (a devbox job is team-scoped,

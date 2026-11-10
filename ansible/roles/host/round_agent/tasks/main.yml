@@ -5,9 +5,10 @@
 # service, and the least-privilege Proxmox ACL for the orchestrator's VM-power
 # token.
 
-- name: Install psycopg2 for the agent
+# psycopg2: the database. cryptography: the KeePass files a gameplan writes (src/gameplan/render.py).
+- name: Install the agent's Python libraries
   ansible.builtin.apt:
-    name: python3-psycopg2
+    name: [python3-psycopg2, python3-cryptography]
     state: present
     update_cache: true
     cache_valid_time: 3600

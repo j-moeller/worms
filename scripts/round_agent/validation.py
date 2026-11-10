@@ -122,6 +122,10 @@ def write_file(params):
     }
 
 
+def read_file(params):
+    return write_file(params)
+
+
 # --- devbox (docs/04-dev-environment.md) --------------------------------------------------
 
 # A team slug as scripts/generate_devbox.py accepts it.
@@ -259,6 +263,7 @@ VALIDATORS = {
     "remove_flags": flags,
     "place_flags": flags,
     "write_file": write_file,
+    "read_file": read_file,
     "teardown": teardown,
     "devbox_provision": devbox_provision,
     "devbox_rebuild": devbox_rebuild,

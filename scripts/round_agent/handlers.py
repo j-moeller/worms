@@ -15,12 +15,14 @@ import hashlib
 import json
 import os
 import secrets
+import shlex
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 from gameplan import build as gameplan_build
 from gameplan import loader as gameplan_loader
+from gameplan import render as gameplan_render
 from gameplan import runtime as gameplan_runtime
 from gameplan.definition import SECRET_MARKER, GameplanError
 from generate_devbox import team_addressing
@@ -278,12 +280,13 @@ def _load_run_state(cfg, run_uuid):
 
 
 def _generate_secrets(ex, spec):
-    """{secret id: {field: value}}, new for this run: key pairs from ssh-keygen, passwords from
-    `secrets`. They stay on the node; the database never sees them."""
+    """{secret id: {field: value}}, new for this run: key pairs from ssh-keygen, passwords and
+    TOTP seeds from `secrets` (gameplan/render.py). They stay on the node; the database never
+    sees them."""
     out = {}
     for secret in spec["secrets"]:
-        if secret["kind"] == "password":
-            out[secret["id"]] = {"password": secrets.token_urlsafe(15)}
+        if secret["kind"] != "ssh_key":
+            out[secret["id"]] = gameplan_render.new_secret(secret)
             continue
         with tempfile.TemporaryDirectory() as tmp:
             key = Path(tmp) / "key"
@@ -332,11 +335,19 @@ def _apply_setup(ex, vms, spec, values):
 
 
 def _write_gameplan_file(ex, ip, entry, values):
-    ex.ssh(
-        ip,
-        ["sudo", "install", "-D", "-m", entry["mode"], "-o", entry["owner"], "-g", entry["owner"], "/dev/stdin", entry["path"]],
-        input=_fill(entry["content"], values),
-    )
+    """Text as it is (with the run's secrets); a document, archive or vault made here first
+    (gameplan/render.py) and sent base64-encoded, as binary does not survive the text channel."""
+    install = ["install", "-D", "-m", entry["mode"], "-o", entry["owner"], "-g", entry["owner"], "/dev/stdin", entry["path"]]
+    if isinstance(entry["content"], str):
+        ex.ssh(ip, ["sudo", *install], input=_fill(entry["content"], values))
+        return
+    data = gameplan_render.render(entry["content"], values)
+    ex.ssh(ip, ["sudo", "sh", "-c", "base64 -d | " + shlex.join(install)], input=base64.b64encode(data).decode("ascii"))
+
+
+# What read_file runs on a VM: the file's size and SHA-256, or that it is not a regular file.
+# The path is the script's argument, never part of it.
+READ_FILE = 'if [ -f "$1" ] && [ ! -L "$1" ]; then stat -c %s -- "$1" && sha256sum < "$1"; else echo missing; fi'
 
 
 def _guest_step(strict, action):
@@ -578,6 +589,39 @@ def write_file(ex, cfg, params):
         ex.note(f"file {params['file']} on {entry['vm']}: {problem}")
         problem = "the file could not be written: the job log on the node says why"
     return {"written": problem is None, "vm": entry["vm"], "error": problem}
+
+
+@_quiet
+def read_file(ex, cfg, params):
+    """Whether a file is on a sandbox VM, its size and SHA-256, for execute(): never its
+    content, which would reach the database. The file is named by its number in the gameplan's
+    `reads`; its path comes from the node's copy. After the worm (not strict) the VM may lie or
+    fail: the reason is returned, by name only (it may quote the path); the job log has it."""
+    state = _load_run_state(cfg, params["run_uuid"])
+    spec, _ = _gameplan(ex, state["gameplan"], state["sha256"])
+    entry = next((r for r in spec["reads"] if r["id"] == params["file"]), None)
+    if entry is None:
+        raise validation.Invalid(f"the gameplan has no readable file {params['file']}")
+    vms = _sandbox_vms(ex)
+    if entry["vm"] not in vms:
+        raise validation.Invalid(f"{entry['vm']} is not a VM of the current sandbox")
+    found = {}
+
+    def read():
+        out = ex.ssh(vms[entry["vm"]]["maintenance_ip"], ["sudo", "sh", "-c", READ_FILE, "sh", entry["path"]], timeout=120)
+        lines = out.split()
+        if lines == ["missing"]:
+            found.update(exists=False, size=None, sha256=None)
+        elif len(lines) == 3 and lines[0].isdigit() and validation.SHA256.fullmatch(lines[1]) and lines[2] == "-":
+            found.update(exists=True, size=int(lines[0]), sha256=lines[1])
+        else:
+            raise RuntimeError("the VM's answer is not a size and a SHA-256")
+
+    problem = _guest_step(params["strict"], read)
+    if problem:
+        ex.note(f"reading file {params['file']} on {entry['vm']}: {problem}")
+        return {"error": "the file could not be read: the job log on the node says why"}
+    return found
 
 
 def teardown(ex, cfg, params):
@@ -893,6 +937,7 @@ HANDLERS = {
     "remove_flags": remove_flags,
     "place_flags": place_flags,
     "write_file": write_file,
+    "read_file": read_file,
     "teardown": teardown,
     "devbox_provision": devbox_provision,
     "devbox_rebuild": devbox_rebuild,

@@ -17,9 +17,10 @@ The rules:
 
 from __future__ import annotations
 
+import hashlib
 import json
 
-from gameplan.definition import BasicVM, Flag, Gameplan, GameplanError, RoundError
+from gameplan.definition import BasicVM, FileState, Flag, Gameplan, GameplanError, RoundError
 
 POWER_ACTIONS = ("start", "stop", "shutdown", "suspend", "resume")
 
@@ -58,6 +59,11 @@ class Backend:
         raise NotImplementedError
 
     def write_file(self, file_id: int, strict: bool) -> str | None:
+        raise NotImplementedError
+
+    def read_file(self, entry: dict, strict: bool) -> dict:
+        """{exists, size, sha256} of a file the spec lets execute() read ({id, vm, path}, the
+        spec's `reads`); not strict: {error} if it cannot be read."""
         raise NotImplementedError
 
     def event(self, kind: str, vm: str | None = None, **data) -> None:
@@ -210,6 +216,14 @@ class Runner:
         if problem:
             self.note(f"could not write {handle.path} on {handle.vm.name}: {problem}")
 
+    def read_file(self, vm, index, path):
+        self._guard()
+        result = self._do(self.backend.read_file, {"id": index, "vm": vm.name, "path": path}, strict=self.strict)
+        if result.get("error"):
+            self.note(f"could not read {path} on {vm.name}: {result['error']}")
+            return FileState(error=result["error"])
+        return FileState(bool(result["exists"]), result.get("size"), result.get("sha256"))
+
 
 class FreezeState:
     """Suspend VMs (qm suspend), change what you like, resume them:
@@ -269,10 +283,13 @@ class DryRun(Backend):
     """A backend that does nothing but keep a clock and the VMs' power, and refuses what the
     real one would refuse (resuming a running VM, ...). It never fails on its own."""
 
-    def __init__(self, vms):
+    def __init__(self, vms, files=()):
         self.clock = 0.0
         self.state = {name: "running" for name in vms}
         self.steps: list = []
+        # The files of the spec: those written at the start are there, the others once written.
+        self.files = {f["id"]: f for f in files}
+        self.written = {(f["vm"], f["path"]) for f in files if f["at_reset"]}
 
     def now(self):
         return self.clock
@@ -307,7 +324,16 @@ class DryRun(Backend):
 
     def write_file(self, file_id, strict):
         self.steps.append((self.clock, "write_file", file_id))
+        if file_id in self.files:
+            self.written.add((self.files[file_id]["vm"], self.files[file_id]["path"]))
         return None
+
+    def read_file(self, entry, strict):
+        vm, path = entry["vm"], entry["path"]
+        self.steps.append((self.clock, "read_file", vm, path))
+        if (vm, path) not in self.written:
+            return {"exists": False, "size": None, "sha256": None}
+        return {"exists": True, "size": 0, "sha256": hashlib.sha256(f"{vm}:{path}".encode()).hexdigest()}
 
 
 def validate(cls, duration=None, packages=None):
@@ -335,7 +361,7 @@ def validate(cls, duration=None, packages=None):
         low, high = 60, 7 * 86400
         if isinstance(duration, bool) or not isinstance(duration, int) or not low <= duration <= high:
             return problems + [f"the duration per team is whole seconds in [{low}, {high}]"]
-    backend = DryRun([vm["name"] for vm in spec["vms"]])
+    backend = DryRun([vm["name"] for vm in spec["vms"]], spec["files"])
     runner = Runner(first, backend, duration)
     try:
         runner.run()

@@ -23,6 +23,9 @@ import posixpath
 import random
 import re
 
+from gameplan import content as _content
+from gameplan.errors import GameplanError, RoundError
+
 # The sandbox networks: /24s from this range (opentofu/shared/shared-variables.tf,
 # networks.sandbox_vms). Each network's .1 is sandbox-gw, the way to scoring, logging and the
 # private internet; VMs get addresses from .10 on.
@@ -66,21 +69,34 @@ KEY_TYPES = ("ed25519", "rsa", "ecdsa")
 
 # A per-run secret inside a file's content: replaced on the node, when the file is written.
 SECRET_MARKER = re.compile(r"@@worms-secret:([a-z0-9]+)\.([a-z]+)@@")
+PASSWORD_CHARSETS = ("alnum", "digits", "hex")
+TOTP_LABEL = re.compile(r"^[A-Za-z0-9._@+-]{1,64}$")
+
+# SSH with a key and a TOTP code (Gameplan.add_ssh_totp_login): the members of this group answer
+# pam_google_authenticator after their key; everyone else logs in as before. Run when the sandbox
+# is built, after the users are made. The Match block goes at the end of sshd_config, as the
+# password logins' (roles/applications/sandbox_vm), not into sshd_config.d.
+TOTP_GROUP = "worms-totp"
+TOTP_WINDOW = 17  # codes accepted around the current one: the VMs' clocks come from the node
+TOTP_SETUP = (
+    "set -e; getent group worms-totp >/dev/null || groupadd --system worms-totp; "
+    "grep -q '^# BEGIN worms totp logins' /etc/ssh/sshd_config || printf '%s\\n' '# BEGIN worms totp logins' "
+    "'Match Group worms-totp' '    AuthenticationMethods publickey,keyboard-interactive' "
+    "'    KbdInteractiveAuthentication yes' '# END worms totp logins' >> /etc/ssh/sshd_config; "
+    "grep -q pam_google_authenticator /etc/pam.d/sshd || sed -i '0,/^@include common-auth/s//"
+    "auth [success=ignore default=1] pam_succeed_if.so quiet user ingroup worms-totp\\n"
+    "auth [success=done default=die] pam_google_authenticator.so\\n&/' /etc/pam.d/sshd; "
+    "sshd -t; systemctl reload ssh"
+)
+
+# Telnet (Gameplan.add_telnet_login): inetutils-telnetd registers itself with inetd switched off
+# (#<off># in /etc/inetd.conf); this switches it on, behind tcpd as the package means it.
+TELNET_SETUP = "set -e; update-inetd --enable telnet; grep -q '^telnet' /etc/inetd.conf; systemctl restart inetutils-inetd"
 
 Allow = "ACCEPT"
 Deny = "DROP"
 Incoming = "in"
 Outgoing = "out"
-
-
-class GameplanError(ValueError):
-    """The gameplan is not valid, or used the API the wrong way. Before a round: the gameplan
-    cannot be scheduled. During a run: the attempt fails like any other error."""
-
-
-class RoundError(RuntimeError):
-    """The infrastructure failed (a host job, the Proxmox API, a check). The attempt is thrown
-    away and the team's worm runs again (docs/05-live-environment.md)."""
 
 
 class Secret(str):
@@ -114,6 +130,71 @@ class PasswordLogin:
 
     def __repr__(self):
         return f"PasswordLogin({self.user!r})"
+
+
+class Password(Secret):
+    """A password of no user, new for every run (`Gameplan.generate_password`): for a vault, a
+    zip, a document. It is a string, so it goes wherever text goes."""
+
+    def __new__(cls, ident, length, charset):
+        self = super().__new__(cls, ident, "password")
+        self.id, self.length, self.charset = ident, length, charset
+        return self
+
+    def __repr__(self):
+        return f"Password({self.id})"
+
+
+class TOTP:
+    """A time-based one-time password's secret, new for every run (`Gameplan.generate_totp`):
+    what an authenticator app holds. `secret` stands for the base32 seed, `uri` for the
+    otpauth:// URI with it (a QR code's content); both go into a file's content."""
+
+    def __init__(self, ident, account, issuer, digits, period, algorithm):
+        self.id, self.account, self.issuer = ident, account, issuer
+        self.digits, self.period, self.algorithm = digits, period, algorithm
+        self.secret = Secret(ident, "secret")
+
+    def spec(self):
+        return {"id": self.id, "account": self.account, "issuer": self.issuer, "digits": self.digits,
+                "period": self.period, "algorithm": self.algorithm, "secret": str(self.secret)}  # fmt: skip
+
+    @property
+    def uri(self):
+        return _content.totp_uri(self.spec())
+
+    def __repr__(self):
+        return f"TOTP({self.issuer}:{self.account})"
+
+
+def _fields(secret):
+    """The fields of a secret that a file's content can name."""
+    if isinstance(secret, SSHKey):
+        return ("public", "private")
+    if isinstance(secret, TOTP):
+        return ("secret",)
+    return ("password",)
+
+
+class FileState:
+    """What `vm.read_file(path)` learns about a file in execute(): whether it is there, its size
+    and its SHA-256. Its content stays on the node (it would pass the database, which the
+    dashboard reads). Compare two reads to see a change. `error`: why it could not be read
+    (only after the worm, which is root on the VM; before it, that fails the attempt)."""
+
+    def __init__(self, exists=None, size=None, sha256=None, error=None):
+        self.exists, self.size, self.sha256, self.error = exists, size, sha256, error
+
+    def __eq__(self, other):
+        return isinstance(other, FileState) and (self.exists, self.size, self.sha256) == (other.exists, other.size, other.sha256)
+
+    def __hash__(self):
+        return hash((self.exists, self.size, self.sha256))
+
+    def __repr__(self):
+        if self.error:
+            return f"FileState(error={self.error!r})"
+        return f"FileState(exists={self.exists}, size={self.size}, sha256={(self.sha256 or '')[:12]})"
 
 
 class FirewallRule:
@@ -222,10 +303,14 @@ class BasicVM:
         services  systemd units enabled and running then
 
     The resources are the class's unless given: BasicVM(cores=2, memory=1024, disk=8).
-    `install`/`uninstall` add to the packages of one VM.
+    `install`/`uninstall`, `add_setup` and `add_service` add to them for one VM, and
+    `add_user(user)` makes a user (the owner of files and logins).
+
+    Per run: `write_file(path, content)`, text or a document, archive or vault (also
+    Gameplan.write_file).
 
     In `execute()` a VM is also a handle on its power: start(), stop(), shutdown(),
-    suspend(), resume(), status()."""
+    suspend(), resume(), status(); and `read_file(path)` tells whether a file changed."""
 
     image = "debian"
     cores = 1
@@ -260,13 +345,59 @@ class BasicVM:
 
     def install(self, *packages):
         self._defining("install")
-        self._install.extend(packages)
+        self._install.extend(p for p in packages if p not in self._install)
 
     def uninstall(self, *packages):
         self._defining("uninstall")
-        self._uninstall.extend(packages)
+        self._uninstall.extend(p for p in packages if p not in self._uninstall)
+
+    def add_setup(self, *commands):
+        """Shell commands run as root when the sandbox is built, after the class's own."""
+        self._defining("add_setup")
+        self._setup.extend(commands)
+
+    def add_service(self, *units):
+        """systemd units enabled and running when the sandbox is built."""
+        self._defining("add_service")
+        self._services.extend(unit for unit in units if unit not in self._services)
+
+    def _gameplan(self, what):
+        if self._plan is None:
+            raise GameplanError(f"{self!r}.{what}(): assign the VM to self.<name> first")
+        return self._plan.gameplan
+
+    def add_user(self, user):
+        """A user on this VM, made when the sandbox is built: no password, no key. Logins give
+        it one (add_ssh_key_login, ...); files can be its own (write_file owner=)."""
+        self._gameplan("add_user").add_user(self, user)
+
+    def write_file(self, path, content, mode=0o644, owner=DEFAULT_USER, at_reset=True):
+        """A file on this VM, made for every run (Gameplan.write_file): text, or a document,
+        archive or vault (gameplan/content.py). Returns its handle."""
+        return self._gameplan("write_file").write_file(self, path, content, mode=mode, owner=owner, at_reset=at_reset)
+
+    def watch_file(self, path, user=DEFAULT_USER):
+        """A path execute() may read_file() besides the files written with write_file (those it
+        may always). Declared here so that a read names it by number: no path of the gameplan
+        reaches the database. `~` is `user`'s home."""
+        self._defining("watch_file")
+        normalised = _readable_path(path, user, "watch_file")
+        watched = self._gameplan("watch_file")._plan.watched
+        if (self, normalised) not in watched:
+            watched.append((self, normalised))
 
     # -- in execute() ----------------------------------------------------------
+
+    def read_file(self, path, user=DEFAULT_USER):
+        """What the file is now (a FileState: exists, size, sha256), not its content: a file
+        written with write_file, or one declared with watch_file. `~` is `user`'s home."""
+        runner = self._runtime("read_file")
+        normalised = _readable_path(path, user, "read_file")
+        readable = self._plan.readable()
+        if (self.name, normalised) not in readable:
+            raise GameplanError(f"read_file: {self.name} {normalised} is neither written with write_file nor declared "
+                                f"with {self.name}.watch_file() in __init__")  # fmt: skip
+        return runner.read_file(self, readable.index((self.name, normalised)), normalised)
 
     def _runtime(self, what):
         if self._plan is None or self._plan.runner is None:
@@ -376,6 +507,13 @@ def _file_path(path, owner):
     return path
 
 
+def _readable_path(path, user, what):
+    normalised = _file_path(path, user)
+    if normalised is None:
+        raise GameplanError(f"{what}: {path!r} is not a path a gameplan can read (absolute or ~/..., no .., not /etc/worms)")
+    return normalised
+
+
 class _Plan:
     """What a gameplan's __init__ recorded, and the state of a run against it."""
 
@@ -388,7 +526,10 @@ class _Plan:
         self.secrets: list = []
         self.setup: list[tuple] = []  # (op, vm, object, user)
         self.files: list[FileHandle] = []
-        self.logins: dict[str, list] = {}  # VM name -> PasswordLogins on it
+        self.logins: dict[str, list] = {}  # VM name -> PasswordLogins on it (their password set every run)
+        self.users: dict[str, list] = {}  # VM name -> users made when the sandbox is built
+        self.ssh_password: dict[str, list] = {}  # VM name -> users who may log in over SSH with a password
+        self.watched: list[tuple] = []  # (VM, path) execute() may read besides the files it writes
         self.entrypoint = None
         self.runner = None
         self.errors: list[str] = []
@@ -421,6 +562,15 @@ class _Plan:
         if not isinstance(vm, BasicVM) or vm._plan is not self:
             raise GameplanError(f"{what}: {vm!r} is not a VM of this gameplan (assign it to self.<name> first)")
         return vm
+
+    def readable(self):
+        """[(VM name, path)] execute() may read_file(), numbered by their place: the files
+        written, then those watched."""
+        out = []
+        for name, path in [*((h.vm.name, h.path) for h in self.files), *((vm.name, p) for vm, p in self.watched)]:
+            if (name, path) not in out:
+                out.append((name, path))
+        return out
 
     # -- the spec ----------------------------------------------------------------
 
@@ -461,7 +611,8 @@ class _Plan:
                 "install": list(vm._install), "uninstall": list(vm._uninstall),
                 "files": [{"path": p, "content": c} for p, c in sorted(vm._files.items())],
                 "setup": list(vm._setup), "services": list(vm._services),
-                "users": [login.user for login in self.logins.get(vm.name, [])],
+                "users": list(self.users.get(vm.name, [])),
+                "ssh_password_users": list(self.ssh_password.get(vm.name, [])),
                 "firewall": [],
             })  # fmt: skip
         by_name = {vm["name"]: vm for vm in vms}
@@ -477,9 +628,13 @@ class _Plan:
         for secret in self.secrets:
             if isinstance(secret, SSHKey):
                 secrets.append({"id": secret.id, "kind": "ssh_key", "type": secret.type})
+            elif isinstance(secret, TOTP):
+                secrets.append({"id": secret.id, "kind": "totp"})
+            elif isinstance(secret, Password):
+                secrets.append({"id": secret.id, "kind": "password", "length": secret.length, "charset": secret.charset})
             else:
                 secrets.append({"id": secret.id, "kind": "password", "user": secret.user})
-        known_secrets = {(s.id, f) for s in self.secrets for f in (("public", "private") if isinstance(s, SSHKey) else ("password",))}
+        known_secrets = {(s.id, f) for s in self.secrets for f in _fields(s)}
 
         setup = []
         for op, vm, thing, user in self.setup:
@@ -489,16 +644,17 @@ class _Plan:
             setup.append(entry)
         files = []
         for handle in self.files:
-            for owner_id, field in SECRET_MARKER.findall(handle.content):
-                if (owner_id, field) not in known_secrets:
-                    errors.append(f"{handle!r}: its content refers to a secret this gameplan did not generate")
+            for text in _content.strings(handle.content):
+                for owner_id, field in SECRET_MARKER.findall(text):
+                    if (owner_id, field) not in known_secrets:
+                        errors.append(f"{handle!r}: its content refers to a secret this gameplan did not generate")
             files.append({
                 "id": handle.id, "vm": handle.vm.name, "path": handle.path, "content": handle.content,
                 "mode": f"{handle.mode:04o}", "owner": handle.owner, "at_reset": handle.at_reset,
             })  # fmt: skip
         for vm in vms:
             for text in [*vm["setup"], *(f["content"] for f in vm["files"])]:
-                if SECRET_MARKER.search(text):
+                if isinstance(text, str) and SECRET_MARKER.search(text):
                     errors.append(f"{vm['name']}: the run's secrets go into files written with self.write_file, "
                                   "not into what the sandbox is built with")  # fmt: skip
         if errors:
@@ -516,6 +672,7 @@ class _Plan:
             "secrets": secrets,
             "setup": setup,
             "files": files,
+            "reads": [{"id": i, "vm": name, "path": path} for i, (name, path) in enumerate(self.readable())],
         }
 
     def _addresses(self):
@@ -661,10 +818,53 @@ class Gameplan:
         plan.secrets.append(login)
         return login
 
+    def generate_password(self, length=16, charset="alnum"):
+        """A password of no user, new for every run: for a vault, a zip, a document. It is a
+        string (a marker the node fills in), so f-strings and `+` work.
+
+        charset: alnum (letters and digits), digits (a PIN), hex."""
+        plan = self._plan
+        plan.defining("generate_password")
+        if charset not in PASSWORD_CHARSETS:
+            raise GameplanError(f"generate_password: the charset is one of {', '.join(PASSWORD_CHARSETS)}")
+        if isinstance(length, bool) or not isinstance(length, int) or not 4 <= length <= 64:
+            raise GameplanError("generate_password: the length is a whole number in [4, 64]")
+        password = Password(f"pw{len(plan.secrets)}", length, charset)
+        plan.secrets.append(password)
+        return password
+
+    def generate_totp(self, account, issuer="worms", digits=6, period=30, algorithm="SHA1"):
+        """A TOTP secret, new for every run: what an authenticator app holds for `account`.
+        Give it to a login (add_ssh_totp_login) and put it into a file (`totp.uri`,
+        `totp.secret`, TotpExport, a KeePass Entry's otp)."""
+        plan = self._plan
+        plan.defining("generate_totp")
+        for value, what in ((account, "account"), (issuer, "issuer")):
+            if not isinstance(value, str) or not TOTP_LABEL.fullmatch(value):
+                raise GameplanError(f"generate_totp: the {what} is 1-64 letters, digits and ._@+- (no spaces)")
+        if digits not in (6, 7, 8) or period not in (15, 30, 60) or algorithm not in _content.TOTP_ALGORITHMS:
+            raise GameplanError("generate_totp: digits 6-8, a period of 15, 30 or 60 s, algorithm "
+                                f"{', '.join(_content.TOTP_ALGORITHMS)}")  # fmt: skip
+        totp = TOTP(f"totp{len(plan.secrets)}", account, issuer, digits, period, algorithm)
+        plan.secrets.append(totp)
+        return totp
+
     def _owner(self, vm, user, what):
-        if user in ("root", DEFAULT_USER) or user in [login.user for login in self._plan.logins.get(vm.name, [])]:
+        if user in ("root", DEFAULT_USER) or user in self._plan.users.get(vm.name, []):
             return user
-        raise GameplanError(f"{what}: {user!r} is not a user of {vm.name} (root, {DEFAULT_USER}, or a login added to it first)")
+        raise GameplanError(f"{what}: {user!r} is not a user of {vm.name} (root, {DEFAULT_USER}, or one added to it first)")
+
+    def add_user(self, vms, user):
+        """A user on each VM, made when the sandbox is built: locked, no key. The logins below
+        make theirs; add one yourself to own files or for a login you build."""
+        plan = self._plan
+        plan.defining("add_user")
+        if not isinstance(user, str) or not USER.fullmatch(user) or user in RESERVED_USERS:
+            raise GameplanError(f"add_user: {user!r} is not a user name a gameplan can create")
+        for vm in _as_list(vms, "add_user"):
+            users = plan.users.setdefault(plan.known(vm, "add_user").name, [])
+            if user not in users:
+                users.append(user)
 
     def add_private_ssh_key(self, vms, key, user=DEFAULT_USER):
         """The private key, as ~/.ssh/<name> of `user` (0600)."""
@@ -683,29 +883,46 @@ class Gameplan:
             plan.known(vm, op)
             plan.setup.append((op, vm, key, self._owner(vm, user, op)))
 
+    def _login(self, login, what):
+        plan = self._plan
+        if login is None:
+            logins = [s for s in plan.secrets if isinstance(s, PasswordLogin)]
+            if len(logins) != 1:
+                raise GameplanError(f"{what}: name the login (there is not exactly one)")
+            login = logins[0]
+        if not isinstance(login, PasswordLogin) or login not in plan.secrets:
+            raise GameplanError(f"{what}: give a login from self.generate_ssh_pwd_login()")
+        return login
+
+    def _set_password(self, vm, login):
+        """The login's user on the VM, its password set every run (once, whatever uses it)."""
+        plan = self._plan
+        self.add_user(vm, login.user)
+        on_vm = plan.logins.setdefault(vm.name, [])
+        if login not in on_vm:
+            on_vm.append(login)
+            plan.setup.append(("password", vm, login, login.user))
+
     def add_ssh_pwd_login(self, vms, login=None):
         """Create the login's user on each VM and let it log in over SSH with its password."""
         plan = self._plan
         plan.defining("add_ssh_pwd_login")
-        if login is None:
-            logins = [s for s in plan.secrets if isinstance(s, PasswordLogin)]
-            if len(logins) != 1:
-                raise GameplanError("add_ssh_pwd_login: name the login (there is not exactly one)")
-            login = logins[0]
-        if not isinstance(login, PasswordLogin) or login not in plan.secrets:
-            raise GameplanError("add_ssh_pwd_login: give a login from self.generate_ssh_pwd_login()")
+        login = self._login(login, "add_ssh_pwd_login")
         for vm in _as_list(vms, "add_ssh_pwd_login"):
             plan.known(vm, "add_ssh_pwd_login")
-            on_vm = plan.logins.setdefault(vm.name, [])
-            if login in on_vm:
+            allowed = plan.ssh_password.setdefault(vm.name, [])
+            if login.user in allowed:
                 raise GameplanError(f"add_ssh_pwd_login: {login.user} is on {vm.name} already")
-            on_vm.append(login)
-            plan.setup.append(("password", vm, login, login.user))
+            self._set_password(vm, login)
+            allowed.append(login.user)
 
     def write_file(self, vm, path=None, content=None, mode=0o644, owner=DEFAULT_USER, at_reset=True):
         """In __init__: declare a file, written into the VM at the start of every run (before the
-        worm), or with at_reset=False only when execute() writes it. `~` is the owner's home;
-        `content` may hold the run's secrets (login.pwd, key.private, ...). Returns its handle.
+        worm), or with at_reset=False only when execute() writes it. `~` is the owner's home.
+
+        `content` is text, or a document, archive or vault (gameplan/content.py: Doc, Docx, Ods,
+        Zip, KeePass, TotpExport), made on the node. Either may hold the run's secrets
+        (login.pwd, key.private, totp.secret, a generate_password(), ...). Returns its handle.
 
         In execute(): self.write_file(handle) writes a declared file now. Only declared files
         can be written: what goes into a VM never passes the database."""
@@ -721,13 +938,69 @@ class Gameplan:
         if normalised is None:
             raise GameplanError(f"write_file: {path!r} is not a path a gameplan can write (absolute or ~/..., "
                                 "no .., not /etc/worms)")  # fmt: skip
-        if not isinstance(content, str) or len(content.encode()) > LIMITS["file_size"]:
-            raise GameplanError(f"write_file: the content is text of at most {LIMITS['file_size']} bytes")
+        try:
+            described = _content.spec_of(content)
+            problems = _content.check(described)
+        except GameplanError as error:
+            raise GameplanError(f"write_file {normalised}: {error}") from None
+        if isinstance(described, str) and len(described.encode()) > LIMITS["file_size"]:
+            problems.append(f"the content is text of at most {LIMITS['file_size']} bytes")
+        if problems:
+            raise GameplanError(f"write_file {normalised}: " + "; ".join(problems))
         if isinstance(mode, bool) or not isinstance(mode, int) or not 0 <= mode <= 0o777:
             raise GameplanError("write_file: mode is a permission like 0o644 (no setuid, setgid or sticky bit)")
-        handle = FileHandle(len(plan.files), vm, normalised, str(content), mode, owner, bool(at_reset))
+        handle = FileHandle(len(plan.files), vm, normalised, described, mode, owner, bool(at_reset))
         plan.files.append(handle)
         return handle
+
+    # -- logins built from the methods above ----------------------------------------------
+
+    def add_ssh_key_login(self, vms, key, user=DEFAULT_USER):
+        """`user` on each VM (made if it is new) logs in over SSH with the key's private half.
+        Put that half somewhere the worm can find it: add_private_ssh_key, or a file."""
+        plan = self._plan
+        plan.defining("add_ssh_key_login")
+        for vm in _as_list(vms, "add_ssh_key_login"):
+            if user not in ("root", DEFAULT_USER):
+                self.add_user(vm, user)
+            self.add_public_ssh_key(vm, key, user)
+
+    def add_ssh_totp_login(self, vms, key, totp, user):
+        """`user` on each VM (made if it is new) logs in over SSH with the key *and* the TOTP's
+        current code (keyboard-interactive, pam_google_authenticator). Both have to be found:
+        put the private key in a file, and the TOTP's secret in another (TotpExport, totp.uri).
+        Only this user needs the code; the node's own access and the other logins do not.
+        The VM needs libpam-google-authenticator in the apt cache."""
+        plan = self._plan
+        plan.defining("add_ssh_totp_login")
+        if not isinstance(totp, TOTP) or totp not in plan.secrets:
+            raise GameplanError("add_ssh_totp_login: give a TOTP from self.generate_totp()")
+        if totp.algorithm != "SHA1" or totp.digits != 6:
+            raise GameplanError("add_ssh_totp_login: pam_google_authenticator takes SHA1 and 6 digits")
+        if user in ("root", DEFAULT_USER):
+            raise GameplanError(f"add_ssh_totp_login: give the login its own user (not {user}: the node logs in as it)")
+        for vm in _as_list(vms, "add_ssh_totp_login"):
+            self.add_ssh_key_login(vm, key, user)
+            vm.install("libpam-google-authenticator")
+            if TOTP_SETUP not in vm._setup:
+                vm.add_setup(TOTP_SETUP)
+            vm.add_setup(f"usermod -a -G {TOTP_GROUP} {user}")
+            self.write_file(vm, "~/.google_authenticator", f'{totp.secret}\n" STEP_SIZE {totp.period}\n'
+                            f'" WINDOW_SIZE {TOTP_WINDOW}\n" TOTP_AUTH\n', mode=0o400, owner=user)  # fmt: skip
+
+    def add_telnet_login(self, vms, login=None):
+        """The login's user on each VM, with its password, over telnet (port 23, inetutils
+        telnetd under inetd). Open the port with firewall rules, as for any service."""
+        plan = self._plan
+        plan.defining("add_telnet_login")
+        login = self._login(login, "add_telnet_login")
+        for vm in _as_list(vms, "add_telnet_login"):
+            plan.known(vm, "add_telnet_login")
+            self._set_password(vm, login)
+            vm.install("inetutils-telnetd", "inetutils-inetd")
+            if TELNET_SETUP not in vm._setup:
+                vm.add_setup(TELNET_SETUP)
+            vm.add_service("inetutils-inetd")
 
     def set_worm_entrypoint(self, vm):
         """The VM the worm is deployed to."""

@@ -17,8 +17,12 @@ apt_cache_seed_packages:
   - python3
   - python3-pip
   - unzip
-  # Gameplans (src/gameplan/definition.py: DjangoVM, PostgreVM; gameplans/round_one.py).
+  # Gameplans (src/gameplan/definition.py: DjangoVM, PostgreVM, add_telnet_login,
+  # add_ssh_totp_login; gameplans/).
   - gunicorn
+  - inetutils-inetd
+  - inetutils-telnetd
+  - libpam-google-authenticator
   - postgresql
   - python3-django
   - python3-venv

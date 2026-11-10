@@ -31,7 +31,7 @@ orchestrator: conduct_rounds ──HostJob rows──► round agent (root, node
 - It validates every parameter against a fixed menu ([`validation.py`](../scripts/round_agent/validation.py)) and builds commands from literals and validated values only. It sends a heartbeat every 30 s.
 - Job menu:
   - `gameplans`, `prepare`, `check`, `deploy`
-  - `remove_flags`, `place_flags`, `write_file`, `teardown`
+  - `remove_flags`, `place_flags`, `write_file`, `read_file`, `teardown`
   - `devbox_provision`, `devbox_rebuild`, `devbox_reconfigure`, `devbox_deploy`
 - Each job logs to `/var/log/worms/jobs/<uuid>.log`.
 
@@ -79,12 +79,12 @@ PENDING → PREPARING → CHECKING → RUNNING → ENDING → TEARING_DOWN → F
 2. It builds the sandbox, or reuses it:
    - **First attempt of a round, or another gameplan.** It refuses while the internet window is open. It destroys the old sandbox, shuts down the devboxes and rolls the 11 service VMs back to `clean`. Then it writes `generated_vms.tf`, applies the sandbox stack and runs [`SetupSandbox.yml`](../ansible/SetupSandbox.yml): the CA, apt, and role [`sandbox_vm`](../ansible/roles/applications/sandbox_vm/) for the gameplan's packages, users, files, setup commands and services. It snapshots every sandbox VM as `clean` and starts the devboxes again.
    - **Later attempts.** `qm rollback … clean` of the same sandbox.
-3. It generates **this run's** secrets on the node: SSH keys and passwords.
-4. It sets the passwords, installs the keys and writes the files marked `at_reset`.
+3. It generates **this run's** secrets on the node: SSH keys, passwords and TOTP seeds.
+4. It sets the passwords, installs the keys and writes the files marked `at_reset`. Documents, archives and vaults are made on the node at this point, with the secrets in them ([`render.py`](../src/gameplan/render.py)).
 5. It places a fresh flag on **every** VM, reads it back and reports only its hash.
 6. It keeps the secrets in `/var/lib/worms/runs/<run>.json` (root, 0600) until teardown.
 
-**Errors of the gameplan jobs.** `prepare`, `write_file` and `gameplans` report "the job failed: its log says why" to the database. The reason, which may quote the gameplan, stays in the job log.
+**Errors of the gameplan jobs.** `prepare`, `write_file`, `read_file` and `gameplans` report "the job failed: its log says why" to the database. The reason, which may quote the gameplan, stays in the job log.
 
 **The worm.** `deploy_worm()` sends a `deploy` job, which:
 1. writes the team's uuid to `/etc/sandbox-api/current-team` on scoring and logging;
@@ -177,11 +177,11 @@ class RoundOne(Gameplan):                       # gameplans/round_one.py
 
 - **VMs.** Assign them to `self.<attr>`; the VM is then named `sandbox-<attr>`, with `_` becoming `-`. A list becomes `sandbox-<attr>-<i>`. `gw` is reserved.
 - **VM classes.**
-  - `BasicVM(cores=1, memory=512, disk=5)`: Debian 13. Class attributes `packages`, `remove`, `files`, `setup` (root shell commands) and `services`; per instance, `install()` and `uninstall()`.
+  - `BasicVM(cores=1, memory=512, disk=5)`: Debian 13. Class attributes `packages`, `remove`, `files`, `setup` (root shell commands) and `services`; per instance, `install()`, `uninstall()`, `add_setup()`, `add_service()` and `add_user()`.
   - `DjangoVM`: a Django project served by gunicorn on :8000.
   - `PostgreVM`: PostgreSQL on :5432, password logins from the sandbox networks.
   - Subclass `BasicVM` for your own.
-- **Packages.** Every package must be in `apt_cache_seed_packages` ([`apt_cache/defaults`](../ansible/roles/private_internet/apt_cache/defaults/main.yml)): VMs install from the offline apt cache.
+- **Packages.** Every package must be in `apt_cache_seed_packages` ([`apt_cache/defaults`](../ansible/roles/private_internet/apt_cache/defaults/main.yml)): VMs install from the offline apt cache. After adding one, refill the cache: `worms build apt-cache --packages`, outside a round.
 - **`register_network(vms, name=None)`.**
   - The N-th network gets the N-th /24 of 10.64.0.0/10 and bridge `vmbr<1000+N>`.
   - Addresses are .10–.249, in a fixed shuffle.
@@ -192,19 +192,64 @@ class RoundOne(Gameplan):                       # gameplans/round_one.py
   - `port` is an int, a `(low, high)` range, or `None`.
   - `peers` are VMs or networks; the default is every network the VM is on.
   - Scoring, logging, DNS, the private internet and the LLM endpoint are always allowed.
-- **Credentials, new for every run.**
-  - `generate_ssh_key(name, type="ed25519"|"rsa"|"ecdsa")` and `add_private_ssh_key(vms, key, user="debian")` (`~/.ssh/<name>`, 0600). `add_public_ssh_key(vms, key, user)` appends to `authorized_keys`.
-  - `generate_ssh_pwd_login(user=None)` and `add_ssh_pwd_login(vms, login)`. Only these users may log in with a password.
-  - The node's own SSH access stays key-only.
-- **`write_file(vm, path, content, mode=0o644, owner="debian", at_reset=True)` returns a `FileHandle`.**
-  - `content` may use `login.pwd`, `login.user`, `key.private` and `key.public`, for instance in an f-string. They are markers (`@@worms-secret:…@@`), filled in on the node per run. They are allowed nowhere else.
+- **Secrets, new for every run.** Each stands for its value in a file's content (a marker, `@@worms-secret:…@@`, filled in on the node). They are allowed nowhere else.
+
+  | Call | Gives | In a file |
+  |---|---|---|
+  | `generate_ssh_key(name="id_ed25519", type="ed25519"\|"rsa"\|"ecdsa")` | a key pair; `name` is its file name in `~/.ssh` | `key.private`, `key.public` |
+  | `generate_ssh_pwd_login(user=None)` | a user and a password | `login.user`, `login.pwd` |
+  | `generate_password(length=16, charset="alnum"\|"digits"\|"hex")` | a password of no user, itself a string | `pw` |
+  | `generate_totp(account, issuer="worms", digits=6, period=30, algorithm="SHA1")` | an authenticator's seed | `totp.secret`, `totp.uri` (`otpauth://…`) |
+
+- **Logins.** Each makes its user on the VM if it is new. The node's own SSH access stays key-only, and open the ports with firewall rules.
+
+  | Call | The worm needs |
+  |---|---|
+  | `add_ssh_key_login(vms, key, user="debian")` | the private key (`add_public_ssh_key` alone, for an existing user) |
+  | `add_ssh_pwd_login(vms, login)` | the password; only these users may use one over SSH |
+  | `add_ssh_totp_login(vms, key, totp, user)` | the private key **and** the current code ([`pam_google_authenticator`](https://github.com/google/google-authenticator-libpam), ±8 codes). Only `user` is asked for one |
+  | `add_telnet_login(vms, login)` | the password, on port 23 (`inetutils-telnetd` under inetd) |
+  | `add_private_ssh_key(vms, key, user="debian")` | nothing: puts `~/.ssh/<name>` (0600) there for the worm to find |
+
+- **`vm.write_file(path, content, mode=0o644, owner="debian", at_reset=True)`** (or `self.write_file(vm, path, …)`) returns a `FileHandle`.
+  - `~` is the owner's home. The owner is root, debian, or a user of that VM.
   - With `at_reset=False` the file is written only when `execute()` calls `self.write_file(handle)`.
+  - `content` is text or one of these ([`content.py`](../src/gameplan/content.py)). Any text in them, a zip's password and a vault's password can be secrets. The node makes the file when it writes it ([`render.py`](../src/gameplan/render.py)); it never passes the database.
+
+  | Content | File |
+  |---|---|
+  | `"text"`, f-strings | text (UTF-8) |
+  | `Doc(paragraphs, title="")` | Word 97–2003 `.doc` (one paragraph per item or per line) |
+  | `Docx(paragraphs, title="")` | Word `.docx` |
+  | `Ods({sheet: rows})` or `Ods(rows)` | OpenDocument spreadsheet `.ods`; a cell is text or a number |
+  | `Zip({name: content}, password=None)` | `.zip`; entries are text or any of these. With a password, ZipCrypto |
+  | `KeePass(password, [Entry(title, username, password, url, notes, otp=totp)])`, or `{group: entries}` | KeePass `.kdbx` (KDBX 4, AES-256, AES-KDF) |
+  | `TotpExport(totps, format="aegis"\|"uri")` | an authenticator's plain export: Aegis JSON, or `otpauth://` lines |
+
+- **`vm.watch_file(path)`** declares a path that `execute()` may `read_file()` without writing it.
 - **Entry point.** `set_worm_entrypoint(vm)`, exactly once.
 - **Limits.**
   - 32 VMs, 30 networks, 8 NICs per VM.
   - 1–4 cores, 256–8192 MB, 5–64 GB.
-  - 64 KiB per file.
+  - 64 KiB of text per file, also inside a document or archive; a rendered file at most 4 MiB.
   - Duration 60 s – 7 days.
+
+A chain of them, from [`gameplans/credential_chain.py`](../gameplans/credential_chain.py):
+
+```python
+archivist = self.generate_ssh_pwd_login("archivist")
+self.add_telnet_login(self.files, archivist)                      # sandbox-files: telnet
+ops_key, ops_totp = self.generate_ssh_key("id_ops"), self.generate_totp("ops@sandbox-vault")
+self.add_ssh_totp_login(self.vault, ops_key, ops_totp, user="ops")  # sandbox-vault: key + code
+vault_pw, zip_pw = self.generate_password(), self.generate_password(length=12)
+
+self.entry.write_file("~/handover.doc", Doc(["Logins are in passwords.kdbx.", f"Master password: {vault_pw}"]))
+self.entry.write_file("~/passwords.kdbx", KeePass(vault_pw, [Entry("file server", archivist.user, archivist.pwd)]))
+self.files.write_file("~/accounts.ods", Ods([["backup.zip", zip_pw]]), owner="archivist")
+self.files.write_file("~/backup.zip", Zip({"ops/id_ops": ops_key.private,
+                                          "ops/aegis-export-plain.json": TotpExport(ops_totp)}, password=zip_pw),
+                      owner="archivist")
+```
 
 ### `execute()`: the round
 
@@ -215,6 +260,7 @@ class RoundOne(Gameplan):                       # gameplans/round_one.py
 | `remove_flag(vm)` → `Flag` | Deletes the VM's flag; a later submission of it no longer counts |
 | `add_flag(flag_or_vm)` | A new flag on a VM that has none |
 | `write_file(handle)` | Writes a file declared with `at_reset=False` |
+| `vm.read_file(path)` → `FileState` | Whether the file is there (`exists`), its `size` and `sha256`, never its content (that would reach the database). Compare two reads to see a change. After the worm, a VM that cannot be read gives `error`. Readable: the files written with `write_file`, and paths declared in `__init__` with `vm.watch_file(path)`. The job names the file by number, so no path reaches the database |
 | `vm.start()`, `stop()`, `shutdown(timeout=60)`, `suspend()`, `resume()`, `status()` | Proxmox power, awaited |
 | `with FreezeState(vms) as fs: fs.unfreeze(vm)` | Suspends the running VMs, resumes them on exit |
 | `log(msg)`, `elapsed`, `remaining` | The orchestrator's journal; time |

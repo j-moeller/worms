@@ -211,6 +211,13 @@ class AttemptBackend:
             return result.get("error") or "not written"
         return None
 
+    def read_file(self, entry, strict):
+        """By its number in the gameplan's `reads`: the path stays on the node and here."""
+        result = self._guest(HostJob.Kind.READ_FILE, strict, run_uuid=str(self.run.uuid), file=entry["id"])
+        if result.get("error"):
+            self._skipped(entry["vm"], f"file {entry['id']} not read: {result['error']}")
+        return result
+
     def _skipped(self, name, message):
         RunEvent.objects.create(run=self.run, kind=RunEvent.Kind.SKIPPED, vm=self.vms.get(name), data={"message": message[:500]})
 

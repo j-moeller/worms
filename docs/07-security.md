@@ -56,7 +56,7 @@ The 9 event tables are append-only for every role.
 ### Operating system
 
 - **SSH into VMs.** Key-only, from the node, on the management NIC (cloud-init: `PermitRootLogin prohibit-password`, no passwords; `HardenSSH` pins `ListenAddress`).
-- **Gameplan exception.** A gameplan may add password logins for its own users on sandbox VMs, via a `Match User` block ([`sandbox_vm`](../ansible/roles/applications/sandbox_vm/tasks/main.yml)).
+- **Gameplan exception.** On sandbox VMs a gameplan may add logins for its own users: SSH passwords (a `Match User` block, [`sandbox_vm`](../ansible/roles/applications/sandbox_vm/tasks/main.yml)), SSH key plus TOTP code (`Match Group worms-totp`), and telnet. The node's own login (`debian`, key-only) is never in either block.
 - **Services** run as dedicated users with systemd hardening:
   - common: `NoNewPrivileges`, `ProtectSystem=strict`, `MemoryDenyWriteExecute`;
   - `sandbox-api` and the Zeek shipper also get an empty capability set and `IPAddressAllow=<db>/32`.
@@ -111,7 +111,7 @@ Account rules ([`core/accounts.py`](../projects/dashboard/core/accounts.py), [`m
 | Controller | The internal CA (`ansible/pki/worms/`, RSA 4096, key encrypted with the vault passphrase) |
 
 - **TLS.** The CA signs the nginx and PostgreSQL certificates, and every DB client uses `verify-full`. The dashboard's public certificate comes from the same CA, so browsers warn.
-- **Per run.** A gameplan's SSH keys and passwords are generated on the node for each run and kept in `/var/lib/worms/runs/<run>.json` (0600) until teardown. They never reach the database.
+- **Per run.** A gameplan's SSH keys, passwords and TOTP seeds are generated on the node for each run and kept in `/var/lib/worms/runs/<run>.json` (0600) until teardown. They never reach the database. The documents, archives and vaults that hold them are made on the node too. `vm.read_file` returns only a file's size and SHA-256.
 - **Flags.** Generated on the node; only their SHA-256 leaves it.
 - **Gameplan content** stays on the orchestrator and the node:
   - The dashboard sees file names, validity and a run's topology.

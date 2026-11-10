@@ -78,6 +78,7 @@ def ansible_vars(spec: dict) -> dict:
                 "setup": vm["setup"],
                 "services": vm["services"],
                 "users": vm["users"],
+                "ssh_password_users": vm["ssh_password_users"],
             }
             for vm in spec["vms"]
         }

@@ -24,9 +24,9 @@
     name: "{{ sandbox_vm.uninstall }}"
     state: absent
 
-# The users of the gameplan's password logins. Locked here: every run sets a new password
-# (the agent, before the worm), and the snapshot holds none.
-- name: Create the login users
+# The gameplan's users (its logins' and its files' owners). Locked here: every run sets a new
+# password or key (the agent, before the worm), and the snapshot holds none.
+- name: Create the gameplan's users
   ansible.builtin.user:
     name: "{{ item }}"
     shell: /bin/bash
@@ -34,19 +34,19 @@
     password: "!"
   loop: "{{ sandbox_vm.users | default([]) }}"
 
-# Only these users may log in with a password; everyone else keeps keys only (the VM's
-# cloud-init hardening). At the end of sshd_config, not in sshd_config.d: a Match block in an
-# included file would run on into the main file's global settings.
-- name: Let the login users in with their password
+# Only the users of SSH password logins may log in with a password; everyone else keeps keys
+# only (the VM's cloud-init hardening). At the end of sshd_config, not in sshd_config.d: a Match
+# block in an included file would run on into the main file's global settings.
+- name: Let the SSH password logins in with their password
   ansible.builtin.blockinfile:
     path: /etc/ssh/sshd_config
     marker: "# {mark} worms gameplan password logins"
     insertafter: EOF
     validate: /usr/sbin/sshd -t -f %s
     block: |
-      Match User {{ sandbox_vm.users | join(',') }}
+      Match User {{ sandbox_vm.ssh_password_users | join(',') }}
           PasswordAuthentication yes
-  when: sandbox_vm.users | default([]) | length > 0
+  when: sandbox_vm.ssh_password_users | default([]) | length > 0
   notify: Reload ssh
 
 - name: Write the VM's files

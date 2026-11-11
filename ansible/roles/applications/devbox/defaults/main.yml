@@ -31,3 +31,7 @@ devbox_packages:
 # works with no internet.
 devbox_pip_index_host: pypi.worms.internal
 devbox_pip_index_url: "http://{{ devbox_pip_index_host }}:3141/root/offline/+simple/"
+
+# Time sync: the devbox has no internet, so point systemd-timesyncd at the
+# private-internet NTP service instead of the (unreachable) Debian NTP pool.
+devbox_ntp_server: ntp.worms.internal

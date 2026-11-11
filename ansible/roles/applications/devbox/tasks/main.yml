@@ -28,6 +28,24 @@
     cache_valid_time: 3600
     install_recommends: false # 83 packages instead of 3, compilers and all
 
+- name: Ensure the systemd-timesyncd drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/timesyncd.conf.d
+    state: directory
+    mode: "0755"
+
+- name: Point the clock at the private-internet NTP server (offline time sync)
+  ansible.builtin.copy:
+    dest: /etc/systemd/timesyncd.conf.d/10-worms.conf
+    content: |
+      # Managed by Ansible (role devbox). The devbox has no internet, so sync
+      # time from the private-internet NTP service, not the Debian pool.
+      [Time]
+      NTP={{ devbox_ntp_server }}
+    owner: root
+    mode: "0644"
+  notify: Restart devbox timesyncd
+
 - name: Ensure the login user's .ssh directory
   ansible.builtin.file:
     path: "~{{ devbox_login_user }}/.ssh"

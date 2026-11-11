@@ -4,3 +4,10 @@
     name: ssh
     state: restarted
   failed_when: false
+
+- name: Restart devbox timesyncd
+  ansible.builtin.systemd:
+    name: systemd-timesyncd
+    state: restarted
+    enabled: true
+  failed_when: false

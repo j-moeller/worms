@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="WORMS">
+  <!-- WORMS//ARENA favicon: a segmented worm crawling across a dark terminal
+       tile. Colours match the dashboard dark theme (bg #12161b, green #3cc58a,
+       accent #5aa0f0). Drawn on a 32x32 grid; stays legible at 16px. -->
+  <rect width="32" height="32" rx="7" fill="#12161b"/>
+  <rect x="0.6" y="0.6" width="30.8" height="30.8" rx="6.4" fill="none" stroke="#2e3742" stroke-width="1.2"/>
+  <!-- worm body: a wavy rounded trail with segment ticks -->
+  <path d="M5 22 Q10 12 16 18 T27 13"
+        fill="none" stroke="#3cc58a" stroke-width="5.4"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M5 22 Q10 12 16 18 T27 13"
+        fill="none" stroke="#1b7a4e" stroke-width="5.4"
+        stroke-linecap="round" stroke-dasharray="0.2 4.3" stroke-dashoffset="2.2" opacity="0.85"/>
+  <!-- head -->
+  <circle cx="27" cy="13" r="4.2" fill="#5aa0f0"/>
+  <circle cx="28.3" cy="11.8" r="1.25" fill="#12161b"/>
+</svg>

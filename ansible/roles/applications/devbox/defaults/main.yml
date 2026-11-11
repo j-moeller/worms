@@ -24,6 +24,14 @@ devbox_packages:
   - python3-pip
   - unzip
 
-# pip goes to the private internet's devpi, as apt goes to its cache.
+# pip goes to the private internet's devpi, as apt goes to its cache. Use the
+# curated `root/offline` stage, not the `root/pypi` mirror: offline the mirror
+# only serves what it happened to cache, while root/offline holds the packages
+# we deliberately seeded (common-python-packages.txt), so a devbox pip install
+# works with no internet.
 devbox_pip_index_host: pypi.worms.internal
-devbox_pip_index_url: "http://{{ devbox_pip_index_host }}:3141/root/pypi/+simple/"
+devbox_pip_index_url: "http://{{ devbox_pip_index_host }}:3141/root/offline/+simple/"
+
+# Time sync: the devbox has no internet, so point systemd-timesyncd at the
+# private-internet NTP service instead of the (unreachable) Debian NTP pool.
+devbox_ntp_server: ntp.worms.internal

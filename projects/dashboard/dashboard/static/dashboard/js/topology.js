@@ -13,6 +13,13 @@
  *                     replaced by the round's (data-download: its zip)
  *   Without data-rounds it is the Dev view: the devbox has no rounds, and
  *   data-progression is its one progression, which grows until a reset.
+ * Simulations (data-audience="staff" data-mode="simulation"; staff's
+ * Simulations page):
+ *   data-simulations  the gameplans and the durations their rounds give them (the tabs)
+ *   data-simulation   one gameplan's simulated attempt; "__gameplan__" in the URL is
+ *                     replaced by the file's name, ?duration= added (0: its own)
+ *   A simulation (environment "simulation") brings its own scene: the sandbox
+ *   the gameplan describes, scoring, logging and the private internet.
  *
  * A progression names where the rest is: its connections (network.url, or
  * inline, or in the zip) and each log record (logs.url with {ref}, or in the
@@ -58,11 +65,16 @@
         round: root.dataset.round || null,
         progression: root.dataset.progression,
         download: root.dataset.download,
+        simulations: root.dataset.simulations,
+        simulation: root.dataset.simulation,
         refreshMs: Number(root.dataset.refreshMs || 60000),
     };
     // The team's page: its rounds, its scene; no infrastructure, no firewall.
     const TEAM = cfg.audience === "team";
     const DEVBOX = TEAM && !cfg.rounds;
+    // Staff's Simulations page: gameplans played against a pretend clock (no infrastructure, no worm).
+    const SIM = !TEAM && root.dataset.mode === "simulation";
+    const simUrl = (file, duration) => `${cfg.simulation.replace("__gameplan__", encodeURIComponent(file))}?duration=${encodeURIComponent(duration)}`;
     // A round's (team) or a run's (staff) URL from the page's template: the all-zero uuid in its place.
     const roundUrl = (template, id) => template.replace(ZERO_UUID, encodeURIComponent(id));
 
@@ -360,6 +372,7 @@
                 group: n.group === "devbox" ? "devbox" : "sandbox", devbox_role: ["a", "b", "c"].includes(n.devbox_role) ? n.devbox_role : null,
                 networks: list(n.networks, "networks", CAP.small, (x) => (isObj(x) ? { name: txt(x.name, 64), cidr: optTxt(x.cidr, 64) } : null)),
                 start_vm: bool(n.start_vm), captured: bool(n.captured), captured_at: time(n.captured_at),
+                firewall: isObj(n.firewall) ? cleanFirewall(n.firewall) : null,
             } : null)),
             networks: list(tl.networks, "timeline.networks", CAP.nodes, (n) => (isObj(n) ? { id: txt(n.id, 64), label: txt(n.label, 64), cidr: optTxt(n.cidr, 64) } : null)),
             edges: list(tl.edges, "timeline.edges", CAP.list, (e) => (isObj(e) ? { source: txt(e.source, 256), target: txt(e.target, 64), network: txt(e.network, 64) } : null)),
@@ -381,6 +394,20 @@
         return s && s.startsWith("/") && !s.startsWith("//") && !s.includes("\\") ? s : null;
     }
 
+    const ENVIRONMENTS = new Set(["live", "dev", "simulation"]);
+    const OUTCOMES = new Set(["ok", "cut", "failed", "invalid"]);
+
+    // A simulation's own facts (orchestrator/rounds/simulations.py).
+    function cleanSimulation(m) {
+        return {
+            gameplan: txt(m.gameplan, 128), sha256: txt(m.sha256, 64), version: num(m.version), duration: time(m.duration),
+            own_duration: bool(m.own_duration), outcome: OUTCOMES.has(m.outcome) ? m.outcome : "failed", problems: num(m.problems, 0),
+            log_lines: num(m.log_lines, 0), failed_at: time(m.failed_at), events_truncated: bool(m.events_truncated),
+            files: num(m.files, 0), watched: num(m.watched, 0), timing: dict(m.timing, 64, (v) => num(v)),
+            simulated_at: optTxt(m.simulated_at, 64),
+        };
+    }
+
     // A progression (orchestrator/rounds/progression.py), from the server or a file.
     function cleanProgression(p, fromServer) {
         if (!isObj(p)) throw new Error("not a JSON object");
@@ -391,7 +418,7 @@
         const nw = isObj(p.network) ? p.network : {};
         const doc = {
             audience: p.audience === "team" ? "team" : "staff",
-            environment: p.environment === "dev" ? "dev" : "live",
+            environment: ENVIRONMENTS.has(p.environment) ? p.environment : "live",
             generated_at: optTxt(p.generated_at, 64),
             round: rd ? { id: optTxt(rd.id, 64), name: txt(rd.name, 256), competition: txt(rd.competition, 32), start: optTxt(rd.start, 64), end: optTxt(rd.end, 64) } : null,
             team: tm ? { uuid: txt(tm.uuid, 64), name: txt(tm.name, 256) } : null,
@@ -408,6 +435,7 @@
                 available: nw.available !== false, reason: optTxt(nw.reason, 512), count: num(nw.count, 0), truncated: bool(nw.truncated),
                 included: bool(nw.included), path: optTxt(nw.path, 256), url: sitePath(nw.url, fromServer),
             },
+            simulation: isObj(p.simulation) ? cleanSimulation(p.simulation) : null,
         };
         doc.timeline = p.timeline === null || p.timeline === undefined ? null : cleanTimeline(p.timeline, doc);
         return doc;
@@ -532,7 +560,7 @@
             delete run.present;
             delete run.key;
         }
-        return {
+        return Object.assign({
             format: FORMAT,
             version: VERSION,
             generated_at: new Date().toISOString(),
@@ -548,12 +576,13 @@
             }, tl.flowsLoaded ? { flows: tl.flows } : {}) : null,
             logs: d ? Object.assign({}, d.logs, { included: false, path: null, url: null }) : null,
             network: d ? Object.assign({}, d.network, { included: !!(tl && tl.flowsLoaded), count: tl ? tl.flows.length : 0, path: null, url: null }) : null,
-        };
+        }, d && d.simulation ? { simulation: d.simulation } : {});
     }
 
     function bundleName() {
         const d = S.mode === "live" ? null : S.doc;
-        const parts = d && S.timeline ? ["worms", d.round ? d.round.name : d.environment === "dev" ? "devbox" : "round", d.team ? d.team.name : "team", d.environment] : ["worms", "infrastructure"];
+        const parts = d && S.timeline && d.simulation ? ["worms", "simulation", d.simulation.gameplan, d.simulation.duration ?? ""]
+            : d && S.timeline ? ["worms", d.round ? d.round.name : d.environment === "dev" ? "devbox" : "round", d.team ? d.team.name : "team", d.environment] : ["worms", "infrastructure"];
         parts.push(new Date().toISOString().slice(0, 19));
         return `${parts.join("-").replace(/[^A-Za-z0-9._-]+/g, "_")}.json`;
     }
@@ -719,6 +748,12 @@
                 return { icon: "power", color: "--off", label: "VM stopped (game plan)" };
             case "vm_started":
                 return { icon: "power", color: "--ok", label: "VM started (game plan)" };
+            case "vm_suspended":
+                return { icon: "power", color: "--warn", label: "VM suspended (game plan)" };
+            case "vm_resumed":
+                return { icon: "power", color: "--ok", label: "VM resumed (game plan)" };
+            case "flag_removed":
+                return { icon: "flag", color: "--off", label: "flag removed (game plan)" };
             case "secret_released":
                 return { icon: "key", color: "--warn", label: "secret released (a new flag in the VM)" };
             case "worm_deployed":
@@ -740,6 +775,21 @@
                 return { icon: "doc", color: "--c-logging", label: d.stored ? "log received (stored)" : "log received" };
             case "error":
                 return { icon: "bang", color: "--bad", label: "error" };
+            case "skipped":
+                return { icon: "bang", color: "--warn", label: "skipped (the worm made it impossible)" };
+            // A simulation's own (orchestrator/rounds/simulations.py).
+            case "file_written":
+                return { icon: "doc", color: "--c-state", label: `file ${num(d.file) ?? "?"} written${d.at_reset ? " (prepare)" : ""}` };
+            case "file_read": {
+                const what = num(d.watched) !== null ? `watched path ${num(d.watched)}` : `file ${num(d.file) ?? "?"}`;
+                return { icon: "doc", color: "--muted", label: `${what} read: ${d.exists ? "there" : "missing"}` };
+            }
+            case "wait":
+                return { icon: "ring", color: "--muted", label: `wait ${fmtTime(num(d.seconds, 0))}${d.cut ? ", cut short by the run's end" : ""}` };
+            case "log":
+                return { icon: "doc", color: "--c-other", label: `log line ${num(d.line) ?? "?"} (in the orchestrator's journal)` };
+            case "execute_returned":
+                return { icon: "check", color: "--c-state", label: "execute() returned; the run goes on until its end" };
             default:
                 return { icon: "ring", color: "--c-other", label: e.kind };
         }
@@ -774,6 +824,10 @@
         runsError: null,
         rounds: null, // team: its rounds (the tabs)
         roundsError: null,
+        sims: null, // simulations: the gameplans (the tabs)
+        simsError: null,
+        simFile: null,
+        simDuration: 0,
         mode: TEAM ? "round" : "live", // "live" | "round" | "file"
         roundId: null,
         runUuid: null,
@@ -865,6 +919,8 @@
         // A team's scene: no infrastructure rows, one untrusted group (its
         // sandbox, or its devbox in Dev), the VMs it may see.
         const team = opts.audience === "team";
+        // A simulation brings only the sandbox and the services: laid out as a team's scene.
+        const compact = team || !!opts.simulation;
         const runNodes = new Map(((tl && tl.nodes) || []).map((n) => [n.id, n]));
 
         // Devboxes (left column): one box per team, A - B - C.
@@ -919,7 +975,7 @@
         const SB_H = Math.max(240, 100 + (2 * rowsEach) * (VM_CARD.h + 30) + 40);
         const sbBox = {
             id: "group:sandbox", kind: "sandbox", x: SB_X, y: GROUPS_TOP, w: withSandbox ? SB_W : 0, h: withSandbox ? SB_H : 0,
-            label: opts.mode === "round" && tl ? `SANDBOX · ${tl.run.team} · ${tl.run.round}` : "SANDBOX",
+            label: opts.simulation && tl ? `SANDBOX · ${tl.run.team} · simulated` : opts.mode === "round" && tl ? `SANDBOX · ${tl.run.team} · ${tl.run.round}` : "SANDBOX",
             info: ((model && model.groups) || []).find((g) => g.id === "group:sandbox") || { id: "group:sandbox", kind: "sandbox", members: [] },
             empty: sbVMs.length === 0,
         };
@@ -972,23 +1028,23 @@
         // logging only, above its group).
         const RIGHT = PI_X + PI_W;
         const mid = (LEFT + RIGHT) / 2;
-        if (!team) {
+        if (!compact) {
             addNode(first("proxmox"), LEFT + 120, 80, CARD, { sub: "hypervisor" });
             addNode(first("orchestrator"), mid, 80, CARD);
             addNode(first("dashboard"), RIGHT - 120, 80, CARD);
             addNode(first("database"), mid, 220, CARD);
             addNode(first("monitor"), mid - 380, 220, CARD, { sub: "traffic recorder" });
         }
-        const serviceMid = team ? (withSandbox ? sbBox.x + sbBox.w / 2 : LEFT + DEV_W / 2) : mid;
-        addNode(first("scoring"), serviceMid - 170, 360, CARD, team ? { sub: "flag submissions" } : undefined);
-        addNode(first("logging"), serviceMid + 170, 360, CARD, team ? { sub: "your worm's logs" } : undefined);
-        if (opts.showAux && !team) {
+        const serviceMid = compact ? (withSandbox ? sbBox.x + sbBox.w / 2 : LEFT + DEV_W / 2) : mid;
+        addNode(first("scoring"), serviceMid - 170, 360, CARD, compact ? { sub: "flag submissions" } : undefined);
+        addNode(first("logging"), serviceMid + 170, 360, CARD, compact ? { sub: team ? "your worm's logs" : "the worm's logs" } : undefined);
+        if (opts.showAux && !compact) {
             for (const n of byRole.syslog || []) addNode(n, mid + 380, 220, CARD);
             for (const n of byRole.ssh_gateway || []) addNode(n, LEFT + 120, 360, CARD);
             (byRole.other || []).forEach((n, i) => addNode(n, LEFT + 80 + i * (CARD.w + 20), Math.max(devBottom, sbBox.y + sbBox.h, piBox.y + piBox.h) + 70, CARD));
         }
         // Extra VMs of a role that has a fixed slot (e.g. two scoring VMs) go next to it.
-        for (const role of team ? ["scoring", "logging"] : ["orchestrator", "dashboard", "database", "scoring", "logging", "monitor"]) {
+        for (const role of compact ? ["scoring", "logging"] : ["orchestrator", "dashboard", "database", "scoring", "logging", "monitor"]) {
             (byRole[role] || []).slice(1).forEach((n, i) => {
                 const base = scene.nodes.get(scene.byRole.get(role)[0]);
                 addNode(n, base.x, base.y + (i + 1) * (CARD.h + 12), CARD);
@@ -1014,6 +1070,7 @@
         // and the sandbox (one trunk for all teams), then the shared lane.
         const trunkX = LEFT + DEV_W + 25;
         scene.team = team;
+        scene.simulation = !!opts.simulation;
         const lead = (box) => (box.kind === "devbox"
             ? [pt(box.anchor), { x: trunkX, y: box.anchor.y }, { x: trunkX, y: scene.lane }]
             : [pt(box.anchor)]);
@@ -1261,7 +1318,9 @@
         if (g.kind === "sandbox" && g.empty) {
             node.appendChild(sv("text", {
                 class: "muted", x: g.x + g.w / 2, y: g.y + g.h / 2 + 4, "text-anchor": "middle",
-                text: S.scene.team ? "No VM to show (yet): the entry VM appears when your worm starts." : replaying() ? "No VMs recorded for this run." : "No sandbox right now (no run in progress).",
+                text: S.scene.team ? "No VM to show (yet): the entry VM appears when your worm starts."
+                    : S.scene.simulation ? (replaying() ? "No sandbox: the gameplan does not load." : S.timelineError ? "Could not simulate it." : "Simulating…")
+                        : replaying() ? "No VMs recorded for this run." : "No sandbox right now (no run in progress).",
             }));
         }
         if (g.kind === "pi") {
@@ -1576,6 +1635,11 @@
                 parts.push(el("div", { class: "tn" }, "Click for its events."));
                 return el("div", null, parts);
             }
+            if (info.run.firewall) {
+                appendFirewall(parts, info.run.firewall, 6);
+                parts.push(el("div", { class: "tn" }, "The gameplan's rules, besides the groups every sandbox VM has. Click for details."));
+                return el("div", null, parts);
+            }
             appendFirewall(parts, sandboxFirewall(), 6);
             parts.push(el("div", { class: "tn" }, "Groups as attached to every sandbox VM (opentofu/stacks/sandbox). Click for details."));
             return el("div", null, parts);
@@ -1623,6 +1687,11 @@
         }
         const parts = [el("div", { class: "tt" }, a.gw ? a.gw.name : g.kind === "sandbox" ? "sandbox-gw" : "devbox-gw")];
         parts.push(el("div", { class: "ts" }, `${ROLE_LABEL[g.kind === "sandbox" ? "sandbox_gw" : "devbox_gw"]} · routes the group's networks to the services (SNAT)`));
+        if (S.scene.simulation) {
+            parts.push(el("div", { class: "tl mono" }, (a.gw && a.gw.addresses.length ? a.gw.addresses : []).join(", ")));
+            parts.push(el("div", { class: "tn" }, "Its .1 in every network is each VM's default route."));
+            return el("div", null, parts);
+        }
         if (!a.gw) {
             parts.push(el("div", { class: "tn" }, S.mode !== "live" ? "Built per run; not in the snapshot." : "Not in the live snapshot."));
             return el("div", null, parts);
@@ -1681,7 +1750,8 @@
         }
         return el("div", null, el("div", { class: "tt" }, "Sandbox"),
             el("div", { class: "ts" }, S.scene.team ? "The entry VM and the VMs your worm captured in this round (faint until captured)."
-                : "The running round's VMs; reach each other, scoring, logging and the private internet only."));
+                : S.scene.simulation ? "The VMs the gameplan describes; they reach each other as their firewalls allow, and scoring, logging and the private internet."
+                    : "The running round's VMs; reach each other, scoring, logging and the private internet only."));
     }
 
     // ------------------------------------------------------------------
@@ -1912,6 +1982,9 @@
         if (sel && sel.type === "node") return renderNodeDetails(sel.id);
         if (sel && sel.type === "event") return renderEventDetails(sel.event);
         if (sel && sel.type === "flow") return renderFlowDetails(sel.flow);
+        if (replaying() && S.doc && S.doc.simulation) return renderSimSummary();
+        if (SIM && S.mode !== "file") return append(side, [el("h3", null, "Simulation"), el("p", { class: S.timelineError ? "is-warn" : "hint" },
+            S.timelineError ? S.timelineError.message : S.simsError ? S.simsError.message : S.simFile ? "Simulating…" : "Pick a gameplan.")]);
         if (replaying() || S.mode === "round") return renderRunSummary();
         return renderLiveSummary();
     }
@@ -2009,6 +2082,11 @@
                 ? `Your devbox ${d.round ? "during the round" : "so far"}: its VMs (faint until your worm finds their token), what it submitted and logged.`
                 : "Your run: only the entry VM and the VMs your worm captured are shown (faint until captured), with their traffic to each other, scoring, logging and the private internet.")]);
         }
+        appendFeed(tl);
+    }
+
+    // Every event in time order (clicking one seeks there and shows it), following the clock.
+    function appendFeed(tl) {
         const feed = el("ul", { class: "feed", id: "topo-feed" });
         const notable = tl.events.filter((e) => e.kind !== "flag_submitted" || e.data.result !== "invalid").slice(0, 600);
         for (const e of notable) {
@@ -2024,6 +2102,52 @@
         append(side, [el("h4", null, `Events (${tl.events.length})`), feed]);
         S.feedIndex = -1;
         updateFeed(S.t);
+    }
+
+    const POWER_KINDS = new Set(["vm_started", "vm_stopped", "vm_suspended", "vm_resumed"]);
+    const OUTCOME_LABEL = {
+        ok: "plays out", cut: "execute() is still going when the run ends", failed: "the attempt fails", invalid: "the gameplan does not load",
+    };
+
+    // A simulation: the gameplan, its outcome, what execute() did, the feed.
+    function renderSimSummary() {
+        const tl = S.timeline;
+        const m = S.doc.simulation;
+        const kinds = {};
+        for (const e of tl.events) kinds[e.kind] = (kinds[e.kind] || 0) + 1;
+        const waited = tl.events.filter((e) => e.kind === "wait").reduce((sum, e) => sum + (num(e.data.duration, 0) || 0), 0);
+        // execute()'s own (not the stops at the run's end).
+        const power = tl.events.filter((e) => POWER_KINDS.has(e.kind) && e.data.how !== "end").length;
+        const why = {
+            cut: "Whatever execute() does after the run's end never happens: its waits are longer than the duration per team.",
+            failed: `Why: the orchestrator's journal (journalctl -u orchestrator)${m.problems ? `, ${m.problems} line${m.problems === 1 ? "" : "s"}` : ""}.`,
+            invalid: "Why: the orchestrator's journal (journalctl -u orchestrator). Staff → Rounds marks such a gameplan invalid.",
+        }[m.outcome];
+        append(side, [
+            el("h3", null, `${m.gameplan} · simulated`),
+            el("div", { class: "sub" }, [m.duration !== null ? `${fmtTime(m.duration)} per team${m.own_duration ? " (its own)" : ""}` : null,
+                `${tl.nodes.length} VMs`, `${tl.networks.length} networks`].filter(Boolean).join(" · ")),
+            el("p", { class: m.outcome === "ok" ? "is-ok" : "is-bad" }, OUTCOME_LABEL[m.outcome] + (m.failed_at !== null ? ` (at ${fmtTime(m.failed_at)})` : "")),
+            why ? el("p", { class: "hint" }, why) : null,
+            m.outcome === "invalid" ? kvTable([
+                ["version", el("span", { class: "mono" }, `${m.sha256.slice(0, 12)}…`)],
+                ["simulated", m.simulated_at ? fmtDate(m.simulated_at) : "—"],
+            ]) : kvTable([
+                ["version", el("span", { class: "mono" }, `${m.sha256.slice(0, 12)}…`)],
+                ["worm start", tl.run.duration !== null ? "00:00 (the clock's zero)" : "never: execute() did not deploy the worm"],
+                ["waits", `${kinds.wait || 0} · ${fmtTime(waited)}`],
+                ["power steps", String(power)],
+                ["flags", `${kinds.flag_removed || 0} removed · ${kinds.secret_released || 0} placed (prepare places one on every VM)`],
+                ["files", `${m.files} declared · ${kinds.file_written || 0} written · ${kinds.file_read || 0} read${m.watched ? ` · ${m.watched} watched` : ""}`],
+                ["log lines", m.log_lines ? `${m.log_lines} (in the orchestrator's journal)` : "none"],
+                ["simulated", m.simulated_at ? fmtDate(m.simulated_at) : "—"],
+            ]),
+            el("p", { class: "hint" }, "No worm runs here: nothing is captured, and a file changes only when the gameplan writes it. " +
+                `Steps take nominal times (a host job ${m.timing.flags ?? "?"} s, the fuse ${m.timing.worm_start_delay ?? "?"} s, prepare ${m.timing.prepare ?? "?"} s). ` +
+                "Files are numbered in the order __init__ writes them; their paths are in the orchestrator's journal."),
+            m.events_truncated ? el("p", { class: "is-warn" }, "Only the first events are shown: execute() took more steps than a simulation records.") : null,
+        ]);
+        appendFeed(tl);
     }
 
     function updateFeed(t) {
@@ -2060,7 +2184,7 @@
                     nets.map((net) => el("tr", null, el("td", { class: "mono" }, net.name), el("td", { class: "mono" }, net.cidr || "")))))]);
             }
             if (info.run.captured_at !== null && info.run.captured_at !== undefined) append(side, [el("p", { class: "is-bad" }, `Captured at ${fmtTime(info.run.captured_at)}.`)]);
-            if (!S.scene.team) renderFirewall(sandboxFirewall());
+            if (!S.scene.team) renderFirewall(info.run.firewall || sandboxFirewall());
             const mine = S.timeline.events.filter((e) => e.vm === info.id || e.node === info.id || (e.data && e.data.source_vm === info.id));
             if (mine.length) {
                 const feed = el("ul", { class: "feed" });
@@ -2297,7 +2421,11 @@
         const pct = (t) => `${(((t - lo) / (hi - lo)) * 100).toFixed(3)}%`;
         const big = new Set(["captured", "worm_started"]);
         for (const e of tl.events) {
-            if (!["captured", "worm_started", "worm_deployed", "vm_stopped", "vm_started", "secret_released", "state", "error"].includes(e.kind)) continue;
+            const span = e.kind === "wait" ? num(e.data.duration, 0) : 0;
+            if (span > 0 && hi > lo) {
+                marks.appendChild(el("div", { class: "span", title: `${fmtTime(e.t)} ${eventLook(e).label}`, style: `left: ${pct(e.t)}; width: ${((span / (hi - lo)) * 100).toFixed(3)}%` }));
+            }
+            if (!MARKED.has(e.kind)) continue;
             const look = eventLook(e);
             marks.appendChild(el("div", {
                 class: `mark${big.has(e.kind) ? " big" : ""}`, title: `${fmtTime(e.t)} ${look.label}`,
@@ -2319,6 +2447,9 @@
         for (let t = Math.ceil(lo / step) * step; t <= hi; t += step) axis.appendChild(el("span", { style: `left: ${pct(t)}` }, fmtTime(t)));
         drawDensity();
     }
+
+    const MARKED = new Set(["captured", "worm_started", "worm_deployed", "vm_stopped", "vm_started", "vm_suspended", "vm_resumed",
+        "secret_released", "flag_removed", "file_written", "file_read", "log", "execute_returned", "state", "error"]);
 
     function drawDensity() {
         const c = $("topo-density");
@@ -2471,6 +2602,7 @@
 
     function renderTabs() {
         const rounds = clear($("topo-rounds"));
+        if (SIM) return renderSimTabs(rounds);
         if (TEAM) {
             for (const r of (S.rounds && S.rounds.rounds) || []) {
                 rounds.appendChild(tabButton(shorten(r.name, 40), S.mode === "round" && S.roundId === r.id, () => selectTeamRound(r.id),
@@ -2497,6 +2629,61 @@
         for (const run of round.runs) {
             teams.appendChild(tabButton(shorten(run.team, 40), S.runUuid === run.uuid, () => selectRun(run.uuid), el("span", { class: "state" }, run.state)));
         }
+    }
+
+    // Simulations: the gameplans, then the durations per team (its own, and each round's that uses it).
+    function renderSimTabs(rounds) {
+        const list = (S.sims && S.sims.gameplans) || [];
+        for (const g of list) {
+            rounds.appendChild(tabButton(shorten(g.file, 40), S.mode === "round" && S.simFile === g.file, () => selectSimulation(g.file, 0),
+                el("span", { class: "state" }, g.valid ? "valid" : "invalid")));
+        }
+        if (S.file) {
+            const d = S.file.doc;
+            rounds.appendChild(tabButton(`File: ${shorten(S.file.name, 40)}`, S.mode === "file", () => selectFile(),
+                el("span", { class: "state" }, d.simulation ? shorten(d.simulation.gameplan, 48) : "not a simulation")));
+        }
+        if (S.simsError) rounds.appendChild(el("span", { class: "topo-tabs-empty is-warn" }, `gameplans: ${S.simsError.message}`));
+        else if (S.sims && !list.length) rounds.appendChild(el("span", { class: "topo-tabs-empty" }, "The orchestrator lists no gameplan yet."));
+        const teams = clear($("topo-teams"));
+        const g = list.find((x) => x.file === S.simFile);
+        if (S.mode !== "round" || !g) return;
+        const own = S.doc && S.doc.simulation && S.doc.simulation.own_duration ? ` · ${fmtTime(S.doc.simulation.duration)}` : "";
+        teams.appendChild(tabButton(`its own duration${own}`, S.simDuration === 0, () => selectSimulation(g.file, 0)));
+        for (const r of g.rounds || []) {
+            teams.appendChild(tabButton(shorten(r.name, 40), S.simDuration === num(r.team_duration), () => selectSimulation(g.file, num(r.team_duration, 0)),
+                el("span", { class: "state" }, fmtTime(num(r.team_duration, 0)))));
+        }
+    }
+
+    // One gameplan's simulation (made on the orchestrator the first time, then kept there).
+    async function selectSimulation(file, duration, t) {
+        pause();
+        S.needsFit = true;
+        S.mode = "round";
+        S.simFile = file;
+        S.simDuration = num(duration, 0) || 0;
+        S.model = null;
+        S.doc = null;
+        S.timeline = null;
+        S.timelineError = null;
+        S.selected = null;
+        renderTabs();
+        rebuild();
+        const wanted = [file, S.simDuration];
+        try {
+            const doc = cleanProgression(await getJSON(simUrl(file, S.simDuration)), true);
+            if (S.simFile !== wanted[0] || S.simDuration !== wanted[1] || S.mode !== "round") return; // another tab meanwhile
+            if (!doc.simulation) throw new Error("the server sent no simulation");
+            showProgression(doc, t);
+            S.model = doc.scene;
+        } catch (error) {
+            if (S.simFile !== wanted[0] || S.simDuration !== wanted[1]) return;
+            S.timelineError = error;
+        }
+        renderTabs();
+        rebuild();
+        writeHash();
     }
 
     function selectLive() {
@@ -2657,6 +2844,7 @@
         S.scene = buildScene(S.model, tl, {
             mode: tl ? "round" : "live", showAux: S.showAux, teamSlug: tl ? tl.run.team_slug : null,
             audience: doc ? doc.audience : cfg.audience, environment: doc ? doc.environment : cfg.environment,
+            simulation: SIM || !!(doc && doc.simulation),
         });
         drawScene();
         if (S.needsFit) fit();
@@ -2669,7 +2857,7 @@
         const empty = $("topo-empty");
         if (S.mode === "round" && S.timelineError) {
             empty.hidden = false;
-            empty.textContent = `Could not load the ${TEAM ? "round" : "run"}: ${S.timelineError.message}`;
+            empty.textContent = `Could not load the ${SIM ? "simulation" : TEAM ? "round" : "run"}: ${S.timelineError.message}`;
         } else if (S.mode !== "file" && !S.model && S.modelError) {
             empty.hidden = false;
             empty.textContent = S.modelError.message;
@@ -2688,6 +2876,17 @@
             if (d.generated_at) meta.appendChild(document.createTextNode(`, made ${shorten(fmtDate(d.generated_at), 40)}`));
             if (m && m.collected_at) meta.appendChild(document.createTextNode(` · snapshot of ${shorten(m.host.node || "?", 60)} from ${shorten(fmtDate(m.collected_at), 40)}`));
             meta.appendChild(document.createTextNode(" · viewed locally, nothing is fetched"));
+            return;
+        }
+        if (SIM) {
+            const m = S.doc && S.doc.simulation;
+            if (!m) {
+                meta.appendChild(document.createTextNode(S.timelineError ? "" : S.simFile ? `Simulating ${shorten(S.simFile, 60)}…` : ""));
+                return;
+            }
+            meta.appendChild(document.createTextNode(`Simulation of ${shorten(m.gameplan, 60)} (${m.sha256.slice(0, 12)})`));
+            if (m.simulated_at) meta.appendChild(document.createTextNode(`, made ${shorten(fmtDate(m.simulated_at), 40)}`));
+            meta.appendChild(document.createTextNode(" · a pretend clock, no worm"));
             return;
         }
         if (TEAM) {
@@ -2717,6 +2916,16 @@
     function renderLegend() {
         const legend = clear($("topo-legend"));
         const item = (cls, color, label) => el("span", { style: `color: var(${color})` }, el("i", { class: cls }), el("span", { style: "color: var(--muted)" }, label));
+        if (S.scene && S.scene.simulation && !S.scene.team) {
+            append(legend, [
+                item("", "--c-service", "→ scoring / logging"),
+                item("", "--c-pi", "→ private internet"),
+                item("", "--c-lan", "sandbox network"),
+                item("dash", "--muted", "faint VM: stopped or paused"),
+                item("", "--muted", "grey bar on the timeline: a wait"),
+            ]);
+            return;
+        }
         if (S.scene && S.scene.team) {
             const dev = S.doc && S.doc.environment === "dev";
             append(legend, [
@@ -2757,14 +2966,18 @@
 
     function writeHash() {
         let hash = S.mode === "file" ? "#file" : "#live";
-        if (S.mode === "round" && TEAM && S.roundId) hash = `#round=${S.roundId}&t=${S.t.toFixed(1)}`;
+        if (SIM && S.mode === "round") hash = S.simFile ? `#gameplan=${encodeURIComponent(S.simFile)}&duration=${S.simDuration}&t=${S.t.toFixed(1)}` : "";
+        else if (S.mode === "round" && TEAM && S.roundId) hash = `#round=${S.roundId}&t=${S.t.toFixed(1)}`;
         else if (S.mode === "round" && S.runUuid) hash = `#run=${S.runUuid}&t=${S.t.toFixed(1)}`;
         if (location.hash !== hash) history.replaceState(null, "", hash);
     }
 
     function readHash() {
         const params = new URLSearchParams(location.hash.replace(/^#/, ""));
-        return { run: params.get("run"), round: params.get("round") || null, t: params.has("t") ? Number(params.get("t")) : undefined };
+        return {
+            run: params.get("run"), round: params.get("round") || null, t: params.has("t") ? Number(params.get("t")) : undefined,
+            gameplan: params.get("gameplan") || null, duration: params.has("duration") ? Number(params.get("duration")) : 0,
+        };
     }
 
     async function loadModel() {
@@ -2795,7 +3008,23 @@
         }
     }
 
+    async function loadSims() {
+        try {
+            S.sims = await getJSON(cfg.simulations);
+            S.simsError = null;
+        } catch (error) {
+            S.simsError = error;
+        }
+    }
+
     async function reload() {
+        if (SIM) {
+            await loadSims();
+            renderTabs();
+            if (S.mode === "round" && S.simFile) await selectSimulation(S.simFile, S.simDuration, S.t);
+            else rebuild();
+            return;
+        }
         if (TEAM) {
             await loadRounds();
             renderTabs();
@@ -2819,8 +3048,19 @@
         $("topo-reload").title = DEVBOX ? "Reload your devbox's progression" : "Reload the rounds and the round shown";
     }
 
+    // Staff's Simulations page: the player replaces the page's own list (kept without JavaScript).
+    function simPage() {
+        for (const node of document.querySelectorAll("[data-simulation-list]")) node.hidden = true;
+        root.hidden = false;
+        $("topo-aux").parentElement.hidden = true;
+        root.querySelector(".topo-title").textContent = "// SIMULATION";
+        $("topo-svg").setAttribute("aria-label", "A gameplan's sandbox and its simulated attempt");
+        $("topo-reload").title = "Reload the gameplans and the simulation shown";
+    }
+
     async function init() {
         if (TEAM) teamPage();
+        if (SIM) simPage();
         readColors();
         resizeCanvas();
         wirePanZoom();
@@ -2855,6 +3095,16 @@
             root.classList.remove("dragging");
             openFile(ev.dataTransfer.files[0]);
         });
+        if (SIM) {
+            await loadSims();
+            const wanted = readHash();
+            const files = ((S.sims && S.sims.gameplans) || []).map((g) => g.file);
+            const file = [wanted.gameplan, files[0]].find((x) => x && files.includes(x));
+            renderTabs();
+            if (file) await selectSimulation(file, file === wanted.gameplan ? wanted.duration : 0, file === wanted.gameplan ? wanted.t : undefined);
+            else rebuild();
+            return;
+        }
         if (TEAM) {
             await loadRounds();
             renderTabs();

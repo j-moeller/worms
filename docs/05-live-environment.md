@@ -39,7 +39,7 @@ orchestrator: conduct_rounds ──HostJob rows──► round agent (root, node
 - **Orchestrator.** `/opt/orchestrator/gameplans/{plans,lib}`, readable by the service only. Set by `WORMS_GAMEPLAN_DIR` and `WORMS_GAMEPLAN_LIB`.
 - **Node.** `/opt/worms/gameplans` and `/opt/worms/src/gameplan`.
 - **Dashboard VM.** It holds no copy; Ansible deletes one if present.
-- **What the dashboard sees.** Only the `gameplans` table (file name, valid or not) and a round's `gameplan_status`. Why a gameplan is invalid goes to the orchestrator's journal and the node's job log, never to the database.
+- **What the dashboard sees.** The `gameplans` table (file name, valid or not), a round's `gameplan_status`, and the simulations staff ask for ([Simulation](#simulation)). Why a gameplan is invalid goes to the orchestrator's journal and the node's job log, never to the database.
 
 ## A round, step by step
 
@@ -281,11 +281,24 @@ The dry run costs no time for jobs and boots, so leave margin. To check a file l
 PYTHONPATH=src python3 -c "from gameplan import loader, runtime; print(runtime.validate(loader.load('gameplans', 'round_one.py').cls, duration=3600))"
 ```
 
+### Simulation
+
+**Staff → Simulations** shows how a gameplan plays out before a round uses it: its attempt, replayed on the sandbox it describes in the round player.
+
+- **The attempt.** [`gameplan/simulation.py`](../src/gameplan/simulation.py) runs it as the conductor would: prepare (every VM gets its flag, the files with `at_reset` are written), check, `execute()` under the Runner's rules, the rest of the run's time, every VM stopped, the drain, the teardown.
+- **The clock is pretend.** `wait(600)` moves it by 600 s and is recorded. Every other step takes a nominal time (`TIMING`: a host job 3–5 s, start 5 s, shutdown up to 10 s, prepare 60 s), plus the conductor's fuse and drain.
+- **There is no worm.** Nothing is captured, and `read_file` sees a file change only when the gameplan writes it. What a real round would refuse (resuming a running VM, a second `deploy_worm()`) fails the simulation the same way.
+- **Where it runs.** On the orchestrator, which holds the gameplans ([`simulations.py`](../projects/dashboard/orchestrator/rounds/simulations.py)), one at a time, in a child process limited to 20 s, 10 s of CPU and 1 GiB. The dashboard asks through the orchestrator API (`/gameplans/<file>/simulation/?duration=`, [`api.py`](../projects/dashboard/orchestrator/api.py)).
+- **Kept.** One document per version of the file (SHA-256), duration per team and `SIMULATION_VERSION`, in `gameplan_simulations`; up to 20 per file. A changed file is simulated again on the next request.
+- **What it shows.** The VMs, networks, addresses and each VM's firewall rules, and the timeline: the run's states, power, flags, the worm's deployment, waits, and files written and read **by number**. Files are numbered in the order `__init__` writes them, then the `watch_file` paths.
+- **What stays on the orchestrator.** Paths, file contents, the gameplan's log lines and why a simulation failed: `journalctl -u orchestrator` lists them when a simulation is made.
+- **Outcomes.** `ok`; `cut` (`execute()` is still going when the run ends); `failed` (the attempt would fail); `invalid` (the gameplan does not load).
+
 ## Running a round
 
 1. **Create the round** on **Staff → Rounds**: its window (the start is the upload deadline; teams' latest Live uploads before it are used) and its duration per team. The gameplan is optional here.
 2. **Commit and deploy** the gameplan: `worms build orchestrator round-agent` (both copies), outside a round. The conductor restarts; the agent reads gameplan files fresh.
-3. **Check it is valid.** **Staff → Rounds** marks it valid. If not, read `journalctl -u orchestrator-conduct-rounds` on the orchestrator and the `gameplans` job log on the node.
+3. **Check it is valid.** **Staff → Rounds** marks it valid. If not, read `journalctl -u orchestrator-conduct-rounds` on the orchestrator and the `gameplans` job log on the node. **Staff → Simulations** (or **Simulate** on the round's page) replays its attempt at the round's duration per team ([Simulation](#simulation)).
 4. **Choose it** on the round's page. That works until the round's first attempt starts: a round without a valid gameplan waits ([`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py), `_pin`), and then the gameplan's version is pinned for every attempt.
 5. **Watch it.** **Staff → Rounds → round** shows the attempts, their errors and host jobs, and a replay of each run. `worms status` shows the active run. On the node, `tail -F /var/log/worms/jobs/latest.log`.
 

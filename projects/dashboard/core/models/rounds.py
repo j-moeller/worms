@@ -103,6 +103,31 @@ class GameplanFile(models.Model):
         return self.filename
 
 
+class GameplanSimulation(models.Model):
+    """A gameplan's attempt played against a pretend clock, as the round player's document: what
+    staff see on the dashboard's Simulations page (orchestrator/rounds/simulations.py). Made by the
+    orchestrator on the first request for a version of the file (sha256), a duration per team (0:
+    the gameplan's own) and a version of the simulation, then kept. It holds what a run's timeline
+    holds (the sandbox's VMs, networks and firewall rules; power, flags, the worm, files by number,
+    waits), never a path, file content, log line or problem of the gameplan."""
+
+    filename = models.TextField()
+    sha256 = models.TextField()
+    duration = models.PositiveIntegerField()
+    version = models.PositiveIntegerField()
+    document = models.JSONField()
+    created_at = models.DateTimeField(db_default=Now())
+
+    class Meta:
+        db_table = "gameplan_simulations"
+        constraints = [
+            models.UniqueConstraint(fields=["filename", "sha256", "duration", "version"], name="unique_gameplan_simulation"),
+        ]
+
+    def __str__(self):
+        return f"GameplanSimulation({self.filename}, {self.duration})"
+
+
 class HostJob(models.Model):
     """A privileged operation requested by the orchestrator and executed by
     the round agent on the Proxmox host (ansible/roles/host/round_agent).

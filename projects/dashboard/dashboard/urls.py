@@ -17,7 +17,7 @@ from dashboard.views.uploads import download as upload_download, upload
 from dashboard.views.todos import todos
 from dashboard import api
 from dashboard.views import progression
-from dashboard.views import staff, staff_rounds, staff_teams, staff_users
+from dashboard.views import staff, staff_rounds, staff_simulations, staff_teams, staff_users
 from dashboard.views.topology import topology, topology_data, topology_runs
 from django.conf import settings
 from django.contrib import admin
@@ -108,6 +108,10 @@ urlpatterns = [
     path("staff/rounds/", staff_rounds.rounds, name="staff_rounds"),
     path("staff/rounds/<uuid:round_uuid>/", staff_rounds.round_detail, name="staff_round"),
     path("staff/rounds/<uuid:round_uuid>/delete/", staff_rounds.round_delete, name="staff_round_delete"),
+    # How a gameplan plays out, simulated on the orchestrator (dashboard/views/staff_simulations.py).
+    path("staff/simulations/", staff_simulations.simulations, name="staff_simulations"),
+    path("staff/simulations/gameplans/", staff_simulations.simulation_gameplans, name="staff_simulation_gameplans"),
+    path("staff/simulations/<str:filename>/", staff_simulations.simulation_document, name="staff_simulation"),
     #
     path("topology/", topology, name="topology"),
     path("topology/data/", topology_data, name="topology_data"),

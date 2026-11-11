@@ -84,6 +84,10 @@ postgresql_table_privileges:
       tables: [round_runs, virtual_machines]
     - privs: INSERT, UPDATE, DELETE
       tables: [gameplans]
+    # The simulations staff ask for (orchestrator/rounds/simulations.py): made once, then kept
+    # until the file changes.
+    - privs: INSERT, DELETE
+      tables: [gameplan_simulations]
     - privs: UPDATE (gameplan_status, gameplan_checked_at)
       tables: [rounds]
     - privs: INSERT

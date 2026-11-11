@@ -3,8 +3,9 @@ picks from.
 
 The files are deployed to the orchestrator VM only (WORMS_GAMEPLAN_DIR, with the framework
 in WORMS_GAMEPLAN_LIB): the dashboard VM has none, and the dashboard reads nothing but the
-`gameplans` table (file names, valid or not) and a round's gameplan_status. Why a gameplan
-is not valid goes to the orchestrator's journal, never to the database.
+`gameplans` table (file names, valid or not), a round's gameplan_status and the simulations
+staff ask for (simulations.py). Why a gameplan is not valid goes to the orchestrator's
+journal, never to the database.
 
 A gameplan is valid when the orchestrator's copy and the node's (the round agent's
 `gameplans` job) are the same file (SHA-256) and both find nothing wrong with it. A round's
@@ -17,7 +18,7 @@ from __future__ import annotations
 import logging
 import sys
 
-from core.models.rounds import GameplanFile, HostJob
+from core.models.rounds import GameplanFile, GameplanSimulation, HostJob
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
@@ -96,6 +97,7 @@ def refresh(node):
     now = timezone.now()
     with transaction.atomic():
         GameplanFile.objects.exclude(filename__in=loader.available(directory())).delete()
+        GameplanSimulation.objects.exclude(filename__in=loader.available(directory())).delete()
         for name in loader.available(directory()):
             GameplanFile.objects.update_or_create(filename=name, defaults={"valid": name in valid, "checked_at": now})
     return valid

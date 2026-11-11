@@ -1,8 +1,9 @@
 """Finding and loading gameplans: one file in the gameplans directory, one Gameplan class in it.
 
 A gameplan is named by its file name and nothing else (`round_one.py`): that name is all the
-dashboard ever stores or shows. The file is read here only, on the node (the round agent) and
-on the orchestrator; the dashboard VM has no copy and never loads one (docs/05-live-environment.md).
+dashboard ever stores (it shows a simulation of one too, made on the orchestrator:
+gameplan/simulation.py). The file is read here only, on the node (the round agent) and on the
+orchestrator; the dashboard VM has no copy and never loads one (docs/05-live-environment.md).
 
 The name comes from the database, so it is untrusted: it must match NAME, and it must be a
 regular file directly in the directory, listed by the directory itself. No path is built from

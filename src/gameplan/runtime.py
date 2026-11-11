@@ -1,9 +1,10 @@
 """Running a gameplan's execute(): the rules every run follows, whoever carries it out.
 
 The Runner holds them; a Backend does the work. The conductor's backend
-(orchestrator/rounds/attempt.py) powers VMs through the Proxmox API and asks the round agent
-for everything inside a VM; the dry run's (DryRun, below) only keeps a clock and a record,
-so a gameplan can be checked before any round uses it (`validate`).
+(orchestrator/rounds/conductor.py, AttemptBackend) powers VMs through the Proxmox API and asks
+the round agent for everything inside a VM; the dry run's (DryRun, below) only keeps a clock and
+a record, so a gameplan can be checked before any round uses it (`validate`); a simulation's
+(gameplan/simulation.py) also gives each step its nominal time, for staff to replay.
 
 The rules:
   - the run's clock starts at deploy_worm(); it ends round_duration seconds later, whether

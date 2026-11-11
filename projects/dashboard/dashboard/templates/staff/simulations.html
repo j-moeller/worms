@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Simulations{% endblock %}
+{% block head %}<link rel="stylesheet" href="{% static 'dashboard/css/topology.css' %}">{% endblock %}
+{% block content %}
+<header class="page-head">
+    <p class="page-head__kicker">Staff</p>
+    <h1 class="page-head__title">Simulations</h1>
+    <p class="page-head__lead">How a gameplan plays out, before a round uses it: its attempt runs on the orchestrator against a pretend clock (a <code>wait(600)</code> moves it by ten minutes; every other step takes the time its host job nominally takes) and is replayed here on the sandbox it describes. No worm runs in it: nothing is captured, and a file changes only when the gameplan writes it.</p>
+</header>
+{% include "staff/_tabs.html" with section="simulations" %}
+
+{% comment %}Without JavaScript: the gameplans and their documents. topology.js replaces this with
+the player (the tabs are the gameplans, then the durations per team their rounds give them).{% endcomment %}
+<section class="panel" aria-labelledby="simulations-title" data-simulation-list>
+    <header class="panel__head"><h2 class="panel__title" id="simulations-title">Gameplans</h2></header>
+    <div class="table-wrap">
+        <table class="table">
+            <thead><tr><th scope="col">Gameplan</th><th scope="col">Valid</th><th scope="col">Simulation</th></tr></thead>
+            <tbody>
+                {% for g in gameplans %}
+                <tr>
+                    <th scope="row" class="mono">{{ g.file }}</th>
+                    <td>{% if g.valid %}<span class="badge badge--ok">valid</span>{% else %}<span class="badge badge--bad">invalid</span>{% endif %}</td>
+                    <td><a href="{% url 'staff_simulation' g.file %}">its own duration</a>{% for r in g.rounds %} · <a href="{% url 'staff_simulation' g.file %}?duration={{ r.team_duration }}">{{ r.name }} ({{ r.team_duration }} s)</a>{% endfor %}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="3" class="empty">The orchestrator lists no gameplan yet (files in <code>gameplans/</code> on the node and the orchestrator).</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="panel__body"><p class="muted">The replay needs JavaScript; the links are its JSON documents.</p></div>
+</section>
+
+{# The player markup is template-free (topology/player.html); the endpoints come from here. #}
+<div class="topo" id="topo" hidden
+     data-audience="staff"
+     data-mode="simulation"
+     data-simulations="{% url 'staff_simulation_gameplans' %}"
+     data-simulation="{% url 'staff_simulation' '__gameplan__' %}">
+{% include "topology/player.html" %}
+</div>
+<script src="{% static 'dashboard/js/topology.js' %}" defer></script>
+
+<section class="panel" aria-labelledby="simulation-notes-title">
+    <header class="panel__head"><h2 class="panel__title" id="simulation-notes-title">What a simulation shows</h2></header>
+    <div class="panel__body prose">
+        <p>The sandbox as the gameplan describes it (VMs, networks, addresses, each VM's firewall rules) and its attempt as the conductor runs it: prepare (every VM gets its flag, the files written at reset), check, <code>execute()</code>, the rest of the run's time, every VM stopped, the drain, the teardown. A step that would fail in a round fails here too (resuming a running VM, a second <code>deploy_worm()</code>, ...).</p>
+        <p>What a real run keeps off the database stays off it here: files are numbered, in the order <code>__init__</code> writes them (then the <code>watch_file</code> paths), and their paths, the gameplan's log lines and why a simulation failed are in the orchestrator's journal (<code>journalctl -u orchestrator</code>). A simulation is made once per version of the file and duration per team, then kept.</p>
+    </div>
+</section>
+{% endblock %}

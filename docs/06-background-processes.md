@@ -28,7 +28,7 @@ Every unit below runs as `django:www-data`, with `/etc/orchestrator/django.env` 
 
 | Unit | Kind, schedule | Does |
 |---|---|---|
-| `orchestrator` | gunicorn behind nginx :443 | The devbox REST API for the dashboard |
+| `orchestrator` | gunicorn behind nginx :443 | The REST API for the dashboard: devbox resets, gameplan simulations (each in a child process, [5](05-live-environment.md#simulation)) |
 | `orchestrator-conduct-rounds` | daemon, `Restart=always` (5 s) | Plans due rounds and runs one attempt per tick; idles 5 s. SIGTERM fails a running attempt, which is then retried ([`conduct_rounds.py`](../projects/dashboard/orchestrator/management/commands/conduct_rounds.py)) |
 | `orchestrator-process-attempts` | daemon, `Restart=always`; idles 2 s | The single writer of captures and logs, for rounds and devboxes. Also applies finished devbox jobs and advances dev runs |
 | `orchestrator-collect-topology.timer` | every 2 min, `Persistent` | Snapshots VMs, bridges and firewall rules from Proxmox with the read-only token |

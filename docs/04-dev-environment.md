@@ -59,7 +59,7 @@ laptop ──22 (prod) / 2222 (dev)──► node DNAT ──► devbox-ssh-gate
 - **Version.** A reset bumps the team's `devbox_version` at once, so the dev score and logs start over. Nothing is deleted.
 - **Queueing.** A rebuild already queued or running is reused, not stacked ([`orchestrator/rounds/devbox.py`](../projects/dashboard/orchestrator/rounds/devbox.py)).
 - **Rounds.** While a round builds its sandbox, the devbox VMs are shut down and started again afterwards: a reboot, not a reset.
-- **REST API.** The dashboard reaches the orchestrator over HTTPS with a bearer token (`/devbox/<team>/reset/`, `/devbox/<team>/reconfigure/`). The orchestrator writes the host jobs; the dashboard never does.
+- **REST API.** The dashboard reaches the orchestrator over HTTPS with a bearer token (`/devbox/<team>/reset/`, `/devbox/<team>/reconfigure/`; and `/gameplans/<file>/simulation/` for staff's Simulations page, [5](05-live-environment.md#simulation)). The orchestrator writes the host jobs; the dashboard never does.
 
 ## Dev uploads and runs
 

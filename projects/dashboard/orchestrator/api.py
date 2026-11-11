@@ -1,8 +1,9 @@
 """Orchestrator REST API.
 
 One caller, the dashboard (its own bearer token, settings.ORCHESTRATOR_TOKENS
-"dashboard"): it pushes a team's devbox reset. Token-authenticated (no
-session, hence CSRF-exempt), JSON responses. Nothing here touches Proxmox;
+"dashboard"): it pushes a team's devbox reset, and asks for a gameplan's
+simulation (the gameplans are here, never on the dashboard). Token-authenticated
+(no session, hence CSRF-exempt), JSON responses. Nothing here touches Proxmox;
 the round agent rebuilds the devbox from the host job.
 """
 
@@ -18,6 +19,7 @@ from django.http import HttpRequest, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 
+from orchestrator.rounds import gameplans, simulations
 from orchestrator.rounds.devbox import provisioned_team_specs, request_rebuild
 
 
@@ -135,3 +137,33 @@ def devbox_reconfigure(request: HttpRequest, team_uuid):
             params={"team_uuid": str(team.uuid), "teams": teams},
         )
     return JsonResponse({"job": str(job.uuid), "reconfigure_enqueued": True})
+
+
+# ---------------------------------------------------------------------------
+# Gameplan simulations (dashboard, staff's Simulations page) -- docs/05-live-environment.md
+# ---------------------------------------------------------------------------
+
+
+@require_token("dashboard")
+@require_POST
+def gameplan_simulation(request: HttpRequest, filename):
+    """The round player's document of a gameplan's simulated attempt
+    (orchestrator/rounds/simulations.py): ?duration=<seconds per team>, none
+    for the gameplan's own. Made on the first request for the file's current
+    version and kept; it holds no path, file content, log line or problem of
+    the gameplan (those go to this machine's journal)."""
+    try:
+        duration = simulations.parse_duration(request.GET.get("duration"))
+    except ValueError as error:
+        return JsonResponse({"error": str(error)}, status=400)
+    try:
+        doc, cached = simulations.document(filename, duration)
+    except simulations.NotFound:
+        return JsonResponse({"error": "no such gameplan"}, status=404)
+    except simulations.Busy as error:
+        return JsonResponse({"error": str(error)}, status=503)
+    except gameplans.Unavailable as error:
+        return JsonResponse({"error": str(error)}, status=503)
+    response = JsonResponse(doc)
+    response["X-Simulation-Cached"] = "1" if cached else "0"
+    return response

@@ -163,6 +163,8 @@
     /* The round's start / end, and now (a running round). */
     .topo-track .mark.edge { top: 11px; height: 23px; background: var(--muted); opacity: .75; }
     .topo-track .mark.now { top: 9px; height: 27px; width: 3px; margin-left: -1.5px; background: var(--accent); }
+    /* A simulation's waits: the time execute() lets pass. */
+    .topo-track .span { position: absolute; top: 27px; height: 4px; border-radius: 2px; background: var(--muted); opacity: .45; }
     .topo-track .hover {
         position: absolute; top: -20px; transform: translateX(-50%); font-size: 11px; font-family: "Share Tech Mono", monospace;
         background: var(--ink); color: var(--panel); padding: 1px 5px; border-radius: 3px; pointer-events: none; white-space: nowrap;

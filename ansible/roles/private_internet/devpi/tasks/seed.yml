@@ -7,8 +7,12 @@
     prefix: devpi-seed.
   register: devpi_seed_dir
 
-# The long timeout: the first request makes devpi fetch PyPI's whole project list.
-- name: Fetch the packages and everything they depend on
+# In batches, not one download of the whole list: resolving every package and its
+# dependencies at once exhausts the small devpi VM's memory, and the mirror drops
+# the connection mid-download. A batch is one bounded resolution; already-cached
+# files are served from the mirror, so later batches that share dependencies are
+# quick. The long timeout: the first request makes devpi fetch PyPI's project list.
+- name: Fetch the packages and everything they depend on (in batches)
   ansible.builtin.command:
     argv: >-
       {{ [devpi_venv ~ '/bin/pip', 'download', '--quiet', '--no-cache-dir',
@@ -16,7 +20,10 @@
           '--dest', devpi_seed_dir.path,
           '--trusted-host', '127.0.0.1',
           '--index-url', 'http://127.0.0.1:' ~ (devpi_port | string) ~ '/root/pypi/+simple/']
-         + devpi_seed_packages }}
+         + item }}
+  loop: "{{ devpi_seed_packages | batch(devpi_seed_batch_size) | list }}"
+  loop_control:
+    label: "{{ item | join(', ') | truncate(60) }}"
   changed_when: false
 
 - name: Remove the scratch directory

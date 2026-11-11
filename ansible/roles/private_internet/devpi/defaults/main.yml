@@ -10,6 +10,10 @@ devpi_root_password: "{{ vault_devpi_root_password }}"
 # what it already holds, so anything not seeded here fails to install offline.
 # The list is the common Python toolchain a team is likely to want on a worm or
 # devbox: build/test tools, web, data, and the usual security/CTF libraries.
+# Seeded in batches of this size (tasks/seed.yml): one `pip download` of the whole
+# list at once exhausts the devpi VM's memory and the mirror drops mid-download.
+devpi_seed_batch_size: 12
+
 devpi_seed_packages:
   - pip
   - setuptools

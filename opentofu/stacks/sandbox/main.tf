@@ -219,6 +219,15 @@ resource "proxmox_virtual_environment_vm" "gw" {
       }
     }
 
+    # The router resolves worms.internal through the private DNS, like the
+    # sandbox VMs below; without it it inherits the node's upstream resolver,
+    # which the isolated sandbox cannot reach, so `apt` (and every other
+    # worms.internal name) fails and the sandbox never comes up.
+    dns {
+      servers = [local.services_ips.dns]
+      domain  = "worms.internal"
+    }
+
     user_data_file_id = proxmox_virtual_environment_file.sandbox_gw.id
   }
 

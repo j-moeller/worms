@@ -23,6 +23,12 @@
     content: |
       // Managed by Ansible (role apt_client): the private apt cache is offline.
       Acquire::Check-Valid-Until "false";
+      // Do not fetch translated package descriptions. They are useless to an
+      // automated VM, the cache does not seed them, and `apt update` through
+      // python-apt (ansible.builtin.apt) raises FetchFailedException on the
+      // first one it cannot fetch -- which would fail every fresh devbox build,
+      // reset and key change even though the real indexes are fine.
+      Acquire::Languages "none";
     owner: root
     group: root
     mode: '0644'

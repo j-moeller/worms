@@ -370,8 +370,11 @@ class Conductor:
             now = Round.objects.filter(pk=round_.pk).values_list("gameplan", "team_duration").first()
             if now != (round_.gameplan, round_.team_duration):
                 return False
+            # The version is recorded already (check_gameplans: gameplans.refresh records each
+            # version it sees); the run names it by hash and links it (core/models/rounds.py).
             RoundRun.objects.filter(round=round_, gameplan_sha256="").update(
-                gameplan=round_.gameplan, gameplan_sha256=valid[round_.gameplan], duration=round_.team_duration)
+                gameplan=round_.gameplan, gameplan_sha256=valid[round_.gameplan],
+                gameplan_version_id=valid[round_.gameplan], duration=round_.team_duration)  # fmt: skip
         self._waiting.pop(round_.pk, None)
         run.refresh_from_db()
         return True
@@ -528,7 +531,7 @@ class Conductor:
                 retry = RoundRun.objects.create(
                     round=run.round, team=run.team, upload=run.upload, position=run.position,
                     attempt=run.attempt + 1, seed=run.seed, gameplan=run.gameplan,
-                    gameplan_sha256=run.gameplan_sha256, duration=run.duration,
+                    gameplan_sha256=run.gameplan_sha256, gameplan_version_id=run.gameplan_version_id, duration=run.duration,
                 )  # fmt: skip
         if built:
             # The next attempt waits for this teardown (_teardown_pending); it may keep the

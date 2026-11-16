@@ -1,7 +1,9 @@
 """Round orchestration: one run per team and round (an attempt, tried again if the
-infrastructure fails), the jobs the Proxmox host executes for it, and its timeline. The
-round's gameplan (gameplans/, docs/05-live-environment.md) is named by its file only: its content is
-never in the database. See docs/05-live-environment.md.
+infrastructure fails), the jobs the Proxmox host executes for it, and its timeline. A round
+names its gameplan (gameplans/, docs/05-live-environment.md) by file; each run pins the version
+it runs by SHA-256. Every version the orchestrator has seen is recorded, its bytes included, in
+gameplan_versions: immutable, and its content readable by the orchestrator and the admin only,
+never the dashboard. See docs/05-live-environment.md.
 
 Written by the orchestrator (orchestrator/rounds/conductor.py) and, for
 `host_jobs` only, by the round agent on the Proxmox host (state and results).
@@ -53,6 +55,13 @@ class RoundRun(models.Model):
     # the node runs only that version) and its duration per team (seconds from the worm's start).
     gameplan = models.TextField(blank=True, default="")
     gameplan_sha256 = models.TextField(blank=True, default="")
+    # The recorded version of that SHA-256 (set with it when the run is pinned; a database
+    # constraint keeps the two equal). Null before the pin, and for a run pinned before
+    # versions were recorded whose file is gone: its version is known by hash only.
+    gameplan_version = models.ForeignKey(
+        "GameplanVersion", null=True, blank=True, on_delete=models.PROTECT, related_name="runs",
+        db_column="gameplan_version",
+    )  # fmt: skip
     duration = models.PositiveIntegerField(default=3600)
     # The sandbox as built (from the host's prepare job), for the replay: VMs, networks and
     # the gateway (src/gameplan/build.py, topology), and the VM the worm started on.
@@ -70,6 +79,10 @@ class RoundRun(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["round", "team", "attempt"], name="unique_run_attempt_per_round_team"),
             models.UniqueConstraint(fields=["round", "position", "attempt"], name="unique_run_position_attempt"),
+            models.CheckConstraint(
+                condition=models.Q(gameplan_version__isnull=True) | models.Q(gameplan_version=models.F("gameplan_sha256")),
+                name="run_gameplan_version_is_its_sha256",
+            ),
         ]
         indexes = [models.Index(fields=["state"])]
 
@@ -86,18 +99,81 @@ class RoundRun(models.Model):
         return runs.filter(state=cls.State.FINISHED).order_by("-attempt").first() or runs.order_by("-attempt").first()
 
 
+class GameplanVersion(models.Model):
+    """One version of a gameplan file, by its SHA-256: the exact bytes the orchestrator found and
+    what its author wrote for teams (Gameplan.description), recorded the first time the
+    orchestrator sees it (orchestrator/rounds/gameplans.py, refresh).
+
+    Immutable, as the database enforces (migration 0019):
+      - the SHA-256 is the content's (a CHECK computes it), and `size` its length;
+      - no role may UPDATE or DELETE a row, and a trigger refuses both to the owner too;
+      - `first_seen_at` and `recorded_by` (the inserting account) are the database's;
+      - `worms reset database` keeps the table.
+    `content` is readable by the orchestrator and the admin only: the dashboard may read every
+    other column (setup_db_permissions, postgresql_restricted_columns). Use `GameplanVersion.objects`,
+    which leaves `content` out unless asked for it (`.content_of(sha256)`)."""
+
+    sha256 = models.CharField(max_length=64, primary_key=True)
+    filename = models.TextField()  # the name it was first seen under
+    content = models.BinaryField()
+    size = models.PositiveIntegerField()
+    description = models.TextField(blank=True, default="")  # "": none, or the file does not describe a sandbox
+    first_seen_at = models.DateTimeField(db_default=Now())
+    recorded_by = models.TextField(db_default="", editable=False)  # DEFAULT current_user (migration 0019)
+
+    class WithoutContent(models.Manager):
+        def get_queryset(self):
+            return super().get_queryset().defer("content")
+
+    objects = WithoutContent()
+
+    class Meta:
+        db_table = "gameplan_versions"
+        ordering = ["first_seen_at", "sha256"]
+
+    def __str__(self):
+        return f"{self.filename}@{self.sha256[:12]}"
+
+    @classmethod
+    def content_of(cls, sha256) -> bytes | None:
+        """The version's bytes (the orchestrator and the admin only), None if it is not recorded."""
+        row = cls.objects.filter(sha256=sha256).values_list("content", flat=True).first()
+        return None if row is None else bytes(row)
+
+
+class GameplanChange(models.Model):
+    """What a gameplan file was over time, as the orchestrator's checks saw it: a row each time a
+    file appears, becomes another version, or goes (version null). Append-only, as
+    gameplan_versions: no role may change or remove a row, and the time and the writing account
+    are the database's."""
+
+    filename = models.TextField()
+    version = models.ForeignKey(GameplanVersion, null=True, on_delete=models.PROTECT, related_name="changes",
+                                db_column="sha256")  # fmt: skip
+    seen_at = models.DateTimeField(db_default=Now())
+    recorded_by = models.TextField(db_default="", editable=False)  # DEFAULT current_user (migration 0019)
+
+    class Meta:
+        db_table = "gameplan_changes"
+        ordering = ["seen_at", "id"]
+        indexes = [models.Index(fields=["filename", "seen_at"])]
+
+    def __str__(self):
+        return f"{self.filename} -> {self.version_id or 'removed'}"
+
+
 class GameplanFile(models.Model):
-    """A gameplan the orchestrator found, by file name only: the dashboard offers the valid
-    ones for a round. Written by the orchestrator from the round agent's `gameplans` job (the
-    node's copy) and its own copy; their content stays on those two machines."""
+    """A gameplan the orchestrator found, by file name: the dashboard offers the valid ones for
+    a round. Written by the orchestrator from the round agent's `gameplans` job (the node's
+    copy) and its own copy, whose version it records (GameplanVersion); the files stay on those
+    two machines."""
 
     filename = models.TextField(unique=True)
     valid = models.BooleanField(default=False)  # on the node and on the orchestrator, the same file
     checked_at = models.DateTimeField(db_default=Now())
-    # The one part of a gameplan written for teams (Gameplan.description), as the orchestrator's
-    # copy has it: the round page shows it (dashboard/views/round_info.py). "": none, or the file
-    # does not load. A database default, so code that does not know the column still inserts.
-    description = models.TextField(blank=True, default="", db_default="")
+    # The orchestrator's copy as it is now. Null only before its first check after migration 0019.
+    version = models.ForeignKey(GameplanVersion, null=True, blank=True, on_delete=models.PROTECT,
+                                related_name="files", db_column="sha256")  # fmt: skip
 
     class Meta:
         db_table = "gameplans"
@@ -106,12 +182,23 @@ class GameplanFile(models.Model):
     def __str__(self):
         return self.filename
 
-    @classmethod
-    def description_of(cls, filename) -> str:
-        """The description teams read for a round with this gameplan; "" for none."""
-        if not filename:
-            return ""
-        return cls.objects.filter(filename=filename).values_list("description", flat=True).first() or ""
+
+def round_gameplan(round_) -> dict:
+    """The gameplan version a round runs: {sha256, pinned, recorded, description}. Pinned (every
+    attempt runs it) once its first attempt starts; before that, the current version of its file,
+    which may still change. `recorded`: the version's bytes are in gameplan_versions (a run pinned
+    before versions were recorded, whose file is gone, is known by hash only)."""
+    sha = RoundRun.objects.filter(round=round_).exclude(gameplan_sha256="").values_list("gameplan_sha256", flat=True).first()
+    pinned = bool(sha)
+    if not pinned:
+        sha = GameplanFile.objects.filter(filename=round_.gameplan).values_list("version_id", flat=True).first() if round_.gameplan else None
+    version = GameplanVersion.objects.filter(sha256=sha).values("description").first() if sha else None
+    return {
+        "sha256": sha or "",
+        "pinned": pinned,
+        "recorded": version is not None,
+        "description": (version or {}).get("description", ""),
+    }
 
 
 class GameplanSimulation(models.Model):

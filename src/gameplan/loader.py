@@ -1,9 +1,11 @@
 """Finding and loading gameplans: one file in the gameplans directory, one Gameplan class in it.
 
-A gameplan is named by its file name and nothing else (`round_one.py`): that name is all the
-dashboard ever stores (it shows a simulation of one too, made on the orchestrator:
-gameplan/simulation.py). The file is read here only, on the node (the round agent) and on the
-orchestrator; the dashboard VM has no copy and never loads one (docs/05-live-environment.md).
+A gameplan is named by its file name (`round_one.py`), a version of it by the SHA-256 of its
+bytes. The file is read here only, on the node (the round agent) and on the orchestrator; the
+dashboard VM has no copy and never loads one (docs/05-live-environment.md). The orchestrator
+records every version it sees in the database, bytes included, where only it and the admin can
+read them: the dashboard sees names, hashes and descriptions (and simulations made on the
+orchestrator: gameplan/simulation.py). What runs is always the file, checked by its hash.
 
 The name comes from the database, so it is untrusted: it must match NAME, and it must be a
 regular file directly in the directory, listed by the directory itself. No path is built from
@@ -81,6 +83,15 @@ def load(directory, filename, sha256=None) -> Loaded:
     if sha256 is not None and digest != sha256:
         raise GameplanError(f"{filename} is not the version expected (sha256 {digest[:12]}, expected {sha256[:12]}): "
                             "deploy the same checkout to the node and the orchestrator")  # fmt: skip
+    return load_source(directory, filename, source)
+
+
+def load_source(directory, filename, source: bytes) -> Loaded:
+    """As load(), from bytes read already: the orchestrator records a version and describes it
+    from the same bytes (orchestrator/rounds/gameplans.py)."""
+    if not valid_name(filename):
+        raise GameplanError(f"{filename!r} is not a gameplan file name (lowercase, digits, _, ending in .py)")
+    digest = hashlib.sha256(source).hexdigest()
     name = f"worms_gameplans.{filename[:-3]}_{digest[:12]}"
     module = types.ModuleType(name)
     module.__file__ = str(Path(directory) / filename)

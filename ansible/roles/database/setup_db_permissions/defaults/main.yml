@@ -88,6 +88,13 @@ postgresql_table_privileges:
     # until the file changes.
     - privs: INSERT, DELETE
       tables: [gameplan_simulations]
+    # Every gameplan version it sees and what each file was over time (gameplans.py, record):
+    # insert only, the columns it fills. The time and the writing account are the database's,
+    # and no row is ever changed or removed (core/migrations/0019_gameplan_versions.py).
+    - privs: INSERT (sha256, filename, content, size, description)
+      tables: [gameplan_versions]
+    - privs: INSERT (filename, sha256)
+      tables: [gameplan_changes]
     - privs: UPDATE (gameplan_status, gameplan_checked_at)
       tables: [rounds]
     - privs: INSERT
@@ -191,6 +198,15 @@ postgresql_append_only_tables:
   - competition_events
   - ssh_gateway_logins
   - platform_events
+
+# Columns only their readers may read: whatever `tables: ALL` gave another role, it keeps
+# SELECT on the table's other columns only. A gameplan version's bytes are code that runs as
+# root on the node: the orchestrator (which has the files anyway) and the admin read them,
+# never the dashboard (docs/07-security.md, T3).
+postgresql_restricted_columns:
+  gameplan_versions:
+    columns: [content]
+    readers: [django_orchestrator]
 
 # Roles whose INSERT into users is refused when the row is staff or superuser
 # (a trigger, privileges.sql.j2): the public dashboard creates student

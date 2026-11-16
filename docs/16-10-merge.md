@@ -164,9 +164,14 @@ A later deploy gives every row a new UUID, so links handed out meanwhile change 
 - Telnet admits only the users of telnet logins.
 
 **A round page with the gameplan's description** adds migration `0018_gameplan_description`: a `description` column on `gameplans`, with a database default of `""`.
-- Deploying today's `main`, the plan in step 5 names 9 migrations (`0010`–`0018`), not 8.
+- Deploying today's `main`, the plan in step 5 names 10 migrations (`0010`–`0019`), not 8.
 - Code that does not know the column keeps working: production's orchestrator before the deploy, and after a rollback. Option 2 of the rollback migrates back over it like the others.
 - The orchestrator fills the column on its first gameplan check after the deploy. Until then every round page shows no description.
+
+**Gameplan versions** add migration `0019_gameplan_versions` ([5](05-live-environment.md#versions)): `gameplan_versions` and `gameplan_changes` (append-only, the bytes readable by the orchestrator and the admin only), a version on each file and each run. The description moves from the file to its version.
+- **After the deploy:** the first check records the version of each file, with its bytes. It also links every run already pinned to a SHA-256 that one of those files has. A run whose file has changed since stays known by hash only.
+- **Rollback option 1** works as described: production's code does not know the new tables and columns, and every new column may be null.
+- **Rollback option 2** migrates back over `0019` and drops the version record. The dump from step 4 holds the runs; the bytes of what was recorded since are lost with the tables.
 
 None of this alters round_one or `credential_chain.py`: neither removes a package, and `credential_chain.py`'s only telnet user is its telnet login. The round agent has to be restarted after the deploy (step 6) all the more: the new `sandbox_vm` role reads `accounts` and `purge`, which only the new `build.py` writes.
 

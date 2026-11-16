@@ -14,6 +14,23 @@ GRANT {{ grant.privs }} ON {{ grant.tables | map('regex_replace', '^(.*)$', 'pub
 {# Append only: whatever `tables: ALL` gave, no role reads, changes or removes a row. #}
 REVOKE SELECT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON public."{{ table }}" FROM "{{ role }}";
 {% endfor %}
+{% for table, rule in (postgresql_restricted_columns | default({})).items() if role not in rule.readers %}
+{# Restricted columns: a role that may read the table reads its other columns only. #}
+DO $$
+DECLARE
+  others text;
+BEGIN
+  IF has_table_privilege('{{ role }}', 'public.{{ table }}', 'SELECT') THEN
+    REVOKE SELECT ON public."{{ table }}" FROM "{{ role }}";
+    SELECT string_agg(quote_ident(column_name), ', ' ORDER BY ordinal_position) INTO others
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = '{{ table }}'
+        AND column_name <> ALL (ARRAY[{{ rule.columns | map('regex_replace', '^(.*)$', "'\\1'") | join(', ') }}]::text[]);
+    EXECUTE format('GRANT SELECT (%s) ON public.%I TO %I', others, '{{ table }}', '{{ role }}');
+  END IF;
+END
+$$;
+{% endfor %}
 {% endfor %}
 {# Sequences behind the id columns of tables with INSERT (serial or identity). #}
 DO $$

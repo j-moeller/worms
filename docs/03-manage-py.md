@@ -69,7 +69,7 @@ One verb per task ([`src/manage.py`](../src/manage.py)). Commands marked † ask
 | `worms status` | The system, the firewall, the internet window, every VM (kind, state, uptime, memory), the competition |
 | `worms status teams`, `users`, `leaderboard` | The database's view, with the dashboard's own scoring |
 | `worms status audit [--hours 24] [--kind PREFIX] [--limit 200]` | The event tables ([7](07-security.md#audit-trail)) |
-| `worms status rounds`, `gameplans`, `jobs`, `devboxes` | Rounds with their gameplan and attempts; each gameplan as the orchestrator and the node found it, and why one is invalid (this checkout's dry run); the round agent's latest host jobs; every team's devbox and SSH keys |
+| `worms status rounds`, `gameplans`, `jobs`, `devboxes` | Rounds with their gameplan and attempts; each gameplan as the orchestrator and the node found it (with its current version's SHA-256), and why one is invalid (this checkout's dry run); the round agent's latest host jobs; every team's devbox and SSH keys |
 | `worms show <vm>` | One VM: state, resources, disks, networks, management address and login user, OpenTofu address, snapshots, whether it answers over SSH ([`vms.py`](../src/worms_cli/vms.py)) |
 | `worms show database [<table>] [--schema] [--limit 20]` | The VM, then its tables (rows, size); a table's newest rows, or its columns, indexes and constraints ([`database.py`](../src/worms_cli/database.py)) |
 | `worms login <vm>` | A shell over the management SSH, as `debian` (`sudo -i` for root). `worms login --help` lists the VMs there are now: the platform's, the private internet, `ssh-gateway`, `ssh-gateway-<team slug>`, devbox and sandbox VMs, and `node` from a laptop. The agent is never forwarded |
@@ -87,7 +87,7 @@ One verb per task ([`src/manage.py`](../src/manage.py)). Commands marked † ask
 
 | Command | Does |
 |---|---|
-| `worms reset database` † | Truncates every table except the event tables and Django's own, then runs `init`. No migration |
+| `worms reset database` † | Truncates every table except the event tables, the gameplan versions and their history, and Django's own; then runs `init`. No migration |
 | `worms reset services` † | Rolls the 11 service VMs back to `clean` (refused while a sandbox exists); then has the agent write the devbox map again |
 | `worms reset devbox <team>... \| --all-teams` † | Each team's devbox back to its first-boot snapshot, through the orchestrator as the dashboard's reset is: its version goes up, its dev score starts over |
 | `worms devbox-add-key <team> <key\|file\|->` | Adds an SSH key to a team's devbox with the dashboard's checks ([`ssh_keys.py`](../projects/dashboard/core/ssh_keys.py)); the orchestrator has the agent push the keys |
@@ -188,7 +188,7 @@ cd /opt/orchestrator/src && set -a && . /etc/orchestrator/django.env && set +a &
 | `provision_devboxes` | orchestrator | `worms build devbox` | Devbox rows and indexes (at most 16 teams), then one `devbox_provision` job |
 | `init` | core | after migrations (Ansible), `reset_database` | Idempotent: `admin` (no usable password) and the competition `WORMS <year>` |
 | `reset_admin_password` | core | `worms admin-reset-password` | One-time password, ends sessions |
-| `reset_database --yes [--no-init]` | core | `worms reset database` | Truncate, keep event tables, `init` |
+| `reset_database --yes [--no-init]` | core | `worms reset database` | Truncate, keep the event tables and the gameplan versions, `init` |
 | `create_users CSV [--staff]` | core | by hand | Accounts from a CSV; prints `email,password` |
 
 Ansible runs `migrate --database=migrator` (on the orchestrator only, with its services stopped) and `collectstatic` (on both VMs).

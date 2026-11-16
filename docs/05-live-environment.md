@@ -39,7 +39,35 @@ orchestrator: conduct_rounds ──HostJob rows──► round agent (root, node
 - **Orchestrator.** `/opt/orchestrator/gameplans/{plans,lib}`, readable by the service only. Set by `WORMS_GAMEPLAN_DIR` and `WORMS_GAMEPLAN_LIB`.
 - **Node.** `/opt/worms/gameplans` and `/opt/worms/src/gameplan`.
 - **Dashboard VM.** It holds no copy; Ansible deletes one if present.
-- **What the dashboard sees.** The `gameplans` table (file name, valid or not, and the gameplan's `description` for teams), a round's `gameplan_status`, and the simulations staff ask for ([Simulation](#simulation)). Why a gameplan is invalid goes to the orchestrator's journal and the node's job log, never to the database.
+- **Database.** Every version the orchestrator has seen, bytes included ([Versions](#versions)). Only the orchestrator and the admin may read the bytes.
+- **What the dashboard sees.** The files and whether each is valid, every version's SHA-256, file name, size and `description` for teams, which runs pinned it and the files' history; a round's `gameplan_status`; and the simulations staff ask for ([Simulation](#simulation)). Never a version's bytes. Why a gameplan is invalid goes to the orchestrator's journal and the node's job log, never to the database.
+
+### Versions
+
+A gameplan version is its bytes, named by their SHA-256. Once recorded, a version never changes. A round runs one version from its first attempt to its last.
+
+- **Recorded.** Each time the orchestrator checks the gameplans (when the conductor starts, then every 10 minutes), it reads each file once and records it ([`gameplans.py`](../projects/dashboard/orchestrator/rounds/gameplans.py), `refresh`):
+  - **A new version**, in `gameplan_versions`: the SHA-256, the bytes, their size, the file name it had, its `description`, when it was first seen and the database account that recorded it.
+  - **A change**, in `gameplan_changes`: the file appeared, became another version, or went.
+  - **The files now**, in `gameplans`: each one's current version, valid or not.
+- **Immutable.** The database itself keeps the record whole ([migration 0019](../projects/dashboard/core/migrations/0019_gameplan_versions.py)):
+  - A CHECK computes each version's SHA-256 from its bytes, and its size.
+  - No role may UPDATE or DELETE a row of either table, and a trigger refuses both to the owner too.
+  - The time and the recording account are filled by the database; the orchestrator may insert only the other columns.
+  - `worms reset database` keeps both tables.
+- **Pinned.** When a round's first attempt starts, every run of the round gets the version its file has then: `round_runs.gameplan_sha256`, and `gameplan_version` pointing at the record (a constraint keeps the two equal). Retries keep it. Before that, the round shows its file's current version.
+- **Run from the files.** The node and the orchestrator run the file in their copy, after checking it is exactly the pinned SHA-256. Neither ever runs code from the database: whoever could write to the database could otherwise put code on the node, where it runs as root. The record is for the audit.
+- **Edits.** A file edited after a round pinned it is a new version. The record keeps the old one. The round's attempts fail until both copies hold the pinned version again, so edit a gameplan only when no round has pinned the old version and still has attempts to run.
+- **Older runs.** Runs pinned before versions were recorded are linked to their version when a file with that SHA-256 is checked. A hash whose file is gone stays known by hash only: its bytes were never recorded.
+- **Where to look.**
+  - **Staff → Gameplans:** the files now, every version (newest first) with the rounds and attempts that ran it, the history, and the hashes known only as hashes.
+  - **A round's staff page:** its version, pinned or current.
+  - **`worms status gameplans`:** each file's current version.
+  - **The bytes:** for the admin only, on the database VM (`worms login database`):
+
+    ```sh
+    sudo -u postgres psql mydb -Atc "SELECT convert_from(content, 'UTF8') FROM gameplan_versions WHERE sha256 = '<sha256>'"
+    ```
 
 ## A round, step by step
 
@@ -254,7 +282,7 @@ class RoundOne(Gameplan):                       # gameplans/round_one.py
 - **Entry point.** `set_worm_entrypoint(vm)`, exactly once.
 - **`description`** (class attribute, default `""`): what teams read about the round. The round timer in the dashboard's header opens `/round/`, which shows it while the round is the next or the current one; staff see it on the round's page.
   - Plain text, a blank line between paragraphs; a triple-quoted string's indentation is removed. At most 20,000 characters.
-  - The orchestrator copies it from its copy of the file into the `gameplans` table when it checks the gameplans (on start, then every 10 minutes); the dashboard reads only that. A file that does not describe a sandbox has none.
+  - It belongs to the version ([Versions](#versions)): the orchestrator records it with the version's bytes, and the dashboard reads only the description. A round shows the description of the version it runs: the pinned one once its first attempt starts, otherwise its file's current one. A file that does not describe a sandbox has none.
   - It is published as written, before the round: no run's secrets (validation refuses them), and nothing that gives away more than the round should. `""` shows the round's times only.
 - **Limits.**
   - 32 VMs, 30 networks, 8 NICs per VM.

@@ -44,8 +44,8 @@ PostgreSQL accepts TLS only (`hostssl`, `scram-sha-256`), and each role connects
 |---|---|---|
 | `admin` (superuser) | the node | everything: the `worms` CLI |
 | `django_migrator` | orchestrator | owns the tables, runs migrations, `init` |
-| `django_orchestrator` | orchestrator | Read: every table except the event tables. Write: runs, VMs, topology, devbox tables, `gameplans`, `gameplan_simulations`, captures, logs, `run_events`; INSERT `host_jobs`; named columns of `rounds`/`teams` |
-| `django_dashboard` | dashboard | Read: every table except the event tables. Insert: uploads, tokens, SSH keys, memberships, users, teams, rounds, password resets. Update: named columns only. A trigger refuses staff or superuser rows. Never `username`, `is_staff`, `is_superuser` |
+| `django_orchestrator` | orchestrator | Read: every table except the event tables. Write: runs, VMs, topology, devbox tables, `gameplans`, `gameplan_simulations`, captures, logs, `run_events`; INSERT `host_jobs`; INSERT only, named columns, into `gameplan_versions` and `gameplan_changes`; named columns of `rounds`/`teams` |
+| `django_dashboard` | dashboard | Read: every table except the event tables, and every column of `gameplan_versions` except `content`. Insert: uploads, tokens, SSH keys, memberships, users, teams, rounds, password resets. Update: named columns only. A trigger refuses staff or superuser rows. Never `username`, `is_staff`, `is_superuser` |
 | `dbuser_scoring`, `dbuser_logging` | scoring, logging | INSERT into their attempt table only (3–4 columns) |
 | `dbuser_network_monitor` | monitor | INSERT into `network_flows`, `network_events` |
 | `round_agent` | node | SELECT `host_jobs`; UPDATE its state, timestamps, result, error |
@@ -115,7 +115,9 @@ Account rules ([`core/accounts.py`](../projects/dashboard/core/accounts.py), [`m
 - **Flags.** Generated on the node; only their SHA-256 leaves it.
 - **Gameplan content** stays on the orchestrator and the node:
   - The dashboard sees file names, validity and a run's topology.
-  - And each gameplan's `description`: text its author wrote for teams, published on purpose. The orchestrator copies it into the `gameplans` table; the round page shows it to every signed-in user, and validation refuses a run's secrets in it ([5](05-live-environment.md#__init__-the-sandbox)).
+  - And each gameplan's `description`: text its author wrote for teams, published on purpose. The orchestrator records it with the version; the round page shows it to every signed-in user, and validation refuses a run's secrets in it ([5](05-live-environment.md#__init__-the-sandbox)).
+  - The database holds every version's bytes (`gameplan_versions.content`, [5](05-live-environment.md#versions)). Only the orchestrator, which has the files anyway, and the admin may read them. A role that may read every table gets every column but `content` (setup_db_permissions, `postgresql_restricted_columns`); every other role gets nothing. A compromised dashboard learns each version's hash, size and description, never its code.
+  - The record cannot be rewritten: the database checks each version's hash against its bytes, grants no one UPDATE or DELETE on the versions or their history, and refuses both to the owner with a trigger. The node and the orchestrator never run code from the database, so a database write cannot reach the node.
   - And the simulations staff ask for ([5](05-live-environment.md#simulation)): what a run's timeline would show (VMs, networks, addresses, firewall rules; states, power, flags, waits, files by number). A compromised dashboard can ask for one of every gameplan, so it learns the sandbox's shape and the attempt's timing. Never paths, contents, setup commands, packages, log lines or problems.
   - A simulation runs gameplan code on the orchestrator in a child process: 20 s, 10 s of CPU, 1 GiB, 16 MiB of files; stdout carries only its record. One is made at a time (an advisory lock; others get 503), so the API token keeps at most one CPU busy.
   - Errors of the jobs that load a gameplan name only the job ([`handlers.py`](../scripts/round_agent/handlers.py), `_quiet`).

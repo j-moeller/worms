@@ -324,8 +324,9 @@ def devbox_rows() -> list[list[str]]:
 
 
 def gameplan_rows(repo_root) -> list[list[str]]:
-    """The gameplans: what the orchestrator and the node found (the `gameplans` table), and this
-    checkout's own check of each file (src/gameplan, the dry run): why one is invalid."""
+    """The gameplans: what the orchestrator and the node found (the `gameplans` table: valid or
+    not, its version's SHA-256), and this checkout's own check of each file (src/gameplan, the
+    dry run): why one is invalid. Every version and the rounds that ran it: Staff → Gameplans."""
     import sys
 
     from core.models.rounds import GameplanFile
@@ -338,7 +339,10 @@ def gameplan_rows(repo_root) -> list[list[str]]:
     rows = []
     for name in names:
         row = deployed.get(name)
-        there = ("valid" if row.valid else "INVALID") + f" ({_when(row.checked_at)})" if row else "not deployed"
+        there = (
+            ("valid" if row.valid else "INVALID") + (f" {row.version_id[:12]}" if row.version_id else "") + f" ({_when(row.checked_at)})"
+            if row else "not deployed"
+        )  # fmt: skip
         try:
             problems = runtime.validate(loader.load(repo_root / "gameplans", name).cls) if name in loader.available(repo_root / "gameplans") else ["not in this checkout"]
         except Exception as exc:  # noqa: BLE001  (a file that does not load is a problem like any other)

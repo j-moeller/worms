@@ -17,10 +17,11 @@
         <div class="panel__body">
             <dl class="kv">
                 <div><dt>Gameplan</dt><dd>{% include "staff/_gameplan.html" %}{% if round.gameplan %} <a class="btn btn--ghost btn--sm" href="{% url 'staff_simulations' %}#gameplan={{ round.gameplan|urlencode }}&amp;duration={{ round.team_duration }}">Simulate</a>{% endif %}</dd></div>
+                {% if version.sha256 %}<div><dt>Version</dt><dd><a class="mono" href="{% url 'staff_gameplans' %}#v-{{ version.sha256 }}" title="{{ version.sha256 }}">{{ version.sha256|slice:":12" }}</a> {% if version.pinned %}<span class="badge badge--accent">pinned</span> every attempt runs it{% else %}<span class="badge">current</span> the file's version now: pinned when the first attempt starts{% endif %}{% if not version.recorded %} · <span class="muted">known by its hash only</span>{% endif %}</dd></div>{% endif %}
                 <div><dt>Duration</dt><dd>{{ round.team_duration }} s from the worm's start ({{ timing.worm_start_delay }} s after it is deployed)</dd></div>
                 <div><dt>Attempts</dt><dd>up to {{ max_retries|add:1 }} per team: an attempt the infrastructure fails is thrown away and run again</dd></div>
             </dl>
-            <p class="form__note">The gameplan is a file on the node and the orchestrator (<code>gameplans/</code>); this page knows only its name and its description for teams. Every team meets the same sandbox, rolled back for each.</p>
+            <p class="form__note">The gameplan is a file on the node and the orchestrator (<code>gameplans/</code>); this page knows its name, its versions by SHA-256 and their descriptions for teams, never its code. Every team meets the same sandbox, rolled back for each.</p>
         </div>
     </section>
 
@@ -38,8 +39,8 @@
 </div>
 
 <section class="panel" aria-labelledby="description-title">
-    <header class="panel__head"><h2 class="panel__title" id="description-title">What teams read</h2><p class="panel__meta">the gameplan's <code>description</code>, on <a href="{% url 'round_info' %}">the round page</a> while the round is the next or the current one</p></header>
-    <div class="panel__body prose">{% if description %}{{ description|linebreaks }}{% elif round.gameplan %}<p class="muted">The gameplan has no description: teams see only the round's times.</p>{% else %}<p class="muted">No gameplan yet.</p>{% endif %}</div>
+    <header class="panel__head"><h2 class="panel__title" id="description-title">What teams read</h2><p class="panel__meta">the <code>description</code> of the version above, on <a href="{% url 'round_info' %}">the round page</a> while the round is the next or the current one</p></header>
+    <div class="panel__body prose">{% if version.description %}{{ version.description|linebreaks }}{% elif round.gameplan %}<p class="muted">The gameplan has no description: teams see only the round's times.</p>{% else %}<p class="muted">No gameplan yet.</p>{% endif %}</div>
 </section>
 
 <section class="panel" aria-labelledby="runs-title">

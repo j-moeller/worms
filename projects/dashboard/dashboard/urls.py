@@ -18,7 +18,7 @@ from dashboard.views.todos import todos
 from dashboard import api
 from dashboard.views import progression
 from dashboard.views.round_info import round_info
-from dashboard.views import staff, staff_rounds, staff_simulations, staff_teams, staff_users
+from dashboard.views import staff, staff_gameplans, staff_rounds, staff_simulations, staff_teams, staff_users
 from dashboard.views.topology import topology, topology_data, topology_runs
 from django.conf import settings
 from django.contrib import admin
@@ -112,6 +112,8 @@ urlpatterns = [
     path("staff/rounds/", staff_rounds.rounds, name="staff_rounds"),
     path("staff/rounds/<uuid:round_uuid>/", staff_rounds.round_detail, name="staff_round"),
     path("staff/rounds/<uuid:round_uuid>/delete/", staff_rounds.round_delete, name="staff_round_delete"),
+    # Every version of every gameplan, by SHA-256, and the rounds that ran it.
+    path("staff/gameplans/", staff_gameplans.gameplans, name="staff_gameplans"),
     # How a gameplan plays out, simulated on the orchestrator (dashboard/views/staff_simulations.py).
     path("staff/simulations/", staff_simulations.simulations, name="staff_simulations"),
     path("staff/simulations/gameplans/", staff_simulations.simulation_gameplans, name="staff_simulation_gameplans"),

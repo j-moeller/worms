@@ -2,10 +2,16 @@
 picks from.
 
 The files are deployed to the orchestrator VM only (WORMS_GAMEPLAN_DIR, with the framework
-in WORMS_GAMEPLAN_LIB): the dashboard VM has none, and the dashboard reads nothing but the
-`gameplans` table (file names, valid or not, and each one's description: the text its author
-wrote for teams), a round's gameplan_status and the simulations staff ask for (simulations.py).
-Why a gameplan is not valid goes to the orchestrator's journal, never to the database.
+in WORMS_GAMEPLAN_LIB): the dashboard VM has none. Each check records what the orchestrator's
+copy is (core/models/rounds.py):
+
+  gameplan_versions  every version by SHA-256, its bytes, its description for teams; immutable
+  gameplan_changes   each time a file appears, becomes another version, or goes
+  gameplans          the files now, valid or not, and their versions
+  round_runs         the version each run pinned (gameplan_version)
+
+The dashboard reads all of it but a version's bytes, which only the orchestrator and the admin
+may read. Why a gameplan is not valid goes to the orchestrator's journal, never to the database.
 
 A gameplan is valid when the orchestrator's copy and the node's (the round agent's
 `gameplans` job) are the same file (SHA-256) and both find nothing wrong with it. A round's
@@ -18,9 +24,10 @@ from __future__ import annotations
 import logging
 import sys
 
-from core.models.rounds import GameplanFile, GameplanSimulation, HostJob
+from core.models.rounds import GameplanChange, GameplanFile, GameplanSimulation, GameplanVersion, HostJob, RoundRun
 from django.conf import settings
-from django.db import transaction
+from django.db import connection, transaction
+from django.db.models import F
 from django.utils import timezone
 
 log = logging.getLogger("orchestrator")
@@ -64,12 +71,12 @@ def problems(filename, duration=None, sha256=None):
     return loaded.sha256, runtime.validate(loaded.cls, duration=duration)
 
 
-def description(filename):
-    """The orchestrator's copy's description for teams (Gameplan.description); "" if it has
-    none, or if the file does not describe a sandbox (refresh() logs why it is not valid)."""
+def description(filename, source):
+    """The description for teams (Gameplan.description) of these bytes of the file; "" if it
+    has none, or if they do not describe a sandbox (refresh() logs why it is not valid)."""
     loader, runtime = framework()
     try:
-        return runtime.description(loader.load(directory(), filename).cls)
+        return runtime.description(loader.load_source(directory(), filename, source).cls)
     except Exception:  # noqa: BLE001  (the gameplan's own code; problems() reports it)
         return ""
 
@@ -87,12 +94,20 @@ def node_view():
 
 
 def refresh(node):
-    """Rewrite the `gameplans` table from the orchestrator's copy and the node's view (`node`:
-    node_view()). Returns {file: sha256} of the valid ones."""
+    """Record the orchestrator's copy (its versions, what changed, the files now) and check
+    each file against the node's view (`node`: node_view()). Returns {file: sha256} of the
+    valid ones. Each file is read once: the version recorded is those bytes, and the check
+    loads the file by that hash (a file changed meanwhile fails it until the next check)."""
     loader, _ = framework()
-    valid = {}
+    current = {}
     for name in loader.available(directory()):
-        sha, found = problems(name)
+        try:
+            current[name] = loader.read(directory(), name)
+        except Exception as error:  # noqa: BLE001  (too large, not a regular file, gone meanwhile)
+            log.warning("gameplan %s: %s", name, error)
+    valid = {}
+    for name, (_, sha) in current.items():
+        _, found = problems(name, sha256=sha)
         theirs = (node or {}).get(name)
         if theirs is None:
             found = found + ["the node has no such file (is the agent's workspace synced?)"]
@@ -104,16 +119,47 @@ def refresh(node):
             log.warning("gameplan %s: %s", name, problem)
         if not found:
             valid[name] = sha
-    descriptions = {name: description(name) for name in loader.available(directory())}
     now = timezone.now()
     with transaction.atomic():
-        GameplanFile.objects.exclude(filename__in=loader.available(directory())).delete()
-        GameplanSimulation.objects.exclude(filename__in=loader.available(directory())).delete()
-        for name in loader.available(directory()):
+        record(current)
+        GameplanFile.objects.exclude(filename__in=current).delete()
+        GameplanSimulation.objects.exclude(filename__in=current).delete()
+        for name, (_, sha) in current.items():
             GameplanFile.objects.update_or_create(
-                filename=name, defaults={"valid": name in valid, "checked_at": now, "description": descriptions[name]}
+                filename=name, defaults={"valid": name in valid, "checked_at": now, "version_id": sha}
             )
     return valid
+
+
+def record(current):
+    """Record versions not seen before and what changed ({file: (bytes, sha256)}), and link the
+    runs that pinned a version recorded only now. Plain INSERTs of the columns the orchestrator
+    fills: the time and the writing account are the database's, and the rows are never changed
+    (migration 0019)."""
+    known = set(GameplanVersion.objects.filter(sha256__in=[sha for _, sha in current.values()]).values_list("sha256", flat=True))
+    new = {}
+    for name, (source, sha) in sorted(current.items()):
+        if sha not in known and sha not in new:
+            new[sha] = (name, source, description(name, source))
+    latest = {}
+    for filename, sha in GameplanChange.objects.order_by("seen_at", "id").values_list("filename", "version_id"):
+        latest[filename] = sha
+    changes = [(name, sha) for name, (_, sha) in sorted(current.items()) if name not in latest or latest[name] != sha]
+    changes += [(name, None) for name, sha in sorted(latest.items()) if name not in current and sha is not None]
+    with connection.cursor() as cursor:
+        for sha, (name, source, text) in new.items():
+            cursor.execute(
+                "INSERT INTO gameplan_versions (sha256, filename, content, size, description) VALUES (%s, %s, %s, %s, %s) "
+                "ON CONFLICT (sha256) DO NOTHING",
+                [sha, name, source, len(source), text],
+            )
+            log.info("gameplan %s: version %s recorded (%d bytes)", name, sha[:12], len(source))
+        for name, sha in changes:
+            cursor.execute("INSERT INTO gameplan_changes (filename, sha256) VALUES (%s, %s)", [name, sha])
+    # Runs pinned before their version was recorded (before migration 0019): linked once it is.
+    RoundRun.objects.filter(gameplan_version__isnull=True, gameplan_sha256__in=GameplanVersion.objects.values("sha256")).update(
+        gameplan_version_id=F("gameplan_sha256")
+    )
 
 
 def check_round(round_, valid):

@@ -23,8 +23,11 @@ from core.models.events import EVENT_TABLES
 # types / permissions (recreated lazily, and TRUNCATE CASCADE from them would
 # wipe auth needlessly), and the event tables, which outlive a wipe: they are
 # what an investigation needs (core/events.py). Nothing refers to them, so
-# CASCADE leaves them alone.
-KEEP = {"django_migrations", "django_content_type", "django_admin_log", "auth_permission", *EVENT_TABLES}
+# CASCADE leaves them alone. The gameplan versions and their history outlive it
+# too (core/models/rounds.py): runs and the gameplans table refer to them, and
+# truncating those leaves the tables they refer to alone.
+GAMEPLAN_RECORD = ("gameplan_versions", "gameplan_changes")
+KEEP = {"django_migrations", "django_content_type", "django_admin_log", "auth_permission", *EVENT_TABLES, *GAMEPLAN_RECORD}
 
 
 def _write_db():

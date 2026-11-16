@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Gameplans{% endblock %}
+{% block content %}
+<header class="page-head">
+    <p class="page-head__kicker">Staff</p>
+    <h1 class="page-head__title">Gameplans</h1>
+    <p class="page-head__lead">Every version of every gameplan the orchestrator has seen, by its SHA-256, and the rounds that ran it. A version never changes: the database checks that the hash is its bytes' and refuses to alter or remove a row. A round pins the version of its file when its first attempt starts, and every attempt runs exactly that one (the node and the orchestrator check the hash before they run it).</p>
+</header>
+{% include "staff/_tabs.html" with section="gameplans" %}
+
+<section class="panel" aria-labelledby="files-title">
+    <header class="panel__head"><h2 class="panel__title" id="files-title">Files now</h2><p class="panel__meta">as the orchestrator's last check found them</p></header>
+    <div class="table-wrap">
+        <table class="table">
+            <thead><tr><th scope="col">File</th><th scope="col">Version</th><th scope="col">Valid</th><th scope="col">Checked</th></tr></thead>
+            <tbody>
+                {% for f in files %}
+                <tr>
+                    <th scope="row" class="mono">{{ f.filename }}</th>
+                    <td>{% if f.version_id %}<a class="mono" href="#v-{{ f.version_id }}" title="{{ f.version_id }}">{{ f.version_id|slice:":12" }}</a>{% else %}<span class="muted">not checked since the update</span>{% endif %}</td>
+                    <td>{% if f.valid %}<span class="badge badge--ok">valid</span>{% else %}<span class="badge badge--bad">invalid</span>{% endif %}</td>
+                    <td>{% if f.checked_at %}<time datetime="{{ f.checked_at|date:'c' }}" data-localtime>{{ f.checked_at|date:"Y-m-d H:i" }}</time>{% endif %}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="4" class="empty">The orchestrator lists no gameplan yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<section class="panel" aria-labelledby="versions-title">
+    <header class="panel__head"><h2 class="panel__title" id="versions-title">Versions</h2><p class="panel__meta">newest first; the bytes are for the orchestrator and the admin only</p></header>
+    <div class="table-wrap">
+        <table class="table">
+            <thead><tr><th scope="col">Version</th><th scope="col">First seen</th><th scope="col">Description for teams</th><th scope="col">Ran in</th></tr></thead>
+            <tbody>
+                {% for v in versions %}
+                <tr id="v-{{ v.sha256 }}">
+                    <th scope="row">
+                        <span class="mono" title="{{ v.sha256 }}">{{ v.sha256|slice:":12" }}</span><br>
+                        <span class="mono muted">{{ v.filename }}</span> · {{ v.size|filesizeformat }}
+                        {% for name in v.current_as %}<br><span class="badge badge--accent">now</span> <span class="mono">{{ name }}</span>{% endfor %}
+                    </th>
+                    <td><time datetime="{{ v.first_seen_at|date:'c' }}" data-localtime>{{ v.first_seen_at|date:"Y-m-d H:i" }}</time><br><span class="muted">by {{ v.recorded_by|default:"—" }}</span></td>
+                    <td>{% if v.description %}<span title="{{ v.description }}">{{ v.description|truncatechars:160 }}</span>{% else %}<span class="muted">none</span>{% endif %}</td>
+                    <td>{% for r in v.rounds %}<a href="{% url 'staff_round' r.uuid %}">{{ r.round }}</a>: {{ r.attempts }} attempt{{ r.attempts|pluralize }}, {{ r.teams }} team{{ r.teams|pluralize }}{% if not forloop.last %}<br>{% endif %}{% empty %}<span class="muted">no round yet</span>{% endfor %}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="4" class="empty">No version recorded yet: the orchestrator records them when it checks the gameplans (on start, then every 10 minutes).</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+{% if unrecorded %}
+<section class="panel" aria-labelledby="unrecorded-title">
+    <header class="panel__head"><h2 class="panel__title" id="unrecorded-title">Known by hash only</h2><p class="panel__meta">pinned before versions were recorded; their file has changed since</p></header>
+    <div class="table-wrap">
+        <table class="table">
+            <thead><tr><th scope="col">SHA-256</th><th scope="col">Ran in</th></tr></thead>
+            <tbody>
+                {% for u in unrecorded %}
+                <tr>
+                    <th scope="row" class="mono" title="{{ u.sha256 }}">{{ u.sha256|slice:":12" }}</th>
+                    <td>{% for r in u.rounds %}<a href="{% url 'staff_round' r.uuid %}">{{ r.round }}</a>: {{ r.attempts }} attempt{{ r.attempts|pluralize }}, {{ r.teams }} team{{ r.teams|pluralize }}{% if not forloop.last %}<br>{% endif %}{% endfor %}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endif %}
+
+<section class="panel" aria-labelledby="history-title">
+    <header class="panel__head"><h2 class="panel__title" id="history-title">History</h2><p class="panel__meta">each time a file appeared, became another version or went; the latest {{ history_limit }}</p></header>
+    <div class="table-wrap">
+        <table class="table">
+            <thead><tr><th scope="col">When</th><th scope="col">File</th><th scope="col">Became</th></tr></thead>
+            <tbody>
+                {% for h in history %}
+                <tr>
+                    <td><time datetime="{{ h.seen_at|date:'c' }}" data-localtime>{{ h.seen_at|date:"Y-m-d H:i" }}</time></td>
+                    <th scope="row" class="mono">{{ h.filename }}</th>
+                    <td>{% if h.version_id %}<a class="mono" href="#v-{{ h.version_id }}" title="{{ h.version_id }}">{{ h.version_id|slice:":12" }}</a>{% else %}<span class="muted">removed</span>{% endif %}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="3" class="empty">Nothing recorded yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endblock %}

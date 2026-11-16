@@ -2,6 +2,55 @@
 # Fetch what untrusted VMs install, through the cache, while the internet is open.
 # With the internet closed the cache serves only what it already holds, and those
 # VMs can get packages nowhere else.
+
+# Guard against a permanent "Hash Sum mismatch" from the cache. Left uncleared it
+# fails `apt update` on every VM, and with it every devbox build, reset and SSH
+# key change.
+#
+# apt-cacher-ng can be left holding an internally inconsistent repository index
+# when a window closes mid-refresh: a fresh InRelease that lists one Packages
+# hash, next to a stale or half-written Packages.* (and its content-addressed
+# by-hash copy) from an earlier window. Online, acng revalidates InRelease but
+# trusts a by-hash file by its name, so once such a pair is cached it serves the
+# mismatch to every offline client for good. Toggling the window (several
+# `worms build ... --packages` in a row) is enough to produce it.
+#
+# This play runs only while the internet is open (SetupPrivateInternet.yml) and
+# this VM's own apt already goes through the cache (apt_client ran first), so drop
+# the cached repository indexes and pull them back through acng: every window then
+# ends with a self-consistent index. Only the dists/ metadata goes; the package
+# pool (the .debs under pool/) is untouched, so nothing is re-downloaded.
+- name: Find the cache's repository index trees (dists/), keeping the .deb pool
+  ansible.builtin.find:
+    paths: "{{ apt_cache_cache_dir }}"
+    recurse: true
+    file_type: directory
+    patterns: dists
+  register: apt_cache_index_trees
+
+- name: Discard the cached indexes so acng refetches a consistent set
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ apt_cache_index_trees.files }}"
+  loop_control:
+    label: "{{ item.path | regex_replace('^' ~ apt_cache_cache_dir, '') }}"
+
+- name: Restart apt-cacher-ng so it drops its in-memory view of the removed files
+  ansible.builtin.systemd:
+    name: apt-cacher-ng
+    state: restarted
+  when: apt_cache_index_trees.files | length > 0
+
+- name: Re-prime the indexes through the cache (online, so the set is consistent)
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 0
+  register: apt_cache_reprime
+  until: apt_cache_reprime is succeeded
+  retries: 3
+  delay: 5
+
 - name: Create a scratch directory
   ansible.builtin.tempfile:
     state: directory

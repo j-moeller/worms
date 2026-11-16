@@ -181,6 +181,8 @@ Without them the platform has to be rebuilt. Nothing backs up the database ([6](
 | `got timeout`, `zfs create` timed out, storage lock, `Timeout (12s) waiting for privilege escalation prompt` | Run it again (a busy node) |
 | `Warning: sch_htb: quantum of class ... is big` when a devbox starts | Harmless: the kernel's note on the devbox NICs' rate limit. The build starts the devboxes at its end whether it succeeded or not: look for `== setup complete` or the first `fatal:` above |
 | Every dashboard page answers 500 after deploying the dashboard alone (`column ... does not exist`) | The code needs a migration only the orchestrator runs: `worms build dashboard orchestrator`. `worms build dashboard` now brings both along by itself |
+| `permission denied for table gameplan_versions` (or another new table) in `orchestrator-conduct-rounds`' journal right after a build | The conductor restarted after the migrations, before the grants play. It retries at its next gameplan check (10 min); `sudo systemctl restart orchestrator-conduct-rounds` on the orchestrator checks at once |
+| `the node has no such file` for a gameplan the node has | The round agent running then is older than the file (new agent code needs a restart): `systemctl restart worms-round-agent` on the node, then restart the conductor as above |
 | `unknown job kind: 'gameplans'` in the orchestrator's journal | The node still runs the old round agent: the build stopped before its playbook. Run `worms build` again |
 | `dataset already exists` | A leftover volume: `pvesm free <storage>:<volume>` |
 | `known_hosts has lines OpenTofu's Proxmox provider cannot read` | Delete the lines it names from `/root/.ssh/known_hosts` |

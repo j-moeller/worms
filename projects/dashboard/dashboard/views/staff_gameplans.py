@@ -14,26 +14,30 @@ from collections import defaultdict
 from core.models.rounds import GameplanChange, GameplanFile, GameplanVersion, RoundRun
 from dashboard.views.decorators import staff_required
 from dashboard.views.util import render_with_base_info
-from django.db.models import Count, Max, Min
+from django.db.models import Count, Max, Min, Q
 from django.http import HttpRequest
 
 HISTORY = 200  # the latest changes shown
 
 
 def usage():
-    """{sha256: [{round, uuid, attempts, teams, first, last}]}: the rounds whose runs pinned
-    each version, oldest first."""
+    """{sha256: [{round, uuid, attempts, teams, planned, first, last}]}: the rounds whose runs
+    pinned each version, oldest first. An attempt ran the version (it started); a skipped run
+    (no upload) never did, and a pending one has yet to (`planned`)."""
+    started = ~Q(state__in=[RoundRun.State.PENDING, RoundRun.State.SKIPPED])
     rows = (
-        RoundRun.objects.exclude(gameplan_sha256="")
+        RoundRun.objects.exclude(gameplan_sha256="").exclude(state=RoundRun.State.SKIPPED)
         .values("gameplan_sha256", "round__uuid", "round__name")
-        .annotate(attempts=Count("id"), teams=Count("team", distinct=True), first=Min("created_at"), last=Max("created_at"))
+        .annotate(attempts=Count("id", filter=started), teams=Count("team", distinct=True, filter=started),
+                  planned=Count("id", filter=Q(state=RoundRun.State.PENDING)),
+                  first=Min("created_at"), last=Max("created_at"))
         .order_by("first")
-    )
+    )  # fmt: skip
     out = defaultdict(list)
     for row in rows:
         out[row["gameplan_sha256"]].append({
             "round": row["round__name"], "uuid": row["round__uuid"], "attempts": row["attempts"],
-            "teams": row["teams"], "first": row["first"], "last": row["last"],
+            "teams": row["teams"], "planned": row["planned"], "first": row["first"], "last": row["last"],
         })  # fmt: skip
     return out
 

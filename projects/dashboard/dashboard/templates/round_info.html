@@ -16,8 +16,14 @@ paragraphs; a gameplan without one shows only the facts.{% endcomment %}
 </header>
 
 {% if round %}
-{% if not running and state.warning and request.team %}
-<p class="alert alert--warn">Your team has no upload for this round yet. <a href="{% url 'upload' %}">Upload your worm</a> before it starts.</p>
+{% if not running and request.team %}
+{% if not upload %}
+<p class="alert alert--warn">Your team has no upload yet: <a href="{% url 'upload' %}">upload your worm</a> before the start, or your team sits this round out.</p>
+{% elif upload_before_last_round %}
+<p class="alert alert--warn">Your team has not uploaded since the last round: your upload from <time datetime="{{ upload.created_at|date:'c' }}" data-localtime>{{ upload.created_at|date:"Y-m-d H:i" }} UTC</time> takes part again, unless you <a href="{% url 'upload' %}">upload a newer one</a> before the start.</p>
+{% else %}
+<p class="alert alert--info">Your upload from <time datetime="{{ upload.created_at|date:'c' }}" data-localtime>{{ upload.created_at|date:"Y-m-d H:i" }} UTC</time> takes part, unless you <a href="{% url 'upload' %}">upload a newer one</a> before the start.</p>
+{% endif %}
 {% endif %}
 
 {% if description %}

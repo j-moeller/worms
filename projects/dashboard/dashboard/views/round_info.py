@@ -12,6 +12,7 @@ round's facts only.
 from __future__ import annotations
 
 from core.models.rounds import round_gameplan
+from core.models.worms import Upload
 from dashboard.views.util import render_with_base_info
 from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest
@@ -37,4 +38,12 @@ def round_info(request: HttpRequest):
     if rnd is not None:
         context["description"] = round_gameplan(rnd)["description"]
         context["duration"] = duration_text(rnd.team_duration)
+        if state.next_round is not None and request.team is not None:
+            # What takes part (orchestrator/rounds/planner.py): the team's latest Live upload
+            # from before the start, however old.
+            upload = Upload.objects.filter(team=request.team, devbox=False).order_by("-created_at", "-id").first()
+            context["upload"] = upload
+            context["upload_before_last_round"] = bool(
+                upload and state.prev_round and state.prev_round.round_start and upload.created_at < state.prev_round.round_start
+            )
     return render_with_base_info(request, "round_info.html", context)

@@ -33,7 +33,7 @@
     <header class="panel__head"><h2 class="panel__title" id="versions-title">Versions</h2><p class="panel__meta">newest first; the bytes are for the orchestrator and the admin only</p></header>
     <div class="table-wrap">
         <table class="table">
-            <thead><tr><th scope="col">Version</th><th scope="col">First seen</th><th scope="col">Description for teams</th><th scope="col">Ran in</th></tr></thead>
+            <thead><tr><th scope="col">Version</th><th scope="col">First seen</th><th scope="col">Description for teams</th><th scope="col">Ran in (attempts that started)</th></tr></thead>
             <tbody>
                 {% for v in versions %}
                 <tr id="v-{{ v.sha256 }}">
@@ -44,7 +44,7 @@
                     </th>
                     <td><time datetime="{{ v.first_seen_at|date:'c' }}" data-localtime>{{ v.first_seen_at|date:"Y-m-d H:i" }}</time><br><span class="muted">by {{ v.recorded_by|default:"—" }}</span></td>
                     <td>{% if v.description %}<span title="{{ v.description }}">{{ v.description|truncatechars:160 }}</span>{% else %}<span class="muted">none</span>{% endif %}</td>
-                    <td>{% for r in v.rounds %}<a href="{% url 'staff_round' r.uuid %}">{{ r.round }}</a>: {{ r.attempts }} attempt{{ r.attempts|pluralize }}, {{ r.teams }} team{{ r.teams|pluralize }}{% if not forloop.last %}<br>{% endif %}{% empty %}<span class="muted">no round yet</span>{% endfor %}</td>
+                    <td>{% for r in v.rounds %}<a href="{% url 'staff_round' r.uuid %}">{{ r.round }}</a>: {{ r.attempts }} attempt{{ r.attempts|pluralize }}, {{ r.teams }} team{{ r.teams|pluralize }}{% if r.planned %}, {{ r.planned }} to come{% endif %}{% if not forloop.last %}<br>{% endif %}{% empty %}<span class="muted">no round yet</span>{% endfor %}</td>
                 </tr>
                 {% empty %}
                 <tr><td colspan="4" class="empty">No version recorded yet: the orchestrator records them when it checks the gameplans (on start, then every 10 minutes).</td></tr>
@@ -64,7 +64,7 @@
                 {% for u in unrecorded %}
                 <tr>
                     <th scope="row" class="mono" title="{{ u.sha256 }}">{{ u.sha256|slice:":12" }}</th>
-                    <td>{% for r in u.rounds %}<a href="{% url 'staff_round' r.uuid %}">{{ r.round }}</a>: {{ r.attempts }} attempt{{ r.attempts|pluralize }}, {{ r.teams }} team{{ r.teams|pluralize }}{% if not forloop.last %}<br>{% endif %}{% endfor %}</td>
+                    <td>{% for r in u.rounds %}<a href="{% url 'staff_round' r.uuid %}">{{ r.round }}</a>: {{ r.attempts }} attempt{{ r.attempts|pluralize }}, {{ r.teams }} team{{ r.teams|pluralize }}{% if r.planned %}, {{ r.planned }} to come{% endif %}{% if not forloop.last %}<br>{% endif %}{% endfor %}</td>
                 </tr>
                 {% endfor %}
             </tbody>

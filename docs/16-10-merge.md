@@ -99,11 +99,16 @@ During and after the deploy, old and new parts can meet:
 5. **Plan, then build** the database, orchestrator, dashboard and round agent:
    - `worms build --plan dashboard round-agent`. Expect `database` and `orchestrator` with "configure again: the database lacks migrations", a note naming the 8 migrations, `dashboard` and `round-agent`.
    - `worms build dashboard round-agent`. One Ansible run configures the database, orchestrator and dashboard together: the orchestrator migrates (its services stopped), the dashboard restarts, the grants are applied, the conductor restarts. Then the node's play: workspace, `python3-cryptography`, the unit.
-6. **Restart the round agent** on the node, while `worms status jobs` shows nothing running:
+6. **Restart the round agent** on the node, while `worms status jobs` shows nothing running, **then the conductor** on the orchestrator (`worms login orchestrator`):
    ```sh
    systemctl restart worms-round-agent
    journalctl -u worms-round-agent -n 20
    ```
+   ```sh
+   sudo systemctl restart orchestrator-conduct-rounds
+   sudo journalctl -u orchestrator-conduct-rounds -n 20   # "version ... recorded" for each gameplan
+   ```
+   The conductor restarts during the build right after the migrations, before the grants play gives it the new tables. Its first gameplan check then fails (`permission denied for table gameplan_versions`), and the next one comes 10 minutes later. Restarting it, after the agent, makes it check at once, against an agent that lists every file. Seen on worms-dev on 2026-11-16: the agent still running then predated `credential_chain.py` and left it out (`the node has no such file`).
 7. **Fill the private internet:** `worms build apt-cache devpi --packages`.
    - This opens the internet window and shuts the devboxes down. Both VMs are rolled back to `clean`, seeded, put back into offline mode and snapshotted as `clean` again.
    - The apt cache refetches its indexes and the new packages. devpi fetches 116 packages in 10 batches. On worms-dev, the batches took 4–5 minutes straight from PyPI; through devpi it takes longer.

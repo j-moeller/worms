@@ -177,11 +177,21 @@ class RoundOne(Gameplan):                       # gameplans/round_one.py
 
 - **VMs.** Assign them to `self.<attr>`; the VM is then named `sandbox-<attr>`, with `_` becoming `-`. A list becomes `sandbox-<attr>-<i>`. `gw` is reserved.
 - **VM classes.**
-  - `BasicVM(cores=1, memory=512, disk=5)`: Debian 13. Class attributes `packages`, `remove`, `files`, `setup` (root shell commands) and `services`; per instance, `install()`, `uninstall()`, `add_setup()`, `add_service()` and `add_user()`.
+  - `BasicVM(cores=1, memory=512, disk=5)`: Debian 13. Class attributes `packages`, `files`, `setup` (root shell commands), `remove`, `purge` and `services`; per instance, `install()`, `uninstall()`, `add_setup()`, `add_service()` and `add_user()`.
   - `DjangoVM`: a Django project served by gunicorn on :8000.
   - `PostgreVM`: PostgreSQL on :5432, password logins from the sandbox networks.
   - Subclass `BasicVM` for your own.
+- **The build, in order** ([`sandbox_vm`](../ansible/roles/applications/sandbox_vm/tasks/main.yml)): packages, users, files, setup commands, removals, services. The snapshot every run starts from is taken after that.
 - **Packages.** Every package must be in `apt_cache_seed_packages` ([`apt_cache/defaults`](../ansible/roles/private_internet/apt_cache/defaults/main.yml)): VMs install from the offline apt cache. After adding one, refill the cache: `worms build apt-cache --packages`, outside a round.
+- **Removing packages.** `vm.uninstall(*packages, purge=False)`, or the class's `remove` and `purge`.
+  - Removed after the setup commands, so a setup step can still use what goes: `install("gcc", "libc6-dev")`, compile in `add_setup`, `uninstall("gcc", "libc6-dev", purge=True)`. `purge` also removes the configuration files.
+  - Nothing a VM needs can go: `openssh-server`, `sudo`, `python3`, `systemd`, `ca-certificates` and the rest of `PROTECTED_PACKAGES` ([`definition.py`](../src/gameplan/definition.py)), nor what one of the gameplan's logins needs (`vsftpd` for an FTP login, ...). Validation refuses those names.
+  - The build asks apt first what a removal would take with it (its dependents) and fails before removing anything if that includes a protected package. A package that is not installed is skipped.
+- **Users.** `add_user(vms, user, shell=None, groups=None, sudo=None)` (or `vm.add_user(user, …)`): made when the sandbox is built, locked, with no key. A login's user is made by the login; call `add_user` as well for the options.
+  - `shell`: `/bin/bash` (default), `/bin/sh`, `/bin/rbash` (restricted: no `cd`, no `/` in commands), or `/usr/sbin/nologin` for a user nothing logs in as (validation refuses it for a user with a login).
+  - `groups`: supplementary groups, made if missing. In `sudo`, the user may sudo with its own password.
+  - `sudo`: `True` (anything, no password), or a list of commands run as root without a password (`["/usr/bin/find"]`): a step up for a worm that knows its GTFOBins.
+  - Called again for the same user, the groups add up; a different shell or sudo rule is an error. `root` and `debian` are the image's and cannot be changed.
 - **`register_network(vms, name=None)`.**
   - The N-th network gets the N-th /24 of 10.64.0.0/10 and bridge `vmbr<1000+N>`.
   - Addresses are .10–.249, in a fixed shuffle.
@@ -197,19 +207,33 @@ class RoundOne(Gameplan):                       # gameplans/round_one.py
   | Call | Gives | In a file |
   |---|---|---|
   | `generate_ssh_key(name="id_ed25519", type="ed25519"\|"rsa"\|"ecdsa")` | a key pair; `name` is its file name in `~/.ssh` | `key.private`, `key.public` |
-  | `generate_ssh_pwd_login(user=None)` | a user and a password | `login.user`, `login.pwd` |
+  | `generate_login(user=None, length=None, charset=None)` (also `generate_ssh_pwd_login`) | a user and a password: long and random, or as weak as `length`/`charset` say, for a worm to guess (`length=4, charset="digits"`) | `login.user`, `login.pwd` |
   | `generate_password(length=16, charset="alnum"\|"digits"\|"hex")` | a password of no user, itself a string | `pw` |
   | `generate_totp(account, issuer="worms", digits=6, period=30, algorithm="SHA1")` | an authenticator's seed | `totp.secret`, `totp.uri` (`otpauth://…`) |
 
-- **Logins.** Each makes its user on the VM if it is new. The node's own SSH access stays key-only, and open the ports with firewall rules.
+- **Logins.** Each makes its user on the VM if it is new; `add_user` sets its shell, groups and sudo. A password login admits only its own users: a user with a password for `su` does not get in over telnet or FTP. The node's own SSH access stays key-only. Open the ports with firewall rules.
 
   | Call | The worm needs |
   |---|---|
   | `add_ssh_key_login(vms, key, user="debian")` | the private key (`add_public_ssh_key` alone, for an existing user) |
   | `add_ssh_pwd_login(vms, login)` | the password; only these users may use one over SSH |
   | `add_ssh_totp_login(vms, key, totp, user)` | the private key **and** the current code ([`pam_google_authenticator`](https://github.com/google/google-authenticator-libpam), ±8 codes). Only `user` is asked for one |
-  | `add_telnet_login(vms, login)` | the password, on port 23 (`inetutils-telnetd` under inetd) |
+  | `add_telnet_login(vms, login)` | the password, on port 23 (`inetutils-telnetd` under inetd; PAM service `remote`, with a list of the telnet users) |
+  | `add_ftp_login(vms, login)` | the password, on port 21 (`vsftpd`), passive mode on `FTP_PASSIVE_PORTS` (40000–40019: open them too). Read and write wherever the user may, not chrooted: fetch a file, or put `~/.ssh/authorized_keys` and log in over SSH |
+  | `add_local_login(vms, login)` | the password, from the VM itself: `su`, and `sudo` for a user in the group `sudo`. No way in from outside |
   | `add_private_ssh_key(vms, key, user="debian")` | nothing: puts `~/.ssh/<name>` (0600) there for the worm to find |
+
+  Users, logins and sudo rules make steps up on one VM. The numbers are the worm's steps:
+
+  ```python
+  pi = self.generate_login("pi", length=4, charset="digits")         # 1. guess pi's PIN over telnet
+  self.add_telnet_login(self.box, pi)
+  self.add_user(self.box, "pi", shell="/bin/rbash", sudo=["/usr/bin/cat /root/notes"])  # 2. read one root file
+  admin = self.generate_login("admin")
+  self.box.write_file("/root/notes", f"admin: {admin.pwd}\n", owner="root", mode=0o600)
+  self.add_user(self.box, "admin", groups=["sudo"])
+  self.add_local_login(self.box, admin)                                # 3. su admin, then sudo: root
+  ```
 
 - **`vm.write_file(path, content, mode=0o644, owner="debian", at_reset=True)`** (or `self.write_file(vm, path, …)`) returns a `FileHandle`.
   - `~` is the owner's home. The owner is root, debian, or a user of that VM.

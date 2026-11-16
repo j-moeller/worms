@@ -156,6 +156,15 @@ A later deploy gives every row a new UUID, so links handed out meanwhile change 
 
 **The private internet** needs no rollback: production's code works with the larger caches.
 
+## Since this review
+
+**The gameplan framework's users, FTP and local logins, and removals** (after `21976d9`) change nothing in the procedure above. There is no migration and no new secret. The changes:
+- `apt_cache_seed_packages` lists `vsftpd`. Step 7 fetches it; it is needed only by a gameplan with an FTP login.
+- The sandbox build ([`sandbox_vm`](../ansible/roles/applications/sandbox_vm/tasks/main.yml)) now removes packages after the setup commands, not before them. It also refuses a removal that would take a package every VM needs.
+- Telnet admits only the users of telnet logins.
+
+None of this alters round_one or `credential_chain.py`: neither removes a package, and `credential_chain.py`'s only telnet user is its telnet login. The round agent has to be restarted after the deploy (step 6) all the more: the new `sandbox_vm` role reads `accounts` and `purge`, which only the new `build.py` writes.
+
 ## Worth doing, not needed for this deploy
 
 - **Restart the round agent when its code changes.** Neither the sync nor `worms build round-agent` does it today. A handler on the sync task would remove step 6 and the risk above.

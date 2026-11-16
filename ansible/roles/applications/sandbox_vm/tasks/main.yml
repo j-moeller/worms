@@ -4,10 +4,16 @@
 # team's run starts from, so before any team. The values come from the gameplan file on the
 # node and arrive tagged !unsafe (scripts/round_agent/handlers.py): none of it is templated.
 # Packages come from the private apt cache: a gameplan's must be in apt_cache_seed_packages.
+#
+# In order: packages, users (groups, shells, sudo rules), SSH password logins, files, setup
+# commands, removals (after the setup, which may still use what goes), services.
 
 - name: The gameplan's part for this VM
   ansible.builtin.set_fact:
     sandbox_vm: "{{ sandbox_vm_config[inventory_hostname] | default({}) }}"
+    sandbox_vm_removed: >-
+      {{ (sandbox_vm_config[inventory_hostname] | default({})).uninstall | default([])
+         + (sandbox_vm_config[inventory_hostname] | default({})).purge | default([]) }}
 
 - name: Install the gameplan's packages
   when: sandbox_vm.install | default([]) | length > 0
@@ -18,20 +24,40 @@
     update_cache: true
     cache_valid_time: 3600
 
-- name: Remove the packages it removes
-  when: sandbox_vm.uninstall | default([]) | length > 0
-  ansible.builtin.apt:
-    name: "{{ sandbox_vm.uninstall }}"
-    state: absent
+# Before the users that are put in them. A group that exists (sudo, adm, ...) stays as it is.
+- name: Create the groups of the gameplan's users
+  ansible.builtin.group:
+    name: "{{ item }}"
+    state: present
+  loop: >-
+    {{ (sandbox_vm.accounts | default({})).values() | map(attribute='groups') | flatten | unique }}
 
 # The gameplan's users (its logins' and its files' owners). Locked here: every run sets a new
 # password or key (the agent, before the worm), and the snapshot holds none.
 - name: Create the gameplan's users
   ansible.builtin.user:
     name: "{{ item }}"
-    shell: /bin/bash
+    shell: "{{ (sandbox_vm.accounts | default({}))[item].shell | default('/bin/bash') }}"
+    groups: "{{ ((sandbox_vm.accounts | default({}))[item].groups | default([])) or omit }}"
+    append: true
     create_home: true
     password: "!"
+  loop: "{{ sandbox_vm.users | default([]) }}"
+
+# sudo rules of the gameplan (Gameplan.add_user sudo=): everything, or some commands as root,
+# without a password. visudo checks each file before it is put in place.
+- name: Give the gameplan's users their sudo rules
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/worms-{{ item }}"
+    content: |
+      {{ item }} ALL={{ '(ALL:ALL) NOPASSWD: ALL' if 'ALL' in sandbox_vm_sudo else '(root) NOPASSWD: ' ~ (sandbox_vm_sudo | join(', ')) }}
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+  vars:
+    sandbox_vm_sudo: "{{ (sandbox_vm.accounts | default({}))[item].sudo | default([]) }}"
+  when: sandbox_vm_sudo | length > 0
   loop: "{{ sandbox_vm.users | default([]) }}"
 
 # Only the users of SSH password logins may log in with a password; everyone else keeps keys
@@ -69,6 +95,47 @@
     index_var: sandbox_vm_step
     label: "setup command {{ sandbox_vm_step + 1 }}"
   changed_when: true
+
+# apt removes whatever depends on a removed package as well, so a removal can reach further than
+# the names the gameplan gives (the gameplan's validation checks only those). Ask apt first
+# what would go, and refuse if that includes what the node, Ansible or the worm need. Packages
+# that are not installed are left out: removing them changes nothing.
+- name: Find what the removals would take with them
+  when: sandbox_vm_removed | length > 0
+  ansible.builtin.command:
+    argv: "{{ ['/bin/sh', '-c', sandbox_vm_removal_check, 'sh'] + sandbox_vm_removed }}"
+  vars:
+    sandbox_vm_removal_check: >-
+      installed=$(dpkg-query -W -f='${db:Status-Status} ${Package}\n' "$@" 2>/dev/null
+      | awk '$1 == "installed" { print $2 }');
+      [ -n "$installed" ] || exit 0;
+      out=$(apt-get -s -q remove $installed 2>&1) || { printf '%s\n' "$out" >&2; exit 1; };
+      printf '%s\n' "$out" | awk '/^Remv / { sub(/:.*/, "", $2); print $2 }'
+  register: sandbox_vm_removals
+  changed_when: false
+
+- name: Refuse a removal that takes what every sandbox VM needs
+  when: sandbox_vm_removed | length > 0
+  ansible.builtin.assert:
+    that: sandbox_vm_removals.stdout_lines | intersect(sandbox_vm_protected_packages) | length == 0
+    fail_msg: >-
+      Removing {{ sandbox_vm_removed | join(', ') }} would also remove
+      {{ sandbox_vm_removals.stdout_lines | intersect(sandbox_vm_protected_packages) | join(', ') }}, which
+      every sandbox VM needs (src/gameplan/definition.py, PROTECTED_PACKAGES).
+    quiet: true
+
+- name: Remove the packages it removes
+  when: sandbox_vm.uninstall | default([]) | length > 0
+  ansible.builtin.apt:
+    name: "{{ sandbox_vm.uninstall }}"
+    state: absent
+
+- name: Purge the packages it purges (with their configuration)
+  when: sandbox_vm.purge | default([]) | length > 0
+  ansible.builtin.apt:
+    name: "{{ sandbox_vm.purge }}"
+    state: absent
+    purge: true
 
 - name: Enable and start the VM's services
   ansible.builtin.systemd_service:

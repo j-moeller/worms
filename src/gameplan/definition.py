@@ -51,6 +51,8 @@ LIMITS = {
     "file_size": 64 * 1024,
     "command_size": 4096,
     "round_duration": (60, 7 * 86400),
+    "groups": 16,  # per user
+    "sudo_commands": 16,  # per user
 }
 
 VM_ATTRIBUTE = re.compile(r"^[a-z](?:[a-z0-9_]{0,39}[a-z0-9])?$")
@@ -67,6 +69,25 @@ RESERVED_USERS = {
 }  # fmt: skip
 KEY_TYPES = ("ed25519", "rsa", "ecdsa")
 
+# A user's login shell (Gameplan.add_user). nologin: the user owns files or runs a service, and
+# no login works for it. rbash: bash, restricted (no cd, no / in commands, no changing PATH).
+SHELLS = ("/bin/bash", "/bin/sh", "/bin/rbash", "/usr/sbin/nologin")
+DEFAULT_SHELL = "/bin/bash"
+NOLOGIN = "/usr/sbin/nologin"
+# A command a sudo rule allows (Gameplan.add_user sudo=[...]): an absolute path, then words. No
+# commas, quotes, backslashes or wildcards a rule could be widened with, beyond sudoers' own `*`.
+SUDO_COMMAND = re.compile(r"^/[A-Za-z0-9._+/-]+(?: [A-Za-z0-9._+/=:@*-]+)*$")
+
+# What every sandbox VM keeps, whatever a gameplan removes: the node logs in over SSH as the
+# image's user and becomes root with sudo, Ansible needs Python, the agent systemd, coreutils and
+# chpasswd, the worm bash and Python, scoring is HTTPS (ca-certificates), the VM's network comes
+# from cloud-init. The sandbox build also refuses a removal that would take one of these with it
+# (roles/applications/sandbox_vm), as apt resolves dependencies there.
+PROTECTED_PACKAGES = frozenset({
+    "apt", "base-files", "bash", "ca-certificates", "cloud-init", "coreutils", "dpkg", "libc6", "libpam-modules",
+    "libpam-runtime", "login", "netplan.io", "openssh-server", "passwd", "python3", "python3-minimal", "sudo",
+    "systemd", "systemd-sysv", "util-linux",
+})  # fmt: skip
 # A per-run secret inside a file's content: replaced on the node, when the file is written.
 SECRET_MARKER = re.compile(r"@@worms-secret:([a-z0-9]+)\.([a-z]+)@@")
 PASSWORD_CHARSETS = ("alnum", "digits", "hex")
@@ -90,8 +111,46 @@ TOTP_SETUP = (
 )
 
 # Telnet (Gameplan.add_telnet_login): inetutils-telnetd registers itself with inetd switched off
-# (#<off># in /etc/inetd.conf); this switches it on, behind tcpd as the package means it.
-TELNET_SETUP = "set -e; update-inetd --enable telnet; grep -q '^telnet' /etc/inetd.conf; systemctl restart inetutils-inetd"
+# (#<off># in /etc/inetd.conf); this switches it on, behind tcpd as the package means it. telnetd
+# hands over to `login -h <host>`, and Debian 13's login (util-linux) asks PAM for the service
+# `remote` then. Debian ships none, so PAM would fall back to `other`: any user with a password.
+# This makes `remote` login's stack with a list in front, so only the users of telnet logins get
+# in, not a user whose password is for su or FTP. Console logins (`login`) stay as they are.
+TELNET_USERS = "/etc/worms-telnet-users"
+TELNET_SETUP = (
+    f"set -e; touch {TELNET_USERS}; [ -e /etc/pam.d/remote ] || cp /etc/pam.d/login /etc/pam.d/remote; "
+    f"grep -q worms-telnet-users /etc/pam.d/remote || "
+    f"sed -i '1i auth required pam_listfile.so item=user sense=allow file={TELNET_USERS} onerr=fail' /etc/pam.d/remote; "
+    "update-inetd --enable telnet; grep -q '^telnet' /etc/inetd.conf; systemctl restart inetutils-inetd"
+)
+
+# FTP (Gameplan.add_ftp_login): vsftpd, local users with their password, read and write, not
+# chrooted (Debian's default). Only the users of FTP logins get in (userlist_deny=NO); the PAM
+# service also wants a shell listed in /etc/shells. Passive mode only, on these ports: a firewall
+# rule has to open them as well as 21.
+FTP_PASSIVE_PORTS = (40000, 40019)
+FTP_USERS = "/etc/vsftpd.user_list"
+FTP_CONF = f"""# Written by the gameplan framework (Gameplan.add_ftp_login).
+listen=YES
+listen_ipv6=NO
+anonymous_enable=NO
+local_enable=YES
+write_enable=YES
+local_umask=022
+dirmessage_enable=YES
+use_localtime=YES
+xferlog_enable=YES
+port_enable=NO
+pasv_enable=YES
+pasv_min_port={FTP_PASSIVE_PORTS[0]}
+pasv_max_port={FTP_PASSIVE_PORTS[1]}
+secure_chroot_dir=/var/run/vsftpd/empty
+pam_service_name=vsftpd
+ssl_enable=NO
+userlist_enable=YES
+userlist_deny=NO
+userlist_file={FTP_USERS}
+"""
 
 Allow = "ACCEPT"
 Deny = "DROP"
@@ -121,11 +180,13 @@ class SSHKey:
 
 
 class PasswordLogin:
-    """A user with a password, generated for every run (`Gameplan.generate_ssh_pwd_login`). The
-    user name is fixed; `pwd` (or `password`) stands for the run's password."""
+    """A user with a password, generated for every run (`Gameplan.generate_login`). The user name
+    is fixed; `pwd` (or `password`) stands for the run's password. The logins (add_ssh_pwd_login,
+    add_telnet_login, add_ftp_login, add_local_login) put it on VMs."""
 
-    def __init__(self, ident, user):
+    def __init__(self, ident, user, length=None, charset=None):
         self.id, self.user = ident, user
+        self.length, self.charset = length, charset  # None: a long random one
         self.pwd = self.password = Secret(ident, "password")
 
     def __repr__(self):
@@ -297,14 +358,15 @@ class BasicVM:
     """A Debian VM. Subclasses describe what else it runs (DjangoVM, PostgreVM below):
 
         packages  installed from the private apt cache when the sandbox is built
-        remove    packages removed then
         files     {path: content} written then (no per-run secrets)
-        setup     shell commands then, as root, after the packages and files
-        services  systemd units enabled and running then
+        setup     shell commands then, as root, after the packages, users and files
+        remove    packages removed then, after the setup commands (which may still use them)
+        purge     packages removed with their configuration, as `remove`
+        services  systemd units enabled and running then, last
 
     The resources are the class's unless given: BasicVM(cores=2, memory=1024, disk=8).
     `install`/`uninstall`, `add_setup` and `add_service` add to them for one VM, and
-    `add_user(user)` makes a user (the owner of files and logins).
+    `add_user(user, shell=, groups=, sudo=)` makes a user (the owner of files and logins).
 
     Per run: `write_file(path, content)`, text or a document, archive or vault (also
     Gameplan.write_file).
@@ -318,6 +380,7 @@ class BasicVM:
     disk = 5  # GB
     packages: tuple = ()
     remove: tuple = ()
+    purge: tuple = ()
     files: dict = {}
     setup: tuple = ()
     services: tuple = ()
@@ -329,7 +392,9 @@ class BasicVM:
         self.disk = cls.disk if disk is None else disk
         self.image = cls.image if image is None else image
         self._install = list(cls.packages)
-        self._uninstall = list(cls.remove)
+        self._purge = list(cls.purge)
+        self._uninstall = [p for p in cls.remove if p not in self._purge]
+        self._required = set()  # packages a login of the gameplan needs here: never removed
         self._files = dict(cls.files)
         self._setup = list(cls.setup)
         self._services = list(cls.services)
@@ -347,9 +412,25 @@ class BasicVM:
         self._defining("install")
         self._install.extend(p for p in packages if p not in self._install)
 
-    def uninstall(self, *packages):
+    def uninstall(self, *packages, purge=False):
+        """Packages removed when the sandbox is built, after the setup commands: a package
+        installed for them (a compiler, say) can go again. `purge=True` removes their
+        configuration files too. What the platform needs on every VM cannot be removed
+        (PROTECTED_PACKAGES), nor what one of the gameplan's logins needs."""
         self._defining("uninstall")
-        self._uninstall.extend(p for p in packages if p not in self._uninstall)
+        for package in packages:
+            if purge:
+                if package in self._uninstall:
+                    self._uninstall.remove(package)
+                if package not in self._purge:
+                    self._purge.append(package)
+            elif package not in self._uninstall and package not in self._purge:
+                self._uninstall.append(package)
+
+    def _require(self, *packages):
+        """Install packages a login needs, and keep them from being removed."""
+        self.install(*packages)
+        self._required.update(packages)
 
     def add_setup(self, *commands):
         """Shell commands run as root when the sandbox is built, after the class's own."""
@@ -366,10 +447,11 @@ class BasicVM:
             raise GameplanError(f"{self!r}.{what}(): assign the VM to self.<name> first")
         return self._plan.gameplan
 
-    def add_user(self, user):
+    def add_user(self, user, *, shell=None, groups=None, sudo=None):
         """A user on this VM, made when the sandbox is built: no password, no key. Logins give
-        it one (add_ssh_key_login, ...); files can be its own (write_file owner=)."""
-        self._gameplan("add_user").add_user(self, user)
+        it one (add_ssh_key_login, ...); files can be its own (write_file owner=). The options
+        are Gameplan.add_user's."""
+        self._gameplan("add_user").add_user(self, user, shell=shell, groups=groups, sudo=sudo)
 
     def write_file(self, path, content, mode=0o644, owner=DEFAULT_USER, at_reset=True):
         """A file on this VM, made for every run (Gameplan.write_file): text, or a document,
@@ -528,6 +610,7 @@ class _Plan:
         self.files: list[FileHandle] = []
         self.logins: dict[str, list] = {}  # VM name -> PasswordLogins on it (their password set every run)
         self.users: dict[str, list] = {}  # VM name -> users made when the sandbox is built
+        self.accounts: dict[tuple, dict] = {}  # (VM name, user) -> {shell, groups, sudo} as add_user gave them
         self.ssh_password: dict[str, list] = {}  # VM name -> users who may log in over SSH with a password
         self.watched: list[tuple] = []  # (VM, path) execute() may read besides the files it writes
         self.entrypoint = None
@@ -608,13 +691,15 @@ class _Plan:
                 "memory": vm.memory, "disk": vm.disk,
                 "maintenance": f"{MAINTENANCE_NETWORK.network_address + MAINTENANCE_FIRST_HOST + index}/{MAINTENANCE_NETWORK.prefixlen}",
                 "nics": nics,
-                "install": list(vm._install), "uninstall": list(vm._uninstall),
+                "install": list(vm._install), "uninstall": list(vm._uninstall), "purge": list(vm._purge),
                 "files": [{"path": p, "content": c} for p, c in sorted(vm._files.items())],
                 "setup": list(vm._setup), "services": list(vm._services),
                 "users": list(self.users.get(vm.name, [])),
+                "accounts": {user: self._account(vm, user) for user in self.users.get(vm.name, [])},
                 "ssh_password_users": list(self.ssh_password.get(vm.name, [])),
                 "firewall": [],
             })  # fmt: skip
+            errors += self._login_problems(vm)
         by_name = {vm["name"]: vm for vm in vms}
         for targets, rule in self.rules:
             for vm in targets:
@@ -633,7 +718,10 @@ class _Plan:
             elif isinstance(secret, Password):
                 secrets.append({"id": secret.id, "kind": "password", "length": secret.length, "charset": secret.charset})
             else:
-                secrets.append({"id": secret.id, "kind": "password", "user": secret.user})
+                entry = {"id": secret.id, "kind": "password", "user": secret.user}
+                if secret.charset is not None:
+                    entry.update(length=secret.length, charset=secret.charset)
+                secrets.append(entry)
         known_secrets = {(s.id, f) for s in self.secrets for f in _fields(s)}
 
         setup = []
@@ -700,6 +788,26 @@ class _Plan:
             "dport": None if rule.port is None else _dport(rule.port), "peers": sorted(set(peers)),
         }  # fmt: skip
 
+    def _account(self, vm, user):
+        """A user's settings on a VM, with the defaults filled in."""
+        settings = self.accounts.get((vm.name, user), {})
+        return {
+            "shell": settings.get("shell") or DEFAULT_SHELL,
+            "groups": list(settings.get("groups", [])),
+            "sudo": list(settings.get("sudo") or []),
+        }
+
+    def _login_problems(self, vm):
+        """A user that something logs in as needs a shell: login(1), sshd, su and vsftpd's PAM
+        all refuse nologin."""
+        with_login = {login.user for login in self.logins.get(vm.name, [])}
+        with_login |= {user for op, on, _, user in self.setup if op == "public_key" and on is vm}
+        return [
+            f"{vm.name}: {user} has a login, so its shell cannot be {NOLOGIN}"
+            for user in self.users.get(vm.name, [])
+            if user in with_login and self._account(vm, user)["shell"] == NOLOGIN
+        ]
+
     def _vm_problems(self, vm):
         out = []
         name = vm.name
@@ -709,9 +817,15 @@ class _Plan:
                 out.append(f"{name}: {field} is a whole number in [{low}, {high}]")
         if vm.image not in IMAGES:
             out.append(f"{name}: the image is one of {', '.join(IMAGES)}")
-        for package in [*vm._install, *vm._uninstall]:
+        for package in [*vm._install, *vm._uninstall, *vm._purge]:
             if not isinstance(package, str) or not PACKAGE.fullmatch(package):
                 out.append(f"{name}: {package!r} is not a Debian package name")
+        for package in [p for p in [*vm._uninstall, *vm._purge] if isinstance(p, str)]:
+            if package in PROTECTED_PACKAGES:
+                out.append(f"{name}: {package} cannot be removed: every sandbox VM needs it (the node's access, "
+                           "Ansible, the worm, scoring)")  # fmt: skip
+            elif package in vm._required:
+                out.append(f"{name}: {package} cannot be removed: a login of the gameplan needs it")
         for unit in vm._services:
             if not isinstance(unit, str) or not SERVICE.fullmatch(unit):
                 out.append(f"{name}: {unit!r} is not a systemd unit name")
@@ -804,19 +918,41 @@ class Gameplan:
         plan.secrets.append(key)
         return key
 
-    def generate_ssh_pwd_login(self, user=None):
-        """A user and a password, new for every run (the user name stays). Put it on VMs with
-        add_ssh_pwd_login; `login.user` and `login.pwd` can go into a file's content."""
+    def generate_login(self, user=None, length=None, charset=None):
+        """A user and a password, new for every run (the user name stays). Put it on VMs with a
+        login: add_ssh_pwd_login, add_telnet_login, add_ftp_login, add_local_login; `login.user`
+        and `login.pwd` can go into a file's content.
+
+        By default the password is long and random. With `length` and/or `charset` (as for
+        generate_password: alnum, digits, hex) it is as weak as asked, for a worm to guess:
+        generate_login("pi", length=4, charset="digits")."""
+        return self._generate_login("generate_login", user, length, charset)
+
+    def generate_ssh_pwd_login(self, user=None, length=None, charset=None):
+        """generate_login under its first name: the login is not only for SSH."""
+        return self._generate_login("generate_ssh_pwd_login", user, length, charset)
+
+    def _generate_login(self, what, user, length, charset):
         plan = self._plan
-        plan.defining("generate_ssh_pwd_login")
+        plan.defining(what)
         user = user or f"user{1 + sum(isinstance(s, PasswordLogin) for s in plan.secrets)}"
         if not isinstance(user, str) or not USER.fullmatch(user) or user in RESERVED_USERS:
-            raise GameplanError(f"generate_ssh_pwd_login: {user!r} is not a user name a gameplan can create")
+            raise GameplanError(f"{what}: {user!r} is not a user name a gameplan can create")
         if any(isinstance(s, PasswordLogin) and s.user == user for s in plan.secrets):
-            raise GameplanError(f"generate_ssh_pwd_login: {user} exists already")
-        login = PasswordLogin(f"login{len(plan.secrets)}", user)
+            raise GameplanError(f"{what}: {user} exists already")
+        if length is not None or charset is not None:
+            length, charset = self._password_strength(what, 16 if length is None else length, charset or "alnum")
+        login = PasswordLogin(f"login{len(plan.secrets)}", user, length, charset)
         plan.secrets.append(login)
         return login
+
+    @staticmethod
+    def _password_strength(what, length, charset):
+        if charset not in PASSWORD_CHARSETS:
+            raise GameplanError(f"{what}: the charset is one of {', '.join(PASSWORD_CHARSETS)}")
+        if isinstance(length, bool) or not isinstance(length, int) or not 4 <= length <= 64:
+            raise GameplanError(f"{what}: the length is a whole number in [4, 64]")
+        return length, charset
 
     def generate_password(self, length=16, charset="alnum"):
         """A password of no user, new for every run: for a vault, a zip, a document. It is a
@@ -825,10 +961,7 @@ class Gameplan:
         charset: alnum (letters and digits), digits (a PIN), hex."""
         plan = self._plan
         plan.defining("generate_password")
-        if charset not in PASSWORD_CHARSETS:
-            raise GameplanError(f"generate_password: the charset is one of {', '.join(PASSWORD_CHARSETS)}")
-        if isinstance(length, bool) or not isinstance(length, int) or not 4 <= length <= 64:
-            raise GameplanError("generate_password: the length is a whole number in [4, 64]")
+        length, charset = self._password_strength("generate_password", length, charset)
         password = Password(f"pw{len(plan.secrets)}", length, charset)
         plan.secrets.append(password)
         return password
@@ -854,17 +987,73 @@ class Gameplan:
             return user
         raise GameplanError(f"{what}: {user!r} is not a user of {vm.name} (root, {DEFAULT_USER}, or one added to it first)")
 
-    def add_user(self, vms, user):
+    def add_user(self, vms, user, *, shell=None, groups=None, sudo=None):
         """A user on each VM, made when the sandbox is built: locked, no key. The logins below
-        make theirs; add one yourself to own files or for a login you build."""
+        make theirs (and a login's user is made by the login); add one yourself to own files,
+        for a login you build, or to give it these:
+
+            shell   /bin/bash (default), /bin/sh, /bin/rbash (restricted), or /usr/sbin/nologin
+                    for a user nothing logs in as
+            groups  supplementary groups, made if the VM lacks them. `sudo`: sudo with the
+                    user's own password (a login's password, say)
+            sudo    True: sudo to anyone, no password. A list of commands: those as root, no
+                    password (["/usr/bin/find", "/usr/bin/vim /etc/hosts"]): a step up for a
+                    worm that knows its GTFOBins
+
+        Called again for the same user, the groups add up; a different shell or sudo rule is an
+        error."""
         plan = self._plan
         plan.defining("add_user")
         if not isinstance(user, str) or not USER.fullmatch(user) or user in RESERVED_USERS:
             raise GameplanError(f"add_user: {user!r} is not a user name a gameplan can create")
+        if shell is not None and shell not in SHELLS:
+            raise GameplanError(f"add_user: the shell is one of {', '.join(SHELLS)}")
+        groups = self._user_groups(groups)
+        sudo = self._sudo_rule(sudo)
         for vm in _as_list(vms, "add_user"):
-            users = plan.users.setdefault(plan.known(vm, "add_user").name, [])
+            name = plan.known(vm, "add_user").name
+            users = plan.users.setdefault(name, [])
             if user not in users:
                 users.append(user)
+            settings = plan.accounts.setdefault((name, user), {"shell": None, "groups": [], "sudo": None})
+            for field, value in (("shell", shell), ("sudo", sudo)):
+                if value is not None:
+                    if settings[field] is not None and settings[field] != value:
+                        raise GameplanError(f"add_user: {user} on {name} has another {field} already ({settings[field]})")
+                    settings[field] = value
+            settings["groups"] += [group for group in groups if group not in settings["groups"]]
+
+    @staticmethod
+    def _user_groups(groups):
+        if groups is None:
+            return []
+        if isinstance(groups, str):
+            groups = [groups]
+        if not isinstance(groups, (list, tuple)) or len(groups) > LIMITS["groups"]:
+            raise GameplanError(f"add_user: groups is a list of at most {LIMITS['groups']} group names")
+        for group in groups:
+            if not isinstance(group, str) or not USER.fullmatch(group):
+                raise GameplanError(f"add_user: {group!r} is not a group name (lowercase letters, digits, _ and -)")
+            if group == TOTP_GROUP:
+                raise GameplanError(f"add_user: {TOTP_GROUP} is add_ssh_totp_login's (its members need a code)")
+        return list(dict.fromkeys(groups))
+
+    @staticmethod
+    def _sudo_rule(sudo):
+        """None (no rule), ["ALL"], or the commands."""
+        if sudo is None or sudo is False:
+            return None
+        if sudo is True:
+            return ["ALL"]
+        if isinstance(sudo, str):
+            sudo = [sudo]
+        if not isinstance(sudo, (list, tuple)) or not sudo or len(sudo) > LIMITS["sudo_commands"]:
+            raise GameplanError(f"add_user: sudo is True, or a list of at most {LIMITS['sudo_commands']} commands")
+        for command in sudo:
+            if not isinstance(command, str) or len(command) > 200 or not SUDO_COMMAND.fullmatch(command):
+                raise GameplanError(f"add_user: sudo {command!r}: a command is an absolute path and its arguments "
+                                    "(letters, digits, ._+/=:@*-), no commas or quotes")  # fmt: skip
+        return list(dict.fromkeys(sudo))
 
     def add_private_ssh_key(self, vms, key, user=DEFAULT_USER):
         """The private key, as ~/.ssh/<name> of `user` (0600)."""
@@ -891,7 +1080,7 @@ class Gameplan:
                 raise GameplanError(f"{what}: name the login (there is not exactly one)")
             login = logins[0]
         if not isinstance(login, PasswordLogin) or login not in plan.secrets:
-            raise GameplanError(f"{what}: give a login from self.generate_ssh_pwd_login()")
+            raise GameplanError(f"{what}: give a login from self.generate_login()")
         return login
 
     def _set_password(self, vm, login):
@@ -981,7 +1170,7 @@ class Gameplan:
             raise GameplanError(f"add_ssh_totp_login: give the login its own user (not {user}: the node logs in as it)")
         for vm in _as_list(vms, "add_ssh_totp_login"):
             self.add_ssh_key_login(vm, key, user)
-            vm.install("libpam-google-authenticator")
+            vm._require("libpam-google-authenticator")
             if TOTP_SETUP not in vm._setup:
                 vm.add_setup(TOTP_SETUP)
             vm.add_setup(f"usermod -a -G {TOTP_GROUP} {user}")
@@ -990,17 +1179,48 @@ class Gameplan:
 
     def add_telnet_login(self, vms, login=None):
         """The login's user on each VM, with its password, over telnet (port 23, inetutils
-        telnetd under inetd). Open the port with firewall rules, as for any service."""
+        telnetd under inetd). Only the users of telnet logins get in this way. Open the port
+        with firewall rules, as for any service."""
         plan = self._plan
         plan.defining("add_telnet_login")
         login = self._login(login, "add_telnet_login")
         for vm in _as_list(vms, "add_telnet_login"):
             plan.known(vm, "add_telnet_login")
             self._set_password(vm, login)
-            vm.install("inetutils-telnetd", "inetutils-inetd")
+            vm._require("inetutils-telnetd", "inetutils-inetd")
             if TELNET_SETUP not in vm._setup:
                 vm.add_setup(TELNET_SETUP)
+            vm.add_setup(f"grep -qx {login.user} {TELNET_USERS} || echo {login.user} >> {TELNET_USERS}")
             vm.add_service("inetutils-inetd")
+
+    def add_ftp_login(self, vms, login=None):
+        """The login's user on each VM, with its password, over FTP (vsftpd on port 21, passive
+        mode on FTP_PASSIVE_PORTS): read and write wherever the user may, not chrooted. A worm
+        can fetch a file this way, or put one, ~/.ssh/authorized_keys for instance. Only the
+        users of FTP logins get in. Open 21 and FTP_PASSIVE_PORTS with firewall rules."""
+        plan = self._plan
+        plan.defining("add_ftp_login")
+        login = self._login(login, "add_ftp_login")
+        for vm in _as_list(vms, "add_ftp_login"):
+            plan.known(vm, "add_ftp_login")
+            if vm._files.setdefault("/etc/vsftpd.conf", FTP_CONF) != FTP_CONF:
+                raise GameplanError(f"add_ftp_login: {vm.name} writes its own /etc/vsftpd.conf")
+            self._set_password(vm, login)
+            vm._require("vsftpd")
+            # vsftpd reads its user list when it starts.
+            vm.add_setup(f"grep -qx {login.user} {FTP_USERS} || echo {login.user} >> {FTP_USERS}; systemctl restart vsftpd")
+            vm.add_service("vsftpd")
+
+    def add_local_login(self, vms, login=None):
+        """The login's user on each VM, with its password, and no way in from outside: the
+        password works for `su` (and for sudo, if the user is in the group sudo). A step for a
+        worm that is on the VM already and found the password."""
+        plan = self._plan
+        plan.defining("add_local_login")
+        login = self._login(login, "add_local_login")
+        for vm in _as_list(vms, "add_local_login"):
+            plan.known(vm, "add_local_login")
+            self._set_password(vm, login)
 
     def set_worm_entrypoint(self, vm):
         """The VM the worm is deployed to."""

@@ -18,7 +18,7 @@ apt_cache_seed_packages:
   - python3-pip
   - unzip
   # Gameplans (src/gameplan/definition.py: DjangoVM, PostgreVM, add_telnet_login,
-  # add_ssh_totp_login; gameplans/).
+  # add_ssh_totp_login, add_ftp_login; gameplans/).
   - gunicorn
   - inetutils-inetd
   - inetutils-telnetd
@@ -26,3 +26,4 @@ apt_cache_seed_packages:
   - postgresql
   - python3-django
   - python3-venv
+  - vsftpd

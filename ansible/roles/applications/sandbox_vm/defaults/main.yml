@@ -1,4 +1,8 @@
 ---
-# {VM name: {install, uninstall, files, setup, services, users, ssh_password_users}}: what the round's gameplan
-# puts on each sandbox VM (src/gameplan/build.py). The round agent passes it (-e @file).
+# {VM name: {install, uninstall, purge, files, setup, services, users, accounts, ssh_password_users}}:
+# what the round's gameplan puts on each sandbox VM (src/gameplan/build.py). The round agent passes
+# it (-e @file).
 sandbox_vm_config: {}
+# What no removal may take with it (src/gameplan/definition.py, PROTECTED_PACKAGES); passed with
+# the config.
+sandbox_vm_protected_packages: []

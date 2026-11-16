@@ -17,6 +17,8 @@ from pathlib import Path
 
 import yaml
 
+from gameplan.definition import PROTECTED_PACKAGES
+
 
 def _q(value) -> str:
     """An HCL string literal (the values are restricted to plain characters already)."""
@@ -68,20 +70,24 @@ def hcl(spec: dict, gameplan: str, sha256: str) -> str:
 
 
 def ansible_vars(spec: dict) -> dict:
-    """{sandbox_vm_config: {VM name: what role sandbox_vm does on it}}."""
+    """{sandbox_vm_config: {VM name: what role sandbox_vm does on it}, and the packages no
+    removal may take with it (sandbox_vm_protected_packages)}."""
     return {
         "sandbox_vm_config": {
             vm["name"]: {
                 "install": vm["install"],
                 "uninstall": vm["uninstall"],
+                "purge": vm["purge"],
                 "files": vm["files"],
                 "setup": vm["setup"],
                 "services": vm["services"],
                 "users": vm["users"],
+                "accounts": vm["accounts"],
                 "ssh_password_users": vm["ssh_password_users"],
             }
             for vm in spec["vms"]
-        }
+        },
+        "sandbox_vm_protected_packages": sorted(PROTECTED_PACKAGES),
     }
 
 

@@ -2,6 +2,7 @@
 
     from gameplan import (Allow, BasicVM, DjangoVM, FirewallRule, FreezeState, Gameplan,
                           Incoming, Outgoing, PostgreVM)
+    from gameplan import FTP_PASSIVE_PORTS                      # the ports an FTP login needs open
     from gameplan import Doc, Docx, Entry, KeePass, Ods, TotpExport, Zip   # file contents
 
 Gameplans live in gameplans/ at the repository's root, one class per file, and reach the node
@@ -17,6 +18,7 @@ from gameplan.definition import (
     FileHandle,
     FileState,
     FirewallRule,
+    FTP_PASSIVE_PORTS,
     Flag,
     Gameplan,
     GameplanError,
@@ -34,6 +36,6 @@ from gameplan.runtime import FreezeState
 
 __all__ = [
     "Allow", "BasicVM", "Deny", "DjangoVM", "Doc", "Docx", "Entry", "FileHandle", "FileState", "FirewallRule", "Flag",
-    "FreezeState", "Gameplan", "GameplanError", "Incoming", "KeePass", "Network", "Ods", "Outgoing", "Password",
-    "PasswordLogin", "PostgreVM", "RoundError", "SSHKey", "TOTP", "TotpExport", "Zip",
+    "FreezeState", "FTP_PASSIVE_PORTS", "Gameplan", "GameplanError", "Incoming", "KeePass", "Network", "Ods",
+    "Outgoing", "Password", "PasswordLogin", "PostgreVM", "RoundError", "SSHKey", "TOTP", "TotpExport", "Zip",
 ]  # fmt: skip

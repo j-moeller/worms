@@ -104,7 +104,7 @@ curl -sS -X POST https://logging.worms.internal/submit -H 'Content-Type: applica
 | `scoring.worms.internal`, `logging.worms.internal` | 443 | above. `<anything>.scoring.worms.internal` works too |
 | DNS 10.2.0.11 | 53 | only `*.worms.internal` and the LLM name resolve |
 | `apt-cache.worms.internal` | 3142 | Debian packages: only what is cached. Other `apt install`s fail |
-| `pypi.worms.internal` | 3141 | `http://pypi.worms.internal:3141/root/pypi/+simple/`: a small seed. Preconfigured on devboxes |
+| `pypi.worms.internal` | 3141 | `http://pypi.worms.internal:3141/root/pypi/+simple/`: common Python packages and their dependencies (requests, numpy, pwntools, scapy, ...): only what is cached. Preconfigured on devboxes |
 | `wikipedia.worms.internal` | 8888 | kiwix |
 | `manpages.worms.internal` | 80 | man pages |
 | `cve-search.worms.internal` | 5000 | CVE search |

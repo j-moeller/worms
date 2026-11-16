@@ -83,6 +83,12 @@ def instantiate(cls):
     return gameplan
 
 
+def description(cls):
+    """The gameplan's description for teams (Gameplan.description), as its spec has it: ""
+    if it has none. GameplanError if the gameplan does not describe a sandbox."""
+    return instantiate(cls).spec()["description"]
+
+
 class Runner:
     """One run of `gameplan.execute()` against a backend."""
 

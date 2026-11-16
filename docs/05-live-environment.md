@@ -39,7 +39,7 @@ orchestrator: conduct_rounds ──HostJob rows──► round agent (root, node
 - **Orchestrator.** `/opt/orchestrator/gameplans/{plans,lib}`, readable by the service only. Set by `WORMS_GAMEPLAN_DIR` and `WORMS_GAMEPLAN_LIB`.
 - **Node.** `/opt/worms/gameplans` and `/opt/worms/src/gameplan`.
 - **Dashboard VM.** It holds no copy; Ansible deletes one if present.
-- **What the dashboard sees.** The `gameplans` table (file name, valid or not), a round's `gameplan_status`, and the simulations staff ask for ([Simulation](#simulation)). Why a gameplan is invalid goes to the orchestrator's journal and the node's job log, never to the database.
+- **What the dashboard sees.** The `gameplans` table (file name, valid or not, and the gameplan's `description` for teams), a round's `gameplan_status`, and the simulations staff ask for ([Simulation](#simulation)). Why a gameplan is invalid goes to the orchestrator's journal and the node's job log, never to the database.
 
 ## A round, step by step
 
@@ -252,6 +252,10 @@ class RoundOne(Gameplan):                       # gameplans/round_one.py
 
 - **`vm.watch_file(path)`** declares a path that `execute()` may `read_file()` without writing it.
 - **Entry point.** `set_worm_entrypoint(vm)`, exactly once.
+- **`description`** (class attribute, default `""`): what teams read about the round. The round timer in the dashboard's header opens `/round/`, which shows it while the round is the next or the current one; staff see it on the round's page.
+  - Plain text, a blank line between paragraphs; a triple-quoted string's indentation is removed. At most 20,000 characters.
+  - The orchestrator copies it from its copy of the file into the `gameplans` table when it checks the gameplans (on start, then every 10 minutes); the dashboard reads only that. A file that does not describe a sandbox has none.
+  - It is published as written, before the round: no run's secrets (validation refuses them), and nothing that gives away more than the round should. `""` shows the round's times only.
 - **Limits.**
   - 32 VMs, 30 networks, 8 NICs per VM.
   - 1–4 cores, 256–8192 MB, 5–64 GB.

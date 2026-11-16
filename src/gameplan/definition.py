@@ -18,6 +18,7 @@ docs/05-live-environment.md describes the API with an example (gameplans/round_o
 
 from __future__ import annotations
 
+import inspect
 import ipaddress
 import posixpath
 import random
@@ -53,6 +54,7 @@ LIMITS = {
     "round_duration": (60, 7 * 86400),
     "groups": 16,  # per user
     "sudo_commands": 16,  # per user
+    "description": 20000,  # characters
 }
 
 VM_ATTRIBUTE = re.compile(r"^[a-z](?:[a-z0-9_]{0,39}[a-z0-9])?$")
@@ -589,6 +591,16 @@ def _file_path(path, owner):
     return path
 
 
+def _description(text):
+    """(the description as teams read it, or a problem with it). Indentation and the blank
+    lines around it go (inspect.cleandoc), so a triple-quoted string in the class body works."""
+    if not isinstance(text, str) or len(text) > LIMITS["description"] or "\x00" in text:
+        return "", f"description is text of at most {LIMITS['description']} characters"
+    if SECRET_MARKER.search(text):
+        return "", "description: teams read it on the dashboard, so it cannot hold the run's secrets"
+    return inspect.cleandoc(text), None
+
+
 def _readable_path(path, user, what):
     normalised = _file_path(path, user)
     if normalised is None:
@@ -672,6 +684,9 @@ class _Plan:
         low, high = LIMITS["round_duration"]
         if isinstance(duration, bool) or not isinstance(duration, int) or not low <= duration <= high:
             errors.append(f"round_duration is whole seconds in [{low}, {high}]")
+        description, problem = _description(getattr(self.gameplan, "description", ""))
+        if problem:
+            errors.append(problem)
 
         addresses = self._addresses()
         vms = []
@@ -751,6 +766,7 @@ class _Plan:
             "format": 1,
             "class": type(self.gameplan).__name__,
             "round_duration": duration,
+            "description": description,
             "entrypoint": self.entrypoint.name,
             "networks": [
                 {"name": n.name, "bridge": n.bridge, "cidr": str(n.cidr), "vms": [vm.name for vm in n.vms]}
@@ -853,6 +869,10 @@ class Gameplan:
     that cannot be written any more is logged and skipped."""
 
     round_duration = 60 * 60  # seconds from the worm's start to the end of the run
+    # What teams read about the round on the dashboard (the header's round timer links to it):
+    # plain text, a blank line between paragraphs. Published as it is, before the round, so
+    # nothing in it may give away more than the round should; "" shows none.
+    description = ""
 
     def __new__(cls, *args, **kwargs):
         self = super().__new__(cls)

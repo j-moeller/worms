@@ -17,6 +17,7 @@ from dashboard.views.uploads import download as upload_download, upload
 from dashboard.views.todos import todos
 from dashboard import api
 from dashboard.views import progression
+from dashboard.views.round_info import round_info
 from dashboard.views import staff, staff_rounds, staff_simulations, staff_teams, staff_users
 from dashboard.views.topology import topology, topology_data, topology_runs
 from django.conf import settings
@@ -33,6 +34,9 @@ urlpatterns = [
     path("devbox/ssh-keys/<uuid:key_uuid>/delete/", devbox_delete_ssh_key, name="devbox_delete_ssh_key"),
     #
     path("admin/", admin.site.urls),
+    #
+    # The round the header's timer counts down to: its times and its gameplan's description.
+    path("round/", round_info, name="round_info"),
     #
     # A team's rounds, replayed (docs/08-user-guide.md).
     path("progression/", progression.progression_page, name="progression"),

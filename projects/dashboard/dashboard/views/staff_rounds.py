@@ -22,7 +22,7 @@ from collections import Counter
 from core import clock, events, schedule
 from core.locking import serialized_resource
 from core.models.competition import Competition, Round
-from core.models.rounds import HostJob, RoundRun
+from core.models.rounds import GameplanFile, HostJob, RoundRun
 from core.models.scoring import FlagCapture
 from core.models.team import Team
 from dashboard.forms import RoundForm, overlapping_round
@@ -224,6 +224,7 @@ def round_detail(request: HttpRequest, round_uuid):
         "max_retries": _max_retries(),
         "estimate": _estimate(round_obj, teams),
         "jobs": HostJob.objects.filter(run__round=round_obj).select_related("run__team").order_by("-id")[:50],
+        "description": GameplanFile.description_of(round_obj.gameplan),
     })  # fmt: skip
 
 

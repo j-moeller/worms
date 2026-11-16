@@ -164,7 +164,8 @@ def test_no_round_banner_without_a_round_and_the_same_in_both_views(site, team_u
 
     def banner():
         page = site.get("/", **proxied(HOST)).content.decode()
-        found = re.search(r'class="site-status__label">([^<]*)<', page)
+        # The label of the next or current round is a link to the round page.
+        found = re.search(r'class="site-status__label">(?:<a [^>]*>)?([^<]*)<', page)
         return found.group(1) if found else None
 
     live = banner()  # team_upload signed in to the Live view

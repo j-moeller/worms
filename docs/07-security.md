@@ -115,6 +115,7 @@ Account rules ([`core/accounts.py`](../projects/dashboard/core/accounts.py), [`m
 - **Flags.** Generated on the node; only their SHA-256 leaves it.
 - **Gameplan content** stays on the orchestrator and the node:
   - The dashboard sees file names, validity and a run's topology.
+  - And each gameplan's `description`: text its author wrote for teams, published on purpose. The orchestrator copies it into the `gameplans` table; the round page shows it to every signed-in user, and validation refuses a run's secrets in it ([5](05-live-environment.md#__init__-the-sandbox)).
   - And the simulations staff ask for ([5](05-live-environment.md#simulation)): what a run's timeline would show (VMs, networks, addresses, firewall rules; states, power, flags, waits, files by number). A compromised dashboard can ask for one of every gameplan, so it learns the sandbox's shape and the attempt's timing. Never paths, contents, setup commands, packages, log lines or problems.
   - A simulation runs gameplan code on the orchestrator in a child process: 20 s, 10 s of CPU, 1 GiB, 16 MiB of files; stdout carries only its record. One is made at a time (an advisory lock; others get 503), so the API token keeps at most one CPU busy.
   - Errors of the jobs that load a gameplan name only the job ([`handlers.py`](../scripts/round_agent/handlers.py), `_quiet`).

@@ -94,6 +94,10 @@ class GameplanFile(models.Model):
     filename = models.TextField(unique=True)
     valid = models.BooleanField(default=False)  # on the node and on the orchestrator, the same file
     checked_at = models.DateTimeField(db_default=Now())
+    # The one part of a gameplan written for teams (Gameplan.description), as the orchestrator's
+    # copy has it: the round page shows it (dashboard/views/round_info.py). "": none, or the file
+    # does not load. A database default, so code that does not know the column still inserts.
+    description = models.TextField(blank=True, default="", db_default="")
 
     class Meta:
         db_table = "gameplans"
@@ -101,6 +105,13 @@ class GameplanFile(models.Model):
 
     def __str__(self):
         return self.filename
+
+    @classmethod
+    def description_of(cls, filename) -> str:
+        """The description teams read for a round with this gameplan; "" for none."""
+        if not filename:
+            return ""
+        return cls.objects.filter(filename=filename).values_list("description", flat=True).first() or ""
 
 
 class GameplanSimulation(models.Model):

@@ -157,6 +157,14 @@ html[data-env="dev"] {
 .site-status__unit { color: var(--faint); margin-left: 3px; }
 
 .site-status-slot { display: inline-flex; align-items: center; }
+/* The current or next round's timer links to its page: the whole badge is the link's target. */
+.site-status:has(.site-status__link) { position: relative; }
+.site-status__link { color: inherit; }
+.site-status__link::after { content: ""; position: absolute; inset: 0; border-radius: inherit; }
+.site-status__link:hover { text-decoration: none; }
+.site-status__link:focus-visible { outline: none; }
+.site-status:has(.site-status__link:hover) { border-color: var(--border-strong); background: var(--surface-2); }
+.site-status:has(.site-status__link:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; }
 .site-session { display: inline-flex; align-items: center; gap: 10px; }
 .site-session form { margin: 0; }
 .site-session__user { color: var(--text); font-weight: 600; font-size: .85rem; }

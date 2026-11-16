@@ -3,9 +3,9 @@ picks from.
 
 The files are deployed to the orchestrator VM only (WORMS_GAMEPLAN_DIR, with the framework
 in WORMS_GAMEPLAN_LIB): the dashboard VM has none, and the dashboard reads nothing but the
-`gameplans` table (file names, valid or not), a round's gameplan_status and the simulations
-staff ask for (simulations.py). Why a gameplan is not valid goes to the orchestrator's
-journal, never to the database.
+`gameplans` table (file names, valid or not, and each one's description: the text its author
+wrote for teams), a round's gameplan_status and the simulations staff ask for (simulations.py).
+Why a gameplan is not valid goes to the orchestrator's journal, never to the database.
 
 A gameplan is valid when the orchestrator's copy and the node's (the round agent's
 `gameplans` job) are the same file (SHA-256) and both find nothing wrong with it. A round's
@@ -64,6 +64,16 @@ def problems(filename, duration=None, sha256=None):
     return loaded.sha256, runtime.validate(loaded.cls, duration=duration)
 
 
+def description(filename):
+    """The orchestrator's copy's description for teams (Gameplan.description); "" if it has
+    none, or if the file does not describe a sandbox (refresh() logs why it is not valid)."""
+    loader, runtime = framework()
+    try:
+        return runtime.description(loader.load(directory(), filename).cls)
+    except Exception:  # noqa: BLE001  (the gameplan's own code; problems() reports it)
+        return ""
+
+
 def node_view():
     """{file: (sha256, valid)} from the node's latest `gameplans` job, or None if it has none."""
     job = HostJob.objects.filter(kind=HostJob.Kind.GAMEPLANS, state=HostJob.State.DONE).order_by("-id").first()
@@ -94,12 +104,15 @@ def refresh(node):
             log.warning("gameplan %s: %s", name, problem)
         if not found:
             valid[name] = sha
+    descriptions = {name: description(name) for name in loader.available(directory())}
     now = timezone.now()
     with transaction.atomic():
         GameplanFile.objects.exclude(filename__in=loader.available(directory())).delete()
         GameplanSimulation.objects.exclude(filename__in=loader.available(directory())).delete()
         for name in loader.available(directory()):
-            GameplanFile.objects.update_or_create(filename=name, defaults={"valid": name in valid, "checked_at": now})
+            GameplanFile.objects.update_or_create(
+                filename=name, defaults={"valid": name in valid, "checked_at": now, "description": descriptions[name]}
+            )
     return valid
 
 

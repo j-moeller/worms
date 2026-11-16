@@ -163,6 +163,11 @@ A later deploy gives every row a new UUID, so links handed out meanwhile change 
 - The sandbox build ([`sandbox_vm`](../ansible/roles/applications/sandbox_vm/tasks/main.yml)) now removes packages after the setup commands, not before them. It also refuses a removal that would take a package every VM needs.
 - Telnet admits only the users of telnet logins.
 
+**A round page with the gameplan's description** adds migration `0018_gameplan_description`: a `description` column on `gameplans`, with a database default of `""`.
+- Deploying today's `main`, the plan in step 5 names 9 migrations (`0010`–`0018`), not 8.
+- Code that does not know the column keeps working: production's orchestrator before the deploy, and after a rollback. Option 2 of the rollback migrates back over it like the others.
+- The orchestrator fills the column on its first gameplan check after the deploy. Until then every round page shows no description.
+
 None of this alters round_one or `credential_chain.py`: neither removes a package, and `credential_chain.py`'s only telnet user is its telnet login. The round agent has to be restarted after the deploy (step 6) all the more: the new `sandbox_vm` role reads `accounts` and `purge`, which only the new `build.py` writes.
 
 ## Worth doing, not needed for this deploy

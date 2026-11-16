@@ -20,7 +20,7 @@
                 <div><dt>Duration</dt><dd>{{ round.team_duration }} s from the worm's start ({{ timing.worm_start_delay }} s after it is deployed)</dd></div>
                 <div><dt>Attempts</dt><dd>up to {{ max_retries|add:1 }} per team: an attempt the infrastructure fails is thrown away and run again</dd></div>
             </dl>
-            <p class="form__note">The gameplan is a file on the node and the orchestrator (<code>gameplans/</code>); this page knows only its name. Every team meets the same sandbox, rolled back for each.</p>
+            <p class="form__note">The gameplan is a file on the node and the orchestrator (<code>gameplans/</code>); this page knows only its name and its description for teams. Every team meets the same sandbox, rolled back for each.</p>
         </div>
     </section>
 
@@ -36,6 +36,11 @@
         </div>
     </section>
 </div>
+
+<section class="panel" aria-labelledby="description-title">
+    <header class="panel__head"><h2 class="panel__title" id="description-title">What teams read</h2><p class="panel__meta">the gameplan's <code>description</code>, on <a href="{% url 'round_info' %}">the round page</a> while the round is the next or the current one</p></header>
+    <div class="panel__body prose">{% if description %}{{ description|linebreaks }}{% elif round.gameplan %}<p class="muted">The gameplan has no description: teams see only the round's times.</p>{% else %}<p class="muted">No gameplan yet.</p>{% endif %}</div>
+</section>
 
 <section class="panel" aria-labelledby="runs-title">
     <header class="panel__head"><h2 class="panel__title" id="runs-title">Runs</h2><p class="panel__meta">{% if runs %}in running order, every attempt; only a finished one counts{% else %}planned at the start{% endif %}</p></header>

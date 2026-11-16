@@ -67,7 +67,9 @@
                 <div class="site-status{% if state.warning %} is-warning{% endif %}{% if state.key == 'finished' %} is-finished{% endif %}" role="status">
                     <span class="site-status__line">
                         <span class="dot" aria-hidden="true"></span>
-                        <span class="site-status__label">{{ state.label }}</span>
+                        {% comment %}The current or next round's timer opens its page (views/round_info.py): the
+                        link's ::after covers the whole badge.{% endcomment %}
+                        <span class="site-status__label">{% if state.key == "round" or state.key == "next_round" %}<a class="site-status__link" href="{% url 'round_info' %}" title="About this round">{{ state.label }}</a>{% else %}{{ state.label }}{% endif %}</span>
                     </span>
                     {% if state.target %}
                     <span class="site-status__time">

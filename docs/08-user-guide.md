@@ -24,7 +24,7 @@ This page covers:
 | Profile (click your team's name) | Your account, password change, the team's score, **SSH keys** (add/remove), **access tokens** for the team API (after registration closes) |
 | Teams (`/teams/`) | During registration only: join or leave a team |
 
-The status banner (Live view) shows the next round's countdown, a running round's time left, and a warning if your team has no upload yet.
+The status banner in the header shows the next round's countdown, a running round's time left, and a warning if your team has no upload yet. Click it for the round's page (`/round/`): its times, how long your worm runs, and what the organisers tell you about the round.
 
 ## The worm contract
 

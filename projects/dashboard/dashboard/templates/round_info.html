@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}{% if round %}{{ round.name }}{% else %}Round{% endif %}{% endblock %}
+{% block content %}
+{% comment %}The round the header's timer counts down to (dashboard/views/round_info.py). The
+description is the gameplan author's text for teams, plain text with a blank line between
+paragraphs; a gameplan without one shows only the facts.{% endcomment %}
+{% with state=request.state_presentation %}
+<header class="page-head">
+    <p class="page-head__kicker">{% if not round %}Rounds{% elif running %}The current round{% else %}The next round{% endif %}</p>
+    <h1 class="page-head__title">{% if round %}{{ round.name }} <span class="badge{% if running %} badge--accent{% endif %}">{% if running %}in progress{% else %}next{% endif %}</span>{% else %}No round right now{% endif %}</h1>
+    <p class="page-head__lead">
+        {% if not round %}No round is running or coming up. The header shows the next one once it is scheduled.
+        {% elif running %}Running now{% if state.target %}, for another <time class="countdown" datetime="{{ state.target|date:'c' }}" data-countdown>{{ state.remaining }}</time>{% endif %}. Teams run one after another, each in a sandbox of its own.
+        {% else %}Starts{% if state.target %} in <time class="countdown" datetime="{{ state.target|date:'c' }}" data-countdown>{{ state.remaining }}</time>{% endif %}. Your team's latest Live upload from before the start takes part.{% endif %}
+    </p>
+</header>
+
+{% if round %}
+{% if not running and state.warning and request.team %}
+<p class="alert alert--warn">Your team has no upload for this round yet. <a href="{% url 'upload' %}">Upload your worm</a> before it starts.</p>
+{% endif %}
+
+{% if description %}
+<section class="panel" aria-labelledby="round-description-title">
+    <header class="panel__head"><h2 class="panel__title" id="round-description-title">About this round</h2></header>
+    <div class="panel__body prose">{{ description|linebreaks }}</div>
+</section>
+{% endif %}
+
+<section class="panel" aria-labelledby="round-facts-title">
+    <header class="panel__head"><h2 class="panel__title" id="round-facts-title">When</h2></header>
+    <div class="panel__body">
+        <dl class="kv">
+            {% if round.round_start %}<div><dt>Starts</dt><dd><time datetime="{{ round.round_start|date:'c' }}" data-localtime>{{ round.round_start|date:"Y-m-d H:i" }} UTC</time>{% if not running %} (the upload deadline){% endif %}</dd></div>{% endif %}
+            {% if round.round_end %}<div><dt>Ends</dt><dd><time datetime="{{ round.round_end|date:'c' }}" data-localtime>{{ round.round_end|date:"Y-m-d H:i" }} UTC</time></dd></div>{% endif %}
+            <div><dt>Your worm's run</dt><dd>{{ duration }} from the moment it starts</dd></div>
+        </dl>
+        <p class="form__note">The results are on <a href="{% url 'progression' %}">Progression</a> once your team's run is over.</p>
+    </div>
+</section>
+{% endif %}
+{% endwith %}
+{% endblock %}

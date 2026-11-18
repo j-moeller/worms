@@ -18,10 +18,11 @@ devbox_authorized_keys: "{{ devbox_team_keys[devbox_team] | default([]) if (devb
 devbox_login_user: root
 
 # Packages a devbox is expected to have (the worm start assumes python3/unzip,
-# like the sandbox image).
+# like the sandbox image; `worms rsync` needs rsync at both ends).
 devbox_packages:
   - python3
   - python3-pip
+  - rsync
   - unzip
 
 # pip goes to the private internet's devpi, as apt goes to its cache. The devpi

@@ -461,7 +461,7 @@ def cmd_step(config, args) -> int:
 
 
 def _vm_list(config) -> str:
-    """The VMs there are now, for `worms login --help` and `worms show --help`."""
+    """The VMs there are now, for the --help of `worms login`, `worms show` and `worms rsync`."""
     from worms_cli.vms import Catalogue
 
     try:
@@ -477,6 +477,19 @@ def cmd_login(config, args) -> int:
 
     try:
         return Catalogue(config).login(args.vm)
+    except build.BuildError as exc:
+        output.error(str(exc))
+        return 1
+
+
+def cmd_rsync(config, args) -> int:
+    """`worms rsync <source>... <target>`: rsync's arguments, a VM by its login name
+    (worms_cli/rsync.py); rsync's own options after `--`."""
+    from worms_cli.rsync import Rsync
+
+    options = [*(["--dry-run"] if args.dry_run else []), *(["--delete"] if args.delete else []), *args.extra]
+    try:
+        return Rsync(config).run(args.paths, options, preview=args.preview)
     except build.BuildError as exc:
         output.error(str(exc))
         return 1
@@ -931,6 +944,8 @@ SECTIONS = (
             ("show <vm> [<table>]", "one VM in detail: state, resources, networks, snapshots, login; "
                                     "`show database [<table>]`: its tables, a table's rows or --schema"),  # fmt: skip
             ("login <vm>", "a shell on a VM over its management SSH (`worms login --help` lists them)"),
+            ("rsync <source>... <target>", "rsync -avz between here and a VM, in rsync's syntax: `worms rsync dir/ "
+                                           "devbox-t1-a:` up, `worms rsync devbox-t1-a: dir/` down (`worms rsync --help`)"),  # fmt: skip
         ),
     ),
     Section(
@@ -992,6 +1007,24 @@ SECTIONS = (
 )
 
 HELP_WIDTH = 79
+
+RSYNC_HELP = """\
+rsync's own syntax, with a VM's name (below) for the host:
+  worms rsync team-1-backup/ devbox-t1-a:       the directory's contents into the home
+  worms rsync devbox-t2-a: team-2-backup/       the home's contents into the directory
+  worms rsync devbox-t2-a:notes :src/a.py .     two files from that VM (`:path`: the same VM)
+  worms rsync debian@dashboard:.bashrc .        as another user, from their home
+  worms rsync ./a:b devbox-t1-a:                a local file with a ":" (after a "/": local)
+  worms rsync dir/ devbox-t1-a:dir -- --exclude .cache --progress   rsync's options after --
+
+A trailing "/" on a source copies its contents, not itself; `<vm>:` alone is the home.
+The VM's rsync runs as <user> (sudo) from <user>'s home: root's on a devbox and on the
+node, the login user's (debian) elsewhere.
+
+A devbox or sandbox VM is assumed rooted by its team. Downloaded from one, files get no
+setuid bits, owner or device files, and symbolic links stay inert (--munge-links: a
+backup goes back up as it came); what it prints is escaped. Options after -- can override
+that. rsync has to be on the VM: a devbox has it (devbox_packages), the SSH gateway not."""
 
 
 def _command_name(usage: str) -> str:
@@ -1072,7 +1105,7 @@ def _yes(parser) -> None:
 
 
 def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
-    """`vm_list`: the VMs there are now, for `login --help` and `show --help` (main asks the node
+    """`vm_list`: the VMs there are now, for `login`, `show` and `rsync --help` (main asks the node
     only when one of them is asked for)."""
     parser = argparse.ArgumentParser(
         prog="worms",
@@ -1101,6 +1134,12 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
 
     p = _add(sub, "login", epilog=vm_list, **raw)
     p.add_argument("vm")
+
+    p = _add(sub, "rsync", epilog=RSYNC_HELP + (f"\n\n{vm_list}" if vm_list else ""), **raw)
+    p.add_argument("paths", nargs="+", metavar="path", help="sources, then the target: a local path or [<user>@]<vm>:[<path>]")
+    p.add_argument("-n", "--dry-run", action="store_true", help="rsync's: list what would be sent, send nothing")
+    p.add_argument("--delete", action="store_true", help="rsync's: delete what the source does not have on the target")
+    p.add_argument("--preview", action="store_true", help="count what would be sent (files, sizes, bytes), send nothing")
 
     p = _add(sub, "build", epilog=_components_overview(), **raw)
     p.add_argument("components", nargs="*", metavar="component", help="components or groups (default: everything)")
@@ -1166,7 +1205,8 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
 
 
 HANDLERS = {
-    "status": cmd_status, "show": cmd_show, "login": cmd_login, "build": cmd_build, "internet": cmd_internet,
+    "status": cmd_status, "show": cmd_show, "login": cmd_login, "rsync": cmd_rsync, "build": cmd_build,
+    "internet": cmd_internet,
     "reset": cmd_reset, "devbox-add-key": cmd_devbox_add_key, "devbox-remove-key": cmd_devbox_remove_key,
     "devbox-reconfigure": lambda config, args: _request_devbox_reconfigure(config),
     "admin-reset-password": cmd_admin_reset_password, "admin-create-staff": cmd_admin_create_staff,
@@ -1186,7 +1226,7 @@ def _split(argv: list[str]) -> tuple[list[str], list[str]]:
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     vm_list = ""
-    if len(argv) >= 2 and argv[0] in ("login", "show") and ("-h" in argv or "--help" in argv):
+    if len(argv) >= 2 and argv[0] in ("login", "show", "rsync") and ("-h" in argv or "--help" in argv):
         vm_list = _vm_list(Config.load())
     parser = build_parser(vm_list)
     own, passed = _split(argv)

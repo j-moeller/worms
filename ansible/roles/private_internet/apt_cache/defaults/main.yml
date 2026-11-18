@@ -16,6 +16,7 @@ apt_cache_seed_packages:
   - nftables
   - python3
   - python3-pip
+  - rsync # devbox_packages: `worms rsync`
   - unzip
   # Gameplans (src/gameplan/definition.py: DjangoVM, PostgreVM, add_telnet_login,
   # add_ssh_totp_login, add_ftp_login; gameplans/).

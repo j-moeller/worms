@@ -1,5 +1,5 @@
-"""The VMs `worms status`, `worms login` and `worms show` know: every VM on the node by its name,
-with where it belongs and how to reach it.
+"""The VMs `worms status`, `worms login`, `worms show` and `worms download` know: every VM on the
+node by its name, with where it belongs and how to reach it.
 
 Proxmox says which VMs exist (name, vmid, pool, state). The management address and login user
 come from the Ansible inventories: this checkout's (the platform's VMs and the private internet)
@@ -95,18 +95,26 @@ class Catalogue:
                 return vms[vm_name]
         raise BuildError(f"no VM {name!r}: `worms login --help` lists them")
 
-    def ssh_argv(self, vm: dict, command=None, interactive=True) -> tuple[list[str], dict]:
+    def destination(self, vm: dict) -> str:
+        """login user@management address."""
         host = self.hosts().get(vm["name"])
         if host is None or not host.get("ansible_host"):
             raise BuildError(f"{vm['name']} has no management address in the inventories: `worms step inventory`")
-        argv = ["ssh", "-o", "IdentityFile=none", "-o", "IdentityAgent=SSH_AUTH_SOCK", "-o", "ForwardAgent=no",
-                "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR",
-                "-o", "ConnectTimeout=10"]  # fmt: skip
+        return f"{host.get('ansible_user', 'debian')}@{host['ansible_host']}"
+
+    def ssh_options(self, interactive=True) -> list[str]:
+        """ssh's options for a VM: the WORMS key in its own agent, through the node from a laptop."""
+        options = ["-o", "IdentityFile=none", "-o", "IdentityAgent=SSH_AUTH_SOCK", "-o", "ForwardAgent=no",
+                   "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR",
+                   "-o", "ConnectTimeout=10"]  # fmt: skip
         if self.runner.session.laptop:
-            argv += ["-o", f"ProxyJump={self.config.ssh}"]
+            options += ["-o", f"ProxyJump={self.config.ssh}"]
         if not interactive:
-            argv += ["-o", "BatchMode=yes"]
-        argv += (["-t"] if interactive else []) + [f"{host.get('ansible_user', 'debian')}@{host['ansible_host']}"]
+            options += ["-o", "BatchMode=yes"]
+        return options
+
+    def ssh_argv(self, vm: dict, command=None, interactive=True) -> tuple[list[str], dict]:
+        argv = ["ssh", *self.ssh_options(interactive), *(["-t"] if interactive else []), self.destination(vm)]
         if command:
             argv.append(command)
         return argv, self.runner.session.env()

@@ -5,11 +5,13 @@
     <p class="page-head__kicker">Staff · Rounds</p>
     <h1 class="page-head__title">{{ round.name }} <span class="badge{% if status == 'active' %} badge--accent{% endif %}">{{ status }}</span></h1>
     <p class="page-head__lead">{{ round.round_start|date:"Y-m-d H:i" }} – {{ round.round_end|date:"Y-m-d H:i" }} UTC.
-        {% if not form %}An attempt has started; the round can no longer change.
-        {% elif started %}Started: its end, its gameplan and the duration per team can change until the first attempt starts.{% if not round.gameplan %} It waits for a gameplan.{% endif %}
+        {% if not form %}It has begun, or is over: it can no longer change.
+        {% elif started %}Started: its end, its gameplan and the duration per team can change until the first attempt starts. Its teams' uploads are those from before its start.{% if not round.gameplan %} It waits for a gameplan, alone: the rounds after it go ahead.{% endif %}
         {% else %}Nothing is built until it starts.{% if not round.gameplan %} Choose its gameplan before then, or the round waits for one.{% endif %}{% endif %}</p>
 </header>
 {% include "staff/_tabs.html" with section="rounds" %}
+
+{% if progress %}{% include "staff/_round_progress.html" with p=progress %}{% endif %}
 
 <div class="grid grid--2">
     <section class="panel" aria-labelledby="params-title">

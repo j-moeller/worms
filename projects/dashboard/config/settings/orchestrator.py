@@ -74,6 +74,8 @@ ROUND_CONDUCTOR = {
     "job_timeout": int(env("ROUND_JOB_TIMEOUT", "1800")),
     "capture_grace": int(env("ROUND_CAPTURE_GRACE", "120")),
     "max_retries": int(env("ROUND_MAX_RETRIES", "3")),
+    # A round whose gameplan is missing or not valid waits, alone, and is looked at again after this.
+    "gameplan_poll": int(env("ROUND_GAMEPLAN_POLL", "60")),
 }
 
 # The gameplans (docs/05-live-environment.md): the files, and the framework they import. Deployed to the

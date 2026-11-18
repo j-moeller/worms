@@ -1,5 +1,6 @@
 {% comment %}The staff sections. Database records only: infrastructure is built
-from the console (worms build, worms build devbox) and by the round agent.{% endcomment %}
+from the console (worms build, worms build devbox) and by the round agent. Under them, on every
+staff page, the rounds whose gameplan is missing or not valid (views/util.py, render_with_base_info).{% endcomment %}
 <nav class="round-tabs" aria-label="Staff sections">
     <a class="round-tabs__tab" href="{% url 'staff_competition' %}"{% if section == 'competition' %} aria-current="page"{% endif %}>Competition</a>
     <a class="round-tabs__tab" href="{% url 'staff_users' %}"{% if section == 'users' %} aria-current="page"{% endif %}>Users</a>
@@ -8,3 +9,8 @@ from the console (worms build, worms build devbox) and by the round agent.{% end
     <a class="round-tabs__tab" href="{% url 'staff_simulations' %}"{% if section == 'simulations' %} aria-current="page"{% endif %}>Simulations</a>
     <a class="round-tabs__tab" href="{% url 'staff_gameplans' %}"{% if section == 'gameplans' %} aria-current="page"{% endif %}>Gameplans</a>
 </nav>
+{% if gameplan_notices %}
+<div class="staff-notices" role="status">
+    {% for w in gameplan_notices %}<p class="alert alert--{{ w.tone }}"><strong><a href="{% url 'staff_round' w.round.uuid %}">{{ w.round.name }}</a></strong> {{ w.text }}</p>{% endfor %}
+</div>
+{% endif %}

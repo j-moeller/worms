@@ -2,9 +2,12 @@
 
 Run as a long-lived systemd service on the orchestrator (ansible role
 django_app, django_daemons). It plans the runs of any round whose deadline has
-passed and then runs one attempt at a time, start to finish. A restart during an
-attempt fails it, and the team's worm runs again (docs/05-live-environment.md): do not redeploy
-the orchestrator while a round runs.
+passed (with or without a gameplan: the uploads are those from before the
+deadline) and then runs one attempt at a time, start to finish, one round at a
+time. A round without a valid gameplan waits alone and is looked at again every
+`gameplan_poll` seconds. A restart during an attempt fails it, and the team's
+worm runs again (docs/05-live-environment.md): do not redeploy the orchestrator
+while a round runs.
 
     manage.py conduct_rounds                 # loop forever
     manage.py conduct_rounds --once          # a single tick (tests, cron)

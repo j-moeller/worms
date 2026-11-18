@@ -12,7 +12,10 @@ that got: the attempts, their host jobs and errors.
 
 A round is edited fully before it starts. Afterwards its end, its gameplan and its
 duration per team can change until its first attempt starts (the conductor pins the
-gameplan then; a round without one waits). It is deleted only before its runs exist.
+gameplan then; a round without one waits, alone, and the rounds after it go ahead). It
+is deleted only before its runs exist. Where a round is, its annotated timeline, is read
+from its runs (round_progress.py); every staff page warns of a round whose gameplan is
+missing or not valid (round_progress.warnings, through render_with_base_info).
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ from core.models.rounds import HostJob, RoundRun, round_gameplan
 from core.models.scoring import FlagCapture
 from core.models.team import Team
 from dashboard.forms import RoundForm, overlapping_round
+from dashboard.views import round_progress
 from dashboard.views.decorators import refuse, staff_required
 from dashboard.views.staff import delete_unreferenced
 from dashboard.views.util import render_with_base_info
@@ -101,22 +105,29 @@ def rounds(request: HttpRequest):
                         round_start=start, round_end=end, gameplan=data["gameplan"], team_duration=duration,
                     )  # fmt: skip
                     events.competition("round_created", request=request, round_id=created.pk, detail={"name": created.name})
-                    note = "" if created.gameplan else " It waits for a gameplan: choose one before its first attempt."
+                    note = "" if created.gameplan else " It has no gameplan yet: choose one on its page. Without one at its start it waits, alone."
                     messages.success(request, f"Round {created.name} created. Its runs are planned when it starts.{note}")
                     return redirect("staff_round", round_uuid=created.uuid)
+
+    current = round_progress.under_way()
 
     def listing(competition):
         rows = []
         for r in Round.objects.filter(competition=competition).order_by("round_start"):
-            states = Counter(RoundRun.objects.filter(round=r).values_list("state", flat=True))
+            runs = list(RoundRun.objects.filter(round=r).only("state", "gameplan_sha256", "upload_id"))
             rows.append({
                 "round": r,
                 "status": _status(r, now),
-                "states": sorted(states.items()),
+                "phase": round_progress.phase(r, runs, now, current),
+                "states": sorted(Counter(run.state for run in runs).items()),
                 "captures": FlagCapture.objects.filter(round=r, vm__run__state=RoundRun.State.FINISHED).count(),
                 "estimate": _estimate(r, teams),
             })  # fmt: skip
         return rows
+
+    rows = listing(comp)
+    # The round under way; else the one that waits or is about to begin.
+    focus = current or next((row["round"] for row in rows if row["phase"].key in ("planning", "waiting", "queued", "starting")), None)
 
     active_run = (
         RoundRun.objects.filter(state__in=ACTIVE_STATES).select_related("round", "team")
@@ -124,7 +135,8 @@ def rounds(request: HttpRequest):
     )
     return render_with_base_info(request, "staff/rounds.html", {
         "form": form,
-        "live_rounds": listing(comp),
+        "live_rounds": rows,
+        "progress": round_progress.progress(focus, current=current) if focus is not None else None,
         "teams": teams,
         "active_run": active_run,
         "jobs": HostJob.objects.filter(state__in=[HostJob.State.QUEUED, HostJob.State.RUNNING])
@@ -141,9 +153,20 @@ def _max_retries():
     return getattr(settings, "ROUND_CONDUCTOR", {}).get("max_retries", 3)
 
 
+def _begun(runs) -> bool:
+    """Whether the round can no longer change: its gameplan is pinned, an attempt has begun, or
+    nothing is left to run. A team skipped for want of an upload began nothing: the round may
+    still wait for its gameplan."""
+    if not runs:
+        return False
+    S = RoundRun.State
+    return any(run.gameplan_sha256 or run.state not in (S.PENDING, S.SKIPPED) for run in runs) or not any(
+        run.state == S.PENDING for run in runs
+    )
+
+
 def _attempt_started(round_obj) -> bool:
-    """An attempt of the round has begun (or its gameplan is pinned): it can no longer change."""
-    return RoundRun.objects.filter(round=round_obj).exclude(state=RoundRun.State.PENDING, gameplan_sha256="").exists()
+    return _begun(list(RoundRun.objects.filter(round=round_obj).only("state", "gameplan_sha256")))
 
 
 @staff_required
@@ -166,7 +189,7 @@ def round_detail(request: HttpRequest, round_uuid):
     # Started, or its runs planned (from its seed and window): only its end, gameplan and
     # duration per team can still change.
     started = (round_obj.round_start is not None and round_obj.round_start <= now) or bool(runs)
-    editable = not any(run.state != RoundRun.State.PENDING or run.gameplan_sha256 for run in runs)
+    editable = not _begun(runs)
     form = None
     if editable:
         initial = RoundForm.initial_from(round_obj)
@@ -225,6 +248,7 @@ def round_detail(request: HttpRequest, round_uuid):
         "estimate": _estimate(round_obj, teams),
         "jobs": HostJob.objects.filter(run__round=round_obj).select_related("run__team").order_by("-id")[:50],
         "version": round_gameplan(round_obj),
+        "progress": round_progress.progress(round_obj),
     })  # fmt: skip
 
 

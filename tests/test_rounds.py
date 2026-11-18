@@ -272,24 +272,45 @@ def ran(one_run, gameplans):
 
 
 def test_conductor_runs_a_full_round(one_run, gameplans):
-    """A round without a gameplan waits for one; then the team's attempt runs start to finish."""
+    """A round without a gameplan waits for one, alone: a later round goes ahead, and the
+    conductor looks again every gameplan_poll seconds. Once it has one, the team's attempt runs
+    start to finish, with the upload from before the round's start."""
     from core.models.competition import Round
     from core.models.rounds import HostJob, RoundRun, RunEvent
+    from core.models.worms import MalwareArtifact, Upload
+    from django.utils import timezone
+    from orchestrator.rounds.planner import plan_round
 
     run, round_obj = one_run["run"], one_run["round"]
     power = FakePower()
     conductor, agent, clock = make_conductor(gameplans, power)
 
     Round.objects.filter(pk=round_obj.pk).update(gameplan="")
-    assert conductor.tick() is False and conductor.tick() is False
+    later = Round.objects.create(seed=6, name="R2", competition=one_run["competition"], gameplan="two.py", team_duration=600,
+                                 round_start=round_obj.round_start + timezone.timedelta(seconds=30), round_end=round_obj.round_end)  # fmt: skip
+    [later_run] = plan_round(later)
+    assert conductor.tick() is True  # R1 waits; R2 runs
+    later_run.refresh_from_db()
+    assert later_run.state == RoundRun.State.FINISHED, later_run.error
     run.refresh_from_db()
     assert run.state == RoundRun.State.PENDING and not run.jobs.exists()
+    waiting = Round.objects.get(pk=round_obj.pk)
+    assert waiting.gameplan_status == "" and waiting.gameplan_checked_at is not None  # looked at, for the staff pages
+    assert conductor.tick() is False  # looked at again: still none
+
+    # An upload after the round's start does not take part, however late the gameplan comes.
+    Upload.objects.create(artifact=MalwareArtifact.objects.create(content_hash=sha("late"), storage_key="k-late"),
+                          user=one_run["team"].users.first(), team=one_run["team"], created_at=timezone.now())  # fmt: skip
     Round.objects.filter(pk=round_obj.pk).update(gameplan="two.py")
+    assert conductor.tick() is False  # not before gameplan_poll seconds
+    clock.advance(conductor.cfg["gameplan_poll"])
+    power.stopped.clear()
 
     start = clock.now()
     assert conductor.tick() is True
     run.refresh_from_db()
     assert run.state == RoundRun.State.FINISHED, run.error
+    assert run.upload_id == one_run["run"].upload_id
     # Pinned: this version of the gameplan, for every attempt still to come.
     assert run.gameplan_sha256 == sha(GAMEPLAN) and run.duration == 600
     assert Round.objects.get(pk=round_obj.pk).gameplan_status == "ok"

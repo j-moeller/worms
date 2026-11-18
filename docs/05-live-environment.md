@@ -72,20 +72,25 @@ A gameplan version is its bytes, named by their SHA-256. Once recorded, a versio
 ## A round, step by step
 
 1. **Staff create the round** on **Staff → Rounds** ([`forms.py`](../projects/dashboard/dashboard/forms.py)).
-   - Fields: name, start (in the future), end, seed, a **valid** gameplan, and minutes per team (1–10080, default 60).
+   - Fields: name, start (in the future), end, seed, a gameplan (optional: one of the valid ones, or none yet), and minutes per team (1–10080, default 60).
    - Overlapping rounds are refused. So is a window shorter than teams × slot.
    - A slot is 15 s fuse + duration + 120 s drain + 900 s overhead ([`core/schedule.py`](../projects/dashboard/core/schedule.py)). Retries are not in the estimate.
-   - A round can be edited while it has no runs; after its start only the end can move.
+   - Before its start a round can be edited fully. After it, its end, its gameplan and its duration per team can change until its first attempt starts. A team skipped for want of an upload does not count as a start.
+   - Every staff page warns of a round not over whose gameplan is missing or not valid.
 2. **Validation, every 10 minutes** ([`orchestrator/rounds/gameplans.py`](../projects/dashboard/orchestrator/rounds/gameplans.py)).
    - The conductor asks the node for its view (the `gameplans` job: SHA-256 and validity, with the packages checked against the apt cache). It validates its own copy.
    - A file is valid only if both copies are identical and both find nothing wrong.
    - Each upcoming round gets `gameplan_status` `ok` or `invalid`, checked at its duration per team.
-3. **Planning.** Once `round_start` has passed, the round is planned ([`planner.py`](../projects/dashboard/orchestrator/rounds/planner.py)).
+3. **Planning.** Once `round_start` has passed, the round is planned ([`planner.py`](../projects/dashboard/orchestrator/rounds/planner.py)), with or without a gameplan.
    - Every team of the competition gets a run, at attempt 0, in an order shuffled by the round's seed.
-   - Each run uses the team's latest Live upload from **before** `round_start`. A team without one is SKIPPED.
-4. **Pin.** Before a round's first attempt, the gameplan's SHA-256 is written into every run of that round, so every team runs the same version. If the gameplan is invalid, the round, and every round after it, waits.
-5. **Attempts.** The conductor runs the attempts one by one, ordered by (round, position, attempt) (next section).
-6. **Finish.** A round is finished when its end has passed **and** no run is still open. Runs and retries may go past `round_end`.
+   - Each run uses the team's latest Live upload from **before** `round_start`, however late the gameplan comes. A team without one is SKIPPED.
+4. **Pin, or wait alone** ([`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py), `_next` and `_pin`).
+   - Before a round's first attempt, its gameplan's SHA-256 is written into every run of that round, so every team runs the same version.
+   - The gameplan must be chosen, and valid on the orchestrator and the node at the round's duration per team.
+   - If it is not, the round waits, **alone**: the rounds after it go ahead. The conductor looks at it again every `gameplan_poll` seconds (60) and records each look (`gameplan_checked_at`). Once staff choose a valid gameplan, the round begins at the next look, as soon as no other round is under way.
+   - A round whose teams all lack an upload needs no gameplan: each run is skipped.
+5. **Attempts.** One round at a time. The round under way (a pinned attempt still to come) goes on until every team's run is over, retries included. Then the next round that can begin, earliest start first. Within a round, attempts run by (position, attempt) (next section).
+6. **Finish.** A round is finished when its end has passed **and** no run is still open. Runs and retries may go past `round_end`, and so may a round that waited for its gameplan.
 
 ## An attempt
 
@@ -161,6 +166,7 @@ Flags released late are credited for submissions up to 900 s earlier. The round 
 | `capture_grace` | 120 s | `ROUND_CAPTURE_GRACE` |
 | `max_retries` | 3 | `ROUND_MAX_RETRIES` |
 | `gameplan_check_interval` | 600 s | — |
+| `gameplan_poll` (a round waiting for its gameplan) | 60 s | `ROUND_GAMEPLAN_POLL` |
 
 ## Writing a gameplan
 
@@ -355,8 +361,29 @@ PYTHONPATH=src python3 -c "from gameplan import loader, runtime; print(runtime.v
 1. **Create the round** on **Staff → Rounds**: its window (the start is the upload deadline; teams' latest Live uploads before it are used) and its duration per team. The gameplan is optional here.
 2. **Commit and deploy** the gameplan: `worms build orchestrator round-agent` (both copies), outside a round. The conductor restarts; the agent reads gameplan files fresh.
 3. **Check it is valid.** **Staff → Rounds** marks it valid. If not, read `journalctl -u orchestrator-conduct-rounds` on the orchestrator and the `gameplans` job log on the node. **Staff → Simulations** (or **Simulate** on the round's page) replays its attempt at the round's duration per team ([Simulation](#simulation)).
-4. **Choose it** on the round's page. That works until the round's first attempt starts: a round without a valid gameplan waits ([`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py), `_pin`), and then the gameplan's version is pinned for every attempt.
-5. **Watch it.** **Staff → Rounds → round** shows the attempts, their errors and host jobs, and a replay of each run. `worms status` shows the active run. On the node, `tail -F /var/log/worms/jobs/latest.log`.
+4. **Choose it** on the round's page. That works until the round's first attempt starts: a round without a valid gameplan waits alone, and the conductor looks again every minute ([`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py), `_pin`). Then the gameplan's version is pinned for every attempt.
+5. **Watch it** (next section). `worms status` shows the active run. On the node, `tail -F /var/log/worms/jobs/latest.log`.
+
+### Following a round
+
+**Staff → Rounds** shows the round under way, or else the one that waits or is about to begin. Each round's page shows its own. The panel refreshes every 30 s. It is read from the runs, their events, host jobs and captures ([`round_progress.py`](../projects/dashboard/dashboard/views/round_progress.py)); it writes nothing and never reads the gameplan.
+
+- **Phase.** scheduled, planning, waiting for a gameplan, gameplan not valid, queued (behind the round under way), starting, running or done.
+- **Summary.** Teams done of all, with a progress bar; the flags counted (finished attempts only); restarts; skipped teams; and an estimate of when the last team is done, flagged when that is after the round's end.
+- **Timeline.** One time axis from the round's start:
+  - every attempt as a block: finished, failed (run again) or under way;
+  - the teams to come as dashed blocks (an estimate, one slot each);
+  - the wait before the first attempt;
+  - the skipped teams, the round's end and now.
+  Hovering over a block shows its team, attempt, times, flags or error.
+- **Teams.** One card per team in running order: finished with its flags, skipped, under way, next or to come, its restarts and why each failed attempt failed.
+- **The attempt under way.**
+  - Its steps (build, checks, gameplan, drain, teardown, done) with the time it reached each.
+  - The worm's run time as a progress bar, and the flags so far (they count only if the attempt finishes).
+  - The host job it waits for.
+  - Its own timeline, and a log of what it did, timed from the worm's start: states, flags removed and placed, power, captures, files by number, skipped steps and errors.
+
+Every staff page lists the rounds not over whose gameplan is missing or not valid. A scheduled round gets a warning; one that already waits gets an error, with the time of the conductor's last look.
 
 ## Known gaps
 

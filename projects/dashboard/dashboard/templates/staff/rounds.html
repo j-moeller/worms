@@ -4,9 +4,11 @@
 <header class="page-head">
     <p class="page-head__kicker">Staff</p>
     <h1 class="page-head__title">Rounds</h1>
-    <p class="page-head__lead">A round is defined here: its window, its gameplan and the duration per team. Nothing is built until it starts. Then the conductor runs every team's worm, one after another: the round agent on the Proxmox host builds the gameplan's sandbox once and rolls it back for each team, and the gameplan's <code>execute()</code> plays out. An attempt the infrastructure fails is thrown away and run again.</p>
+    <p class="page-head__lead">A round is defined here: its window, its gameplan and the duration per team. Nothing is built until it starts. Then the conductor runs every team's worm, one after another, one round at a time: the round agent on the Proxmox host builds the gameplan's sandbox once and rolls it back for each team, and the gameplan's <code>execute()</code> plays out. An attempt the infrastructure fails is thrown away and run again. A round without a valid gameplan at its start waits, alone, with the uploads from before its start: the rounds after it go ahead, and it begins once one is chosen.</p>
 </header>
 {% include "staff/_tabs.html" with section="rounds" %}
+
+{% if progress %}{% include "staff/_round_progress.html" with p=progress show_name=True %}{% endif %}
 
 <div class="grid grid--2">
     <section class="panel" aria-labelledby="now-title">
@@ -48,7 +50,7 @@
                 <tbody>
                     {% for row in live_rounds %}
                     <tr>
-                        <th scope="row"><a href="{% url 'staff_round' row.round.uuid %}">{{ row.round.name }}</a> <span class="badge{% if row.status == 'active' %} badge--accent{% endif %}">{{ row.status }}</span></th>
+                        <th scope="row"><a href="{% url 'staff_round' row.round.uuid %}">{{ row.round.name }}</a> <span class="badge{% if row.phase.tone %} badge--{{ row.phase.tone }}{% endif %}" title="{{ row.phase.text }}">{{ row.phase.label }}</span></th>
                         <td>{{ row.round.round_start|date:"Y-m-d H:i" }} – {{ row.round.round_end|date:"H:i" }}</td>
                         <td>{% include "staff/_gameplan.html" with round=row.round %}</td>
                         <td>{% for state, count in row.states %}<span class="badge badge--state">{{ state }} {{ count }}</span> {% empty %}<span class="muted">planned at the start</span>{% endfor %}</td>

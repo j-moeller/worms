@@ -182,8 +182,8 @@ class RoundForm(StyledForm):
     gameplan = forms.ChoiceField(
         required=False,
         help_text="A file in gameplans/ (docs/05-live-environment.md). Only gameplans the orchestrator and the node both "
-                  "hold, and find valid, are listed. It can be chosen later, until the first team's attempt starts; "
-                  "the round waits for it.",
+                  "hold, and find valid, are listed. It can be chosen later, until the first team's attempt starts: "
+                  "the round waits for it, alone (the rounds after it go ahead), with the uploads from before its start.",
     )  # fmt: skip
     team_duration = _minutes(
         "Duration per team (min)", schedule.TEAM_DURATION[0] // 60, schedule.TEAM_DURATION[1] // 60,

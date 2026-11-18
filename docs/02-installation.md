@@ -163,7 +163,7 @@ Without them the platform has to be rebuilt. Nothing backs up the database ([6](
 1. **Admin and teams.** Open `https://<public name>/`, sign in as `admin` and set a password. Create the teams under **Staff → Teams**, then the students under **Staff → Users** (one at a time, or a CSV). Hand out the one-time passwords shown.
 2. **Devboxes.** Run `worms build devbox`. It takes about 17 minutes for 3 teams; follow it with `tail -F /var/log/worms/jobs/latest.log` on the node. Teams then add SSH keys on their profile ([4](04-dev-environment.md)).
 3. **Rounds.**
-   - Create the round on **Staff → Rounds**. Its gameplan can follow later, until the round's first attempt starts ([5](05-live-environment.md#running-a-round)).
+   - Create the round on **Staff → Rounds**. Its gameplan can follow later, until the round's first attempt starts ([5](05-live-environment.md#running-a-round)). A round that reaches its start without one waits, alone, and every staff page says so.
    - Commit a gameplan under `gameplans/` and deploy it with `worms build orchestrator round-agent`: the orchestrator's copy, and the node's (the round agent's workspace).
    - Within 10 minutes it shows as valid on **Staff → Rounds**. Choose it on the round's page.
 
@@ -182,6 +182,8 @@ Without them the platform has to be rebuilt. Nothing backs up the database ([6](
 | `Warning: sch_htb: quantum of class ... is big` when a devbox starts | Harmless: the kernel's note on the devbox NICs' rate limit. The build starts the devboxes at its end whether it succeeded or not: look for `== setup complete` or the first `fatal:` above |
 | Every dashboard page answers 500 after deploying the dashboard alone (`column ... does not exist`) | The code needs a migration only the orchestrator runs: `worms build dashboard orchestrator`. `worms build dashboard` now brings both along by itself |
 | `permission denied for table gameplan_versions` (or another new table) in `orchestrator-conduct-rounds`' journal right after a build | The conductor restarted after the migrations, before the grants play. It retries at its next gameplan check (10 min); `sudo systemctl restart orchestrator-conduct-rounds` on the orchestrator checks at once |
+| A round's start has passed but nothing runs; **Staff → Rounds** shows it "waiting for a gameplan" or "gameplan not valid" | It waits, alone (the rounds after it go ahead). Choose a valid gameplan on its page; the conductor looks again within a minute. Its teams' uploads stay those from before its start. Why a gameplan is not valid: `journalctl -u orchestrator-conduct-rounds` |
+| A round shows "queued" | Its gameplan is ready; another round is under way and runs to its end first (one round at a time) |
 | `the node has no such file` for a gameplan the node has | The round agent running then is older than the file (new agent code needs a restart): `systemctl restart worms-round-agent` on the node, then restart the conductor as above |
 | `unknown job kind: 'gameplans'` in the orchestrator's journal | The node still runs the old round agent: the build stopped before its playbook. Run `worms build` again |
 | `dataset already exists` | A leftover volume: `pvesm free <storage>:<volume>` |

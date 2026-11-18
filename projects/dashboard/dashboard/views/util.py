@@ -228,4 +228,10 @@ def render_with_base_info(
             request.state_presentation.target - request.time_now
         )
 
+    # Every staff page warns of a round whose gameplan is missing or not valid (staff/_tabs.html).
+    if isinstance(template, str) and template.startswith("staff/") and request.user.is_staff and getattr(request, "competition", None):
+        from dashboard.views.round_progress import warnings
+
+        context.setdefault("gameplan_notices", warnings(request.competition))
+
     return render(request, template, context, *args, **kwargs)

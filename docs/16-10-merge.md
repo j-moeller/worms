@@ -178,6 +178,13 @@ A later deploy gives every row a new UUID, so links handed out meanwhile change 
 - **Rollback option 1** works as described: production's code does not know the new tables and columns, and every new column may be null.
 - **Rollback option 2** migrates back over `0019` and drops the version record. The dump from step 4 holds the runs; the bytes of what was recorded since are lost with the tables.
 
+**Rounds that wait alone, and their progress for staff**, need no migration and no new grant. The database schema does not change.
+- **The conductor's order.** It runs one round at a time: the round under way first, then the next that can begin, by start. Before, it went by round id (creation order). A round without a valid gameplan no longer blocks the rounds after it: it waits alone and is looked at every 60 s (`ROUND_GAMEPLAN_POLL`).
+- **The conductor's only new write.** `rounds.gameplan_checked_at` on each look at a waiting round, a column it may already update.
+- **The dashboard.** The staff pages' warnings and progress panel only read `round_runs`, `run_events`, `host_jobs`, `flag_captures` and `virtual_machines`, which its role already reads.
+- **Before the deploy.** Look at **Staff → Rounds** on production for a round whose start has passed with runs still pending. Under the new order, a round created later but starting earlier can come first.
+- **The editor.** A round whose first team was skipped (no upload) before its gameplan was chosen can now still be given one. Before, the skip locked the round.
+
 None of this alters round_one or `credential_chain.py`: neither removes a package, and `credential_chain.py`'s only telnet user is its telnet login. The round agent has to be restarted after the deploy (step 6) all the more: the new `sandbox_vm` role reads `accounts` and `purge`, which only the new `build.py` writes.
 
 ## Worth doing, not needed for this deploy

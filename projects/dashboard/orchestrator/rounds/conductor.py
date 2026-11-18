@@ -1,5 +1,11 @@
 """The conductor: runs every team's worm in a round, one attempt after another, by the round's
-gameplan (docs/05-live-environment.md, docs/05-live-environment.md).
+gameplan (docs/05-live-environment.md).
+
+One round at a time. The round under way (its gameplan pinned, attempts left) goes on until
+every team's run is over; then the next round that can begin, earliest start first. A round
+whose gameplan is missing or not valid waits alone: the rounds after it go ahead, and it is
+looked at again every `gameplan_poll` seconds until staff choose one (_next, _pin). Its runs
+were planned at its start, with the uploads from before it, however late the gameplan comes.
 
     for each team (in the round's order):
         reset the sandbox  (host job prepare: built or rolled back, the run's secrets, files, flags)
@@ -50,6 +56,7 @@ CONFIG = {
     "capture_grace": 120,           # captures/logs accepted this long after ends_at
     "max_retries": 3,               # attempts after a team's first, when the infrastructure fails
     "gameplan_check_interval": 600, # how often the gameplans are checked again (seconds)
+    "gameplan_poll": 60,            # a round waiting for its gameplan is looked at again after this
     # A dev upload (rounds/devbox_runs.py). Short fuse: the VMs were rebuilt just before.
     "devbox_worm_start_delay": 10,
     "devbox_run_duration": 3600,    # systemd stops main.sh after this, as a round would end it
@@ -236,6 +243,7 @@ class Conductor:
         self.jobs = jobs or HostJobs(self)
         self.stopping = False
         self._checked_at, self._valid, self._waiting = None, {}, {}
+        self._next_look = {}  # round pk -> when a waiting round is looked at again
         gameplans.framework()  # the framework's modules, for what follows
 
     def now(self):
@@ -351,24 +359,33 @@ class Conductor:
             log.warning("round %s waits: %s", round_.name, reason)
         return False
 
-    def _pin(self, run):
-        """Fix the round's gameplan version for every attempt still to come: the one the
-        orchestrator and the node both hold now, valid for the round's duration. False (and
-        the round waits) if there is none: staff may choose it until the first attempt starts."""
-        round_ = Round.objects.get(pk=run.round_id)
+    def _pin(self, round_):
+        """Whether the round can begin: its gameplan is chosen, and the orchestrator and the
+        node both hold it and find it valid at the round's duration per team. Then its version
+        is fixed for every attempt still to come. Otherwise the round waits, alone, and is
+        looked at again after gameplan_poll seconds: staff may choose its gameplan until its
+        first attempt starts. Each look is recorded (gameplan_checked_at) for the staff pages."""
+        now = self.now()
+        due = self._next_look.get(round_.pk)
+        if due is not None and now < due:
+            return False
+        self._next_look[round_.pk] = now + timedelta(seconds=self.cfg["gameplan_poll"])
+        round_ = Round.objects.get(pk=round_.pk)
         if not round_.gameplan:
-            return self._waits(round_, "it has no gameplan yet (staff choose one on its page)")
-        # Asked again at most once a minute while the round waits.
-        stale = self._checked_at is None or self.now() - self._checked_at > timedelta(seconds=60)
+            Round.objects.filter(pk=round_.pk).update(gameplan_status="", gameplan_checked_at=now)
+            return self._waits(round_, "it has no gameplan yet (staff choose one on its page); the rounds after it go ahead")
+        # The node is asked again at most once a minute while the round waits.
+        stale = self._checked_at is None or now - self._checked_at > timedelta(seconds=60)
         valid = self.check_gameplans(force=stale)
         status = gameplans.check_round(round_, valid)
         Round.objects.filter(pk=round_.pk).update(gameplan_status=status, gameplan_checked_at=self.now())
         if status != "ok":
-            return self._waits(round_, f"its gameplan {round_.gameplan!r} is not valid (see above)")
+            return self._waits(round_, f"its gameplan {round_.gameplan!r} is not valid (see above); the rounds after it go ahead")
         with serialized_resource("round-plan", round_.pk):
             # Against staff changing the gameplan or the duration meanwhile (staff_rounds.py).
-            now = Round.objects.filter(pk=round_.pk).values_list("gameplan", "team_duration").first()
-            if now != (round_.gameplan, round_.team_duration):
+            current = Round.objects.filter(pk=round_.pk).values_list("gameplan", "team_duration").first()
+            if current != (round_.gameplan, round_.team_duration):
+                self._next_look.pop(round_.pk, None)  # changed under us: look again at once
                 return False
             # The version is recorded already (check_gameplans: gameplans.refresh records each
             # version it sees); the run names it by hash and links it (core/models/rounds.py).
@@ -376,8 +393,27 @@ class Conductor:
                 gameplan=round_.gameplan, gameplan_sha256=valid[round_.gameplan],
                 gameplan_version_id=valid[round_.gameplan], duration=round_.team_duration)  # fmt: skip
         self._waiting.pop(round_.pk, None)
-        run.refresh_from_db()
+        self._next_look.pop(round_.pk, None)
+        log.info("round %s begins: gameplan %s, version %s", round_.name, round_.gameplan, valid[round_.gameplan][:12])
         return True
+
+    def _next(self):
+        """The attempt to run now, or None.
+
+        The round under way (a pinned attempt still to come) goes on, so that one round runs
+        at a time. Otherwise the rounds with attempts to come, earliest start first: one whose
+        teams all lack an upload needs no gameplan (each run is skipped); any other begins once
+        _pin lets it, and until then the next round is tried."""
+        pending = RoundRun.objects.filter(state=S.PENDING).select_related("round", "team", "upload__artifact")
+        under_way = pending.exclude(gameplan_sha256="").order_by("round__round_start", "round_id", "position", "attempt").first()
+        if under_way is not None:
+            return under_way
+        for round_ in Round.objects.filter(runs__state=S.PENDING).distinct().order_by("round_start", "id"):
+            runs = pending.filter(round=round_).order_by("position", "attempt")
+            if runs.filter(upload__isnull=False).exists() and not self._pin(round_):
+                continue
+            return runs.first()
+        return None
 
     # -- the tick -------------------------------------------------------------
 
@@ -395,20 +431,14 @@ class Conductor:
         if self._teardown_pending():
             return False
 
-        nxt = (
-            RoundRun.objects.filter(state=S.PENDING)
-            .select_related("round", "team", "upload__artifact")
-            .order_by("round_id", "position", "attempt")
-            .first()
-        )
+        nxt = self._next()
         if nxt is not None:
             if nxt.upload_id is None:
                 self.set_state(nxt, S.SKIPPED, finished_at=self.now(), error="no upload before the round's start")
                 return True
-            if not nxt.gameplan_sha256 and not self._pin(nxt):
-                return False
             self.run_attempt(nxt)
             return True
+        # Nothing to run now (no attempt left, or every round left waits for its gameplan).
         kept = self._kept_sandbox()
         if kept is not None:
             log.info("no attempt left for the sandbox kept after run %s: destroying it", kept.uuid)

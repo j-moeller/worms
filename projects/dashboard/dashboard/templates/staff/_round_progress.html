@@ -1,0 +1,67 @@
+{% comment %}A round's progress (dashboard/views/round_progress.py), read from its runs, their events
+and host jobs: the round's annotated timeline (every attempt on one time axis, the time it waited,
+what is left as an estimate), every team's outcome, and the attempt under way with the gameplan's
+steps so far. `p`: progress(); `show_name`: link the round. The page refreshes this panel every 30 s
+(enhance.js, data-autorefresh). Times UTC.{% endcomment %}
+<section class="panel progress" id="round-progress" data-autorefresh aria-labelledby="progress-title">
+    <header class="panel__head">
+        <h2 class="panel__title" id="progress-title">{% if show_name %}<a href="{% url 'staff_round' p.round.uuid %}">{{ p.round.name }}</a>: progress{% else %}Progress{% endif %} <span class="badge{% if p.phase.tone %} badge--{{ p.phase.tone }}{% endif %}">{{ p.phase.label }}</span></h2>
+        <p class="panel__meta">as of {{ p.updated|date:"H:i:s" }} UTC · refreshes every 30 s</p>
+    </header>
+    <div class="panel__body">
+        <p class="progress__lead">{{ p.phase.text }}</p>
+        {% if p.teams %}
+        <div class="progress__summary">
+            <progress class="pbar" max="{{ p.teams_total }}" value="{{ p.teams_done }}">{{ p.teams_done }} of {{ p.teams_total }}</progress>
+            <p><strong>{{ p.teams_done }} of {{ p.teams_total }}</strong> team{{ p.teams_total|pluralize }} done · <strong>{{ p.flags }}</strong> flag{{ p.flags|pluralize }} counted · {{ p.restarts }} restart{{ p.restarts|pluralize }} · {{ p.skipped }} skipped{% if p.estimate_end %} · the last team done about {{ p.estimate_end|date:"H:i" }} UTC (an estimate){% if p.late %}, <span class="progress__late">after the round's end</span>{% endif %}{% endif %}</p>
+        </div>
+
+        <svg class="tl" role="img" aria-label="{{ p.timeline.summary }}" width="100%" height="76">
+            <line class="tl__base" x1="0" x2="100%" y1="38" y2="38"></line>
+            {% for b in p.timeline.blocks %}<g class="tl__block tl__block--{{ b.cls }}"><title>{{ b.title }}</title><rect x="{{ b.x }}" y="24" width="{{ b.w }}" height="28" rx="3"></rect>{% if b.wide %}<text x="{{ b.mid }}" y="42" text-anchor="middle">{{ b.label }}</text>{% endif %}</g>{% endfor %}
+            {% for m in p.timeline.marks %}<g class="tl__mark tl__mark--{{ m.cls }}"><title>{{ m.title }}</title><line x1="{{ m.x }}" x2="{{ m.x }}" y1="{% if m.label %}16{% else %}24{% endif %}" y2="56"></line>{% if m.label %}<text x="{{ m.x }}" y="11" text-anchor="middle">{{ m.label }}</text>{% endif %}</g>{% endfor %}
+            {% for t in p.timeline.ticks %}<text class="tl__tick" x="{{ t.x }}" y="72" text-anchor="{{ t.anchor }}">{{ t.text }}</text>{% endfor %}
+        </svg>
+        <p class="tl__legend"><span><span class="key key--finished"></span>finished</span> <span><span class="key key--failed"></span>failed, run again</span> <span><span class="key key--active"></span>under way</span> <span><span class="key key--planned"></span>to come (an estimate)</span> <span><span class="key key--wait"></span>waiting</span> <span>· hover for details</span></p>
+
+        <ol class="pteams" aria-label="The teams, in running order">
+            {% for t in p.teams %}
+            <li class="pteam pteam--{{ t.state }}{% if t.current %} is-current{% endif %}{% if t.next %} is-next{% endif %}">
+                <span class="pteam__pos">#{{ t.position }}</span>
+                <a class="pteam__name" href="{% url 'staff_team' t.team.uuid %}">{{ t.team.name }}</a>
+                <span class="pteam__state">{% if t.current %}under way: {{ t.state }}{% elif t.next %}next{% elif t.state == 'finished' %}finished{% elif t.state == 'skipped' %}skipped: no upload{% elif t.state == 'failed' %}failed, no attempt left{% elif t.no_upload %}to come: no upload, skipped{% else %}to come{% endif %}</span>
+                {% if t.flags is not None %}<span class="pteam__flags">{{ t.flags }} flag{{ t.flags|pluralize }}</span>{% elif t.flags_so_far is not None %}<span class="pteam__flags muted">{{ t.flags_so_far }} flag{{ t.flags_so_far|pluralize }} so far</span>{% endif %}
+                {% if t.restarts %}<span><span class="badge badge--warn">{{ t.restarts }} restart{{ t.restarts|pluralize }}</span></span>{% endif %}
+                {% for a in t.failed %}<span class="pteam__error" title="{{ a.error }}">attempt {{ a.attempt|add:1 }} failed: {{ a.error|truncatechars:120 }}</span>{% endfor %}
+            </li>
+            {% endfor %}
+        </ol>
+
+        {% with a=p.attempt %}{% if a %}
+        <div class="progress__attempt">
+            <h3 class="progress__h">Now: #{{ a.run.position|add:1 }} {{ a.run.team.name }}, attempt {{ a.run.attempt|add:1 }}{% if a.since %} <span class="muted">· {{ a.run.state }} since {{ a.since|date:"H:i:s" }} UTC</span>{% endif %}</h3>
+            <ol class="steps" aria-label="The attempt's steps">
+                {% for s in a.steps %}<li class="step step--{{ s.status }}" title="{{ s.help }}"{% if s.status == 'current' %} aria-current="step"{% endif %}><span class="step__label">{{ s.label }}</span><span class="step__at">{% if s.at %}{{ s.at|date:"H:i:s" }}{% else %}&nbsp;{% endif %}</span></li>{% endfor %}
+            </ol>
+            {% if a.run_time %}
+            <p class="progress__run"><span>The worm's run: <strong>{{ a.run_time.elapsed_text }}</strong> of {{ a.run_time.total_text }}</span> <progress class="pbar pbar--run" max="{{ a.run_time.total }}" value="{{ a.run_time.elapsed }}">{{ a.run_time.percent }}%</progress> <span>{{ a.run_time.percent }}% · {{ a.flags }} flag{{ a.flags|pluralize }} so far (they count if the attempt finishes)</span></p>
+            {% endif %}
+            {% if a.waiting_on %}<p class="muted">Waiting for the node: <span class="mono">{{ a.waiting_on.kind }}</span>, {{ a.waiting_on.state }} since {{ a.waiting_on.requested_at|date:"H:i:s" }} UTC.</p>{% endif %}
+            <svg class="tl tl--attempt" role="img" aria-label="The attempt's steps over time" width="100%" height="70">
+                <line class="tl__base" x1="0" x2="100%" y1="34" y2="34"></line>
+                {% for b in a.segments %}<g class="tl__block tl__block--{{ b.cls }}"><title>{{ b.title }}</title><rect x="{{ b.x }}" y="22" width="{{ b.w }}" height="24" rx="3"></rect>{% if b.wide %}<text x="{{ b.mid }}" y="38" text-anchor="middle">{{ b.label }}</text>{% endif %}</g>{% endfor %}
+                {% for e in a.ticks %}<g class="tl__ev {{ e.cls }}"><title>{{ e.title }}</title><line x1="{{ e.x }}" x2="{{ e.x }}" y1="18" y2="50"></line></g>{% endfor %}
+                {% for m in a.marks %}<g class="tl__mark tl__mark--{{ m.cls }}"><title>{{ m.title }}</title><line x1="{{ m.x }}" x2="{{ m.x }}" y1="14" y2="52"></line><text x="{{ m.x }}" y="9" text-anchor="middle">{{ m.label }}</text></g>{% endfor %}
+                {% for t in a.axis_ticks %}<text class="tl__tick" x="{{ t.x }}" y="66" text-anchor="{{ t.anchor }}">{{ t.text }}</text>{% endfor %}
+            </svg>
+            <p class="field__label">What the attempt did{% if a.log_cut %} (the latest {{ a.log|length }}){% endif %}: time from the worm's start, then UTC</p>
+            <ol class="tl-log">
+                {% for e in a.log %}<li class="tl-log__{{ e.kind }}"><span class="mono">{{ e.offset }}</span><span class="mono muted">{{ e.ts|date:"H:i:s" }}</span><span>{{ e.text }}</span></li>{% empty %}<li><span></span><span></span><span class="muted">Nothing yet.</span></li>{% endfor %}
+            </ol>
+        </div>
+        {% elif p.upcoming %}
+        <p class="progress__next">Next: #{{ p.upcoming.position|add:1 }} {{ p.upcoming.team.name }}{% if p.upcoming.attempt %}, attempt {{ p.upcoming.attempt|add:1 }}{% endif %}{% if not p.upcoming.upload_id %} (no upload: skipped){% endif %}.</p>
+        {% endif %}{% endwith %}
+        {% endif %}
+    </div>
+</section>

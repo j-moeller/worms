@@ -1,4 +1,9 @@
 ---
+# The disks may have grown (OpenTofu: disk_size, data_disk_size).
+- name: Grow the partitions and file systems to their disks
+  ansible.builtin.include_role:
+    name: grow_disks
+
 - name: Install packages
   ansible.builtin.apt:
     name: [python3-pip, python3-venv, acl, ca-certificates]

@@ -84,16 +84,16 @@ locals {
       cpu               = 1
       cpu_type          = null
       ram               = 1024
-      disk_size         = 5
-      data_disk_size    = 20
+      disk_size         = 10 # grown in place; Ansible grows the file systems (grow_disks)
+      data_disk_size    = 40 # the cache: seed (some 300 MB) and what every window adds
       user_data_file_id = local.platform.cloud_init.apt_cache.file_id
     }
     devpi = {
       cpu               = 1
       cpu_type          = null
       ram               = 2048 # devpi-web (Whoosh indexing) OOMs on 1 GB -> crash-loop, nothing cached
-      disk_size         = 5
-      data_disk_size    = 10
+      disk_size         = 10 # grown in place; Ansible grows the file systems (grow_disks)
+      data_disk_size    = 40 # the mirror: the seed is some 5 GB with torch, and every window adds versions
       user_data_file_id = local.platform.cloud_init.devpi.file_id
     }
     docker_registry = {

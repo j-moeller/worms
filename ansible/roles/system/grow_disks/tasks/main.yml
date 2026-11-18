@@ -1,0 +1,22 @@
+---
+# OpenTofu grows a VM's disks in place (disk_size, data_disk_size), but the partitions and file
+# systems keep their size: cloud-init grows the root one only at boot, the data disk's never.
+# Here both follow their disk, online (ext4). growpart exits 1 when there is nothing to grow.
+- name: Grow the partitions to their disks
+  ansible.builtin.command: growpart {{ item.disk }} {{ item.partition }}
+  loop:
+    - {disk: /dev/vda, partition: 1, device: /dev/vda1}
+    - {disk: /dev/vdb, partition: 1, device: /dev/vdb1}
+  loop_control:
+    label: "{{ item.device }}"
+  register: grow_disks_partitions
+  changed_when: grow_disks_partitions.rc == 0
+  failed_when: grow_disks_partitions.rc not in [0, 1]
+
+- name: Grow the file systems to their partitions
+  ansible.builtin.command: resize2fs {{ item.item.device }}
+  loop: "{{ grow_disks_partitions.results }}"
+  loop_control:
+    label: "{{ item.item.device }}"
+  when: item.changed
+  changed_when: true

@@ -82,7 +82,7 @@ One verb per task ([`src/manage.py`](../src/manage.py)). Commands marked † ask
 | `worms build` | Everything, end to end (= `make`): below |
 | `worms build <component>... [--rebuild] [--packages] [--plan] [-- <ansible args>]` | Some components, and what they need first (below) |
 | `worms build devbox [--rebuild [--team NAME]]` | A devbox for every team without one: a `devbox_provision` job for the round agent. With `--rebuild` †: each team's (or `--team`'s) VMs from nothing, through the orchestrator |
-| `worms internet enable`, `worms internet disable` | Opens or closes the internet window by hand |
+| `worms internet enable [--yes]`, `worms internet disable` | Opens or closes the internet window by hand. Enabling is refused during a round (a sandbox VM exists). Running devbox VMs are shut down first, after asking (`--yes`: without asking); start them again after `worms internet disable` |
 
 ### Operate
 

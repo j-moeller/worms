@@ -542,9 +542,25 @@ def _show_table(config, args) -> int:
 
 
 def cmd_internet(config, args) -> int:
+    """`worms internet enable` is refused during a round (a sandbox VM exists). Running devbox
+    VMs are stopped first, after asking: no team VM runs while the window is open."""
     pipe = pipeline.Pipeline(config)
     try:
-        pipe.internet_allow() if args.state == "enable" else pipe.internet_deny()
+        if args.state == "enable":
+            pipe._refuse_vms_in(("sandbox",), "Refusing to open the internet window: sandbox VMs exist (a round is on)")
+            running = sorted((vm for vm in pipe.runner.vms() if vm.get("pool") == "devbox" and vm.get("status") == "running"),
+                             key=lambda vm: vm["name"])  # fmt: skip
+            if running:
+                names = ", ".join(vm["name"] for vm in running)
+                if not build.confirm(f"{len(running)} devbox VM(s) run ({names}). Stop them all and open the window?", args.yes):
+                    output.error("the window stays closed: no team VM may run while it is open")
+                    return 1
+                for vm in running:
+                    pipe.runner.node_sh(f"qm shutdown {vm['vmid']} --timeout 120 --forceStop 1")
+                print(output.color(f"stopped {len(running)} devbox VM(s); start them again after `worms internet disable`", "dim"))
+            pipe.internet_allow()
+        else:
+            pipe.internet_deny()
     except build.BuildError as exc:
         output.error(str(exc))
         return 1
@@ -956,7 +972,7 @@ SECTIONS = (
         (
             ("build [<component>...]", "build what is missing, configure what exists; --rebuild recreates (`worms build --help`); "
                                        "after `--`: arguments for ansible-playbook"),
-            ("internet enable|disable", "open or close the internet window by hand (refused while a team VM runs)"),
+            ("internet enable|disable", "open or close the internet window by hand (refused during a round; asks to stop running devboxes)"),
         ),
     ),
     Section(
@@ -1151,6 +1167,7 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
 
     p = _add(sub, "internet")
     p.add_argument("state", choices=["enable", "disable"])
+    _yes(p)
 
     p = sub.add_parser("reset", help="reset a part to its clean state", description="Reset the database, the service "
                        "VMs or teams' devboxes to their clean state.")  # fmt: skip

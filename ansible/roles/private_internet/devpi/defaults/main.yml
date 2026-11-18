@@ -197,3 +197,11 @@ devpi_seed_packages:
   - anyio
   - trio
   - uvloop
+  # What the old root/offline index and its wheelhouse held that the list above did not
+  # (tasks/seed.yml deletes both once root/pypi has all of it). torch from PyPI brings the
+  # CUDA libraries (some 3 GB): `pip install torch` on a devbox needs them from the mirror.
+  - tensorflow-cpu
+  - pyee
+  - torch
+  - torchvision
+  - torchaudio

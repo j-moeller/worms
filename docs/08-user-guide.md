@@ -104,7 +104,7 @@ curl -sS -X POST https://logging.worms.internal/submit -H 'Content-Type: applica
 | `scoring.worms.internal`, `logging.worms.internal` | 443 | above. `<anything>.scoring.worms.internal` works too |
 | DNS 10.2.0.11 | 53 | only `*.worms.internal` and the LLM name resolve |
 | `apt-cache.worms.internal` | 3142 | Debian packages: only what is cached, other `apt install`s fail. Cached: the usual tools (git, build-essential, gdb, strace, cmake, python3-dev, vim, tmux, rsync, curl, wget, netcat, socat, nmap, tcpdump, tshark, telnet and FTP clients, postgresql-client, sqlite3, 7zip, zip, oathtool, ripgrep, ...) and their dependencies ([the list](../ansible/roles/private_internet/apt_cache/defaults/main.yml)) |
-| `pypi.worms.internal` | 3141 | `http://pypi.worms.internal:3141/root/pypi/+simple/`: common Python packages and their dependencies (requests, numpy, pwntools, scapy, pyotp, pykeepass, python-docx, standard-telnetlib, ...; [the list](../ansible/roles/private_internet/devpi/defaults/main.yml)): only what is cached. Preconfigured on devboxes |
+| `pypi.worms.internal` | 3141 | `http://pypi.worms.internal:3141/root/pypi/+simple/`: common Python packages and their dependencies (requests, numpy, pwntools, scapy, pyotp, pykeepass, python-docx, standard-telnetlib, tensorflow-cpu, torch, ...; [the list](../ansible/roles/private_internet/devpi/defaults/main.yml)): only what is cached. Preconfigured on devboxes |
 | `wikipedia.worms.internal` | 8888 | kiwix |
 | `manpages.worms.internal` | 80 | man pages |
 | `cve-search.worms.internal` | 5000 | CVE search |

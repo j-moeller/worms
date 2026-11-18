@@ -2,15 +2,15 @@
 # Fetch what teams install, through the mirror, while the internet is open. With the
 # internet closed devpi serves only what it already holds.
 
-# On disk, not in /tmp: Debian 13 keeps /tmp in RAM (tmpfs, half the VM's memory),
-# and the downloads (some 650 MB for devpi_seed_packages) would sit there next to
-# devpi on this 2 GB VM until the last batch. The mirror keeps its own copy; these
-# are thrown away.
+# On the data disk (devpi_server_dir), not in /tmp or /var/tmp: Debian 13 keeps /tmp in RAM, and
+# the root disk has less free than one batch with torch and the CUDA libraries it pulls (some
+# 3 GB). The mirror keeps its own copy of every file, so each batch's are thrown away as soon as
+# the batch is done.
 - name: Create a scratch directory
   ansible.builtin.tempfile:
     state: directory
-    path: /var/tmp
-    prefix: devpi-seed.
+    path: "{{ devpi_server_dir }}"
+    prefix: .seed.
   register: devpi_seed_dir
 
 - name: Fill the mirror; the scratch directory goes even if that fails
@@ -21,14 +21,13 @@
     # files are served from the mirror, so later batches that share dependencies are
     # quick. The long timeout: the first request makes devpi fetch PyPI's project list.
     - name: Fetch the packages and everything they depend on (in batches)
-      ansible.builtin.command:
-        argv: >-
-          {{ [devpi_venv ~ '/bin/pip', 'download', '--quiet', '--no-cache-dir',
-              '--timeout', '300', '--retries', '5',
-              '--dest', devpi_seed_dir.path,
-              '--trusted-host', '127.0.0.1',
-              '--index-url', 'http://127.0.0.1:' ~ (devpi_port | string) ~ '/root/pypi/+simple/']
-             + item }}
+      ansible.builtin.shell: |
+        {{ devpi_venv }}/bin/pip download --quiet --no-cache-dir --timeout 300 --retries 5 \
+          --dest {{ (devpi_seed_dir.path ~ '/batch') | quote }} --trusted-host 127.0.0.1 \
+          --index-url http://127.0.0.1:{{ devpi_port }}/root/pypi/+simple/ {{ item | map('quote') | join(' ') }}
+        status=$?
+        rm -rf {{ (devpi_seed_dir.path ~ '/batch') | quote }}
+        exit $status
       loop: "{{ devpi_seed_packages | batch(devpi_seed_batch_size) | list }}"
       loop_control:
         label: "{{ item | join(', ') | truncate(60) }}"
@@ -38,4 +37,98 @@
     - name: Remove the scratch directory
       ansible.builtin.file:
         path: "{{ devpi_seed_dir.path }}"
+        state: absent
+
+# Leftovers of an experiment on worms-dev: an index root/offline, filled from a wheelhouse copied
+# to .wheelhouse-import. Devboxes use root/pypi only (devbox_pip_index_url), and the two held
+# most of its wheels twice more (some 1.9 GB). They go only once root/pypi holds a file of every
+# project either has (devpi_seed_packages lists what they had beyond the rest), so nothing a team
+# could install from them is lost; otherwise they stay and the missing projects are named. After
+# the seed, so the snapshot `clean` taken after this build has neither.
+- name: Check that root/pypi holds every project of root/offline and the old wheelhouse
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import os, re, sys
+        def projects(top):
+            names = set()
+            for _, _, files in os.walk(top):
+                for f in files:
+                    if f.endswith(".whl"):
+                        name = f.split("-")[0]
+                    elif f.endswith((".tar.gz", ".zip", ".tar.bz2")):
+                        name = re.sub(r"\.(tar\.gz|zip|tar\.bz2)$", "", f).rsplit("-", 1)[0]
+                    else:
+                        continue
+                    names.add(re.sub(r"[-_.]+", "-", name).lower())
+            return names
+        root = sys.argv[1]
+        have = projects(os.path.join(root, "+files", "root", "pypi"))
+        old = projects(os.path.join(root, "+files", "root", "offline")) | projects(os.path.join(root, ".wheelhouse-import"))
+        missing = sorted(old - have)
+        print(" ".join(missing))
+        sys.exit(1 if missing else 0)
+      - "{{ devpi_server_dir }}"
+  register: devpi_old_subset
+  changed_when: false
+  failed_when: devpi_old_subset.rc not in [0, 1]
+
+- name: Keep root/offline and the old wheelhouse while root/pypi lacks some of their projects
+  when: devpi_old_subset.rc != 0
+  ansible.builtin.debug:
+    msg: "kept: root/pypi has no file of {{ devpi_old_subset.stdout }}"
+
+- name: Delete root/offline and the old wheelhouse
+  when: devpi_old_subset.rc == 0
+  block:
+    - name: Check for the old root/offline index
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ devpi_port }}/root/offline"
+        headers: {Accept: application/json}
+        status_code: [200, 404]
+      register: devpi_offline_index
+
+    # Through devpi's API, so that its database forgets the files too. The index is
+    # non-volatile, which devpi refuses to delete: volatile first.
+    - name: Log in as root, to delete it
+      when: devpi_offline_index.status == 200
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ devpi_port }}/+login"
+        method: POST
+        body_format: json
+        body: {user: root, password: "{{ devpi_root_password }}"}
+        headers: {Accept: application/json}
+      register: devpi_cleanup_login
+      no_log: "{{ hide_secrets }}"
+
+    - name: Make root/offline volatile (devpi deletes no other index)
+      when: devpi_offline_index.status == 200
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ devpi_port }}/root/offline"
+        method: PATCH
+        body_format: json
+        body: ["volatile=True"]
+        headers:
+          Accept: application/json
+          X-Devpi-Auth: "{{ ('root:' ~ devpi_cleanup_login.json.result.password) | b64encode }}"
+      changed_when: true
+      no_log: "{{ hide_secrets }}"
+
+    - name: Delete root/offline and its files
+      when: devpi_offline_index.status == 200
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ devpi_port }}/root/offline"
+        method: DELETE
+        headers:
+          Accept: application/json
+          X-Devpi-Auth: "{{ ('root:' ~ devpi_cleanup_login.json.result.password) | b64encode }}"
+        status_code: [200, 201]
+      changed_when: true
+      no_log: "{{ hide_secrets }}"
+
+    - name: Remove the old wheelhouse copy
+      ansible.builtin.file:
+        path: "{{ devpi_server_dir }}/.wheelhouse-import"
         state: absent

@@ -30,13 +30,27 @@ options {
 	max-cache-size 32m;
 };
 
+// Every channel is a bounded file, so that no client can fill the disk (S8): each at most
+// 4 x 20 MB. Nothing goes to syslog: /var/log/syslog rotates weekly with no size limit, and
+// failed lookups alone (a VM asking for an outside name, e.g. timesyncd's NTP pool, about
+// 30 000 an hour from three devboxes) filled this VM's disk on 2026-11-18.
 logging {
 	channel query_log {
-		// Bounded so a query flood cannot fill the disk (S8): 4 x 20 MB max.
 		file "/var/log/named/query.log" versions 3 size 20m;
 		print-time yes;
 		print-category yes;
 		severity info;
 	};
+	channel named_log {
+		file "/var/log/named/named.log" versions 3 size 20m;
+		print-time yes;
+		print-category yes;
+		print-severity yes;
+		severity info;
+	};
 	category queries { query_log; };
+	// The queries that failed (SERVFAIL, refused names), beside the queries.
+	category query-errors { query_log; };
+	// Everything else named says: start, zones, denied queries, rate limits, resolver errors.
+	category default { named_log; };
 };

@@ -230,7 +230,7 @@ IDs are cited in code comments. S = team VMs, D = dashboard, C = cross-cutting. 
   - S5: attribution failed open.
   - S6: the internet window could open with team VMs running.
   - S7: a run could start before the last teardown.
-  - S8: unbounded DNS query log.
+  - S8: unbounded DNS query log. Reopened and fixed again on 2026-11-18: only the `queries` category was bounded. The failed lookups (`query-errors`) and the rest of named's log still went to syslog, which rotates weekly with no size limit. The devboxes' NTP pool lookups, about 30 000 failures an hour, filled the DNS VM's 4.8 GB disk in a week. Every BIND category now goes to a bounded file under `/var/log/named/`.
   - S15: a replaced VM lost its firewall.
   - S16: a team login got a shell on the SSH gateway.
   - F14/G8: gateways without nftables.

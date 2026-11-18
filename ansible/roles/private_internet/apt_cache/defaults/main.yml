@@ -85,3 +85,92 @@ apt_cache_seed_packages:
   - python3-django
   - python3-venv
   - vsftpd
+  # Python development, packaging and testing:
+  - python3-build
+  - python3-wheel
+  - python3-setuptools
+  - python3-virtualenv
+  - python3-pytest
+  - python3-pytest-cov
+  - python3-coverage
+  - python3-tox
+  - python3-mock
+  - python3-nose2
+  - python3-flake8
+  - python3-mypy
+  - python3-babel
+  - python3-click
+  - python3-yaml
+  - python3-requests
+  - python3-httpx
+  - python3-aiohttp
+  - python3-websockets
+  - python3-psutil
+  - python3-watchdog
+  - python3-lxml
+  - python3-cryptography
+  - python3-paramiko
+  - python3-scapy
+  # Advanced network diagnostics and testing:
+  - iperf3
+  - mtr-tiny
+  - arping
+  - ethtool
+  - bridge-utils
+  - iproute2
+  - vlan
+  - fping
+  - hping3
+  - conntrack
+  - iptables
+  - iptables-persistent
+  - net-tools
+  - whois
+  - curl
+  - openssh-client
+  - openssh-server
+  - wireguard-tools
+  # HTTP, REST API and web application testing:
+  - httpie
+  - apache2-utils
+  - siege
+  - hey
+  - websocat
+  - mitmproxy
+  - openssl
+  - xmlstarlet
+  - yq
+  # Security testing and vulnerability analysis:
+  - nikto
+  - yara
+  - yara-x
+  - lynis
+  - chkrootkit
+  - debsums
+  - fail2ban
+  - auditd
+  - apparmor-utils
+  - libcap2-bin
+  - tcpdump
+  - sslscan
+  # Database development and testing:
+  - redis-tools
+  - mariadb-client
+  - libpq-dev
+  - sqlite3
+  - jq
+  - csvkit
+  - miller
+  - moreutils
+  # Build systems, automation and CI tooling:
+  - make
+  - ninja-build
+  - meson
+  - autoconf
+  - automake
+  - libtool
+  - gettext
+  - shellcheck
+  - parallel
+  - time
+  - expect

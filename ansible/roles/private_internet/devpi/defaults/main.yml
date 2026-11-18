@@ -205,3 +205,97 @@ devpi_seed_packages:
   - torch
   - torchvision
   - torchaudio
+  # --- Transitive deps (mandatory if devpi has no upstream fallthrough) ---
+  # The requests / pydantic / torch stack depends on these universally.
+  - typing-extensions
+  - certifi
+  - idna
+  - charset-normalizer
+  - markupsafe          # jinja2, flask
+  - pygments            # rich, ipython, jupyter
+  - greenlet            # sqlalchemy async
+  - cffi                # cryptography, pynacl, argon2-cffi
+  - pycparser
+  - pluggy              # pytest
+  - iniconfig
+  - tomli
+  - pydantic-core       # pydantic v2
+  - annotated-types
+  - starlette           # fastapi
+  - sniffio
+  - h11
+  - httpcore            # httpx
+  - httptools           # uvicorn[standard]
+  - watchfiles
+  - multidict           # aiohttp
+  - yarl
+  - frozenlist
+  - aiosignal
+  - async-timeout
+  - werkzeug            # flask
+  - itsdangerous
+  - blinker
+  - asgiref             # django
+  - sqlparse
+  - mako                # alembic
+  - botocore            # boto3
+  - jmespath
+  - s3transfer
+  - joblib              # scikit-learn
+  - threadpoolctl
+  - kiwisolver          # matplotlib
+  - cycler
+  - fonttools
+  - contourpy
+  - mpmath              # sympy, torch
+  - filelock
+  - tzdata
+  - maturin             # build Rust-extension sdists offline
+  - setuptools-rust
+  # --- Documentation (nothing in the seed builds docs) ---
+  - sphinx
+  - sphinx-rtd-theme
+  - furo
+  - myst-parser
+  - mkdocs
+  - mkdocs-material
+  # --- ML companions to the seeded torch/torchvision ---
+  - huggingface-hub
+  - transformers
+  - tokenizers
+  - safetensors
+  - accelerate
+  - datasets
+  - opencv-python
+  - onnxruntime
+  - xgboost
+  - lightgbm
+  # --- LLM SDKs ---
+  - openai
+  - anthropic
+  - tiktoken
+  # --- Task queues / scheduling ---
+  - celery
+  - kombu
+  - apscheduler
+  - watchdog
+  # --- Cloud SDKs beyond AWS ---
+  - google-cloud-storage
+  - google-api-python-client
+  - azure-identity
+  - azure-storage-blob
+  # --- Plotting beyond matplotlib/seaborn ---
+  - plotly
+  - altair
+  - bokeh
+  # --- Packaging / publishing ---
+  - twine
+  # --- FastAPI essentials ---
+  - python-multipart
+  - email-validator
+  # --- RE / analysis (rounds out angr, unicorn, capstone, keystone, lief) ---
+  - yara-python
+  - r2pipe
+  - qiling
+  - volatility3
+  - mitmproxy

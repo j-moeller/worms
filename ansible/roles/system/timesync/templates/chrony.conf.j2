@@ -1,0 +1,14 @@
+# Managed by Ansible (role timesync). This VM's clock follows the Proxmox host's, read through
+# KVM's PTP clock (ptp_kvm): no network source, so no NTP traffic, no DNS lookup and no route
+# to the host. The host is synced to public NTP servers.
+refclock PHC {{ timesync_refclock }} poll 2 dpoll -2
+{% for network in timesync_allow %}
+allow {{ network }}
+{% endfor %}
+{% if timesync_local_stratum %}
+local stratum {{ timesync_local_stratum }}
+{% endif %}
+driftfile /var/lib/chrony/drift
+# Step whenever the clock is a second or more off, not only after a start: a service VM rolled
+# back to its snapshot resumes at the time the snapshot was taken.
+makestep 1 -1

@@ -36,6 +36,7 @@
 
   roles:
     - role: apt_client
+    - role: ntp_client
     - role: untrusted_gateway
 
 - name: Configure the devbox VMs
@@ -55,4 +56,5 @@
   roles:
     - role: ca_distribute
     - role: apt_client
+    - role: ntp_client
     - role: devbox

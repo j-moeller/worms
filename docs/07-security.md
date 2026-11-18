@@ -236,6 +236,11 @@ IDs are cited in code comments. S = team VMs, D = dashboard, C = cross-cutting. 
   - F14/G8: gateways without nftables.
   - G5: Zeek stopped at log rotation.
   - S27 (2026-11-08): a failing gameplan job could copy gameplan content into the database.
+  - S28 (2026-11-18): no VM's clock was synced. timesyncd asked Debian's fallback pool, which the private resolver refuses, and UDP 123 is not forwarded, so the private NTP server never synced either. After two weeks the platform VMs ran 39 s ahead of the node, whose clock stamps a worm's start. Now:
+    - every platform VM's chrony reads the node's clock through KVM's PTP clock (`ptp_kvm`), a hypercall every KVM guest has. No VM gets a network path to the node for it;
+    - the NTP VM does the same and serves the services network;
+    - team VMs and gateways ask only the NTP VM, with no fallback pool.
+    - Still unsynced: the devbox SSH gateway. It has no package source for chrony, and it serves only SSH forwarding.
 - **D** (dashboard):
   - D1: a session row per anonymous request.
   - D2: devbox rebuilds piled up.

@@ -185,6 +185,11 @@ A later deploy gives every row a new UUID, so links handed out meanwhile change 
 - **Before the deploy.** Look at **Staff → Rounds** on production for a round whose start has passed with runs still pending. Under the new order, a round created later but starting earlier can come first.
 - **The editor.** A round whose first team was skipped (no upload) before its gameplan was chosen can now still be given one. Before, the skip locked the round.
 
+**Time** (S28 in [7](07-security.md)) adds the playbook `SetupTime.yml` and the package `chrony` on every platform VM. It needs no migration, no secret and no firewall change.
+- **Install.** chrony comes during a build with the internet window open. A component build without it (`--skip-tags packages`) leaves a VM on its old clock until the next such build.
+- **The first sync steps every platform VM's clock.** On worms-dev they ran 39 s ahead, so time jumped back once. On production it may be more or less. Deploy outside a round, as for every deploy.
+- **Team VMs and gateways** get the private NTP server with the next sandbox build (`SetupSandbox.yml`) and `worms build devbox` (`SetupDevbox.yml`).
+
 **`worms rsync`** ([3](03-manage-py.md#see)) is the controller's CLI. Devboxes need rsync for it: it is a new devbox package and apt cache seed. The apt cache fetches it in step 7 (`apt-cache --packages`); existing devboxes install it with `worms step devbox-configure`, new ones when they are built.
 
 None of this alters round_one or `credential_chain.py`: neither removes a package, and `credential_chain.py`'s only telnet user is its telnet login. The round agent has to be restarted after the deploy (step 6) all the more: the new `sandbox_vm` role reads `accounts` and `purge`, which only the new `build.py` writes.

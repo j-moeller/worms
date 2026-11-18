@@ -1,19 +1,13 @@
 ---
+# chrony's configuration is role timesync's (SetupTime.yml, earlier in the build): the host's
+# clock through KVM's PTP clock, served to the services network (group_vars/ntp.yml). This role
+# installs it and tightens its unit.
 - name: Install chrony
   ansible.builtin.apt:
     name: [chrony, ca-certificates]
     state: present
     update_cache: "{{ internet_enabled | bool }}"
     cache_valid_time: "{{ 3600 if internet_enabled | bool else omit }}"
-
-- name: Deploy chrony config
-  ansible.builtin.template:
-    src: chrony.conf.j2
-    dest: /etc/chrony/chrony.conf
-    owner: root
-    group: root
-    mode: '0644'
-  notify: Restart chrony
 
 - name: Create the chrony systemd drop-in directory
   ansible.builtin.file:

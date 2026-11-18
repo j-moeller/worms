@@ -1,0 +1,48 @@
+---
+# Without it every VM ran systemd-timesyncd on Debian's fallback pool (0-3.debian.pool.ntp.org):
+# offline the lookups fail, so no VM was ever synced. After two weeks the platform VMs were
+# 39 s ahead of the host, whose clock the round agent stamps the worm's start with.
+- name: Load the KVM PTP clock at boot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/ptp_kvm.conf
+    content: "ptp_kvm\n"
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Load the KVM PTP clock now
+  ansible.builtin.command:
+    cmd: modprobe ptp_kvm
+    creates: "{{ timesync_refclock }}"
+
+# chrony reads a PTP clock; systemd-timesyncd cannot. Installing it removes timesyncd.
+- name: Install chrony
+  ansible.builtin.apt:
+    name: chrony
+    state: present
+    update_cache: "{{ internet_enabled | bool }}"
+    cache_valid_time: "{{ 3600 if internet_enabled | bool else omit }}"
+  tags: [packages]
+
+# A build without the internet window skips the install (--skip-tags packages).
+- name: Check whether chrony is installed
+  ansible.builtin.stat:
+    path: /usr/sbin/chronyd
+  register: timesync_chronyd
+
+- name: Follow the host's clock only
+  ansible.builtin.template:
+    src: chrony.conf.j2
+    dest: /etc/chrony/chrony.conf
+    owner: root
+    group: root
+    mode: '0644'
+  when: timesync_chronyd.stat.exists
+  notify: Restart chrony
+
+- name: Enable and start chrony
+  ansible.builtin.systemd:
+    name: chrony
+    enabled: true
+    state: started
+  when: timesync_chronyd.stat.exists

@@ -1,0 +1,16 @@
+---
+# Time (role timesync): every platform VM's clock follows the Proxmox host's, read through KVM's
+# PTP clock, with no network source. The NTP VM does the same and serves that time to the
+# services network (group_vars/ntp.yml), where the team VMs and their gateways ask it (role
+# ntp_client, SetupSandbox.yml and SetupDevbox.yml). Right after UpdateVMs.yml: chrony is a
+# package, installed while the internet window is open.
+#
+# Not applied to the host (it is synced to public NTP servers), nor to the untrusted VMs, nor to
+# the devbox SSH gateway: it has no package source for chrony (no apt-cache, no internet
+# window), and its stack lives on the node (docs/07-security.md, S28).
+- name: Follow the host's clock
+  hosts: all:!proxmox_host:!untrusted:!ssh_gateway
+  any_errors_fatal: true
+  become: true
+  roles:
+    - timesync

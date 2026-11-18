@@ -1,4 +1,3 @@
 ---
-ntp_upstream_pool: pool.ntp.org
-ntp_allow_network: "{{ networks.services }}"
-ntp_local_stratum: 10
+# chrony's configuration is role timesync's: what the NTP VM serves and to whom is in
+# group_vars/ntp.yml (timesync_allow, timesync_local_stratum).

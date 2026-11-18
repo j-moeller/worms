@@ -104,21 +104,22 @@ Sources: [`src/worms_cli/pipeline.py`](../src/worms_cli/pipeline.py), [`src/worm
 ## Ansible
 
 - **Inventory.** [`inventory.yml`](../ansible/inventory.yml) defines the groups. [`inventory.generated.yml`](../scripts/generate_inventory.py) holds the hosts, written from the stacks' `ansible_hosts` outputs.
-- **Configure order.** `worms build` runs 14 playbooks:
+- **Configure order.** `worms build` runs 15 playbooks:
   1. `WaitForVMs`
   2. `SetupDNS`
   3. `UpdateVMs`
-  4. `HardenSSH`
-  5. `CreateCA`
-  6. `DistributeCA`
-  7. `ConfigureNginx`
-  8. `ConfigureNginxDjango`
-  9. `SetupDbAndDashboard`
-  10. `SetupSandboxApi`
-  11. `SetupNetworkMonitor`
-  12. `SetupPrivateInternet`
-  13. `SetupAudit`
-  14. `SetupRoundAgent`
+  4. `SetupTime`
+  5. `HardenSSH`
+  6. `CreateCA`
+  7. `DistributeCA`
+  8. `ConfigureNginx`
+  9. `ConfigureNginxDjango`
+  10. `SetupDbAndDashboard`
+  11. `SetupSandboxApi`
+  12. `SetupNetworkMonitor`
+  13. `SetupPrivateInternet`
+  14. `SetupAudit`
+  15. `SetupRoundAgent`
 - **Playbooks the round agent runs on the node.** `SetupSandbox`, `SetupDevbox` and `SetupSSHGateway`.
 - **Secrets.** An ansible-vault file, `ansible/group_vars/vault.yml` ([7](07-security.md#secrets)).
 - **Which system.** `worms_environments` in [`group_vars/all.yml`](../ansible/group_vars/all.yml), keyed by the node's hostname:

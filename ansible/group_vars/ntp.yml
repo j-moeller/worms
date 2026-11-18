@@ -1,3 +1,6 @@
----
-# NTP VM (OpenTofu: private_internet, key ntp).
-ntp_allow_network: "{{ networks.services }}"
+# NTP VM (OpenTofu: private_internet, key ntp). Its clock follows the host's (role timesync, like
+# every platform VM's); it serves that time to the services network, where the team VMs and
+# their gateways ask it (role ntp_client). It never asks the internet: UDP 123 is not forwarded.
+timesync_allow: ["{{ networks.services }}"]
+# Keep serving if the host's clock cannot be read: the team VMs then agree with each other.
+timesync_local_stratum: 10

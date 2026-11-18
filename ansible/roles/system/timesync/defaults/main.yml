@@ -1,0 +1,12 @@
+---
+# Every platform VM's clock follows the Proxmox host's (synced to public NTP servers), read
+# through KVM's PTP clock: the ptp_kvm module's /dev/ptp0, a hypercall every KVM guest has.
+# No network source: no NTP traffic, no DNS lookup, and no route to the host
+# (docs/06-background-processes.md; docs/07-security.md, S28).
+timesync_refclock: /dev/ptp0
+
+# The networks this VM serves time to (the NTP VM: the services network, for the team VMs).
+timesync_allow: []
+
+# Serve even while the host's clock cannot be read (the NTP VM); "" for none.
+timesync_local_stratum: ""

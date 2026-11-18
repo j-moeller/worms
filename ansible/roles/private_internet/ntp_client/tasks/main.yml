@@ -1,0 +1,33 @@
+---
+# The team VMs and their gateways (sandbox, devbox): the private internet's NTP server by its
+# address, and never Debian's fallback pool. Without it systemd-timesyncd asked for
+# 0-3.debian.pool.ntp.org, which the private resolver refuses: about 30 000 failed lookups an
+# hour from three devboxes, and no VM ever synced. The NTP server follows the host's clock
+# (roles timesync and ntp); the firewall lets these VMs reach it on UDP 123.
+- name: Check whether systemd-timesyncd is installed
+  ansible.builtin.stat:
+    path: /usr/lib/systemd/systemd-timesyncd
+  register: ntp_client_timesyncd
+
+- name: Create the timesyncd drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/timesyncd.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: ntp_client_timesyncd.stat.exists
+
+- name: Ask the private NTP server only
+  ansible.builtin.copy:
+    dest: /etc/systemd/timesyncd.conf.d/worms.conf
+    content: |
+      # Managed by Ansible (role ntp_client): the private internet's NTP server, no fallback pool.
+      [Time]
+      NTP={{ private_internet_ips.ntp.network }}
+      FallbackNTP=
+    owner: root
+    group: root
+    mode: '0644'
+  when: ntp_client_timesyncd.stat.exists
+  notify: Restart systemd-timesyncd

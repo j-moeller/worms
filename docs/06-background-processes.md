@@ -70,6 +70,7 @@ Devbox traffic is not mirrored, so it is not recorded.
 | syslog | `rsyslog` (imtcp :514) | Writes each sender's lines to `/var/log/remote/<sender ip>/audit.log`. The directory comes from the TCP peer, not from the message. Rotated daily, kept 30 days |
 | syslog | `worms-reply-route` | oneshot: a policy route so replies leave by the siem bridge |
 | every infrastructure and private-internet VM | `auditd`, `rsyslog` | auditd rules (exec, identity, config, persistence, modules) are forwarded over plain TCP, with a disk queue of up to 1 GB ([`audit/*`](../ansible/roles/audit/)) |
+| every platform VM (not the team VMs or their gateways) | `chrony` | The host's clock through KVM's PTP clock (`refclock PHC /dev/ptp0`, module `ptp_kvm`): no network source and no route to the host. Steps whenever 1 s off, e.g. after a snapshot rollback ([`timesync`](../ansible/roles/system/timesync/)) |
 
 ## DNS and private internet
 
@@ -80,7 +81,7 @@ Devbox traffic is not mirrored, so it is not recorded.
 | pypi | `devpi` (:3141) | `--offline-mode` while offline; only root may upload |
 | docker-registry | `docker-registry` (:5000) | Read-only while offline; nothing seeds it |
 | manpages | `apache2` (:80) | man2html |
-| ntp | `chrony` (UDP 123) | No upstream while offline |
+| ntp | `chrony` (UDP 123) | Follows the host's clock like every platform VM (below) and serves it to the services network; `local stratum 10` if that clock cannot be read. Never asks the internet |
 | cve-search | `mongod`, `redis-server`, `cve-search` (:5000) | `cve-search` is enabled but not started. Fill its data by hand with `/usr/local/bin/cve-search-populate` |
 | wikipedia | `kiwix-serve` (:8888) | Skipped until a ZIM file exists. Download it by hand with `/usr/local/bin/wikipedia-download` |
 
@@ -93,6 +94,7 @@ Devbox traffic is not mirrored, so it is not recorded.
 | sandbox-gw, devbox-gw | `nftables` | Forward rules, NAT (cloud-init writes them, role `untrusted_gateway` enables them) |
 | sandbox-gw, devbox-gw | `worms-llm-route` | oneshot: a /32 route to the LLM endpoint via the node |
 | devbox-ssh-gateway | `sshd` | Port forwarding to the teams' A VMs |
+| sandbox and devbox VMs, both gateways | `systemd-timesyncd` | Asks only the private NTP server, by address (`ntp.worms.internal`); no fallback pool ([`ntp_client`](../ansible/roles/private_internet/ntp_client/)) |
 | sandbox and devbox VMs | `worms-start.timer` / `.service` (transient) | The armed worm: `bash main.sh` as `debian`. On a devbox, `RuntimeMaxSec=3600` |
 
 ## Backups

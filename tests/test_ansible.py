@@ -561,7 +561,7 @@ def test_django_nginx_forwards_the_host_with_its_port(render):
 
 # Roles every host gets from the configure sequence, and the sequence itself.
 CONFIGURE = [
-    "WaitForVMs.yml", "SetupDNS.yml", "UpdateVMs.yml", "HardenSSH.yml", "CreateCA.yml", "DistributeCA.yml",
+    "WaitForVMs.yml", "SetupDNS.yml", "UpdateVMs.yml", "SetupTime.yml", "HardenSSH.yml", "CreateCA.yml", "DistributeCA.yml",
     "ConfigureNginx.yml", "ConfigureNginxDjango.yml", "SetupDbAndDashboard.yml", "SetupSandboxApi.yml",
     "SetupNetworkMonitor.yml", "SetupPrivateInternet.yml", "SetupAudit.yml", "SetupRoundAgent.yml",
 ]  # fmt: skip
@@ -580,9 +580,9 @@ ROLES = {
     **{pi: ["apt_client", pi, "auditd"] for pi in ("apt_cache", "devpi", "docker_registry", "manpages", "ntp",
                                                    "cve_search", "wikipedia")},
 }  # fmt: skip
-# Every VM first gets apt_updates (UpdateVMs.yml).
+# Every VM first gets apt_updates (UpdateVMs.yml) and the host's clock (SetupTime.yml).
 for _vm in set(ROLES) - {"proxmox_host", "localhost"}:
-    ROLES[_vm] = ["apt_updates", *ROLES[_vm]]
+    ROLES[_vm] = ["apt_updates", "timesync", *ROLES[_vm]]
 # Plays that wait for cloud-init on each of their VMs before their roles.
 CLOUD_INIT_WAITS = {
     ("WaitForVMs.yml", "all:!proxmox_host:!sandbox:!sandbox_gw"), ("SetupDNS.yml", "dns_hosts"),
@@ -648,8 +648,8 @@ def test_untrusted_gateways_get_their_rules_before_their_vms_need_them(playbook,
     plays = [p for p in yaml.safe_load((ANSIBLE / playbook).read_text()) if p.get("roles")]
     assert [p["hosts"] for p in plays] == [gateways, vms]
     gateway_roles, vm_roles = ([r["role"] for r in p["roles"]] for p in plays)
-    assert gateway_roles == ["apt_client", "untrusted_gateway"]
-    assert "apt_client" in vm_roles
+    assert gateway_roles == ["apt_client", "ntp_client", "untrusted_gateway"]
+    assert "apt_client" in vm_roles and "ntp_client" in vm_roles
 
 
 def test_untrusted_vms_use_the_private_internet_for_packages():

@@ -66,9 +66,10 @@ worms login orchestrator
 # 5. PRIVATE INTERNET SEED + NGINX SECURITY UPDATE (one internet window; devboxes go down)
 worms build apt-cache devpi dashboard --packages
 
-# 6. TEAR DOWN + REBUILD EVERY DEVBOX (new pip index + offline NTP)
-worms reset devbox --all-teams
-worms status jobs       # watch the devbox_rebuild jobs drain
+# 6. TEAR DOWN + REBUILD EVERY DEVBOX FROM NOTHING (fresh disks; new pip index + offline NTP)
+worms build devbox --rebuild    # every team (--team <name> repeatable for a subset); prompts to DESTROY
+worms status jobs               # watch the devbox_rebuild jobs drain on the node
+# lighter alternative (snapshot rollback + reconfigure; also applies the update): worms reset devbox --all-teams
 
 # 7. VERIFY
 worms status            # everything up, internet window CLOSED
@@ -108,7 +109,7 @@ parts that matter for a deploy:
 | **Dashboard / API** | Rounds, tokens, SSH keys and progression are addressed by **UUID**, not a number. New **Staff → Simulations** and **Simulate** on a round. Favicon, Dev‑view round badge. | `worms build dashboard` |
 | **Gameplans** (new feature) | `src/gameplan`: documents, archives, KeePass vaults, TOTP/telnet logins, `read_file`, simulation, immutable versions. A second example, `credential_chain.py`. | orchestrator + round agent |
 | **Round agent (node)** | the `read_file` job, new secret kinds, `python3-cryptography`. **Must be restarted by hand** after the deploy. | `worms build round-agent` **+ `systemctl restart`** |
-| **Devbox** | pip now points at the seeded devpi mirror; time syncs from `ntp.worms.internal` (offline). | **a devbox rebuild** ([§5](#5-tear-down-and-rebuild-every-devbox)) |
+| **Devbox** | pip now points at the seeded devpi mirror; time syncs from `ntp.worms.internal` (offline). | **`worms build devbox --rebuild`** ([§7](#7-tear-down-and-rebuild-every-devbox)) |
 | **Private internet** | larger devpi seed (116 pkgs), new apt‑cache packages, stale‑index guard. | `worms build apt-cache devpi --packages` ([§4](#4-refresh-the-private-internet-internet-window)) |
 | **DNS** | every BIND log is a bounded file (failed lookups were filling the DNS VM's disk). | `worms build dns` (or the full build) |
 
@@ -121,7 +122,7 @@ the sshd‑bind fix, so the migration step will not hang.
 ## The three things you flagged
 
 1. **The database is not backed up.** Dump it *first* ([§1](#1-back-up-the-database-first-nothing-else-does)). The UUID steps `0011`/`0014` rewrite rows; a dump is your floor. Nothing in the platform backs the database up on its own.
-2. **Tearing down every devbox.** Use **`worms reset devbox --all-teams`** ([§5](#5-tear-down-and-rebuild-every-devbox)) — it rebuilds each team's three VMs fresh (new pip index + NTP), through the orchestrator, keeping the dev records. **Do _not_ use `worms destroy`** for this: `destroy` tears down the VM stacks **and the database VM and its records**. See [Don'ts](#donts).
+2. **Tearing down every devbox.** Use **`worms build devbox --rebuild`** ([§7](#7-tear-down-and-rebuild-every-devbox)) — it rebuilds every team's three VMs **from nothing** (fresh disks), re‑applies the new pip index + NTP and re‑snapshots them clean; dev scores restart, dev records are kept. (`worms reset devbox --all-teams` is the lighter option — a snapshot rollback + reconfigure that still applies the update but leaves the clean snapshot on the old config.) **Do _not_ use `worms destroy`** — it tears down the VM stacks **and the database VM and its records**. See [Don'ts](#donts).
 3. **nginx security update.** This is *not* in `3ce1751`. nginx is a plain Debian package installed `state: present` (install, never upgrade), so a normal build never moves it. The security build comes from an **apt upgrade during an internet window** — i.e. a `--packages` build of the dashboard. Details and the "newer than Debian stable" case in [§6](#6-nginx-security-update-on-the-dashboard).
 
 ---
@@ -250,13 +251,21 @@ You can combine §5 and §6 into one window: `worms build apt-cache devpi dashbo
 Now that the private internet is seeded and the window is closed:
 
 ```sh
-worms reset devbox --all-teams
-worms status jobs            # watch the devbox_rebuild jobs run and drain
+worms build devbox --rebuild    # every team; add --team <name> (repeatable) for a subset
+worms status jobs               # watch the devbox_rebuild jobs run and drain
 ```
-Each team's three VMs are rebuilt from scratch through the orchestrator → round
-agent (fresh disks, keys re‑installed, **new pip index + NTP drop‑in applied**),
-the dev score restarts, earlier dev records are kept. This is the "tear down all
-devbox VMs" you wanted — do it with `reset`, never `destroy`.
+This is the literal "tear down all devbox VMs": through the orchestrator → round
+agent, each team's three VMs are **replaced from nothing (fresh disks)**, keys
+re‑installed, the **new pip index + NTP drop‑in applied**, and a fresh `clean`
+snapshot taken (so later team resets roll back to the new config). Dev scores
+restart; earlier dev records are kept. It prompts to DESTROY first (`--yes` skips).
+
+> `worms reset devbox --all-teams` is the lighter alternative — it rolls each
+> devbox back to its *pre‑deploy* `clean` snapshot and then reconfigures, which
+> **also** applies the new pip/NTP, but is not a fresh teardown and leaves the
+> snapshot on the old config. Either picks up the private‑internet change;
+> `--rebuild` is the one that matches "tear down". Never use `worms destroy` —
+> it takes the database VM too.
 
 ### 8. Verify
 
@@ -311,7 +320,8 @@ Full detail (two rehearsed, data‑preserving options) is in
 ## Don'ts
 
 - **Don't `worms destroy`** to clear devboxes — it destroys the VM stacks **and
-  the database VM and its records**. Use `worms reset devbox --all-teams`.
+  the database VM and its records**. Use `worms build devbox --rebuild` (or
+  `worms reset devbox --all-teams` for the lighter rollback+reconfigure).
   (`worms destroy --all` is even broader.) There is no undo but the step‑1 dump.
 - **Don't deploy during a round** — the running team loses its attempt.
 - **Don't skip the agent restart** (§4). Nothing reports the error; a flag just

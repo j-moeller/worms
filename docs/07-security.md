@@ -241,6 +241,7 @@ IDs are cited in code comments. S = team VMs, D = dashboard, C = cross-cutting. 
     - the NTP VM does the same and serves the services network;
     - team VMs and gateways ask only the NTP VM, with no fallback pool.
     - Still unsynced: the devbox SSH gateway. It has no package source for chrony, and it serves only SSH forwarding.
+  - Disk filling by logs (with S8): rsyslog's files on every platform VM rotate past 100 MB, checked hourly.
 - **D** (dashboard):
   - D1: a session row per anonymous request.
   - D2: devbox rebuilds piled up.

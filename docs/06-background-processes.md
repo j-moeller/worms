@@ -71,12 +71,13 @@ Devbox traffic is not mirrored, so it is not recorded.
 | syslog | `worms-reply-route` | oneshot: a policy route so replies leave by the siem bridge |
 | every infrastructure and private-internet VM | `auditd`, `rsyslog` | auditd rules (exec, identity, config, persistence, modules) are forwarded over plain TCP, with a disk queue of up to 1 GB ([`audit/*`](../ansible/roles/audit/)) |
 | every platform VM (not the team VMs or their gateways) | `chrony` | The host's clock through KVM's PTP clock (`refclock PHC /dev/ptp0`, module `ptp_kvm`): no network source and no route to the host. Steps whenever 1 s off, e.g. after a snapshot rollback ([`timesync`](../ansible/roles/system/timesync/)) |
+| every platform VM | `logrotate.timer` | Hourly, not daily: rsyslog's files rotate past 100 MB whatever the week ([`log_limits`](../ansible/roles/system/log_limits/)) |
 
 ## DNS and private internet
 
 | VM | Units | Notes |
 |---|---|---|
-| dns | `named` | Authoritative for `worms.internal`. Recursion only while the internet window is open; query log capped at 3 × 20 MB |
+| dns | `named` | Authoritative for `worms.internal`. Recursion only while the internet window is open. Every log is a file under `/var/log/named/` capped at 4 × 20 MB: `query.log` (queries and failed lookups), `named.log` (the rest). Nothing goes to syslog |
 | apt-cache | `apt-cacher-ng` (:3142) | `Offlinemode: 1` while offline |
 | pypi | `devpi` (:3141) | `--offline-mode` while offline; only root may upload |
 | docker-registry | `docker-registry` (:5000) | Read-only while offline; nothing seeds it |

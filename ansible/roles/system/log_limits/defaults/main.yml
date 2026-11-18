@@ -1,0 +1,5 @@
+---
+# The files rsyslog writes (/var/log/syslog, auth.log, ...) rotate weekly with no size limit:
+# on 2026-11-18 one noisy source (failed DNS lookups) filled the DNS VM's 4.8 GB disk in a week.
+# Rotated past this size whatever the week, checked every hour (docs/07-security.md, S8).
+log_limits_maxsize: 100M

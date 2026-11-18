@@ -1,0 +1,38 @@
+---
+# rsyslog's own rotation (Debian's /etc/logrotate.d/rsyslog): weekly, 4 kept, compressed. The
+# size limit joins it; the rest stays the package's.
+- name: Check whether rsyslog's rotation is there
+  ansible.builtin.stat:
+    path: /etc/logrotate.d/rsyslog
+  register: log_limits_rsyslog
+
+- name: Rotate rsyslog's files past {{ log_limits_maxsize }}, whatever the week
+  ansible.builtin.lineinfile:
+    path: /etc/logrotate.d/rsyslog
+    regexp: '^\s*maxsize\s'
+    line: "\tmaxsize {{ log_limits_maxsize }}"
+    insertafter: '^\s*weekly\s*$'
+  when: log_limits_rsyslog.stat.exists
+
+# Debian runs logrotate daily (and up to an hour late): a size limit is checked only then.
+- name: Create the logrotate timer's drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/logrotate.timer.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Run logrotate every hour
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/logrotate.timer.d/worms-hourly.conf
+    content: |
+      # Managed by Ansible (role log_limits): a size limit is only checked when logrotate runs.
+      [Timer]
+      OnCalendar=
+      OnCalendar=hourly
+      RandomizedDelaySec=5min
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart the logrotate timer

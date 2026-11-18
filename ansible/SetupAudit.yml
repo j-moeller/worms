@@ -16,3 +16,12 @@
   become: true
   roles:
     - auditd
+
+# The local logs (role log_limits): rsyslog's files rotate past a size, checked every hour, so
+# that no noisy source fills a disk. After auditd, which installs rsyslog.
+- name: Bound the local logs
+  hosts: all:!proxmox_host:!untrusted
+  any_errors_fatal: true
+  become: true
+  roles:
+    - log_limits

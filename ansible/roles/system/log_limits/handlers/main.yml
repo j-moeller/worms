@@ -1,0 +1,6 @@
+---
+- name: Restart the logrotate timer
+  ansible.builtin.systemd:
+    name: logrotate.timer
+    state: restarted
+    daemon_reload: true

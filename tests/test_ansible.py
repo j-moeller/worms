@@ -580,9 +580,10 @@ ROLES = {
     **{pi: ["apt_client", pi, "auditd"] for pi in ("apt_cache", "devpi", "docker_registry", "manpages", "ntp",
                                                    "cve_search", "wikipedia")},
 }  # fmt: skip
-# Every VM first gets apt_updates (UpdateVMs.yml) and the host's clock (SetupTime.yml).
+# Every VM first gets apt_updates (UpdateVMs.yml) and the host's clock (SetupTime.yml), and last
+# the size limit of its logs (SetupAudit.yml).
 for _vm in set(ROLES) - {"proxmox_host", "localhost"}:
-    ROLES[_vm] = ["apt_updates", "timesync", *ROLES[_vm]]
+    ROLES[_vm] = ["apt_updates", "timesync", *ROLES[_vm], "log_limits"]
 # Plays that wait for cloud-init on each of their VMs before their roles.
 CLOUD_INIT_WAITS = {
     ("WaitForVMs.yml", "all:!proxmox_host:!sandbox:!sandbox_gw"), ("SetupDNS.yml", "dns_hosts"),

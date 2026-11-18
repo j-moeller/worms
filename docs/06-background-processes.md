@@ -40,7 +40,7 @@ Every unit below runs as `django:www-data`, with `/etc/orchestrator/django.env` 
 | Unit | Does |
 |---|---|
 | `dashboard` | gunicorn: 2 workers on a unix socket, user `django`, writes only to `/opt/dashboard/media` |
-| `nginx` | TLS, HSTS. Rate limits: `/login/` 10/min per address; `/api/` 5/s per address and 3/s per token. Upload bodies up to 101 MB |
+| `nginx` | nginx.org's stable package, from its own repository (keys shipped in [`nginx_tls`](../ansible/roles/web/nginx_tls/), pinned over Debian's), configured as Debian's was: `sites-enabled/`, user `www-data`. TLS, HSTS. Rate limits: `/login/` 10/min per address; `/api/` 5/s per address and 3/s per token. Upload bodies up to 101 MB |
 | `fail2ban` | Installed, with no jail configured |
 
 The dashboard runs no background work of its own: it has no timers and no Django signals.
@@ -50,7 +50,7 @@ The dashboard runs no background work of its own: it has no timers and no Django
 | Unit | Does |
 |---|---|
 | `sandbox-api` | Flask under gunicorn (1 worker, 8 threads), user `sandbox-api`. May reach only the database (`IPAddressAllow`). Reads `/etc/sandbox-api/current-team` and `devbox-teams` on each request (cached by mtime) |
-| `nginx` | `POST /submit` only; body caps; 50 r/s per source |
+| `nginx` | nginx.org's, as on the dashboard. `POST /submit` only; body caps; 50 r/s per source |
 
 ## Monitor VM
 

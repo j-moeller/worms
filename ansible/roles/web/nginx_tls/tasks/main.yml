@@ -1,12 +1,103 @@
 ---
+# nginx comes from nginx.org's own repository (its stable line), not Debian's, whose nginx is
+# older. The signing keys are the ones shipped in files/, not fetched; nginx.org signs the
+# repository with one of them:
+#   8540 A6F1 8833 A80E 9C16  53A4 2FD2 1310 B49F 6B46  signing-key-2 (signs trixie's Release)
+#   573B FD6B 3D8F BC64 1079  A6AB ABF5 BD82 7BD9 BF62  signing-key (expires 2027-05-24)
+#   9E9B E90E ACBC DE69 FE9B  204C BCDC D8A3 8D88 A2B3  signing-key-3
+- name: Trust nginx.org's signing keys
+  ansible.builtin.copy:
+    src: nginx-archive-keyring.asc
+    dest: /etc/apt/keyrings/nginx-archive-keyring.asc
+    owner: root
+    group: root
+    mode: "0644"
+  register: nginx_tls_key
+
+- name: Add nginx.org's repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/nginx.list
+    content: |
+      deb [signed-by=/etc/apt/keyrings/nginx-archive-keyring.asc] http://nginx.org/packages/debian {{ ansible_facts['distribution_release'] }} nginx
+    owner: root
+    group: root
+    mode: "0644"
+  register: nginx_tls_repo
+
+# Its version is the higher anyway; this keeps it so should Debian's ever overtake it.
+- name: Prefer nginx.org's packages to Debian's
+  ansible.builtin.copy:
+    dest: /etc/apt/preferences.d/99nginx
+    content: |
+      Package: *
+      Pin: origin nginx.org
+      Pin-Priority: 900
+    owner: root
+    group: root
+    mode: "0644"
+  register: nginx_tls_pin
+
+# apt_updates (UpdateVMs.yml) refreshed the lists within the hour, before the repository was there.
+- name: Read nginx.org's package list
+  when: (internet_enabled | bool) and (nginx_tls_key is changed or nginx_tls_repo is changed or nginx_tls_pin is changed)
+  ansible.builtin.apt:
+    update_cache: true
+
+# Before the package: dpkg keeps this file then (the apt module passes --force-confold), so
+# nginx.org's nginx starts on it, never on its own default, which would leave the sites
+# unserved. It replaces Debian's nginx (and nginx-common) in place.
+- name: Create nginx's configuration directory
+  ansible.builtin.file:
+    path: /etc/nginx
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure nginx as Debian's package did (sites-enabled, www-data)
+  ansible.builtin.template:
+    src: nginx.conf.j2
+    dest: /etc/nginx/nginx.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload nginx
+
+# The latest while internet access is allowed: that is when nginx.org's newer versions arrive.
+# Without it (`worms build <component>` of a VM that exists) the package is there, and nothing
+# may wait on mirrors.
 - name: Install nginx
   ansible.builtin.apt:
-    name: [nginx, openssl, ca-certificates]
-    state: present
-    # Only while internet access is allowed: a configuration run without it (`worms build
-    # <component>` of a VM that exists) finds the package installed, and must not wait on mirrors.
+    name: nginx
+    state: "{{ 'latest' if internet_enabled | bool else 'present' }}"
     update_cache: "{{ internet_enabled | bool }}"
     cache_valid_time: "{{ 3600 if internet_enabled | bool else omit }}"
+  notify: Restart nginx
+
+- name: Install openssl and the CA certificates
+  ansible.builtin.apt:
+    name: [openssl, ca-certificates]
+    state: present
+
+# nginx.org's package brings a default site on port 80 and no sites-available/sites-enabled.
+- name: Remove nginx.org's default site
+  ansible.builtin.file:
+    path: /etc/nginx/conf.d/default.conf
+    state: absent
+  notify: Reload nginx
+
+- name: Create the site directories
+  ansible.builtin.file:
+    path: "/etc/nginx/{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop: [sites-available, sites-enabled]
+
+- name: Check nginx's configuration
+  ansible.builtin.command: nginx -t
+  changed_when: false
 
 - name: Create TLS directory
   ansible.builtin.file:

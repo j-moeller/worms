@@ -3,3 +3,9 @@
   ansible.builtin.service:
     name: nginx
     state: reloaded
+
+# A new nginx binary (the package): a reload would keep the old one running.
+- name: Restart nginx
+  ansible.builtin.service:
+    name: nginx
+    state: restarted

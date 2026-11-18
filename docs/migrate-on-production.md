@@ -20,6 +20,82 @@ detailed rollback. Where they overlap, that page is authoritative.
 
 ---
 
+## Command sequence (copy‑paste)
+
+Run on the **controller** (where `worms` = `src/manage.py`) unless a line is
+marked *inside …*. Pick a window with no round running. Each numbered block is
+explained in [Procedure](#procedure) below.
+
+```sh
+# 0. PRE-FLIGHT — all must be clean/empty before going on
+worms status            # components up, NO sandbox VM, internet window closed
+worms status rounds     # nothing running
+worms status jobs       # nothing running or queued
+git status              # clean working tree (the node workspace rsyncs from it)
+
+# 1. BACK UP THE DATABASE FIRST (nothing else does)
+worms login database
+# inside the database VM:
+  df -h /var/lib/postgresql
+  sudo -u postgres pg_dump -Fc -f /var/lib/postgresql/mydb-before-3ce1751.dump mydb
+  ls -lh /var/lib/postgresql/mydb-before-3ce1751.dump
+  exit
+# recommended: copy the dump off the VM (address from `worms show database`):
+#   scp -J root@<node> debian@<database-ip>:/var/lib/postgresql/mydb-before-3ce1751.dump .
+
+# 2. UPDATE THE CHECKOUT to the target
+git pull --ff-only      # -> 3ce1751 (origin/main is bdb461f = 3ce1751 + this doc)
+git rev-parse --short HEAD
+
+# 3. DEPLOY CODE + MIGRATIONS (no internet window)
+worms build --plan dashboard round-agent    # review: must name migrations 0010-0019
+worms build dashboard round-agent            # migrates (services stopped), restarts dashboard + conductor
+
+# 4. RESTART THE ROUND AGENT, THEN THE CONDUCTOR (by hand — the silent-failure step)
+worms login node
+# inside the node:
+  systemctl restart worms-round-agent
+  journalctl -u worms-round-agent -n 20
+  exit
+worms login orchestrator
+# inside the orchestrator:
+  sudo systemctl restart orchestrator-conduct-rounds
+  sudo journalctl -u orchestrator-conduct-rounds -n 20     # "version ... recorded" per gameplan
+  exit
+
+# 5. PRIVATE INTERNET SEED + NGINX SECURITY UPDATE (one internet window; devboxes go down)
+worms build apt-cache devpi dashboard --packages
+
+# 6. TEAR DOWN + REBUILD EVERY DEVBOX (new pip index + offline NTP)
+worms reset devbox --all-teams
+worms status jobs       # watch the devbox_rebuild jobs drain
+
+# 7. VERIFY
+worms status            # everything up, internet window CLOSED
+worms status gameplans  # round_one valid on both sides
+# by hand: Staff -> Rounds (URLs are now /staff/rounds/<uuid>/), Staff -> Simulations;
+#          create+revoke a token; add+delete a devbox key; SSH a rebuilt devbox
+#          (pip resolves, `timedatectl` shows ntp.worms.internal); dashboard: `nginx -v`.
+```
+
+**If a migration stops** on a duplicate `uuid` (steps 3): on the database VM,
+`UPDATE rounds SET uuid = gen_random_uuid() WHERE uuid IS NULL;` (and the same
+for `access_tokens`, `devbox_ssh_keys`), then re-run step 3.
+
+**Rollback** (only if needed; full detail in [`16-10-merge.md`](16-10-merge.md#rollback)) —
+keep the new schema, let old code run:
+```sh
+worms login database
+# inside the database VM, as postgres (psql mydb):
+  ALTER TABLE rounds          ALTER COLUMN uuid SET DEFAULT gen_random_uuid();
+  ALTER TABLE access_tokens   ALTER COLUMN uuid SET DEFAULT gen_random_uuid();
+  ALTER TABLE devbox_ssh_keys ALTER COLUMN uuid SET DEFAULT gen_random_uuid();
+# then on the controller: git checkout 33dae12 && worms build dashboard round-agent
+# and redo step 4 (restart the agent, then the conductor).
+```
+
+---
+
 ## What's actually changing (at a glance)
 
 27 commits, ~110 files. Nothing touches the platform, firewall, host network,

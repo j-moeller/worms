@@ -39,6 +39,29 @@
         path: "{{ devpi_seed_dir.path }}"
         state: absent
 
+# What was seeded, and from which commit: `worms login devpi`, then
+# `cat /etc/pypi-package-list /etc/seed-version`.
+# Written only after the fetch succeeded: an older version there means the last seed failed or
+# did not run. The commit is the controller's checkout; "-dirty" when this role (its list, its
+# tasks) differs from that commit there; "unknown" outside a git checkout.
+- name: Record the seeded package list
+  ansible.builtin.copy:
+    dest: /etc/pypi-package-list
+    content: "{{ devpi_seed_packages | join('\n') }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Record the commit the seed came from
+  ansible.builtin.copy:
+    dest: /etc/seed-version
+    content: >
+      {{ lookup('ansible.builtin.pipe', 'git -C ' ~ (role_path | quote) ~ ' rev-parse HEAD 2>/dev/null || echo unknown') }}{{
+      '-dirty' if lookup('ansible.builtin.pipe', 'git -C ' ~ (role_path | quote) ~ ' status --porcelain -- . 2>/dev/null || true') else '' }}
+    owner: root
+    group: root
+    mode: "0644"
+
 # Leftovers of an experiment on worms-dev: an index root/offline, filled from a wheelhouse copied
 # to .wheelhouse-import. Devboxes use root/pypi only (devbox_pip_index_url), and the two held
 # most of its wheels twice more (some 1.9 GB). They go only once root/pypi holds a file of every

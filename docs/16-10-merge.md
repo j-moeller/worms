@@ -194,6 +194,8 @@ A later deploy gives every row a new UUID, so links handed out meanwhile change 
 
 **`worms rsync`** ([3](03-manage-py.md#see)) is the controller's CLI. Devboxes need rsync for it: it is a new devbox package and apt cache seed. The apt cache fetches it in step 7 (`apt-cache --packages`); existing devboxes install it with `worms step devbox-configure`, new ones when they are built.
 
+**Larger seeds.** The apt cache seeds some 50 more common tools (git, build-essential, gdb, tmux, nmap, tshark, ...): 353 packages and 294 MB with their dependencies, up from 155 and 116 MB. devpi seeds 61 more (177): readers for what gameplans hand out (pyotp, pykeepass, python-docx, odfpy, pyzipper, py7zr, standard-telnetlib), build backends for offline sdists, and common libraries; some 120 MB. Step 7 fetches them, devpi in 15 batches instead of 10. Sandbox VMs reach both caches: a worm running as root on one can install what they hold.
+
 None of this alters round_one or `credential_chain.py`: neither removes a package, and `credential_chain.py`'s only telnet user is its telnet login. The round agent has to be restarted after the deploy (step 6) all the more: the new `sandbox_vm` role reads `accounts` and `purge`, which only the new `build.py` writes.
 
 ## Worth doing, not needed for this deploy

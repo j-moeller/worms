@@ -18,6 +18,63 @@ apt_cache_seed_packages:
   - python3-pip
   - rsync # devbox_packages: `worms rsync`
   - unzip
+  # Common tools a team expects on a devbox (sandbox VMs reach the cache too: a worm
+  # running as root on one can install these). With the above, some 350 packages and
+  # 290 MB with their dependencies (2026-11, Debian 13).
+  # Shell and editing:
+  - bash-completion
+  - file
+  - htop
+  - less
+  - man-db
+  - nano
+  - screen
+  - tmux
+  - tree
+  - vim
+  # Building and debugging (python3-dev: C extensions an sdist builds):
+  - build-essential
+  - cmake
+  - gdb
+  - git
+  - ltrace
+  - pipx
+  - pkg-config
+  - python3-dev
+  - strace
+  # Network clients and diagnosis, and the programs devpi's python-nmap and pyshark
+  # call (nmap, tshark):
+  - bind9-dnsutils
+  - inetutils-ftp
+  - inetutils-telnet
+  - iputils-ping
+  - lftp
+  - netcat-openbsd
+  - nmap
+  - postgresql-client
+  - socat
+  - sshpass
+  - tcpdump
+  - traceroute
+  - tshark
+  - wget
+  # Archives, data and keys (oathtool: TOTP codes, as gameplans' logins ask for):
+  - 7zip
+  - bc
+  - bzip2
+  - fd-find
+  - gnupg
+  - lsof
+  - oathtool
+  - openssl
+  - patch
+  - psmisc
+  - ripgrep
+  - sqlite3
+  - xxd
+  - xz-utils
+  - zip
+  - zstd
   # Gameplans (src/gameplan/definition.py: DjangoVM, PostgreVM, add_telnet_login,
   # add_ssh_totp_login, add_ftp_login; gameplans/).
   - gunicorn

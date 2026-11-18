@@ -131,3 +131,69 @@ devpi_seed_packages:
   - s3fs
   - pydantic-settings
   - tenacity
+  # What a worm meets in a gameplan's files and logins (src/gameplan/content.py): TOTP
+  # secrets, KeePass vaults, .docx and OpenDocument, encrypted zips, 7z, and telnet
+  # (Python 3.13 has no telnetlib: standard-telnetlib brings it back).
+  - pyotp
+  - pykeepass
+  - python-docx
+  - odfpy
+  - pyzipper
+  - py7zr
+  - standard-telnetlib
+  - telnetlib3
+  - pexpect
+  - asyncssh
+  # Build backends: offline, an sdist builds only with what the mirror holds.
+  - hatchling
+  - flit-core
+  - poetry-core
+  - setuptools-scm
+  - cython
+  # Common libraries and tools.
+  - six
+  - attrs
+  - jinja2
+  - msgpack
+  - protobuf
+  - grpcio
+  - docker
+  - fabric
+  - pyzmq
+  - pyserial
+  - sortedcontainers
+  - more-itertools
+  - cachetools
+  - regex
+  - chardet
+  - simplejson
+  - xmltodict
+  - defusedxml
+  - markdown
+  - termcolor
+  - prompt-toolkit
+  - netaddr
+  - ldap3
+  - smbprotocol
+  - pysocks
+  - requests-toolbelt
+  - sshtunnel
+  - gmpy2
+  - ecdsa
+  - pycryptodomex
+  - pyinstaller
+  - pytest-mock
+  - pytest-xdist
+  - pytest-timeout
+  - tox
+  - nox
+  - responses
+  - freezegun
+  - faker
+  - isort
+  - flake8
+  - pre-commit
+  - bandit
+  - anyio
+  - trio
+  - uvloop

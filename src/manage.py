@@ -547,17 +547,25 @@ def cmd_internet(config, args) -> int:
     pipe = pipeline.Pipeline(config)
     try:
         if args.state == "enable":
-            pipe._refuse_vms_in(("sandbox",), "Refusing to open the internet window: sandbox VMs exist (a round is on)")
-            running = sorted((vm for vm in pipe.runner.vms() if vm.get("pool") == "devbox" and vm.get("status") == "running"),
-                             key=lambda vm: vm["name"])  # fmt: skip
+            pipe.refuse_during_round()
+            running = pipe.running_devboxes()
             if running:
                 names = ", ".join(vm["name"] for vm in running)
                 if not build.confirm(f"{len(running)} devbox VM(s) run ({names}). Stop them all and open the window?", args.yes):
                     output.error("the window stays closed: no team VM may run while it is open")
                     return 1
-                for vm in running:
-                    pipe.runner.node_sh(f"qm shutdown {vm['vmid']} --timeout 120 --forceStop 1")
-                print(output.color(f"stopped {len(running)} devbox VM(s); start them again after `worms internet disable`", "dim"))
+                stopped = []
+                try:
+                    # Listed again: one started while the question was open goes too. Forced after
+                    # 120 s: a team's VM may ignore the shutdown request.
+                    for vm in pipe.running_devboxes():
+                        pipe.runner.node_sh(f"qm shutdown {vm['vmid']} --timeout 120 --forceStop 1")
+                        stopped.append(vm)
+                finally:
+                    if stopped:  # also when a later one failed: these are off now
+                        print(output.color(f"stopped {len(stopped)} devbox VM(s): {', '.join(vm['name'] for vm in stopped)}. "
+                                           "Once the window is closed again, start them on the node: "
+                                           + pipeline.start_command(vm["vmid"] for vm in stopped), "dim"))  # fmt: skip
             pipe.internet_allow()
         else:
             pipe.internet_deny()

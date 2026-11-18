@@ -80,6 +80,11 @@ CONFIGURE_PLAYBOOKS = [
 ]
 
 
+def start_command(vmids) -> str:
+    """What starts these VMs again, on the node: `qm start` takes one vmid."""
+    return "; ".join(f"qm start {vmid}" for vmid in vmids)
+
+
 def _stopping(cleanup: str) -> None:
     """Said before the cleanup that runs after a failed step, so that its commands do not
     read as the build going on. The step's own error ends the build: `build stopped: ...`."""
@@ -388,13 +393,23 @@ class Pipeline:
         self.runner.node_sh(f"qm snapshot {vmid} {SERVICE_SNAPSHOT} --description {shlex.quote(f'worms {self.runner.commit()}')}")
         self.runner.node_sh(f"qm start {vmid}")
 
+    def refuse_during_round(self) -> None:
+        """A sandbox VM exists only during a round (kept, off, between its attempts): the
+        internet window stays shut then."""
+        self._refuse_vms_in(("sandbox",), "Refusing to open the internet window: sandbox VMs exist (a round is on)")
+
+    def running_devboxes(self) -> list[dict]:
+        """The devbox VMs Internet.yml refuses the window for: every one that is not stopped."""
+        return sorted((vm for vm in self.runner.vms() if vm.get("pool") == "devbox" and vm.get("status") != "stopped"),
+                      key=lambda vm: vm["name"])  # fmt: skip
+
     def _devboxes_off(self) -> None:
         """No team VM runs while the internet window is open (docs/IMPORTANT): it
         is refused while a sandbox exists, and the devbox VMs that run are shut
         down meanwhile and started again once it is closed. Teams lose their
         devbox for that long."""
-        self._refuse_vms_in(("sandbox",), "Refusing to open the internet window: sandbox VMs exist (a round is on)")
-        running = [vm for vm in self.runner.vms() if vm.get("pool") == "devbox" and vm.get("status") == "running"]
+        self.refuse_during_round()
+        running = self.running_devboxes()
         if running:
             print(output.color(f"shutting down {len(running)} devbox VM(s) while internet access is allowed", "dim"))
         for vm in running:
@@ -407,7 +422,7 @@ class Pipeline:
         off = list(self.data["devboxes_off"])
         if not off:
             return
-        start = f"qm start {' '.join(str(vmid) for vmid in off)}"
+        start = start_command(off)
         if self.runner.flag_exists(INTERNET_FLAG):
             raise BuildError(
                 f"the devbox VMs stay off while internet access is allowed: start them after `worms internet disable` ({start})"

@@ -46,6 +46,15 @@ const input = JSON.parse(fs.readFileSync(0, 'utf8'));
             await page.waitForURL(input.base + next);
         };
         await login(input.student, input.password, '/progression/');
+        // A new session starts in the Dev view: the round's replay is in the Live view.
+        // The toggle's own POST (enhance.js, switchEnvironment), awaited before the page loads.
+        await page.evaluate(async () => {
+            const form = document.querySelector('form.envform');
+            const body = new FormData(form);
+            body.set('environment', 'sandbox');
+            await fetch(form.action, { method: 'POST', body, credentials: 'same-origin', redirect: 'manual' });
+        });
+        await page.goto(input.base + '/progression/');
         await page.waitForFunction(() => document.getElementById('topo')?.topoState?.timeline);
         assert(await page.locator('#topo').isVisible());
         await page.locator('#topo-feed li', { hasText: 'log received' }).first().hover();

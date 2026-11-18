@@ -26,3 +26,10 @@
   register: untrusted_gateway_llm_route
   changed_when: false
   failed_when: "'via' not in untrusted_gateway_llm_route.stdout"
+
+# systemd's getty on the serial console the VM does not have restarts every 10 s (role
+# log_limits, tasks/serial_getty.yml).
+- name: Stop the getty on the missing serial port
+  ansible.builtin.include_role:
+    name: log_limits
+    tasks_from: serial_getty

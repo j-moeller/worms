@@ -1,0 +1,18 @@
+---
+# No VM has a serial port (Proxmox: no serial0), but the cloud image's kernel command line names
+# console=ttyS0, so systemd starts a getty there. It fails at once and restarts every 10 s,
+# forever: some 26,000 journal lines a day on each VM. Masked where the port does not answer
+# (a VM given a serial0 keeps its getty). Also run by the team VMs' roles (devbox, sandbox_vm,
+# untrusted_gateway).
+- name: Check whether ttyS0 is a serial port that answers
+  ansible.builtin.command: stty -F /dev/ttyS0
+  register: log_limits_ttys0
+  changed_when: false
+  failed_when: false
+
+- name: Stop the getty on the missing serial port, for good
+  when: log_limits_ttys0.rc != 0
+  ansible.builtin.systemd:
+    name: serial-getty@ttyS0.service
+    state: stopped
+    masked: true

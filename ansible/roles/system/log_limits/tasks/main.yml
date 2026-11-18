@@ -36,3 +36,6 @@
     group: root
     mode: '0644'
   notify: Restart the logrotate timer
+
+# The getty on the serial console the VM does not have (tasks/serial_getty.yml).
+- ansible.builtin.import_tasks: serial_getty.yml

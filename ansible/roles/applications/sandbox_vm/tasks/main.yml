@@ -153,3 +153,10 @@
     argv: [systemctl, is-active, "{{ item }}"]
   loop: "{{ sandbox_vm.services | default([]) }}"
   changed_when: false
+
+# systemd's getty on the serial console the VM does not have restarts every 10 s (role
+# log_limits, tasks/serial_getty.yml).
+- name: Stop the getty on the missing serial port
+  ansible.builtin.include_role:
+    name: log_limits
+    tasks_from: serial_getty

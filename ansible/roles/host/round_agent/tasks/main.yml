@@ -5,14 +5,23 @@
 # service, and the least-privilege Proxmox ACL for the orchestrator's VM-power
 # token.
 
+# The node's apt refreshes its lists only to install a package that is missing: with everything
+# there, deploying code or gameplans (`worms build gameplans`) needs no internet.
+- name: Read the node's installed packages
+  ansible.builtin.package_facts:
+    manager: apt
+  tags: [agent-sync]
+
 # psycopg2: the database. cryptography: the KeePass files a gameplan writes, and with bcrypt its
 # SSH keys with a passphrase (src/gameplan/render.py).
 - name: Install the agent's Python libraries
+  vars:
+    round_agent_missing: "{{ round_agent_python_packages | reject('in', ansible_facts.packages) | list }}"
   ansible.builtin.apt:
-    name: [python3-psycopg2, python3-cryptography, python3-bcrypt]
+    name: "{{ round_agent_python_packages }}"
     state: present
-    update_cache: true
-    cache_valid_time: 3600
+    update_cache: "{{ round_agent_missing | length > 0 }}"
+    cache_valid_time: "{{ 3600 if round_agent_missing else omit }}"
 
 - name: The agent's workspace, key and environment
   ansible.builtin.import_tasks: workspace.yml

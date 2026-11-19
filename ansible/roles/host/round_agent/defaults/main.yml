@@ -33,6 +33,7 @@ round_agent_sync_rsync_opts:
 round_agent_user: root
 round_agent_env_file: /etc/worms/round-agent.env
 round_agent_python: /usr/bin/python3
+round_agent_python_packages: [python3-psycopg2, python3-cryptography, python3-bcrypt]
 
 # Where the agent reads uploaded worm artifacts (the dashboard's media dir),
 # over SSH from the host: the dashboard's MEDIA_ROOT (group_vars/all.yml).

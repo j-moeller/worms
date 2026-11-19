@@ -31,12 +31,13 @@
       ssh_gateway_ips.maintenance: "{{ ssh_gateway_ips.maintenance | default('') }}"
     round_agent_unset: "{{ round_agent_required | dict2items | selectattr('value', 'equalto', '') | map(attribute='key') | list }}"
 
+# Lists refreshed only when it is missing (ansible_facts.packages: main.yml), so a sync works offline.
 - name: Install rsync (the workspace is synced with it)
   ansible.builtin.apt:
     name: rsync
     state: present
-    update_cache: true
-    cache_valid_time: 3600
+    update_cache: "{{ 'rsync' not in ansible_facts.packages }}"
+    cache_valid_time: "{{ 3600 if 'rsync' not in ansible_facts.packages else omit }}"
 
 - name: Create the workspace
   ansible.builtin.file:

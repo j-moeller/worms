@@ -191,8 +191,9 @@ On the dashboard, **Staff → Rounds**:
   churns until 5 min before the end; it's written for 60. Below 24 the round shows `invalid`
   (the conductor's log says `execute() is still going when the run ends`) and waits.
 - **Start and end:** a slot per team is its minutes + 15 s + 2 min drain + 15 min overhead.
-  With 4 teams × 60 min that's 4 × 77¼ min ≈ 5 h 10 min. Add about 20 min for the first attempt's
-  sandbox build, and room for retries.
+  With 4 teams × 60 min that's 4 × 77¼ min ≈ 5 h 10 min. Add **about 1 hour for the first
+  attempt's sandbox build** (on dev: 35 min for OpenTofu to create the 21 VMs one at a time, 13½ min
+  to configure them, about 13 min to snapshot them), and room for retries: about 6½ h in all.
 - **"Shut down every devbox while its attempts run":** on, for the node's memory. It can only
   be changed before the round starts.
 - **Simulate** the round once its gameplan is chosen: it must end `ok`.
@@ -206,7 +207,7 @@ skipped, so tell teams to upload before the start.
 worms status rounds       # the round, its attempts by state
 worms status jobs         # prepare, deploy, teardown jobs
 worms log conductor -f    # what the conductor does
-worms log <number>        # one job's log: the first prepare builds the sandbox (about 20 min)
+worms log <number>        # one job's log: the first prepare builds the sandbox (about 1 h)
 ```
 
 - **The first attempt's `prepare` is the step that has never run on production.** If it fails,

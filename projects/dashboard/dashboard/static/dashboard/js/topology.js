@@ -2635,8 +2635,10 @@
     function renderSimTabs(rounds) {
         const list = (S.sims && S.sims.gameplans) || [];
         for (const g of list) {
+            // Its version: the first 12 hex digits of its SHA-256, as Staff → Gameplans shows them.
+            const version = typeof g.sha256 === "string" && /^[0-9a-f]{64}$/.test(g.sha256) ? ` · ${g.sha256.slice(0, 12)}` : "";
             rounds.appendChild(tabButton(shorten(g.file, 40), S.mode === "round" && S.simFile === g.file, () => selectSimulation(g.file, 0),
-                el("span", { class: "state" }, g.valid ? "valid" : "invalid")));
+                el("span", { class: "state" }, `${g.valid ? "valid" : "invalid"}${version}`)));
         }
         if (S.file) {
             const d = S.file.doc;

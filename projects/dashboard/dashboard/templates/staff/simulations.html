@@ -20,7 +20,7 @@ the player (the tabs are the gameplans, then the durations per team their rounds
             <tbody>
                 {% for g in gameplans %}
                 <tr>
-                    <th scope="row" class="mono">{{ g.file }}</th>
+                    <th scope="row" class="mono">{{ g.file }}{% if g.sha256 %} <a href="{% url 'staff_gameplans' %}#v-{{ g.sha256 }}" title="{{ g.sha256 }}">{{ g.sha256|slice:":12" }}</a>{% endif %}</th>
                     <td>{% if g.valid %}<span class="badge badge--ok">valid</span>{% else %}<span class="badge badge--bad">invalid</span>{% endif %}</td>
                     <td><a href="{% url 'staff_simulation' g.file %}">its own duration</a>{% for r in g.rounds %} · <a href="{% url 'staff_simulation' g.file %}?duration={{ r.team_duration }}">{{ r.name }} ({{ r.team_duration }} s)</a>{% endfor %}</td>
                 </tr>

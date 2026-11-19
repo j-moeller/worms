@@ -25,7 +25,7 @@ from collections import Counter
 from core import clock, events, schedule
 from core.locking import serialized_resource
 from core.models.competition import Competition, Round
-from core.models.rounds import HostJob, RoundRun, round_gameplan
+from core.models.rounds import GameplanFile, HostJob, RoundRun, round_gameplan
 from core.models.scoring import FlagCapture
 from core.models.team import Team
 from dashboard.forms import RoundForm, overlapping_round
@@ -113,10 +113,14 @@ def rounds(request: HttpRequest):
 
     def listing(competition):
         rows = []
+        current_versions = dict(GameplanFile.objects.values_list("filename", "version_id"))
         for r in Round.objects.filter(competition=competition).order_by("round_start"):
             runs = list(RoundRun.objects.filter(round=r).only("state", "gameplan_sha256", "upload_id"))
+            # As round_gameplan: the version pinned once an attempt started, else the file's now.
+            pinned = next((run.gameplan_sha256 for run in runs if run.gameplan_sha256), "")
             rows.append({
                 "round": r,
+                "version": pinned or current_versions.get(r.gameplan) or "",
                 "status": _status(r, now),
                 "phase": round_progress.phase(r, runs, now, current),
                 "states": sorted(Counter(run.state for run in runs).items()),

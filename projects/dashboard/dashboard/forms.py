@@ -207,7 +207,10 @@ class RoundForm(StyledForm):
             for name in list(self.fields):
                 if name not in self.STARTED_FIELDS:
                     del self.fields[name]
-        choices = [(g.filename, g.filename) for g in GameplanFile.objects.filter(valid=True).order_by("filename")]
+        # The label names the version (the first 12 hex digits of its SHA-256, as Staff → Gameplans
+        # and `worms status gameplans` do): `sha256sum gameplans/<file>` tells whether it is the one.
+        choices = [(g.filename, f"{g.filename} · {g.version_id[:12]}" if g.version_id else g.filename)
+                   for g in GameplanFile.objects.filter(valid=True).order_by("filename")]  # fmt: skip
         current = instance.gameplan if instance is not None else ""
         if current and current not in dict(choices):
             choices.append((current, f"{current} (not valid now)"))

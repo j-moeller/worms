@@ -29,15 +29,16 @@ TIMEOUT = 28  # the orchestrator gives a simulation 20 s; gunicorn ends this wor
 
 
 def _gameplans(competition):
-    """[{file, valid, checked_at, rounds: [{id, name, team_duration}]}]: every gameplan the
-    orchestrator lists, and the rounds of the competition that use it."""
+    """[{file, sha256, valid, checked_at, rounds: [{id, name, team_duration}]}]: every gameplan the
+    orchestrator lists (sha256: its version now, "" before its first check), and the rounds of the
+    competition that use it."""
     rounds = {}
     if competition is not None:
         for r in Round.objects.filter(competition=competition).exclude(gameplan="").order_by("round_start", "id"):
             rounds.setdefault(r.gameplan, []).append({"id": str(r.uuid), "name": r.name, "team_duration": r.team_duration})
     return [
-        {"file": g.filename, "valid": g.valid, "checked_at": g.checked_at.isoformat() if g.checked_at else None,
-         "rounds": rounds.get(g.filename, [])}
+        {"file": g.filename, "sha256": g.version_id or "", "valid": g.valid,
+         "checked_at": g.checked_at.isoformat() if g.checked_at else None, "rounds": rounds.get(g.filename, [])}
         for g in GameplanFile.objects.order_by("filename")
     ]  # fmt: skip
 

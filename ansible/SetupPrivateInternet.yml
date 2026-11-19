@@ -39,6 +39,12 @@
         tasks_from: seed
       when: internet_enabled | bool
 
+    - name: Check the cache serves a fresh VM while the internet is closed
+      ansible.builtin.include_role:
+        name: apt_cache
+        tasks_from: check
+      when: not (internet_enabled | bool)
+
 - hosts: devpi_hosts
   any_errors_fatal: true
   become: true

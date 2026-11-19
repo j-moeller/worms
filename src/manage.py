@@ -577,7 +577,8 @@ def _show_table(config, args) -> int:
 
 def cmd_internet(config, args) -> int:
     """`worms internet enable` is refused during a round (a sandbox VM exists). Running devbox
-    VMs are stopped first, after asking: no team VM runs while the window is open."""
+    VMs are stopped first, after asking: no team VM runs while the window is open. `disable`
+    closes it and switches DNS and the caches back to offline mode (`worms step offline`)."""
     pipe = pipeline.Pipeline(config)
     try:
         if args.state == "enable":
@@ -603,6 +604,13 @@ def cmd_internet(config, args) -> int:
             pipe.internet_allow()
         else:
             pipe.internet_deny()
+            print(output.color("switching DNS and the private internet's caches to offline mode (a few minutes)", "dim"), flush=True)
+            try:
+                pipe.offline_services()
+            except build.BuildError as exc:
+                output.error(f"the window is closed, but DNS and the caches may not be offline or not serve "
+                             f"what they should: {exc}. Run `worms step offline` again once fixed")  # fmt: skip
+                return 1
     except build.BuildError as exc:
         output.error(str(exc))
         return 1
@@ -1024,7 +1032,8 @@ SECTIONS = (
         (
             ("build [<component>...]", "build what is missing, configure what exists; --rebuild recreates (`worms build --help`); "
                                        "after `--`: arguments for ansible-playbook"),
-            ("internet enable|disable", "open or close the internet window by hand (refused during a round; asks to stop running devboxes)"),
+            ("internet enable|disable", "open or close the internet window by hand (refused during a round; asks to stop running devboxes; "
+                                        "closing switches DNS and the caches back to offline mode)"),
         ),
     ),
     Section(

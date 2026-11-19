@@ -16,10 +16,17 @@
 # `worms build ... --packages` in a row) is enough to produce it.
 #
 # This play runs only while the internet is open (SetupPrivateInternet.yml) and
-# this VM's own apt already goes through the cache (apt_client ran first), so drop
-# the cached repository indexes and pull them back through acng: every window then
-# ends with a self-consistent index. Only the dists/ metadata goes; the package
-# pool (the .debs under pool/) is untouched, so nothing is re-downloaded.
+# this VM's own apt already goes through the cache (apt_client ran first), so move
+# the cached repository indexes aside and pull them back through acng, all of them:
+# every window then ends with a self-consistent, complete index. Only the dists/
+# metadata moves; the package pool (the .debs under pool/) is untouched, so nothing
+# is re-downloaded.
+#
+# Aside, not deleted: should the new ones not all arrive (the internet gone, a window
+# closed mid-refresh: acng then keeps a download under a temporary name such as
+# InRelease.1795048367, which it never serves offline), the previous ones go back and
+# the cache serves what it served before. Deleted first, a failed refresh left the
+# cache with no index at all: "503 Unable to download in offline mode" to every client.
 - name: Find the cache's repository index trees (dists/), keeping the .deb pool
   ansible.builtin.find:
     paths: "{{ apt_cache_cache_dir }}"
@@ -28,28 +35,91 @@
     patterns: dists
   register: apt_cache_index_trees
 
-- name: Discard the cached indexes so acng refetches a consistent set
-  ansible.builtin.file:
-    path: "{{ item.path }}"
-    state: absent
+- name: Move the cached indexes aside (back in place should the new ones not all arrive)
+  ansible.builtin.shell: |
+    set -eu
+    rm -rf {{ (item.path ~ '.before-seed') | quote }}
+    mv {{ item.path | quote }} {{ (item.path ~ '.before-seed') | quote }}
   loop: "{{ apt_cache_index_trees.files }}"
   loop_control:
     label: "{{ item.path | regex_replace('^' ~ apt_cache_cache_dir, '') }}"
+  changed_when: true
 
-- name: Restart apt-cacher-ng so it drops its in-memory view of the removed files
+- name: Restart apt-cacher-ng so it drops its in-memory view of the moved files
   ansible.builtin.systemd:
     name: apt-cacher-ng
     state: restarted
   when: apt_cache_index_trees.files | length > 0
 
-- name: Re-prime the indexes through the cache (online, so the set is consistent)
-  ansible.builtin.apt:
-    update_cache: true
-    cache_valid_time: 0
-  register: apt_cache_reprime
-  until: apt_cache_reprime is succeeded
-  retries: 3
-  delay: 5
+- name: Refresh the indexes, or keep the previous ones
+  block:
+    # From an empty lists directory: apt then fetches every index file a fresh VM asks for
+    # (InRelease and each Packages list), and acng keeps what it passes on. This VM's own lists,
+    # already current, would fetch only InRelease ("Hit") and leave the cache without the
+    # Packages lists: offline, a new sandbox or devbox gateway then gets 503 for them and finds
+    # no package at all ("No package matching 'nftables'"). --error-on=any: a list that did not
+    # arrive fails the refresh, where plain `apt-get update` would warn and go on.
+    # On success this VM's own lists become that same index, so the fetch below resolves the
+    # versions the clients will ask for.
+    - name: Re-prime the indexes through the cache, every list a fresh VM fetches (online)
+      ansible.builtin.shell: |
+        set -eu
+        lists=$(mktemp -d /var/lib/apt/worms-seed-lists.XXXXXX)
+        trap 'rm -rf "$lists"' EXIT
+        mkdir "$lists/partial"
+        apt-get update --error-on=any -o Dir::State::Lists="$lists" -o APT::Sandbox::User=root
+        find /var/lib/apt/lists -maxdepth 1 -type f ! -name lock -delete
+        find "$lists" -maxdepth 1 -type f -exec cp -p {} /var/lib/apt/lists/ \;
+      register: apt_cache_reprime
+      until: apt_cache_reprime is succeeded
+      retries: 3
+      delay: 5
+      changed_when: true
+
+    # What offline clients ask for first: each suite's InRelease, under its own name (acng's
+    # backends: debrep for Debian, secdeb for its security archive).
+    - name: Check every suite's index arrived under its own name
+      ansible.builtin.shell: |
+        set -eu
+        cd {{ apt_cache_cache_dir | quote }}
+        missing=""
+        for f in {% for suite in apt_cache_suites %}debrep/dists/{{ suite }}/InRelease {% endfor %}secdeb/dists/{{ apt_cache_security_suite }}/InRelease; do
+          [ -s "$f" ] || missing="$missing $f"
+        done
+        [ -z "$missing" ] || { echo "not in the cache under its own name:$missing" >&2; exit 1; }
+      changed_when: false
+
+    - name: Drop the indexes moved aside
+      ansible.builtin.file:
+        path: "{{ item.path }}.before-seed"
+        state: absent
+      loop: "{{ apt_cache_index_trees.files }}"
+      loop_control:
+        label: "{{ item.path | regex_replace('^' ~ apt_cache_cache_dir, '') }}"
+  rescue:
+    - name: Put the previous indexes back
+      ansible.builtin.shell: |
+        set -eu
+        if [ -d {{ (item.path ~ '.before-seed') | quote }} ]; then
+          rm -rf {{ item.path | quote }}
+          mv {{ (item.path ~ '.before-seed') | quote }} {{ item.path | quote }}
+        fi
+      loop: "{{ apt_cache_index_trees.files }}"
+      loop_control:
+        label: "{{ item.path | regex_replace('^' ~ apt_cache_cache_dir, '') }}"
+      changed_when: true
+
+    - name: Restart apt-cacher-ng on the previous indexes
+      ansible.builtin.systemd:
+        name: apt-cacher-ng
+        state: restarted
+
+    - name: Say the indexes were not refreshed
+      ansible.builtin.fail:
+        msg: >-
+          The cache's indexes were not refreshed (is the internet open? the job log above says
+          what failed), and the previous ones are back in place: the cache serves what it served
+          before. Nothing was seeded; run the build again once the internet is open.
 
 - name: Create a scratch directory
   ansible.builtin.tempfile:

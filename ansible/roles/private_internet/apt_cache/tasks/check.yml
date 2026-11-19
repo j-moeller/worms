@@ -1,0 +1,28 @@
+---
+# With the internet closed: what a VM built now gets from the cache (a sandbox gateway at a
+# round's first attempt, a sandbox VM, a devbox gateway). It has no package lists, so it asks
+# for the whole index, and the cache answers only from what it holds. Asked from an empty lists
+# directory here, the same way; this VM's own lists stay as they are.
+# A cache without its whole index (a fill that kept only InRelease, or kept it under a temporary
+# name) answers "503 Unable to download in offline mode", and every such VM then fails with
+# "No package matching 'nftables'". Better here, the moment the window closes, than at a round.
+- name: Ask the cache for a fresh VM's package index, offline
+  ansible.builtin.shell: |
+    set -eu
+    lists=$(mktemp -d /var/lib/apt/worms-check-lists.XXXXXX)
+    trap 'rm -rf "$lists"' EXIT
+    mkdir "$lists/partial"
+    apt-get update --error-on=any -o Dir::State::Lists="$lists" -o APT::Sandbox::User=root
+  register: apt_cache_offline_check
+  changed_when: false
+  failed_when: false
+
+- name: Say the cache cannot serve a fresh VM
+  ansible.builtin.fail:
+    msg: >-
+      Offline, the apt cache does not give a fresh VM its package index (apt-get update above:
+      {{ (apt_cache_offline_check.stdout_lines + apt_cache_offline_check.stderr_lines)
+         | select('match', '^(Err|E|W):') | list | join(' | ') | truncate(600) }}).
+      New sandbox and devbox gateways and sandbox VMs would install nothing, and a round's first
+      attempt would fail. Fill it again with the internet: `worms build apt-cache --packages`.
+  when: apt_cache_offline_check.rc != 0

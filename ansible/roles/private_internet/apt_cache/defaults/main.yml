@@ -1,6 +1,10 @@
 ---
 apt_cache_port: 3142
 apt_cache_cache_dir: /var/cache/apt-cacher-ng
+# The suites this VM's own apt asks for (role apt_client's defaults, its sources): after a
+# refresh the seed checks each one's index arrived (tasks/seed.yml).
+apt_cache_suites: [trixie, trixie-updates, trixie-backports]
+apt_cache_security_suite: trixie-security
 apt_cache_log_dir: /var/log/apt-cacher-ng
 # Fetched into the cache whenever the internet is open (tasks/seed.yml). Untrusted
 # VMs cannot install anything else, so a team's `apt install` of a package not

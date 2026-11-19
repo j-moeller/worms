@@ -38,10 +38,20 @@
 # the index, not at whether the sources changed. The apt-cache VM refreshed its
 # index minutes ago, before this role rewrote its sources, so without a refresh
 # here it would know no packages at all ("No package matching ...").
+# Also when an index of these sources is missing: a refresh that failed once (the
+# cache unreachable or without its index) left the sources rewritten but the index
+# empty, and the next run, seeing nothing changed, never tried again ("No package
+# matching 'nftables'" on every devbox gateway). A failing refresh now says so.
+- name: Find the index of these sources (one InRelease list per suite)
+  ansible.builtin.find:
+    paths: /var/lib/apt/lists
+    patterns: "{{ apt_client_mirror | regex_replace('^https?://', '') | replace('/', '_') }}_debian_dists_*_InRelease"
+  register: apt_client_lists
+
 - name: Refresh the package index from the new sources
   ansible.builtin.apt:
     update_cache: true
-    cache_valid_time: 0  # the sources just changed: however recent the index is
+    cache_valid_time: 0  # the sources just changed, or their index is missing: however recent it is
   when:
-    - apt_client_sources is changed
+    - apt_client_sources is changed or apt_client_lists.matched < (apt_client_suites.split() | length)
     - internet_enabled | bool or apt_client_refresh_offline | bool

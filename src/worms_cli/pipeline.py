@@ -579,6 +579,14 @@ class Pipeline:
         args += [f"-replace={shlex.quote(f'{c.module}.{c.resource}')}" for c in recreate]
         self.runner.tofu(stack, "apply", "-auto-approve", "-parallelism=1", "-input=false", *args)
 
+    def offline_services(self) -> None:
+        """DNS and the private internet's caches back to offline mode, as a build does after its
+        window, for `worms internet disable`. A cache left online answers every request it cannot
+        fetch with 503: apt-cacher-ng rechecks its indexes upstream, which is unreachable then."""
+        from worms_cli.components import COMPONENTS
+
+        self._offline_hosts(",".join(c.group for c in COMPONENTS.values() if c.name == "dns" or c.stack == "private_internet"))
+
     def _offline_hosts(self, limit: str) -> None:
         if self.runner.flag_exists(INTERNET_FLAG):
             raise BuildError(f"internet access is still allowed ({INTERNET_FLAG}): run `worms internet disable`")

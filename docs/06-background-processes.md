@@ -11,6 +11,7 @@ This page lists every long-running service, timer and loop, by host. Unit files 
 | `worms-mirror` | daemon, `Restart=always`; reacts to `ip monitor link`, rechecks every 10 s | root | Mirrors every sandbox bridge port (`vmbr1*`) into `vmbr3` for the monitor with `tc mirred`; vmbr3 itself drops everything | `worms-mirror.sh.j2` |
 | `worms-round-agent` | daemon, `Restart=always` | root | The round agent ([5](05-live-environment.md#architecture)): `LISTEN host_jobs` plus a 5 s poll; one job at a time; heartbeat every 30 s. Between jobs it exits when a module it loaded from its workspace changed on disk, and systemd starts the new code. Runs via `worms-node-run`, with the WORMS key in a private ssh-agent | [`round_agent`](../ansible/roles/host/round_agent/), [`agent.py`](../scripts/round_agent/agent.py) |
 | `worms-audit-gateway.timer` | every 60 s | root | `worms-audit collect-gateway`: reads new SSH-gateway logins and matches each to the client address the node logged (`worms-ssh-gw:`). Writes them to `ssh_gateway_logins` | [`events.py`](../scripts/round_agent/events.py) |
+| `worms-status-page.timer` | every 60 s | root | The public status page ([Status page](#status-page)): checks every component from the node, records the result, writes the page to the dashboard VM | [`statuspage.py`](../src/worms_cli/statuspage.py) |
 | `proxmox-firewall`, `pve-*` | Proxmox | root | Per-VM firewalls (nftables backend) | Proxmox |
 
 **Job logs**
@@ -97,6 +98,19 @@ Devbox traffic is not mirrored, so it is not recorded.
 | devbox-ssh-gateway | `sshd` | Port forwarding to the teams' A VMs |
 | sandbox and devbox VMs, both gateways | `systemd-timesyncd` | Asks only the private NTP server, by address (`ntp.worms.internal`); no fallback pool ([`ntp_client`](../ansible/roles/private_internet/ntp_client/)) |
 | sandbox and devbox VMs | `worms-start.timer` / `.service` (transient) | The armed worm: `bash main.sh` as `debian`. On a devbox, `RuntimeMaxSec=3600` |
+
+## Status page
+
+`https://status.<public name>` (`status.worms.mlsec.tu-berlin.de`, `status.worms-dev.mlsec.tu-berlin.de`): the platform's state for teams and staff, in the shape of the common status pages (Atlassian Statuspage, on which status.openai.com was built).
+
+- **Components**, in groups: Website (dashboard, team API), Rounds (round evaluation, flag submissions, worm logs), Devboxes (SSH gateway, devbox VMs), Private internet (apt, pip, container images, Wikipedia, CVE search, man pages, NTP, DNS) and Platform (database, log server, network monitor). Each is *operational*, *degraded performance*, *partial outage*, *major outage* or *under maintenance*.
+- **Headline:** rolled up from the components by Statuspage's rules (all operational: "All Systems Operational"; any major outage: "Partial System Outage"; ...), raised to an open incident's impact.
+- **History:** a bar per day for 90 days and the uptime. A day shows its worst state that lasted two checks or more; uptime counts a major outage as down and a partial outage as half down.
+- **Incidents and maintenance:** posted by staff with `worms incident` ([3](03-manage-py.md)); an incident moves through investigating, identified, monitoring, resolved, a maintenance through scheduled, in progress, completed. A component under an active maintenance shows as such, and so do the devbox VMs while a round holds them shut down or the internet window is open. The last 14 days' incidents are listed.
+- **How it is checked** (`worms-status-page.timer`, every minute, on the node, from outside every VM): the website and the team API over HTTPS by the public name (slower than 3 s: degraded), the SSH gateway's banner, each VM's services with `systemctl is-active` over the management SSH (the WORMS key, never forwarded), `pg_isready` on the database, the round agent on the node, the devbox VMs' power in Proxmox. A check that fails is tried again once before it counts. Nothing a check returns is shown, only the state.
+- **How it stays up:** the page is static. The node copies `index.html` and `summary.json` (Statuspage's `/api/v2/summary.json`, in part) to the dashboard VM, `/var/www/status`, whose nginx serves them for the status name with no Django and no database. It still answers when they, the orchestrator or the round agent are down; not when the dashboard VM or the node is, the only way in. No internet is needed.
+- **Its state** on the node: `/var/lib/worms/status` (`history.sqlite`: checks per component, day and state, 100 days; `notices.json`: incidents and maintenance).
+- **The name** needs a DNS record for `status.<public name>` to the same address as the dashboard; the dashboard's certificate carries the name (`group_vars/dashboard.yml`).
 
 ## Backups
 

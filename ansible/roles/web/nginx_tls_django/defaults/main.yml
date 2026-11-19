@@ -22,6 +22,11 @@ nginx_login_burst: 5
 # collectstatic output of this host's Django app (role django_app,
 # django_static_root -- keep the two equal).
 nginx_django_static_root: "/opt/{{ django_variant | default('dashboard') }}/static"
+# The public status page's name (dashboard only, group_vars/dashboard.yml) and where the Proxmox node
+# writes it (src/worms_cli/statuspage.py, WEB_ROOT). Empty: no status site.
+nginx_status_page_name: ""
+nginx_status_page_root: /var/www/status
+
 # Body limit of the worm upload (/upload/; dashboard only, group_vars). Empty:
 # no upload location, nginx's default 1 MiB applies everywhere.
 nginx_upload_max_body_size: ""

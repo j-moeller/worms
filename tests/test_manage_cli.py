@@ -566,23 +566,24 @@ def test_an_unreachable_database_after_a_reset_says_what_is_left_to_do(monkeypat
     monkeypatch.setattr(cli, "_request_devbox_reconfigure", fails)
     assert cli._restore_devbox_map(None) == 1
     err = capsys.readouterr().err
-    assert "the services are reset" in err and "worms devbox-reconfigure" in err
+    assert "the services are reset" in err and "worms reset services" in err
 
 
 def test_devbox_reconfigure_enqueues_a_job_the_agent_accepts(initialised):
-    """The agent validates a job's params; one it refuses restores nothing."""
+    """The agent validates a job's params; one it refuses restores nothing (the map, after a
+    reset of the services)."""
     cluster = initialised
     add_team(cluster, "Mapped")
     cli(cluster, "_build_devboxes(config)")
-    worms(cluster, "devbox-reconfigure")
+    cli(cluster, "_request_devbox_reconfigure(config)")
     (params,), = sql(cluster, "SELECT params FROM host_jobs WHERE kind = 'devbox_reconfigure' AND state = 'queued'")
     sys.path.insert(0, str(REPO / "scripts"))
     from round_agent import validation
 
     assert validation.devbox_reconfigure(params)["teams"]
     # The same list again: the queued job already covers it.
-    assert "nothing to enqueue" in worms(cluster, "devbox-reconfigure").stdout
+    assert "nothing to enqueue" in cli(cluster, "_request_devbox_reconfigure(config)").stdout
 
 
 def test_devbox_reconfigure_without_devboxes_enqueues_nothing(initialised):
-    assert "nothing to enqueue" in worms(initialised, "devbox-reconfigure").stdout
+    assert "nothing to enqueue" in cli(initialised, "_request_devbox_reconfigure(config)").stdout

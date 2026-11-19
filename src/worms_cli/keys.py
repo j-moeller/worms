@@ -1,4 +1,5 @@
-"""`worms status keys`: are every team's devbox SSH keys where they belong? (docs/04-dev-environment.md)
+"""`worms status keys`: are every team's devbox SSH keys where they belong? `worms devbox-sync-keys`:
+put them there. (docs/04-dev-environment.md)
 
 The dashboard holds each team's keys (devbox_ssh_keys); the round agent pushes them, with every
 devbox_reconfigure, devbox_provision and devbox_rebuild job, to two places:
@@ -15,6 +16,9 @@ return is only parsed for keys and counted, never printed, and a team can only m
 
 from __future__ import annotations
 
+import base64
+import ipaddress
+import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
@@ -29,6 +33,39 @@ MAX_BYTES = 1024 * 1024
 HEADERS = ["Team", "Keys", "SSH gateway", "A", "B", "C"]
 LEGEND = ("● ✓  every key the team has, and no other     ✗ n missing / n old  a key not there yet / one removed, still there\n"
           "○ off  the VM is stopped (not checked)     ? not readable     — no such VM")  # fmt: skip
+
+
+# `worms devbox-sync-keys`: what is written, by one ssh command per VM, the keys on its stdin (never
+# in a command line). A devbox VM: its team's key file, and sshd's drop-in that reads it should it
+# be missing. The gateway: the whole file, as the ssh_gateway role writes it (authorized_keys.j2).
+KEY_TYPE = re.compile(r"(ssh-(ed25519|rsa)|ecdsa-sha2-nistp(256|384|521)|sk-[a-z0-9@.-]+)")
+SSHD_DROP_IN = "/etc/ssh/sshd_config.d/20-worms-devbox.conf"
+DEVBOX_WRITE = (
+    f"sudo sh -c 'install -d -m 700 /root/.ssh && install -m 600 /dev/stdin {DEVBOX_FILE}"
+    f" && if ! grep -qs authorized_keys_worms_team {SSHD_DROP_IN}; then"
+    f" echo \"AuthorizedKeysFile .ssh/authorized_keys .ssh/authorized_keys_worms_team\" > {SSHD_DROP_IN}"
+    " && systemctl reload ssh; fi'"
+)
+GATEWAY_WRITE = f"sudo install -m 644 -o root -g root /dev/stdin {GATEWAY_FILE}"
+GATEWAY_HEADER = "# WORMS devbox SSH gateway authorized_keys (`worms devbox-sync-keys`, role ssh_gateway). DO NOT EDIT."
+GATEWAY_LINE = 'restrict,port-forwarding,command="/usr/sbin/nologin",permitopen="{ip}:22" {key} team={slug}'
+
+
+def canonical(public_key: str) -> str | None:
+    """`type blob` of a team's key, or None if it is not one: a known type, base64 that decodes,
+    and a blob that names the same type (RFC 4253). Its comment is left out, so nothing the team
+    typed reaches a file but the key itself."""
+    parts = str(public_key).split()
+    if len(parts) < 2 or not KEY_TYPE.fullmatch(parts[0]):
+        return None
+    try:
+        raw = base64.b64decode(parts[1], validate=True)
+    except ValueError:
+        return None
+    size = int.from_bytes(raw[:4], "big") if len(raw) >= 4 else 0
+    if raw[4:4 + size] != parts[0].encode():
+        return None
+    return f"{parts[0]} {base64.b64encode(raw).decode()}"
 
 
 def _fingerprint(key_type: str, blob: str) -> str | None:
@@ -95,6 +132,19 @@ class KeyCheck:
             return ("", "") if b"No such file" in proc.stderr[:4096] else (None, "unreadable")
         return proc.stdout[:MAX_BYTES].decode(errors="replace"), ""
 
+    def write(self, vm: dict | None, command: str, text: str) -> str:
+        """"" if `text` is written on `vm` by `command`, else why not: "off", "absent", "failed"."""
+        if vm is None:
+            return "absent"
+        if vm.get("status") != "running":
+            return "off"
+        try:
+            argv, env = self.catalogue.ssh_argv(vm, command, interactive=False)
+            proc = subprocess.run(argv, env=env, input=text.encode(), capture_output=True, timeout=60)
+        except Exception:  # noqa: BLE001  (a timeout, no address in the inventories)
+            return "failed"
+        return "" if proc.returncode == 0 else "failed"
+
     def rows(self, teams) -> tuple[list[list[str]], list[str]]:
         """(table rows, the teams whose keys are not in place, with where) for [(name, slug, {fingerprints}, has devbox)]."""
         vms = {vm["name"]: vm for vm in self.catalogue.vms()}
@@ -142,20 +192,30 @@ class KeyCheck:
             why, output.status_cell("unknown", "not readable"))
 
 
-def status(config) -> int:
-    """Print the overview; 1 if a team's keys are not in place everywhere they can be checked."""
+def _teams():
+    """[(name, slug, [key texts], has a devbox)] of the current competition, by name."""
     from core.models.devbox import Devbox, DevboxSSHKey
-    from core.models.rounds import HostJob
     from core.models.team import Team
     from orchestrator.rounds.devbox import team_slug
 
     from worms_cli import queries
 
     competition = queries._require_competition()
-    teams = []
-    for team in Team.objects.filter(competition=competition).order_by("name"):
-        expected = {k.key_fingerprint for k in DevboxSSHKey.objects.filter(team=team)}
-        teams.append((team.name, team_slug(team), expected, Devbox.objects.filter(team=team).exists()))
+    return [
+        (team.name, team_slug(team), list(DevboxSSHKey.objects.filter(team=team).order_by("id").values_list("public_key", flat=True)),
+         Devbox.objects.filter(team=team).exists())
+        for team in Team.objects.filter(competition=competition).order_by("name")
+    ]  # fmt: skip
+
+
+def status(config) -> int:
+    """Print the overview; 1 if a team's keys are not in place everywhere they can be checked."""
+    from core.models.devbox import DevboxSSHKey
+    from core.models.rounds import HostJob
+
+    from worms_cli import queries
+
+    teams = [(name, slug, {DevboxSSHKey.fingerprint(k) for k in texts}, has) for name, slug, texts, has in _teams()]
     if not teams:
         print("No teams (or no current competition).")
         return 0
@@ -168,11 +228,51 @@ def status(config) -> int:
     if last is not None:
         when = queries._when(last.finished_at or last.requested_at)
         state = output.status_cell("ok" if last.state == HostJob.State.DONE else "error", last.state)
-        print(f"last key push: {last.kind} #{last.id} {state} {when}" + (f": {last.error[:120]}" if last.error else ""))
+        print(f"last key push by the round agent: {last.kind} #{last.id} {state} {when}" + (f": {last.error[:120]}" if last.error else ""))
     if waiting is not None:
         print(output.color(f"a key push is {waiting.state} (#{waiting.id}, {waiting.kind}): the files change once it has run", "yellow"))
     if wrong:
-        print(output.status_cell("error", f"not in place: {'; '.join(wrong)}"))
+        print(output.status_cell("error", f"not in place: {'; '.join(wrong)}") + output.color("  (`worms devbox-sync-keys` copies them)", "dim"))
         return 1
     print(output.status_cell("ok", "every team's keys are in place (stopped VMs not checked)"))
     return 0
+
+
+def sync(config) -> int:
+    """`worms devbox-sync-keys`: copy every team's SSH keys from the database to where they are used,
+    over the management SSH, then show them (`worms status keys`). Nothing else: no round agent, no
+    Ansible, no OpenTofu, no internet. A stopped VM is skipped (the next copy, or its reset, writes it)."""
+    teams = _teams()
+    if not teams:
+        print("No teams (or no current competition).")
+        return 0
+    check = KeyCheck(config)
+    vms = {vm["name"]: vm for vm in check.catalogue.vms()}
+    hosts = check.catalogue.hosts()
+    gateway, writes = [GATEWAY_HEADER], []
+    for name, slug, texts, has_devbox in teams:
+        if not has_devbox:
+            continue
+        keys = [k for k in map(canonical, texts) if k]
+        if len(keys) != len(texts):
+            output.warn(f"{name}: {len(texts) - len(keys)} key(s) are not SSH public keys and are left out")
+        # The gateway lets a key forward to its team's VM A only; without one, no line (role ssh_gateway).
+        a = hosts.get(f"devbox-{slug}-a", {}).get("devbox_ssh_ip")
+        try:
+            a = str(ipaddress.ip_address(a)) if a and f"devbox-{slug}-a" in vms else None
+        except ValueError:
+            a = None
+        gateway += [GATEWAY_LINE.format(ip=a, key=key, slug=slug) for key in keys] if a else []
+        for role in ROLES:
+            writes.append((f"devbox-{slug}-{role}", DEVBOX_WRITE, "".join(f"{key}\n" for key in keys)))
+    writes.append((GATEWAY, GATEWAY_WRITE, "\n".join(gateway) + "\n"))
+    print(f"copying the keys of {sum(1 for t in teams if t[3])} team(s) to {len(writes)} VMs ...", flush=True)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda w: (w[0], check.write(vms.get(w[0]), w[1], w[2])), writes))
+    for vm, why in results:
+        if why == "off":
+            print(output.status_cell("stopped", f"{vm}: stopped, skipped"))
+        elif why == "failed":
+            print(output.status_cell("error", f"{vm}: could not write (`worms login {vm}`)"))
+    print()
+    return status(config)

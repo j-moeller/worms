@@ -115,7 +115,7 @@ def _next_free_index(used):
 def request_reconfigure(competition):
     """Enqueue a devbox_reconfigure host job: the round agent pushes every team's
     SSH keys and the source->team map again, from what the database says. Needed
-    after a reset of the service VMs (`worms devbox-reconfigure`), which takes the
+    after a reset of the service VMs (`worms reset services`), which takes the
     map off scoring and logging. Touches no VM's disk and no token.
 
     Returns the job, or None when no devbox is provisioned or a queued job

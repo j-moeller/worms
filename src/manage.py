@@ -496,6 +496,26 @@ def cmd_login(config, args) -> int:
         return 1
 
 
+def cmd_log(config, args) -> int:
+    """`worms log [<job>|<name>|<vm>]`: one place for every log (worms_cli/logs.py)."""
+    from worms_cli import logs
+
+    what = args.what
+    try:
+        if what is None or what.isdigit():
+            _with_db(config)
+            if what is None:
+                logs.overview()
+                return 0
+            return logs.Logs(config).job(int(what), args.lines, args.follow)
+        if what in logs.SOURCES:
+            return logs.Logs(config).source(what, args.lines, args.follow, args.since)
+        return logs.Logs(config).vm(what, args.lines, args.follow, args.since)
+    except build.BuildError as exc:
+        output.error(str(exc))
+        return 1
+
+
 def cmd_rsync(config, args) -> int:
     """`worms rsync <source>... <target>`: rsync's arguments, a VM by its login name
     (worms_cli/rsync.py); rsync's own options after `--`."""
@@ -989,6 +1009,9 @@ SECTIONS = (
             ("show <vm> [<table>]", "one VM in detail: state, resources, networks, snapshots, login; "
                                     "`show database [<table>]`: its tables, a table's rows or --schema"),  # fmt: skip
             ("login <vm>", "a shell on a VM over its management SSH (`worms login --help` lists them)"),
+            ("log [<job>|<name>|<vm>]", "a host job's log by its number (`worms status jobs`), a service's (agent, "
+                                       "conductor, dashboard, scoring, audit, ...) or a VM's journal; -f follows. "
+                                       "Alone: what there is"),
             ("rsync <source>... <target>", "rsync -avz between here and a VM, in rsync's syntax: `worms rsync dir/ "
                                            "devbox-t1-a:` up, `worms rsync devbox-t1-a: dir/` down (`worms rsync --help`)"),  # fmt: skip
         ),
@@ -1180,6 +1203,12 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     p = _add(sub, "login", epilog=vm_list, **raw)
     p.add_argument("vm")
 
+    p = _add(sub, "log")
+    p.add_argument("what", nargs="?", help="a host job's number, a log's name (`worms log` lists them) or a VM's name")
+    p.add_argument("-f", "--follow", action="store_true", help="keep showing new lines (Ctrl-C ends it)")
+    p.add_argument("-n", "--lines", type=int, default=100, help="lines to show first (default 100)")
+    p.add_argument("--since", help="journals only: from this time on (\"1 hour ago\", \"2026-11-19 18:00\")")
+
     p = _add(sub, "rsync", epilog=RSYNC_HELP + (f"\n\n{vm_list}" if vm_list else ""), **raw)
     p.add_argument("paths", nargs="+", metavar="path", help="sources, then the target: a local path or [<user>@]<vm>:[<path>]")
     p.add_argument("-n", "--dry-run", action="store_true", help="rsync's: list what would be sent, send nothing")
@@ -1251,7 +1280,7 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
 
 
 HANDLERS = {
-    "status": cmd_status, "show": cmd_show, "login": cmd_login, "rsync": cmd_rsync, "build": cmd_build,
+    "status": cmd_status, "show": cmd_show, "login": cmd_login, "log": cmd_log, "rsync": cmd_rsync, "build": cmd_build,
     "internet": cmd_internet,
     "reset": cmd_reset, "devbox-add-key": cmd_devbox_add_key, "devbox-remove-key": cmd_devbox_remove_key,
     "devbox-sync-keys": cmd_devbox_sync_keys,

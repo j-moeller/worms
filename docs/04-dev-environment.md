@@ -44,7 +44,7 @@ laptop ──22 (prod) / 2222 (dev)──► node DNAT ──► devbox-ssh-gate
   - the comment matches `[A-Za-z0-9._@/+:,-]`;
   - at most 64 keys per team;
   - a key may belong to one team only.
-- Adding or removing a key, or a member leaving (which removes the keys they added), enqueues `devbox_reconfigure`. The round agent then rewrites the gateway's and the VMs' key files, in about 3 minutes.
+- Adding or removing a key, or a member leaving (which removes the keys they added), enqueues `devbox_reconfigure`. The round agent then rewrites the gateway's and the VMs' key files, in about 3 minutes. `worms status keys` shows whether each team's keys arrived: on the SSH gateway (`/home/team/.ssh/authorized_keys`, lines ending in `team=<slug>`) and on its VMs A, B and C (`/root/.ssh/authorized_keys_worms_team`).
 
 ## Build and reset
 

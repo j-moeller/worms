@@ -201,6 +201,10 @@ def cmd_status(config, args) -> int:
         if topic == "devboxes":
             print(output.table(queries.devbox_rows(), headers=["Team", "Devbox", "SSH keys (name, fingerprint)"]))
             return 0
+        if topic == "keys":
+            from worms_cli import keys
+
+            return keys.status(config)
         if topic == "gameplans":
             print(output.table(queries.gameplan_rows(config.repo_root), headers=["Gameplan", "Orchestrator + node", "This checkout"]))
             print(output.color("Why the deployed copy is invalid: journalctl -u orchestrator-conduct-rounds (orchestrator), "
@@ -956,6 +960,7 @@ STATUS_TOPICS = {
     "gameplans": "the gameplans: valid on the orchestrator and the node? why not, by this checkout's check",
     "jobs": "the round agent's latest host jobs, and why one failed",
     "devboxes": "every team's devbox and SSH keys",
+    "keys": "are every team's SSH keys on the SSH gateway and its devbox VMs? (reads them there)",
 }
 
 SECTIONS = (

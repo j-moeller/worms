@@ -19,6 +19,26 @@
       ansible.builtin.wait_for_connection:
         timeout: 600
 
+# The teams' SSH keys before anything else (role devbox, tasks/keys.yml): the gateways' play, the
+# CA, apt and the packages below can fail, and must not keep a key change from arriving. Ansible
+# reaches the VMs over the management network, not through their gateways.
+- name: Install the teams' SSH keys on the devbox VMs
+  hosts: devbox
+  any_errors_fatal: false # one team's devbox must not block another's
+  become: true
+  gather_facts: false
+  tasks:
+    # cloud-init writes root's .ssh too: wait for it, whatever its outcome (the keys do not depend on it).
+    - name: Wait for cloud-init completion
+      ansible.builtin.command:
+        cmd: cloud-init status --wait
+      changed_when: false
+      failed_when: false
+    - name: The team's keys
+      ansible.builtin.import_role:
+        name: devbox
+        tasks_from: keys.yml
+
 # The gateways first: a devbox VM reaches everything through its team's gateway.
 - name: Configure the devbox gateways
   hosts: devbox_gw

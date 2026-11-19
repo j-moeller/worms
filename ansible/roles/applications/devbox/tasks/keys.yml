@@ -1,0 +1,34 @@
+---
+# The team's registered SSH keys on one devbox VM: how the team gets in (through the SSH gateway).
+# SetupDevbox.yml runs this in a play of its own, first, so that nothing else (the CA, apt and
+# its packages, the gateways) can stop a key change from arriving: with these tasks at the end of
+# the role, a package the offline apt cache lacked failed every key push on every devbox VM while
+# the gateway had the keys (`worms status keys`).
+
+- name: Ensure the login user's .ssh directory
+  ansible.builtin.file:
+    path: "~{{ devbox_login_user }}/.ssh"
+    state: directory
+    owner: "{{ devbox_login_user }}"
+    mode: "0700"
+
+# Managed (exclusive) so removing a key in the dashboard removes access on the next push. The
+# operator key (cloud-init) stays in ~/.ssh/authorized_keys, which cloud-init wrote: the team's go
+# in a file of their own that sshd also reads.
+- name: Install the team's authorized keys (devbox access via the gateway)
+  ansible.builtin.copy:
+    dest: "~{{ devbox_login_user }}/.ssh/authorized_keys_worms_team"
+    content: "{{ devbox_authorized_keys | join('\n') + ('\n' if devbox_authorized_keys else '') }}"
+    owner: "{{ devbox_login_user }}"
+    mode: "0600"
+
+- name: Have sshd also read the team key file
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/20-worms-devbox.conf
+    content: |
+      # Managed by Ansible (role devbox). Team keys (from the dashboard) in a
+      # separate file so the operator (cloud-init) key is never disturbed.
+      AuthorizedKeysFile .ssh/authorized_keys .ssh/authorized_keys_worms_team
+    owner: root
+    mode: "0644"
+  notify: Restart devbox sshd

@@ -8,16 +8,24 @@ part over SSH. Status comes from the database VM and the Proxmox API.
 
 from __future__ import annotations
 
-import argparse
 import os
-import re
-import subprocess
 import sys
-import textwrap
-from pathlib import Path
-from typing import NamedTuple
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+
+if __name__ == "__main__" and sys.argv[1:2] == ["__complete"]:
+    # A TAB (worms_cli/completion.py): it answers before the imports below, which would cost it a
+    # quarter of a second, and reads local files only.
+    from worms_cli.completion import complete_main
+
+    sys.exit(complete_main(sys.argv[2:]))
+
+import argparse  # noqa: E402
+import re  # noqa: E402
+import subprocess  # noqa: E402
+import textwrap  # noqa: E402
+from pathlib import Path  # noqa: E402
+from typing import NamedTuple  # noqa: E402
 
 from worms_cli import build, output, pipeline, power  # noqa: E402
 from worms_cli.config import Config  # noqa: E402
@@ -1089,6 +1097,39 @@ def cmd_power(config, args) -> int:
         return 1
 
 
+def completion_slots() -> dict[str, list[str]]:
+    """What tab completion offers for a command's positional arguments that its parser cannot
+    say, slot by slot (the last one repeats; "" = files): from the CLI's own tables."""
+    from worms_cli import components, remote, services
+
+    built = " ".join([*components.COMPONENTS, *components.GROUPS])
+    groups = " ".join(remote.groups())
+    return {
+        "show": ["@targets @teams database", ""],
+        "login": ["@targets", ""],
+        "run": [f"@targets {groups}"],
+        "log": [f"@targets {' '.join(services.SERVICES)} build latest", ""],
+        "rsync": ["@rsync"],
+        "power": ["start stop", f"@targets {groups}"],
+        "build": [built],
+        "deploy": [built],
+        "restart": [" ".join(n for n, s in services.SERVICES.items() if s.restartable)],
+        "reset devbox": ["@teams"],
+        "keys add": ["@teams", ""],
+        "keys remove": ["@teams", ""],
+        "delete-team": ["@teams", ""],
+        "step": [" ".join([*pipeline.STEPS, "debug"]), ""],
+    }
+
+
+def cmd_completion(config, args) -> int:
+    """`worms completion bash`: the bash completion script (worms_cli/completion.py)."""
+    from worms_cli import completion
+
+    print(completion.script(build_parser(), completion_slots(), [sys.executable, str(Path(__file__).resolve())]), end="")
+    return 0
+
+
 def cmd_emergency_stop(config, args) -> int:
     if not build.confirm("Freeze: hard-stop ALL VMs (nothing is destroyed). Proceed?", args.yes):
         return 1
@@ -1480,6 +1521,7 @@ SECTIONS = (
             ("secrets set <name>", "store a secret by hand (prompted, or from stdin)"),
             ("secrets check", "ask Proxmox whether the stored tokens work, with exactly their rights"),
             ("trust-node", "let the WORMS key in, for root on the node and on VMs that predate it"),
+            ("completion bash", "tab completion for bash: eval \"$(worms completion bash)\" in ~/.bashrc"),
         ),
     ),
     Section(
@@ -1770,6 +1812,9 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     p_set = _add(secrets_sub, "secrets set")
     p_set.add_argument("name", choices=["proxmox-token", "orchestrator-token", "topology-token", "ssh-key"])
     _add(sub, "trust-node")
+    p = sub.add_parser("completion", help="tab completion", description="Tab completion for the shell.")
+    completion_sub = p.add_subparsers(dest="shell", required=True, metavar="bash")
+    _add(completion_sub, "completion bash")
 
     _yes(_add(sub, "emergency-stop"))
     p = _add(sub, "destroy")
@@ -1790,7 +1835,7 @@ HANDLERS = {
     "internet": cmd_internet, "restart": cmd_restart, "power": cmd_power, "backup": cmd_backup,
     "reset": cmd_reset, "keys": cmd_keys,
     "admin-reset-password": cmd_admin_reset_password, "admin-create-staff": cmd_admin_create_staff,
-    "delete-team": cmd_delete_team, "secrets": cmd_secrets, "trust-node": cmd_trust_node,
+    "delete-team": cmd_delete_team, "secrets": cmd_secrets, "trust-node": cmd_trust_node, "completion": cmd_completion,
     "emergency-stop": cmd_emergency_stop, "destroy": cmd_destroy, "test": cmd_test, "step": cmd_step,
 }  # fmt: skip
 
@@ -1816,6 +1861,8 @@ def main(argv=None) -> int:
     args = parser.parse_args(own)
     args.ansible_args = args.extra = passed
     config = Config.load(args.config)
+    if args.command == "completion":  # read at every shell start: no notice, no node
+        return cmd_completion(config, args)
     tee = _run_log(config, args)
     try:
         _internet_notice(config)

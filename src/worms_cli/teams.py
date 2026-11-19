@@ -74,10 +74,34 @@ def _from_database(config) -> dict[str, Team] | None:
         return None
 
 
+CACHE = "~/.worms/team-map.json"  # what tab completion knows of the teams (worms_cli/completion.py)
+
+
+def write_cache(teams: dict[str, Team]) -> None:
+    """The team map as the database has it, for tab completion, which reads no database. Best
+    effort: a TAB without team names is no reason for a command to fail."""
+    import json
+    import os
+    from pathlib import Path
+
+    path = Path(CACHE).expanduser()
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}")
+        tmp.write_text(json.dumps({"teams": [{"slug": t.slug, "name": t.name} for t in teams.values()]}))
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
 def team_map(config, vm_names=(), hosts=None, database=True) -> dict[str, Team]:
     """slug -> Team: the database's teams, and every team whose devbox VMs there are (by their
     names, `vm_names`, and the inventory's `devbox_team`, `hosts`) though the database lacks it."""
-    teams = (_from_database(config) if database else None) or {}
+    teams = _from_database(config) if database else None
+    if teams is not None:
+        write_cache(teams)
+    teams = teams or {}
     found = {of_vm(name)[0] for name in vm_names if of_vm(name)}
     found |= {str(host.get("devbox_team")) for host in (hosts or {}).values() if host.get("devbox_team")}
     for slug in sorted(found - set(teams)):

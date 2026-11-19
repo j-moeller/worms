@@ -92,11 +92,13 @@ cd opentofu/modules/os_images && make images/debian-13-generic-amd64-with-guest-
   images/resolute-server-cloudimg-amd64-with-guest-agent.qcow2 && cd /root/app
 python3 -m venv .venv-test && .venv-test/bin/pip install -q -r tests/requirements.txt
 echo 'worms() { /root/app/.venv-test/bin/python /root/app/src/manage.py "$@"; }' >> ~/.bashrc && . ~/.bashrc
+worms completion bash > /etc/bash_completion.d/worms   # tab completion (again after an update), or in ~/.bashrc: eval "$(worms completion bash)"
 tmux new -s worms                                 # builds take about an hour
 ```
 
 - **Images.** They are git-ignored, so a fresh clone has none.
 - **The venv.** It provides Django, psycopg2 and proxmoxer for the database and status commands.
+- **Tab completion.** Commands, flags, components, steps and services come with the script; VM names and `<team>/<role>` targets from the generated inventories and the last team map read from the database (`~/.worms/team-map.json`). A new shell picks it up ([3](03-manage-py.md#tab-completion)).
 - **Config.** The node needs no `~/.worms/config`.
 
 ## 3. Secrets and tokens

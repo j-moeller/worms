@@ -399,6 +399,10 @@ def test_every_command_is_in_exactly_one_section():
     cli = _cli_module()
     listed = [cli._command_name(usage) for section in cli.SECTIONS for usage, _ in section.commands]
     assert sorted(listed) == sorted(name for name, _ in commands_of(cli.build_parser()))
+    # Tab completion is generated from the same parsers: it offers every top-level command.
+    script = run_cli("completion", "bash")
+    offered = next(line for line in script.splitlines() if line.startswith("_WORMS_COMMANDS=")).split("=", 1)[1].strip("'").split()
+    assert sorted(offered) == sorted({name.split()[0] for name, _ in commands_of(cli.build_parser())})
 
 
 def test_build_help_lists_every_component_and_group_with_what_it_needs():

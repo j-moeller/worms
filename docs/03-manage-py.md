@@ -11,9 +11,12 @@ There are two `manage.py` files:
 
 ```sh
 worms() { /root/app/.venv-test/bin/python /root/app/src/manage.py "$@"; }
+eval "$(worms completion bash)"   # tab completion; or once: worms completion bash > /etc/bash_completion.d/worms
 worms --help              # the verbs, grouped by purpose
 worms build --help        # the components, what each needs
 ```
+
+<a id="tab-completion"></a>**Tab completion** ([`completion.py`](../src/worms_cli/completion.py)). `worms completion bash` prints a bash completion script, written by hand (no `argcomplete`: production has no internet). What does not change with the platform is in the script, taken from the CLI's own tables when it is generated: the commands, subcommands and flags (the argparse parsers), the status topics, the components and groups of `build` and `deploy`, the steps, the services of `log` and `restart`. Generate it again after an update. What changes, the VM names and the `<team>/<role>` targets of `run`, `login`, `show`, `log`, `rsync` and `power`, and the teams of `reset devbox`, `keys add|remove` and `delete-team`, comes from the hidden `worms __complete <kind>` (`targets`, `teams`). It answers before the CLI's own imports and reads local files only, no Proxmox API, SSH or database: the generated inventories (this checkout's, and on the node the round agent's workspace's) and `~/.worms/team-map.json`, which the team map writes (0600) whenever it was read from the database. About 0.15 s a TAB on the node. After `--` the shell's own file completion applies.
 
 **Modes.** `WORMS_SSH` chooses the mode ([`session.py`](../src/worms_cli/session.py)).
 

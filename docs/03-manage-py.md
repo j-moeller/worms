@@ -138,6 +138,7 @@ Sources: [`components.py`](../src/worms_cli/components.py) (what a component is 
 | a node play | `host-network`, `round-agent` | its playbook on the node | its service is active (`worms-host-firewall`, `worms-round-agent`) |
 | a VM | `dns`, `syslog`, `database`, `orchestrator`, `dashboard`, `scoring`, `logging`, `monitor`, `apt-cache`, `devpi`, `docker-registry`, `manpages`, `ntp`, `cve-search`, `wikipedia` | `tofu apply -target=<its module>`, then the configure playbooks with `--limit <its group>` | Proxmox has a VM of that name |
 | devboxes | `devbox` | the round agent (a host job) | — |
+| gameplans | `gameplans` | `SetupRoundAgent.yml --tags agent-sync` (the node's copy), then `SetupDbAndDashboard.yml --limit orchestrator --tags gameplans` (the orchestrator's; the conductor restarts and checks them). No packages, no internet; refused during a round | — |
 
 Groups: `infrastructure` (the platform's own VMs), `private-internet`, `services` (the VMs a reset returns to their snapshot).
 

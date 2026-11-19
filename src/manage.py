@@ -301,7 +301,7 @@ def _exists(pipe, config):
             return components.stack_built(config.repo_root, component.stack)
         if component.kind == "node":
             return pipe.runner.node_sh(f"systemctl is-active --quiet {component.node_service}", check=False, quiet=True) == 0
-        if component.kind == "devbox":
+        if component.kind in ("devbox", "gameplans"):
             return True
         return component.name in vm_names()
 

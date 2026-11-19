@@ -8,6 +8,8 @@ A component is one of:
                 `tofu apply -target`, recreated with `-replace`) and its share of the
                 configuration playbooks (`--limit` to its inventory group)
   devbox        the teams' devboxes: the round agent builds them (orchestrator chain)
+  gameplans     gameplans/ and the framework (src/gameplan), copied to the orchestrator and the
+                node, which then check them: no packages, no internet window
 
 `deps` are what a component needs to exist before it is built. `worms build` builds a missing
 dependency only after showing the plan and asking (build.confirm). Whether a component exists
@@ -27,7 +29,7 @@ class Component:
     name: str
     help: str
     deps: tuple[str, ...] = ()
-    kind: str = "vm"  # "vm", "stack", "node", "devbox"
+    kind: str = "vm"  # "vm", "stack", "node", "devbox", "gameplans"
     stack: str = ""  # its OpenTofu stack
     module: str = ""  # its VM's module in that stack (-target)
     resource: str = ""  # its VM resource in that module (-replace)
@@ -82,6 +84,9 @@ COMPONENTS: dict[str, Component] = {
         _private("wikipedia", "the private internet: Wikipedia"),
         Component("round-agent", "the round agent on the node: runs rounds and builds devboxes", ("database", "orchestrator"),
                   kind="node", node_service="worms-round-agent", playbook="SetupRoundAgent.yml"),  # fmt: skip
+        Component("gameplans", "the gameplans and their framework, copied to the orchestrator and the node, "
+                  "checked at once; no packages, no internet; not during a round", ("orchestrator", "round-agent"),
+                  kind="gameplans"),  # fmt: skip
         Component("devbox", "the teams' missing devboxes, built by the round agent; --rebuild: every team's (or "
                   "--team's) from nothing", ("round-agent", "scoring", "logging", "apt-cache"), kind="devbox"),  # fmt: skip
     )
@@ -155,6 +160,7 @@ class Plan:
             "dependency": "create: a missing dependency",
             "migrations": "configure again: the database lacks migrations",
             "provision": "build the teams' missing devboxes (round agent)",
+            "deploy": "copy to the node and the orchestrator, check at once",
         }
         return [[name, what[action], COMPONENTS[name].help] for name, action in self.steps]
 
@@ -171,7 +177,9 @@ def plan(requested, exists, rebuild=False, pending_migrations=lambda: []) -> Pla
     for name in closure(requested):
         component = COMPONENTS[name]
         if name in requested:
-            if component.kind == "devbox":
+            if component.kind == "gameplans":
+                action = "deploy"
+            elif component.kind == "devbox":
                 action = "recreate" if rebuild else "provision"
             elif rebuild and component.kind == "vm":
                 action = "recreate"

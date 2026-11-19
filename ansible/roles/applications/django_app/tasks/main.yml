@@ -110,8 +110,10 @@
 
 # The gameplans (docs/05-live-environment.md): the orchestrator runs their execute() and checks them; the
 # dashboard must never hold one. Root-owned, readable by the application (it cannot change them).
+# Tag gameplans: `worms build gameplans` runs these alone (no packages, no internet).
 - name: Create the gameplan directories (orchestrator only)
   when: django_variant == "orchestrator"
+  tags: [gameplans]
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
@@ -126,6 +128,8 @@
 
 - name: Synchronize the gameplans and their framework (orchestrator only)
   when: django_variant == "orchestrator"
+  tags: [gameplans]
+  register: django_gameplans_sync
   ansible.posix.synchronize:
     src: "{{ item.src }}"
     dest: "{{ item.dest }}"
@@ -145,6 +149,7 @@
 
 - name: Make the gameplans root's, readable by the application only (orchestrator only)
   when: django_variant == "orchestrator"
+  tags: [gameplans]
   ansible.builtin.file:
     path: "{{ django_app_dir }}/gameplans"
     state: directory
@@ -152,6 +157,19 @@
     owner: root
     group: "{{ django_app_group }}"
     mode: "u=rwX,g=rX,o="
+
+# The conductor checks the gameplans when it starts, then every 10 minutes. `worms build
+# gameplans` synced the node's copy first, so a check now finds both copies alike: a changed copy
+# here restarts it (Restart Django); an unchanged one restarts it here.
+- name: Have the conductor check the gameplans at once (worms build gameplans)
+  when:
+    - django_variant == "orchestrator"
+    - "'gameplans' in ansible_run_tags"
+    - django_gameplans_sync is not changed
+  tags: [gameplans]
+  ansible.builtin.systemd:
+    name: "{{ django_app_name }}-conduct-rounds"
+    state: restarted
 
 - name: Remove any gameplans from the dashboard
   when: django_variant != "orchestrator"

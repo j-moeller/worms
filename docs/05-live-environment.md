@@ -170,7 +170,7 @@ Flags released late are credited for submissions up to 900 s earlier. The round 
 
 ## Writing a gameplan
 
-One file in `gameplans/`, named `[a-z][a-z0-9_]*.py`, holding exactly one `Gameplan` subclass. Commit it like any other file and deploy it with `worms build`.
+One file in `gameplans/`, named `[a-z][a-z0-9_]*.py`, holding exactly one `Gameplan` subclass. Commit it like any other file and deploy it with `worms build gameplans` ([Running a round](#running-a-round)).
 
 - **Who runs it.** The code runs as root on the node and as the orchestrator's service user, so gameplan authors are trusted.
 - **Teams never see it.**
@@ -373,7 +373,7 @@ PYTHONPATH=src python3 -c "from gameplan import loader, runtime; print(runtime.v
 ## Running a round
 
 1. **Create the round** on **Staff → Rounds**: its window (the start is the upload deadline; teams' latest Live uploads before it are used) and its duration per team. The gameplan is optional here.
-2. **Commit and deploy** the gameplan: `worms build orchestrator round-agent` (both copies), outside a round. The conductor restarts; the agent reads gameplan files fresh.
+2. **Commit and deploy** the gameplan: `worms build gameplans`, outside a round. It copies `gameplans/` and the framework (`src/gameplan`) to the node, then to the orchestrator, and restarts the conductor, which checks them at once. Nothing else is configured and no package installed, so it needs no internet and takes seconds. The round agent reads gameplan files fresh for every job, and restarts itself, between jobs, when the framework or its own code changed on disk ([`agent.py`](../scripts/round_agent/agent.py), `LoadedCode`).
 3. **Check it is valid.** **Staff → Rounds** marks it valid. If not, read `journalctl -u orchestrator-conduct-rounds` on the orchestrator and the `gameplans` job log on the node. **Staff → Simulations** (or **Simulate** on the round's page) replays its attempt at the round's duration per team ([Simulation](#simulation)).
 4. **Choose it** on the round's page. That works until the round's first attempt starts: a round without a valid gameplan waits alone, and the conductor looks again every minute ([`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py), `_pin`). Then the gameplan's version is pinned for every attempt.
 5. **Watch it** (next section). `worms status` shows the active run. On the node, `tail -F /var/log/worms/jobs/latest.log`.

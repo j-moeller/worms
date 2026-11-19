@@ -206,6 +206,6 @@ None of this alters round_one or `credential_chain.py`: neither removes a packag
 
 ## Worth doing, not needed for this deploy
 
-- **Restart the round agent when its code changes.** Neither the sync nor `worms build round-agent` does it today. A handler on the sync task would remove step 6 and the risk above.
+- **Restart the round agent when its code changes.** Done on 2026-11-19: the agent exits between jobs once a module it loaded changed on disk, and systemd starts the new code. Production's agent predates that, so this deploy still needs step 6 once. Gameplans alone are deployed with `worms build gameplans` from then on (no internet).
 - **A database default for the UUIDs** (`db_default`, `gen_random_uuid()`). It would make the deploy gap harmless and rollback option 1 unnecessary.
 - **Database dumps** on a schedule (S1 in [7](07-security.md)).

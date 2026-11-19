@@ -511,6 +511,8 @@ class Pipeline:
         services = [c for c in vms if c.service]
         window = bool(new) or (packages and bool(vms))
         steps = [Step("secrets", self.secrets)]
+        if "gameplans" in actions:
+            steps.append(Step("gameplans: not during a round", self._refuse_gameplans_during_round))
         for c in chosen:
             if c.kind == "stack":
                 steps += [Step(f"init {c.stack}", partial(self.runner.tofu, c.stack, "init", "-input=false")),
@@ -550,7 +552,25 @@ class Pipeline:
                                   scope=(DEVBOXES_OFF,)))  # fmt: skip
         if "round-agent" in actions:
             steps.append(Step("round agent", partial(self._ansible, "SetupRoundAgent.yml")))
+        if "gameplans" in actions:
+            steps += self._plan_gameplans()
         return steps
+
+    def _refuse_gameplans_during_round(self) -> None:
+        self._refuse_vms_in(("sandbox",), "Refusing to deploy gameplans during a round: sandbox VMs exist")
+
+    def _plan_gameplans(self) -> list[Step]:
+        """`worms build gameplans`: gameplans/ and src/gameplan to both copies, nothing else. The
+        node's first: the round agent restarts itself on new framework code once it is idle
+        (scripts/round_agent/agent.py, LoadedCode), so the conductor, restarted with the
+        orchestrator's copy, checks against a node that has the same files and code. No package
+        is installed, so no internet is needed (the node's apt refreshes its lists only for a
+        missing package)."""
+        return [
+            Step("gameplans: the node's copy", partial(self._ansible, "SetupRoundAgent.yml", "--tags", "agent-sync")),
+            Step("gameplans: the orchestrator's copy, then its check",
+                 partial(self._ansible, "SetupDbAndDashboard.yml", "--limit", "orchestrator", "--tags", "gameplans")),
+        ]  # fmt: skip
 
     def _apply_targets(self, stack: str, targets, recreate) -> None:
         """`tofu apply` of just these VMs of `stack` (and what they need), recreating `recreate`."""

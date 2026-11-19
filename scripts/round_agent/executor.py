@@ -269,6 +269,10 @@ class Executor:
 
     def tofu(self, stack, *args, timeout=3600):
         path = self.repo_root / "opentofu" / "stacks" / stack
+        if args[:1] == ("init",):
+            # From the node's provider mirror first, the registry only for a version it lacks: a
+            # plain init needs the internet even for installed providers (scripts/tofu-init).
+            return self.run(["sh", str(self.repo_root / "scripts" / "tofu-init"), str(path)], timeout=timeout, stream=True)
         if args[:1] in (("apply",), ("destroy",)):
             known_hosts = Path.home() / ".ssh" / "known_hosts"
             problems = known_hosts_problems(known_hosts)

@@ -137,10 +137,11 @@
     - { src: "{{ round_agent_controller_repo }}/opentofu/stacks/platform/terraform.tfstate", dest: opentofu/stacks/platform/terraform.tfstate }
     - { src: "{{ round_agent_controller_repo }}/opentofu/stacks/firewall/terraform.tfstate", dest: opentofu/stacks/firewall/terraform.tfstate }
 
-- name: Initialise the node's stacks (providers)
+# Without internet too (scripts/tofu-init): a plain `tofu init` asks the registry even for a
+# provider it has installed, and the node may have no outbound connection at all.
+- name: Initialise the node's stacks (providers, from the node's mirror first)
   ansible.builtin.command:
-    cmd: tofu init -input=false -no-color
-    chdir: "{{ round_agent_repo_root }}/opentofu/stacks/{{ item }}"
+    argv: [sh, "{{ round_agent_repo_root }}/scripts/tofu-init", "{{ round_agent_repo_root }}/opentofu/stacks/{{ item }}"]
   loop: [sandbox, devbox]
   changed_when: false
 

@@ -1,0 +1,37 @@
+#!/bin/sh
+# `tofu init` of one of the node's stacks (sandbox, devbox) that works without internet.
+#
+#   tofu-init <stack directory> [mirror]
+#
+# A plain `tofu init` asks the registry for every provider, even one it has installed and
+# locked (OpenTofu 1.13), and so fails on a node with no outbound connection: the workspace
+# sync (role round_agent, tasks/workspace.yml) and a round's sandbox build (the round agent,
+# executor.py) then stop there. So: first from the node's provider mirror, which keeps every
+# provider version the stacks have installed; the registry only for a version the mirror lacks
+# (a new pin in the code: that needs the internet once), and what it installs is kept too.
+set -eu
+stack=$1
+mirror=${2:-/var/lib/worms/tofu-providers}
+cd "$stack"
+
+keep_installed() {
+    # .terraform/providers/<host>/<namespace>/<type>/<version>/<os_arch>: the mirror's layout too.
+    [ -d .terraform/providers ] || return 0
+    (cd .terraform/providers && find . -mindepth 5 -maxdepth 5 \( -type d -o -type l \)) | while read -r dir; do
+        [ -e "$mirror/$dir" ] && continue
+        mkdir -p "$mirror/$(dirname "$dir")"
+        cp -RL ".terraform/providers/$dir" "$mirror/$dir"
+        echo "tofu-init: kept ${dir#./} in $mirror"
+    done
+}
+
+mkdir -p "$mirror"
+keep_installed
+if tofu init -input=false -no-color -plugin-dir="$mirror" >/dev/null 2>&1; then
+    echo "tofu-init: $(basename "$PWD"): initialised from $mirror (no internet needed)"
+    exit 0
+fi
+echo "tofu-init: $(basename "$PWD"): a provider version is not in $mirror: from the registry (needs the internet)" >&2
+rm -f .terraform/plugin_path
+tofu init -input=false -no-color
+keep_installed

@@ -73,7 +73,8 @@ def problems_of(init, execute=None, duration=None):
 
 
 def test_the_example_round_loads_and_validates():
-    loaded = loader.load(GAMEPLANS, "round_one.py")
+    # The small three-VM example lives in poc_round.py; round_one.py is the full competition round.
+    loaded = loader.load(GAMEPLANS, "poc_round.py")
     assert loaded.cls.__name__ == "RoundOne" and len(loaded.sha256) == 64
     assert validate(loaded.cls) == []
     spec = spec_of(loaded.cls)

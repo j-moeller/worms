@@ -11,11 +11,12 @@ full code/migration review of this exact range (production `33dae12` → `main`)
 This page is the *procedure*; that page is the *why* for every migration and the
 detailed rollback. Where they overlap, that page is authoritative.
 
-> **One‑line answer to "can I just `worms build all`?"** No — not cleanly, and
-> not for what you want. `build all` opens the internet window, which **refuses
-> while any devbox or sandbox VM exists**, so it would stop until the devboxes
-> are down; it does not, on its own, dump the database first; and it does not
-> upgrade nginx unless you add `--packages`. Do the ordered steps below instead.
+> **One‑line answer to "can I just run `worms build` (everything)?"** No — not
+> cleanly, and not for what you want. (There is no `worms build all`: `worms
+> build` without a component is the whole build.) It opens the internet window,
+> which is **refused while a sandbox VM exists** and shuts every running devbox
+> down meanwhile; it does not, on its own, dump the database first; and it
+> applies every stack and playbook, far more than this deploy needs. Do the ordered steps below instead.
 > They are mostly `worms build <component>`, just sequenced so nothing is lost.
 
 ---
@@ -69,7 +70,7 @@ worms build apt-cache devpi dashboard --packages
 # 6. TEAR DOWN + REBUILD EVERY DEVBOX FROM NOTHING (fresh disks; new pip index + offline NTP)
 worms build devbox --rebuild    # every team (--team <name> repeatable for a subset); prompts to DESTROY
 worms status jobs               # watch the devbox_rebuild jobs drain on the node
-# lighter alternative (snapshot rollback + reconfigure; also applies the update): worms reset devbox --all-teams
+# not an alternative here: worms reset devbox --all-teams (a snapshot rollback, then CA/keys/tokens over SSH: no update)
 
 # 7. VERIFY
 worms status            # everything up, internet window CLOSED
@@ -122,7 +123,7 @@ the sshd‑bind fix, so the migration step will not hang.
 ## The three things you flagged
 
 1. **The database is not backed up.** Dump it *first* ([§1](#1-back-up-the-database-first-nothing-else-does)). The UUID steps `0011`/`0014` rewrite rows; a dump is your floor. Nothing in the platform backs the database up on its own.
-2. **Tearing down every devbox.** Use **`worms build devbox --rebuild`** ([§7](#7-tear-down-and-rebuild-every-devbox)) — it rebuilds every team's three VMs **from nothing** (fresh disks), re‑applies the new pip index + NTP and re‑snapshots them clean; dev scores restart, dev records are kept. (`worms reset devbox --all-teams` is the lighter option — a snapshot rollback + reconfigure that still applies the update but leaves the clean snapshot on the old config.) **Do _not_ use `worms destroy`** — it tears down the VM stacks **and the database VM and its records**. See [Don'ts](#donts).
+2. **Tearing down every devbox.** Use **`worms build devbox --rebuild`** ([§7](#7-tear-down-and-rebuild-every-devbox)) — it rebuilds every team's three VMs **from nothing** (fresh disks), re‑applies the new pip index + NTP and re‑snapshots them clean; dev scores restart, dev records are kept. (`worms reset devbox --all-teams` is no substitute: it rolls each devbox back to its `clean` snapshot and writes the internal CA, the team's keys and new tokens over SSH, without Ansible, so the VMs stay on the snapshot's pip index and NTP.) **Do _not_ use `worms destroy`** — it tears down the VM stacks **and the database VM and its records**. See [Don'ts](#donts).
 3. **nginx security update.** This is *not* in `3ce1751`. nginx is a plain Debian package installed `state: present` (install, never upgrade), so a normal build never moves it. The security build comes from an **apt upgrade during an internet window** — i.e. a `--packages` build of the dashboard. Details and the "newer than Debian stable" case in [§6](#6-nginx-security-update-on-the-dashboard).
 
 ---
@@ -260,11 +261,12 @@ re‑installed, the **new pip index + NTP drop‑in applied**, and a fresh `clea
 snapshot taken (so later team resets roll back to the new config). Dev scores
 restart; earlier dev records are kept. It prompts to DESTROY first (`--yes` skips).
 
-> `worms reset devbox --all-teams` is the lighter alternative — it rolls each
-> devbox back to its *pre‑deploy* `clean` snapshot and then reconfigures, which
-> **also** applies the new pip/NTP, but is not a fresh teardown and leaves the
-> snapshot on the old config. Either picks up the private‑internet change;
-> `--rebuild` is the one that matches "tear down". Never use `worms destroy` —
+> `worms reset devbox --all-teams` is **not** an alternative: it rolls each
+> devbox back to its *pre‑deploy* `clean` snapshot and writes the internal CA,
+> the team's keys and new tokens over SSH (no Ansible, no package), so the VMs
+> keep the snapshot's old pip index and NTP. (A devbox whose snapshot is from its
+> first boot only gets a one-time offline setup, still without packages.)
+> `--rebuild` is the one that picks up the private‑internet change. Never use `worms destroy` —
 > it takes the database VM too.
 
 ### 8. Verify
@@ -320,8 +322,8 @@ Full detail (two rehearsed, data‑preserving options) is in
 ## Don'ts
 
 - **Don't `worms destroy`** to clear devboxes — it destroys the VM stacks **and
-  the database VM and its records**. Use `worms build devbox --rebuild` (or
-  `worms reset devbox --all-teams` for the lighter rollback+reconfigure).
+  the database VM and its records**. Use `worms build devbox --rebuild` (a
+  `worms reset devbox --all-teams` is only a snapshot rollback plus keys and tokens).
   (`worms destroy --all` is even broader.) There is no undo but the step‑1 dump.
 - **Don't deploy during a round** — the running team loses its attempt.
 - **Don't skip the agent restart** (§4). Nothing reports the error; a flag just

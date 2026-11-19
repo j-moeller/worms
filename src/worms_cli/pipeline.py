@@ -186,8 +186,10 @@ class Pipeline:
             self._close_window()
 
     def _leave_after_failure(self, active: list) -> None:
-        """After a failed step: close the window and start the devbox VMs again. A window
-        that does not close is the louder error, and replaces the step's."""
+        """After a failed step: close the window, switch DNS and the caches back to offline
+        mode, and start the devbox VMs again. A window that does not close is the louder
+        error, and replaces the step's. A cache left in online mode answers every request it
+        cannot fetch with an error (503): said loudly, but the step's error stays the one."""
         still_open = None
         for scope in reversed(active):
             if scope == INTERNET:
@@ -196,6 +198,13 @@ class Pipeline:
                     self._close_window()
                 except BuildError as exc:
                     still_open = exc
+                    continue
+                _stopping("switching DNS and the caches back to offline mode")
+                try:
+                    self.offline_services()
+                except BuildError as exc:
+                    output.error(f"!!! DNS AND THE CACHES MAY STILL BE IN ONLINE MODE (they answer what they cannot fetch "
+                                 f"with errors): run `worms internet disable` once fixed -- {exc}")  # fmt: skip
             else:
                 try:
                     self._devboxes_on()
@@ -662,6 +671,39 @@ class Pipeline:
         self.runner.node_sh("qm list | awk 'NR>1 {print $1}' | xargs -r -I {} qm destroy {}", check=False)
 
 
+def has_varfile(ansible_args) -> bool:
+    """Whether ansible-playbook's arguments load a variable file (`-e @<file>`, `-e@<file>`,
+    `--extra-vars @<file>`, `--extra-vars=@<file>`), as the round agent passes its own."""
+    args = list(ansible_args)
+    for i, arg in enumerate(args):
+        value = None
+        if arg in ("-e", "--extra-vars"):
+            value = args[i + 1] if i + 1 < len(args) else ""
+        elif arg.startswith("--extra-vars="):
+            value = arg[len("--extra-vars="):]
+        elif arg.startswith("-e") and not arg.startswith("--"):
+            value = arg[2:]
+        if value and value.startswith("@") and len(value) > 1:
+            return True
+    return False
+
+
+# Steps only the round agent runs, with the teams' keys in a variable file of its own
+# (round_agent/handlers.py, _configure_devbox). Without it the roles' defaults apply
+# (devbox_team_keys: {}, ssh_gateway_authorized_keys: []), and the exclusive key files are
+# written EMPTY: every team is locked out of its devbox and the SSH gateway.
+AGENT_VARFILE_STEPS = ("devbox-configure", "devbox-keys")
+
+
+def refuse_without_varfile(step: str, ansible_args) -> None:
+    if step in AGENT_VARFILE_STEPS and not has_varfile(ansible_args):
+        raise BuildError(
+            f"refusing `worms step {step}` without the round agent's variable file (-e @<file>): the teams' keys "
+            "would be written EMPTY, every team locked out of its devbox and the SSH gateway. The keys: "
+            "`worms devbox-sync-keys`; a team's devbox: `worms reset devbox <team>`, or `worms build devbox`"
+        )
+
+
 # `worms step <name>`: single steps of the pipeline, for the round agent (it runs them in its
 # workspace, never interactively) and for troubleshooting. name -> (method, one-line help).
 STEPS: dict[str, tuple[str, str]] = {
@@ -674,6 +716,8 @@ STEPS: dict[str, tuple[str, str]] = {
                           "snapshot the service VMs as they are, as what a reset returns to (no team VM may exist)"),
     "round-configure-sandbox": ("round_configure_sandbox", "configure a round's freshly built sandbox VMs (round agent)"),
     "devbox-apply": ("devbox_apply", "apply the devbox stack (round agent)"),
-    "devbox-configure": ("devbox_configure", "configure the devbox VMs and the SSH gateway (round agent)"),
-    "devbox-keys": ("devbox_keys", "only the teams' SSH keys on the SSH gateway and the devbox VMs (round agent)"),
+    "devbox-configure": ("devbox_configure", "configure the devbox VMs and the SSH gateway (round agent only: "
+                                             "refused without its -e @<varfile>)"),
+    "devbox-keys": ("devbox_keys", "only the teams' SSH keys on the SSH gateway and the devbox VMs (round agent only: "
+                                   "refused without its -e @<varfile>)"),
 }

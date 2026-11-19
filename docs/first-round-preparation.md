@@ -132,8 +132,10 @@ all as they are (its job log says `not reset: no clean snapshot`), and the cache
   The message names them. Send it to me; don't start the round.
 - `!!! INTERNET ACCESS IS STILL ALLOWED`: run `worms internet disable`.
 - **Whatever failed, and you stop there:** run `worms internet disable`. A build that fails inside
-  the window closes it, but leaves DNS and the caches in online mode, where they answer every
-  request they can't fetch with an error. `disable` switches them back offline and checks the cache.
+  the window closes it and switches DNS and the caches back to offline mode itself (online, they
+  answer every request they can't fetch with an error). `disable` does both again and checks the
+  cache; it is needed for sure when the build says `!!! DNS AND THE CACHES MAY STILL BE IN ONLINE
+  MODE`.
 
 **Check by hand.** Do this even if the build passed: it's the request the round will make.
 

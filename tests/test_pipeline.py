@@ -131,6 +131,14 @@ def test_component_steps(run, name):
 
 def test_every_step_is_covered():
     assert set(pipeline.STEPS) - set(EXPECTED) <= {"init", "inventory", "show-config", "ping", "snapshot-services"}
+    # The round agent's own steps, by hand without its variable file, would write every team's
+    # key files empty (the roles' defaults): refused, and the agent's call still passes.
+    for step in pipeline.AGENT_VARFILE_STEPS:
+        for by_hand in ([], ["--limit", "devbox-t1-a"], ["-e", "x=1"]):
+            with pytest.raises(BuildError, match="EMPTY"):
+                pipeline.refuse_without_varfile(step, by_hand)
+        for agent in (["-e", "@/tmp/vars.yml"], ["-e", "@/tmp/vars.yml", "--limit", "devbox-t1-a"], ["--extra-vars=@v.yml"]):
+            pipeline.refuse_without_varfile(step, agent)
 
 
 def test_failed_step_still_closes_the_window(monkeypatch):
@@ -141,7 +149,7 @@ def test_failed_step_still_closes_the_window(monkeypatch):
         with pytest.raises(BuildError):
             build(pipe, ["scoring"], missing=("scoring",))
         steps = [c for c in pipe.runner.calls if c[0] == "ansible"]
-        assert steps[-1] == DENY
+        assert steps[-3:] == [DENY, *OFFLINE]  # closed, and DNS and the caches offline again
         assert ("ansible", "SetupSandboxApi.yml") not in steps  # stopped at the failure
     finally:
         Recorder.fail_on = None
@@ -159,7 +167,7 @@ def test_a_failed_step_aborts_the_build(monkeypatch, failing):
         pipe.build_all()
     steps = [c for c in pipe.runner.calls if c[0] in ("tofu", "ansible")]
     at = next(i for i, step in enumerate(steps) if step[:2] == failing)
-    assert steps[at + 1:] in ([], [DENY])
+    assert steps[at + 1:] in ([], [DENY, *OFFLINE])
     assert (DENY in steps) == (ALLOW in steps)
 
 
@@ -170,10 +178,11 @@ def test_the_cleanup_after_a_failed_step_says_the_build_is_stopping(monkeypatch,
     pipe = pipeline.Pipeline(config=None)
     with pytest.raises(BuildError, match="private_internet"):
         pipe.online(lambda: pipe._execute(pipe._plan_infrastructure()))  # build_all's window, without its `tofu init`
-    assert [c for c in pipe.runner.calls if c[0] == "ansible"][-1] == DENY
+    assert [c for c in pipe.runner.calls if c[0] == "ansible"][-3:] == [DENY, *OFFLINE]
     err = capsys.readouterr().err
     assert "stopping the build: regenerating the inventory" in err
     assert "stopping the build: closing the internet window" in err
+    assert "stopping the build: switching DNS and the caches back to offline mode" in err
 
 
 def test_a_failed_inventory_after_a_failed_apply_keeps_the_applys_error(monkeypatch):

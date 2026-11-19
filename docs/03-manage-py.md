@@ -126,7 +126,7 @@ One verb per task ([`src/manage.py`](../src/manage.py)). Commands marked † ask
 |---|---|
 | `worms test [-- <pytest args>]` | The offline suite (Testing) |
 | `worms test --live [-- <ansible args>]` | The end-to-end simulation on the deployed platform |
-| `worms step <name> [-- <ansible args>]` | One pipeline step ([`pipeline.py`](../src/worms_cli/pipeline.py), `STEPS`): `init`, `inventory`, `show-config`, `ping`, `offline`, `snapshot-services`, and the round agent's `round-configure-sandbox`, `devbox-apply`, `devbox-configure`. `worms step debug HOST`: why Ansible cannot reach a host (address, TCP 22, SSH, Python, sudo, cloud-init) |
+| `worms step <name> [-- <ansible args>]` | One pipeline step ([`pipeline.py`](../src/worms_cli/pipeline.py), `STEPS`): `init`, `inventory`, `show-config`, `ping`, `offline`, `snapshot-services`, and the round agent's `round-configure-sandbox`, `devbox-apply`, `devbox-configure`, `devbox-keys`. The last two are refused without the agent's `-e @<varfile>`: the roles' defaults would write every team's key files empty (`worms devbox-sync-keys` writes the keys; `worms reset devbox <team>` or `worms build devbox` a devbox). `worms step debug HOST`: why Ansible cannot reach a host (address, TCP 22, SSH, Python, sudo, cloud-init) |
 
 ## `worms build`
 
@@ -159,7 +159,7 @@ Groups: `infrastructure` (the platform's own VMs), `private-internet`, `services
 4. The window closes. Offline mode runs. The service VMs are snapshotted as `clean`.
 5. The devboxes start again.
 
-A failed step ends the build. Before exiting, it still closes the window and starts the devboxes.
+A failed step ends the build. Before exiting, it still closes the window, switches DNS and the caches back to offline mode (best effort: `!!! DNS AND THE CACHES MAY STILL BE IN ONLINE MODE` if that fails too, then `worms internet disable`) and starts the devboxes.
 
 **The internet window** ([`Internet.yml`](../ansible/Internet.yml), [`host_network/tasks/internet.yml`](../ansible/roles/host/host_network/tasks/internet.yml)) lets the infrastructure and private-internet VMs reach the internet (80, 443, 53) through the node.
 

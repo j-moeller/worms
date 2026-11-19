@@ -164,7 +164,7 @@ Without them the platform has to be rebuilt. Nothing backs up the database ([6](
 2. **Devboxes.** Run `worms build devbox`. It takes about 17 minutes for 3 teams; follow it with `tail -F /var/log/worms/jobs/latest.log` on the node. Teams then add SSH keys on their profile ([4](04-dev-environment.md)).
 3. **Rounds.**
    - Create the round on **Staff → Rounds**. Its gameplan can follow later, until the round's first attempt starts ([5](05-live-environment.md#running-a-round)). A round that reaches its start without one waits, alone, and every staff page says so.
-   - Commit a gameplan under `gameplans/` and deploy it with `worms build orchestrator round-agent`: the orchestrator's copy, and the node's (the round agent's workspace).
+   - Commit a gameplan under `gameplans/` and deploy it with `worms build gameplans`: the node's copy (the round agent's workspace) first, then the orchestrator's, whose conductor checks it. No packages, no internet window; refused during a round.
    - Within 10 minutes it shows as valid on **Staff → Rounds**. Choose it on the round's page.
 
 ## Troubleshooting

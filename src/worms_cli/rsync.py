@@ -188,7 +188,7 @@ class Rsync:
             relay.join()
         if code in (12, 127) and any("rsync" in line and "not found" in line for line in relays[1].tail):
             output.error(f"rsync is not installed on {plan.vm}"
-                         + (": a devbox gets it from `worms step devbox-configure` (devbox_packages)" if plan.devbox else ""))  # fmt: skip
+                         + (": a devbox gets it when it is built again (`worms build devbox --rebuild`, devbox_packages)" if plan.devbox else ""))  # fmt: skip
         return code
 
 

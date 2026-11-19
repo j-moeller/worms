@@ -456,6 +456,7 @@ def cmd_step(config, args) -> int:
     interactively; for troubleshooting too."""
     pipe = pipeline.Pipeline(config, ansible_args=" ".join(args.ansible_args))
     try:
+        pipeline.refuse_without_varfile(args.name, args.ansible_args)
         if args.name == "debug":
             if not args.host:
                 output.error("worms step debug <host>: an inventory host or group")

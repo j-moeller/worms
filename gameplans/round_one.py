@@ -50,11 +50,10 @@ from gameplan import (Allow, BasicVM, Docx, Entry, FirewallRule, FreezeState, Ga
 
 class RoundOne(Gameplan):
     description = (
-        "Round one. The worm lands on a single entry host and has a short grace period before "
-        "that host is powered off. Everything of value is deeper in the network: twenty hosts "
-        "behind a default-deny firewall, each reachable only from the one before it. Follow the "
-        "credentials outward -- SSH keys, passwords noted in files, a telnet login or two -- and "
-        "spread before the entry host goes dark. Only a worm that moved keeps scoring."
+        "This introductory round consists of 20 virtual machines (VMs). Your objective is to propagate the worm throughout the network and reach all remaining VMs."
+        "You begin on a single entry VM, which provides a 10-minute grace period before it is automatically shut down. Once this period expires, the flags on the remaining VMs are placed and become available for collection."
+        "Propagation is intended to take place through existing access mechanisms, primarily SSH and Telnet. Credentials required to access subsequent VMs can be discovered on the machines themselves, scattered across various files and locations."
+        "The challenge focuses exclusively on worm propagation using discovered credentials and legitimate access methods. Exploitation of security vulnerabilities is neither required nor permitted."
     )
     # round_duration = 60 * 60    # the default: one hour per team from the worm's start
     grace = 10 * 60               # how long A stays up after the worm lands, before it is shut down

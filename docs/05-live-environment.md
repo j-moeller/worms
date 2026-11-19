@@ -407,4 +407,4 @@ As of 2026-11-08. The gameplan rework is uncommitted and not yet deployed.
 - **Shared services.** The service VMs are rolled back only when a sandbox is built, i.e. the first attempt of a round. What one team's worm does to them stays for later attempts.
 - **Operations.**
   - Nothing clears a failed-teardown hold.
-  - New agent code needs `systemctl restart worms-round-agent` on the node; gameplan files are read fresh.
+  - The round agent restarts itself between jobs when its code changed on disk; gameplan files are read fresh. An agent started before 2026-11-19 does not, and needs `systemctl restart worms-round-agent` once.

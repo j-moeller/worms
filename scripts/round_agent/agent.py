@@ -28,6 +28,7 @@ import logging
 import os
 import select
 import signal
+import sys
 import threading
 import time
 
@@ -180,11 +181,17 @@ class Agent:
 
     def run_forever(self):
         self._listen()
+        code = LoadedCode(self.env.get("REPO_ROOT", os.getcwd()))
         log.info("round agent started")
         while self.running:
+            # Between jobs only: a job runs to its end on the code it started with.
+            changed = code.changed()
+            if changed:
+                log.info("my code changed on disk (%s): exiting for systemd to start the new code", changed)
+                return
             try:
-                while self.tick():
-                    pass
+                if self.tick():
+                    continue
             except Exception:  # noqa: BLE001  (connection hiccup: reconnect and retry)
                 log.exception("agent loop error; reconnecting")
                 self._conn = None
@@ -208,6 +215,39 @@ class Agent:
                 conn.notifies.clear()
         except Exception:  # noqa: BLE001
             time.sleep(IDLE_POLL_SECONDS)
+
+
+class LoadedCode:
+    """The modules this process loaded from the workspace (`root`), as they were on disk then.
+
+    The workspace is synced from the controller's checkout (role round_agent, workspace.yml), but
+    a running agent keeps the code it imported, the gameplan framework among it: it would check
+    and build gameplans with the old code while the playbooks on disk are new. So the agent exits
+    between jobs once one of those files changed, and systemd (Restart=always) starts the new
+    code. rsync replaces a file only when its size or time differs, and keeps the time: those
+    two are what is compared. Gameplan files are not modules here (gameplan/loader.py reads them
+    fresh for every job)."""
+
+    def __init__(self, root):
+        self.root = os.path.realpath(root) + os.sep
+        self.seen = {}
+
+    def changed(self):
+        """The first loaded file that is no longer what was loaded, or None. Modules imported
+        since the last call are recorded as they are now."""
+        for module in list(sys.modules.values()):
+            path = getattr(module, "__file__", None)
+            if path and path not in self.seen and os.path.realpath(path).startswith(self.root):
+                self.seen[path] = _stat(path)
+        return next((path for path, seen in self.seen.items() if _stat(path) != seen), None)
+
+
+def _stat(path):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return st.st_size, st.st_mtime_ns
 
 
 def check_env(env) -> None:

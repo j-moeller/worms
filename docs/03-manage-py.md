@@ -44,6 +44,7 @@ In both modes:
 - Every command first prints `internet access: <state>` on stderr.
 - Results go to stdout; `error:`/`warning:` go to stderr.
 - Each tool call is echoed as `$ <cmd>  [locally | on root@node | in the agent's workspace]`.
+- A command that changes something (`build`, `deploy`, `reset`, `internet`, `keys`, `devbox-*-key(s)`, `step`, `restart`, `power`, `destroy`, `emergency-stop`) keeps its whole output, the tools' too, in a run log: `~/.worms/runs/<YYYYmmdd-HHMMSS>-<verb>.log` on the machine it ran on (directory 0700, files 0600: Ansible's output can hold secrets; the newest 200 are kept, without colours). It says where at its start, and again when it fails. `worms log build [N]` shows the newest (or N-th newest). Not in the round agent's workspace, whose jobs have their own logs; never for a command whose output is a secret (`admin-reset-password`, `admin-create-staff`) or a VM's (`run`, `login`) ([`runlog.py`](../src/worms_cli/runlog.py)).
 
 **Exit codes**
 
@@ -73,7 +74,7 @@ One verb per task ([`src/manage.py`](../src/manage.py)). Commands marked † ask
 | `worms status audit [--hours 24] [--kind PREFIX] [--limit 200]` | The event tables ([7](07-security.md#audit-trail)) |
 | `worms status rounds`, `gameplans`, `jobs`, `devboxes` | Rounds with their gameplan and attempts; each gameplan as the orchestrator and the node found it (with its current version's SHA-256), and why one is invalid (this checkout's dry run); the round agent's latest host jobs; every team's devbox (its slug `t<id>` and VM names) and SSH keys |
 | `worms status keys` | Whether every team's devbox SSH keys are in place: for each team, the SSH gateway and its devbox VMs A, B and C (✓, or how many keys are missing or old there; `off` for a stopped VM, which is not checked), read over the management SSH and compared by fingerprint with the dashboard's; then the last key push job and one verdict. Exit 1 if a team's keys are not in place ([`keys.py`](../src/worms_cli/keys.py)) |
-| `worms log [<job>\|<name>\|<vm>] [-f] [-n N] [--since T]` | Every log from one place ([`logs.py`](../src/worms_cli/logs.py)): a host job's log by its number (`worms status jobs`; `/var/log/worms/jobs/<uuid>.log` on the node), a service's by its name in the service registry ([`services.py`](../src/worms_cli/services.py), which `worms restart` and `worms show <vm>` read too: `agent`, `firewall`, `conductor`, `processor`, `api`, `dashboard`, `scoring`, `logging`, `database`, `monitor`, `audit`: every platform VM's audit trail on the syslog VM), or any platform VM's whole journal by its name (`node` too). `-f` follows. Alone: the names and the newest jobs. Not the team VMs |
+| `worms log [<job>\|<name>\|<vm>] [-f] [-n N] [--since T]` | Every log from one place ([`logs.py`](../src/worms_cli/logs.py)): a host job's log by its number (`worms status jobs`; `/var/log/worms/jobs/<uuid>.log` on the node), a service's by its name in the service registry ([`services.py`](../src/worms_cli/services.py), which `worms restart` and `worms show <vm>` read too: `agent`, `firewall`, `conductor`, `processor`, `api`, `dashboard`, `scoring`, `logging`, `database`, `monitor`, `audit`: every platform VM's audit trail on the syslog VM), or any platform VM's whole journal by its name (`node` too). `worms log latest [-f]`: the newest host job's log without its number (`-f` moves on to the next job, as `tail -F latest.log` on the node). `worms log build [N] [-f]`: the newest (N-th newest) run log on this machine (Conventions). `-f` follows. Alone: the run logs, the names and the newest jobs. Not the team VMs |
 | `worms show <vm>` | One VM: state, resources, disks, networks, management address and login user, OpenTofu address, snapshots, its team, whether it answers over SSH ([`vms.py`](../src/worms_cli/vms.py)) |
 | `worms show <team>` | A team (its name or slug `t<id>`): its devbox's VMs `a`, `b`, `c` and `gw` with vmid, management address and state, and its keys on each (as `worms status keys` reads them), with the shared SSH gateway's lines for it |
 | `worms show database [<table>] [--schema] [--limit 20]` | The VM, then its tables (rows, size); a table's newest rows, or its columns, indexes and constraints ([`database.py`](../src/worms_cli/database.py)) |
@@ -218,10 +219,13 @@ Ansible runs `migrate --database=migrator` (on the orchestrator only, with its s
 
 ## Logs
 
-| What | Where |
-|---|---|
-| A host job (devbox build, round prepare, …) | On the node: `/var/log/worms/jobs/<uuid>.log`, `latest.log`. Kept 30 days |
-| Conductor, capture processing | On the orchestrator: `journalctl -u orchestrator-conduct-rounds`, `-u orchestrator-process-attempts` |
-| Dashboard | `journalctl -u dashboard`, nginx logs |
-| Audit logs of the infrastructure VMs | The syslog VM: `/var/log/remote/<ip>/audit.log` |
-| Security events | `worms status audit` |
+Every one is shown by `worms log` ([See](#see)).
+
+| What | Where | `worms` |
+|---|---|---|
+| A `worms` run that changed something | Here: `~/.worms/runs/<time>-<verb>.log` (0600). The newest 200 | `worms log build [N]` |
+| A host job (devbox build, round prepare, …) | On the node: `/var/log/worms/jobs/<uuid>.log`, `latest.log`. Kept 30 days | `worms log <#>`, `worms log latest -f` |
+| Conductor, capture processing | On the orchestrator: `journalctl -u orchestrator-conduct-rounds`, `-u orchestrator-process-attempts` | `worms log conductor`, `worms log processor` |
+| Dashboard | `journalctl -u dashboard`, nginx logs | `worms log dashboard` |
+| Audit logs of the infrastructure VMs | The syslog VM: `/var/log/remote/<ip>/audit.log` | `worms log audit` |
+| Security events | The database | `worms status audit` |

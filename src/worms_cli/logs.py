@@ -77,6 +77,12 @@ class Logs:
         command = f"tail -n {int(lines)}{' -F' if follow else ''} {shlex.quote(f'{JOB_LOGS}/{job.uuid}.log')}"
         return self._on_node(command)
 
+    def latest(self, lines: int, follow: bool) -> int:
+        """`worms log latest`: the newest host job's log, without looking up its number (the agent
+        points latest.log at each job it begins: -f moves on to the next one)."""
+        print(output.color(f"the newest host job · {JOB_LOGS}/latest.log", "dim"), flush=True)
+        return self._on_node(f"tail -n {int(lines)}{' -F' if follow else ''} {JOB_LOGS}/latest.log")
+
     def source(self, name: str, lines: int, follow: bool, since: str | None) -> int:
         service = SERVICES[name]
         if service.where == "node":
@@ -89,13 +95,33 @@ class Logs:
         return self._on_vm(name, _command(None, lines, follow, since, root=False))
 
 
-def overview() -> None:
-    from worms_cli import queries
+def run_log(nth: int, lines: int, follow: bool) -> int:
+    """`worms log build [N]`: the N-th newest run log of this machine (worms_cli/runlog.py)."""
+    from worms_cli import runlog
 
+    try:
+        path = runlog.nth(nth)
+    except LookupError as exc:
+        raise BuildError(f"no such run log: {exc}") from None
+    print(output.color(f"run log #{nth}: {path}", "dim"), flush=True)
+    argv = ["tail", "-n", str(int(lines)), *(["-F"] if follow else []), str(path)]
+    os.execvp(argv[0], argv)
+    return 0  # not reached
+
+
+def overview() -> None:
+    from worms_cli import queries, runlog
+
+    newest = runlog.logs()[:5]
+    if newest:
+        print(output.heading("run logs here: worms log build [N]"))
+        print(output.table([[str(n), path.name] for n, path in enumerate(newest, 1)], headers=["N", "file"]))
+        print(output.color(f"in {runlog.directory()}: every build, deploy, reset, internet, keys, step, restart, power run", "dim"))
+        print()
     print(output.heading("logs: worms log <name>"))
     print(output.table([[name, s.where, s.about] for name, s in SERVICES.items()], headers=["name", "on", "what"]))
     print(output.color("Any platform VM by its name (`worms log orchestrator`, `worms log apt-cache`, `worms log node`; a name above comes first): "
                        "its whole journal. -f follows, -n lines, --since a time.", "dim"))  # fmt: skip
     print()
-    print(output.heading("host jobs: worms log <#>"))
+    print(output.heading("host jobs: worms log <#>, worms log latest [-f]"))
     print(output.table(queries.job_rows(10), headers=["#", "Job", "State", "Team", "Requested", "Finished", "Error"]))

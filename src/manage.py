@@ -221,8 +221,8 @@ def cmd_status(config, args) -> int:
             return keys.status(config)
         if topic == "gameplans":
             print(output.table(queries.gameplan_rows(config.repo_root), headers=["Gameplan", "Orchestrator + node", "This checkout"]))
-            print(output.color("Why the deployed copy is invalid: journalctl -u orchestrator-conduct-rounds (orchestrator), "
-                               "the gameplans job log on the node (/var/log/worms/jobs/).", "dim"))  # fmt: skip
+            print(output.color("Why the deployed copy is invalid: `worms log conductor` (the orchestrator's check), "
+                               "and the newest gameplans job's log (`worms status jobs`, then `worms log <#>`).", "dim"))  # fmt: skip
             return 0
     except ValueError as exc:
         output.error(str(exc))
@@ -537,6 +537,10 @@ def cmd_log(config, args) -> int:
 
     what = args.what
     try:
+        if what == "build":
+            return logs.run_log(args.nth, args.lines, args.follow)
+        if what == "latest":
+            return logs.Logs(config).latest(args.lines, args.follow)
         if what is None or what.isdigit():
             _with_db(config)
             if what is None:
@@ -1169,8 +1173,9 @@ SECTIONS = (
             ("login <vm>", "a shell on a VM over its management SSH, by its name or <team>/a|b|c|gw (`worms login --help` "
                            "lists them); `login <vm> -- <command>`: that command there, as `worms run`"),  # fmt: skip
             ("log [<job>|<name>|<vm>]", "a host job's log by its number (`worms status jobs`), a service's (agent, "
-                                       "conductor, dashboard, scoring, audit, ...) or a VM's journal; -f follows. "
-                                       "Alone: what there is"),
+                                       "conductor, dashboard, scoring, audit, ...) or a VM's journal; `log latest`: the "
+                                       "newest host job's; `log build [N]`: the newest (N-th) run log of a build, deploy, "
+                                       "reset, ... here; -f follows. Alone: what there is"),
             ("rsync <source>... <target>", "rsync -avz between here and a VM, in rsync's syntax: `worms rsync dir/ "
                                            "devbox-t1-a:` up, `worms rsync devbox-t1-a: dir/` down (`worms rsync --help`)"),  # fmt: skip
         ),
@@ -1395,7 +1400,9 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     p.add_argument("--root", action="store_true", help="run the command as root (sudo -n sh -c); the node's login is root")
 
     p = _add(sub, "log")
-    p.add_argument("what", nargs="?", help="a host job's number, a log's name (`worms log` lists them) or a VM's name")
+    p.add_argument("what", nargs="?", help="a host job's number, a log's name (`worms log` lists them), a VM's name; "
+                   "`build [N]`: the newest (N-th newest) run log here; `latest`: the newest host job's")  # fmt: skip
+    p.add_argument("nth", nargs="?", type=int, default=1, metavar="N", help="build: the N-th newest run log (default 1)")
     p.add_argument("-f", "--follow", action="store_true", help="keep showing new lines (Ctrl-C ends it)")
     p.add_argument("-n", "--lines", type=int, default=100, help="lines to show first (default 100)")
     p.add_argument("--since", help="journals only: from this time on (\"1 hour ago\", \"2026-11-19 18:00\")")
@@ -1516,8 +1523,38 @@ def main(argv=None) -> int:
     args = parser.parse_args(own)
     args.ansible_args = args.extra = passed
     config = Config.load(args.config)
-    _internet_notice(config)
-    return HANDLERS[args.command](config, args)
+    tee = _run_log(config, args)
+    try:
+        _internet_notice(config)
+        code = HANDLERS[args.command](config, args)
+    finally:
+        if tee is not None:
+            tee.stop()
+    if tee is not None and code:
+        print(output.color(f"this run's whole output: {tee.path} (`worms log build`)", "dim"), file=sys.stderr)
+    return code
+
+
+# The commands that change something: their whole output goes to a run log too (worms_cli/runlog.py).
+# Never one whose output is a secret (admin-reset-password, admin-create-staff) or a VM's (run, login).
+LOGGED = ("build", "deploy", "reset", "internet", "keys", "devbox-sync-keys", "devbox-add-key", "devbox-remove-key", "step",
+          "restart", "power", "destroy", "emergency-stop")  # fmt: skip
+
+
+def _run_log(config, args):
+    """Start this run's log, if it is a changing one; None otherwise, or when it cannot be (said once)."""
+    from worms_cli import runlog
+    from worms_cli.session import NODE_WORKSPACE
+
+    if args.command not in LOGGED or Path(config.repo_root).resolve() == Path(NODE_WORKSPACE):
+        return None
+    try:
+        tee = runlog.Tee(runlog.verb(args)).start()
+    except OSError as exc:
+        output.warn(f"no run log for this run ({exc})")
+        return None
+    print(output.color(f"run log: {tee.path}", "dim"), file=sys.stderr, flush=True)
+    return tee
 
 
 if __name__ == "__main__":

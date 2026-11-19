@@ -19,7 +19,7 @@ from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from worms_cli import build, output, pipeline  # noqa: E402
+from worms_cli import build, output, pipeline, power  # noqa: E402
 from worms_cli.config import Config  # noqa: E402
 
 INTERNET_FLAG = "/run/worms/internet-allowed"
@@ -543,7 +543,7 @@ def cmd_log(config, args) -> int:
                 logs.overview()
                 return 0
             return logs.Logs(config).job(int(what), args.lines, args.follow)
-        if what in logs.SOURCES:
+        if what in logs.SERVICES:
             return logs.Logs(config).source(what, args.lines, args.follow, args.since)
         return logs.Logs(config).vm(what, args.lines, args.follow, args.since)
     except build.BuildError as exc:
@@ -629,8 +629,9 @@ def _show_table(config, args) -> int:
 
 def cmd_internet(config, args) -> int:
     """`worms internet enable` is refused during a round (a sandbox VM exists). Running devbox
-    VMs are stopped first, after asking: no team VM runs while the window is open. `disable`
-    closes it and switches DNS and the caches back to offline mode (`worms step offline`)."""
+    VMs are stopped first, after asking: no team VM runs while the window is open; they are
+    written down on the node (power.WINDOW_STOPPED). `disable` closes it, switches DNS and the
+    caches back to offline mode (`worms step offline`) and starts those devboxes again."""
     pipe = pipeline.Pipeline(config)
     try:
         if args.state == "enable":
@@ -642,29 +643,57 @@ def cmd_internet(config, args) -> int:
                     output.error("the window stays closed: no team VM may run while it is open")
                     return 1
                 stopped = []
+                recorded = power.read_record(pipe.runner, power.WINDOW_STOPPED)
                 try:
                     # Listed again: one started while the question was open goes too. Forced after
-                    # 120 s: a team's VM may ignore the shutdown request.
+                    # 120 s: a team's VM may ignore the shutdown request. Each is written down on the
+                    # node first, for `worms internet disable` to start again.
                     for vm in pipe.running_devboxes():
-                        pipe.runner.node_sh(f"qm shutdown {vm['vmid']} --timeout 120 --forceStop 1")
+                        recorded = [r for r in recorded if r["vmid"] != int(vm["vmid"])] + [{"vmid": int(vm["vmid"]), "name": vm["name"]}]
+                        power.write_record(pipe.runner, power.WINDOW_STOPPED, recorded)
+                        pipe.runner.node_sh(power.SHUTDOWN.format(vmid=int(vm["vmid"])))
                         stopped.append(vm)
                 finally:
                     if stopped:  # also when a later one failed: these are off now
                         print(output.color(f"stopped {len(stopped)} devbox VM(s): {', '.join(vm['name'] for vm in stopped)}. "
-                                           "Once the window is closed again, start them on the node: "
-                                           + pipeline.start_command(vm["vmid"] for vm in stopped), "dim"))  # fmt: skip
+                                           "`worms internet disable` starts them again once the window is closed "
+                                           f"(on the node: {pipeline.start_command(vm['vmid'] for vm in stopped)})", "dim"))  # fmt: skip
             pipe.internet_allow()
         else:
             pipe.internet_deny()
             print(output.color("switching DNS and the private internet's caches to offline mode (a few minutes)", "dim"), flush=True)
+            code = 0
             try:
                 pipe.offline_services()
             except build.BuildError as exc:
                 output.error(f"the window is closed, but DNS and the caches may not be offline or not serve "
                              f"what they should: {exc}. Run `worms step offline` again once fixed")  # fmt: skip
-                return 1
+                code = 1
+            return _start_window_stopped(pipe.runner) or code
     except build.BuildError as exc:
         output.error(str(exc))
+        return 1
+    return 0
+
+
+def _start_window_stopped(runner) -> int:
+    """After the window closed: the devbox VMs `worms internet enable` shut down, started again
+    (those still there and stopped, and not held by a round). Those that do not start stay
+    written down."""
+    recorded = power.read_record(runner, power.WINDOW_STOPPED)
+    if not recorded:
+        return 0
+    held = {r["vmid"] for r in power.read_record(runner, power.HELD_DEVBOXES)}
+    vms = [vm for vm in power.still_there(runner, recorded) if int(vm["vmid"]) not in held]
+    failed = power.start(runner, vms)
+    power.write_record(runner, power.WINDOW_STOPPED, [r for r in recorded if r["name"] in failed])
+    started = [vm["name"] for vm in vms if vm["name"] not in failed]
+    if started:
+        print(output.status_cell("running", f"started again the devbox VM(s) the window stopped: {', '.join(started)}"))
+    if held & {r["vmid"] for r in recorded}:
+        print(output.color("held by a round, left off: its release starts them", "dim"))
+    if failed:
+        output.error(f"did not start again: {', '.join(failed)} (`worms power start {failed[0]}`)")
         return 1
     return 0
 
@@ -738,6 +767,74 @@ def _reset_devboxes(config, args) -> int:
         else:
             print(f"{team.name}: {'enqueued' if enqueued else 'already queued'} devbox_rebuild {job.uuid}")
     return 0
+
+
+ROUND_CRITICAL = ("agent", "processor", "conductor", "scoring", "logging")  # a round's attempt needs them running
+
+
+def cmd_restart(config, args) -> int:
+    """`worms restart <service>...`: in a safe order (services.SERVICES); the agent once no host
+    job runs. Refused for what a round needs while one is on, unless --during-round."""
+    from worms_cli import services
+
+    try:
+        names = services.in_order(args.services)
+    except KeyError as exc:
+        output.error(f"no service {exc.args[0]!r}: {', '.join(n for n, s in services.SERVICES.items() if s.restartable)}")
+        return 2
+    except ValueError as exc:
+        output.error(str(exc))
+        return 1
+    restarter = services.Restarter(config)
+    try:
+        critical = [name for name in names if name in ROUND_CRITICAL]
+        sandboxes = [vm["name"] for vm in restarter.catalogue.vms() if vm.get("pool") == "sandbox"] if critical else []
+        if sandboxes and not args.during_round:
+            raise build.BuildError(f"Refusing to restart {', '.join(critical)} during a round ({len(sandboxes)} sandbox VM(s)): "
+                                   "it can cost the running team its attempt; --during-round if it must")  # fmt: skip
+        for name in names:
+            if name == "agent":
+                _with_db(config)
+                services.wait_until_idle(args.timeout)
+            restarter.restart(name)
+            print(output.status_cell("ok", f"{name}: restarted, active"))
+    except build.BuildError as exc:
+        output.error(str(exc))
+        return 1
+    except KeyboardInterrupt:
+        output.error("interrupted: what is listed above as restarted was restarted, nothing else")
+        return 130
+    return 0
+
+
+def cmd_backup(config, args) -> int:
+    """`worms backup database`: a pg_dump of the platform's database, here (database.backup)."""
+    from worms_cli import database
+
+    try:
+        path, size = database.backup(config, args.output)
+    except (build.BuildError, OSError) as exc:
+        output.error(str(exc))
+        return 1
+    print(output.status_cell("ok", f"{size / 1e6:.1f} MB: {path}"))
+    print(output.color(f"readable by you only (0600). Restore on the database VM: pg_restore -d <db> {Path(path).name}", "dim"))
+    return 0
+
+
+def cmd_power(config, args) -> int:
+    """`worms power start|stop <target>...` (worms_cli/power.py)."""
+    if args.held and args.state != "start":
+        output.error("--held is for `worms power start --held`")
+        return 2
+    if not args.targets and not args.held:
+        output.error(f"which VMs? `worms power {args.state} <target>...`" + (" or --held" if args.state == "start" else ""))
+        return 2
+    try:
+        machines = power.Power(config)
+        return machines.start(args.targets, held=args.held) if args.state == "start" else machines.stop(args.targets)
+    except build.BuildError as exc:
+        output.error(str(exc))
+        return 1
 
 
 def cmd_emergency_stop(config, args) -> int:
@@ -1098,6 +1195,12 @@ SECTIONS = (
             ("run <target>... -- <command>", "a command on VMs without a login: a VM, <team>/<role>, node, or a group "
                                               "(infrastructure, services, private-internet: never a team's VM); "
                                               "one prefix per VM; --root: with sudo"),  # fmt: skip
+            ("restart <service>...", "restart services in a safe order: the agent first and once no host job runs, "
+                                     "then the conductor (`worms log` lists them); refused during a round for what "
+                                     "it needs, unless --during-round"),  # fmt: skip
+            ("power start|stop <target>...", "VMs on or off (qm on the node), by the names `worms run` takes; "
+                                             "`start --held`: the devboxes a round holds, once it is over"),  # fmt: skip
+            ("backup database", "a pg_dump -Fc of the platform's database, streamed to a file here (0600)"),
             ("reset database", "DANGER: wipe the database, migrate and initialise it again"),
             ("reset services", "the service VMs (ephemeral, private internet) back to their snapshot"),
             ("reset devbox <team>...", "teams' devboxes back to their snapshot, through the orchestrator (--all-teams)"),
@@ -1325,6 +1428,22 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     p_devbox.add_argument("--all-teams", action="store_true", help="every team's devbox")
     _yes(p_devbox)
 
+    p = _add(sub, "restart")
+    p.add_argument("services", nargs="+", metavar="service", help="agent, processor, api, conductor, dashboard, scoring, "
+                   "logging, monitor")  # fmt: skip
+    p.add_argument("--timeout", type=int, default=900, help="agent: how long to wait for its running host job (s, default 900)")
+    p.add_argument("--during-round", action="store_true", help="restart what a round needs even while one is on")
+
+    p = _add(sub, "power")
+    p.add_argument("state", choices=["start", "stop"])
+    p.add_argument("targets", nargs="*", metavar="target", help="a VM (its name, an alias, <team>/<role>) or a group")
+    p.add_argument("--held", action="store_true", help="start: the devbox VMs a round holds shut down")
+
+    p = sub.add_parser("backup", help="back a part up", description="Back up the platform's database.")
+    backup_sub = p.add_subparsers(dest="what", required=True, metavar="database")
+    p_backup = _add(backup_sub, "backup database")
+    p_backup.add_argument("-o", "--output", metavar="FILE", help="the dump's file (default ~/.worms/backups/<system>-<db>-<time>.dump)")
+
     p = _add(sub, "devbox-add-key")
     p.add_argument("team")
     p.add_argument("key", help="the public key (quoted), a .pub file, or - for stdin")
@@ -1370,7 +1489,7 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
 HANDLERS = {
     "status": cmd_status, "show": cmd_show, "login": cmd_login, "run": cmd_run, "log": cmd_log, "rsync": cmd_rsync,
     "build": cmd_build,
-    "internet": cmd_internet,
+    "internet": cmd_internet, "restart": cmd_restart, "power": cmd_power, "backup": cmd_backup,
     "reset": cmd_reset, "devbox-add-key": cmd_devbox_add_key, "devbox-remove-key": cmd_devbox_remove_key,
     "devbox-sync-keys": cmd_devbox_sync_keys,
     "admin-reset-password": cmd_admin_reset_password, "admin-create-staff": cmd_admin_create_staff,

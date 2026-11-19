@@ -2,7 +2,7 @@
 
     worms log                 the sources, and the newest host jobs
     worms log 1782            a host job's log, by its number (`worms status jobs`)
-    worms log conductor       a service's log, on whichever VM it runs (SOURCES)
+    worms log conductor       a service's log, on whichever VM it runs (services.SERVICES)
     worms log orchestrator    ... and any platform VM by its name: its whole journal
     -f follow · -n lines · --since (journals: "1 hour ago", "2026-11-19 18:00")
 
@@ -18,23 +18,9 @@ import shlex
 
 from worms_cli import output
 from worms_cli.build import BuildError
+from worms_cli.services import SERVICES  # where each service runs, its units, its log
 
 JOB_LOGS = "/var/log/worms/jobs"  # scripts/round_agent/executor.py, JobLog: <job uuid>.log, kept 30 days
-
-# name -> (where, what it holds, journal units | a file glob)
-SOURCES = {
-    "agent": ("node", "the round agent: each host job started, done or failed", ["worms-round-agent"]),
-    "firewall": ("node", "the host firewall, its watchdog and the traffic mirror", ["worms-host-firewall", "worms-firewall-watchdog", "worms-mirror"]),
-    "conductor": ("orchestrator", "rounds and their attempts; the gameplan checks (why one is invalid)", ["orchestrator-conduct-rounds"]),
-    "processor": ("orchestrator", "captures and worm logs counted; dev uploads run", ["orchestrator-process-attempts"]),
-    "api": ("orchestrator", "the orchestrator's API: simulations, devbox key pushes", ["orchestrator"]),
-    "dashboard": ("dashboard", "the website: errors and tracebacks", ["dashboard"]),
-    "scoring": ("scoring", "flag submissions (the sandbox API)", ["sandbox-api"]),
-    "logging": ("logging", "the worms' log records (the sandbox API)", ["sandbox-api"]),
-    "database": ("database", "PostgreSQL", "/var/log/postgresql/postgresql-*-main.log"),
-    "monitor": ("monitor", "Zeek and its shipper (connections into the database)", ["zeek", "zeek-shipper"]),
-    "audit": ("syslog", "every platform VM's audit trail (auditd), one file per sender address", "/var/log/remote/*/audit.log"),
-}  # fmt: skip
 UNTRUSTED_POOLS = ("sandbox", "devbox")
 
 
@@ -92,10 +78,10 @@ class Logs:
         return self._on_node(command)
 
     def source(self, name: str, lines: int, follow: bool, since: str | None) -> int:
-        where, _, what = SOURCES[name]
-        if where == "node":
-            return self._on_node(_command(what, lines, follow, since, root=True))
-        return self._on_vm(where, _command(what, lines, follow, since, root=False))
+        service = SERVICES[name]
+        if service.where == "node":
+            return self._on_node(_command(service.log, lines, follow, since, root=True))
+        return self._on_vm(service.where, _command(service.log, lines, follow, since, root=False))
 
     def vm(self, name: str, lines: int, follow: bool, since: str | None) -> int:
         if name == "node":
@@ -107,7 +93,7 @@ def overview() -> None:
     from worms_cli import queries
 
     print(output.heading("logs: worms log <name>"))
-    print(output.table([[name, where, what] for name, (where, what, _) in SOURCES.items()], headers=["name", "on", "what"]))
+    print(output.table([[name, s.where, s.about] for name, s in SERVICES.items()], headers=["name", "on", "what"]))
     print(output.color("Any platform VM by its name (`worms log orchestrator`, `worms log apt-cache`, `worms log node`; a name above comes first): "
                        "its whole journal. -f follows, -n lines, --since a time.", "dim"))  # fmt: skip
     print()

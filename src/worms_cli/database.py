@@ -65,6 +65,59 @@ def rows(table: str, limit: int = 20) -> tuple[list[str], list[list[str]]]:
         return columns, [[_cell(value) for value in row] for row in cur.fetchall()]
 
 
+BACKUPS = "~/.worms/backups"  # 0700; each dump 0600: it holds every record, password hashes too
+
+
+def backup(config, path: str | None = None) -> tuple[str, int]:
+    """`worms backup database`: `pg_dump -Fc` of the platform's database (ansible/group_vars/all.yml,
+    postgres_db) on the database VM, streamed over its management SSH (as `worms login` gets
+    there) into a new local file, readable by its owner only. (path, bytes). Nothing is written
+    on the VM; a failed dump leaves no file."""
+    import os
+    import shlex
+    import subprocess
+    from datetime import datetime
+    from pathlib import Path
+
+    from worms_cli.build import BuildError
+    from worms_cli.session import SessionError, group_var
+    from worms_cli.vms import Catalogue
+
+    catalogue = Catalogue(config)
+    session = catalogue.runner.session
+    try:
+        name = group_var(config.repo_root, "postgres_db")
+    except SessionError as exc:
+        raise BuildError(str(exc)) from None
+    vm = catalogue.resolve("database")
+    if vm.get("status") != "running":
+        raise BuildError(f"the database VM is {vm.get('status')}: `worms power start database`")
+    if path is None:
+        try:
+            system = session.environment()["node"]
+        except SessionError:
+            system = "worms"
+        directory = Path(BACKUPS).expanduser()
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(directory, 0o700)
+        path = str(directory / f"{system}-{name}-{datetime.now():%Y%m%d-%H%M%S}.dump")
+    argv, env = catalogue.ssh_argv(vm, f"cd / && sudo -n -u postgres pg_dump -Fc {shlex.quote(name)}", interactive=False)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)  # never over an existing file
+    try:
+        with os.fdopen(fd, "wb") as out:
+            proc = subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.PIPE)
+        size = os.path.getsize(path)
+        with open(path, "rb") as dump:
+            magic = dump.read(5)
+        if proc.returncode != 0 or magic != b"PGDMP":
+            raise BuildError(f"pg_dump of {name} on {vm['name']} failed (exit {proc.returncode}, {size} bytes): "
+                             f"{proc.stderr.decode(errors='replace').strip()[-300:] or 'not a pg_dump archive'}")  # fmt: skip
+    except BaseException:
+        os.unlink(path)
+        raise
+    return path, size
+
+
 def _cell(value) -> str:
     if value is None:
         return "∅"

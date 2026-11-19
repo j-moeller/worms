@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 import shlex
 
-from worms_cli import output, teams
+from worms_cli import output, services, teams
 from worms_cli.build import BuildError, Runner
 
 DOMAIN = ".worms.internal"
@@ -283,6 +283,11 @@ class Catalogue:
             ["snapshots", ", ".join(f"{s['name']} ({s.get('description', '').strip()})" for s in snapshots) or "none"],
             ["login", f"worms login {vm['name']}"],
         ]
+        running = services.on(vm["name"])
+        if running:
+            rows.append(["services", ", ".join(f"{name} ({' '.join(services.SERVICES[name].units) or 'a log'})" for name in running)
+                         + f": `worms log {running[0]}`"
+                         + (f", `worms restart {running[0]}`" if services.SERVICES[running[0]].restartable else "")])  # fmt: skip
         if component:
             rows.append(["build", f"worms build {component.name} [--rebuild]; needs {', '.join(component.deps) or 'nothing'}"])
         if vm.get("status") == "running":

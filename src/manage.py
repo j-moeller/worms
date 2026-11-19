@@ -361,10 +361,12 @@ def cmd_build(config, args) -> int:
             except ValueError as exc:
                 output.error(str(exc))
                 return 1
-            print(output.heading("plan"))
-            print(output.table(plan.table(), headers=["component", "what happens", "what it is"]))
-            for note in plan.notes:
-                print(output.color(f"note: {note}", "dim"))
+            _print_plan(plan, args.packages)
+            configured = [name for name, action in plan.steps
+                          if action == "reconfigure" and components.COMPONENTS[name].kind in ("vm", "node")]  # fmt: skip
+            if configured:
+                print(output.color(f"note: {', '.join(configured)} exist(s): `worms deploy {' '.join(configured)}` configures "
+                                   "them too, never runs OpenTofu, and restarts the agent and the conductor after", "dim"))  # fmt: skip
             if args.plan:
                 return 0
             asks = []
@@ -380,7 +382,7 @@ def cmd_build(config, args) -> int:
             if infrastructure.steps:
                 pipe.build_components(infrastructure, packages=args.packages)
             if "devbox" in dict(plan.steps):
-                code = _build_devboxes(config, rebuild=args.rebuild, teams=args.team)
+                code = _build_devboxes(config, rebuild=args.rebuild, teams=args.team, wait=getattr(args, "wait", False))
     except (build.BuildError, SessionError, KeyboardInterrupt) as exc:
         output.error(f"build stopped: {exc}" if str(exc) else "build stopped: interrupted")
         code = 130 if isinstance(exc, KeyboardInterrupt) else 1
@@ -390,10 +392,68 @@ def cmd_build(config, args) -> int:
     return code
 
 
-def _build_devboxes(config, rebuild=False, teams=()) -> int:
+def _print_plan(plan, packages: bool) -> None:
+    """The plan of `worms build <component>` or `worms deploy`: each component, what happens to
+    it and what that touches; then what the whole run touches (components.Plan.touches)."""
+    rows, summary = plan.touches(packages)
+    print(output.heading("plan"))
+    print(output.table([[name, what, rows[name]] for name, what, _ in plan.table()], headers=["component", "what happens", "touches"]))
+    for line in summary:
+        print(output.color(f"  {line}", "dim"))
+    for note in plan.notes:
+        print(output.color(f"note: {note}", "dim"))
+
+
+def _wait_for_jobs(jobs) -> int:
+    """--wait: until each of these host jobs has ended, saying each one's end as it comes. 1 if one
+    failed, 130 if the wait was interrupted (the jobs go on)."""
+    import time
+
+    from core.models.rounds import HostJob
+    from core.models.team import Team
+
+    pending = {job.id for job in jobs if job is not None}
+    if not pending:
+        return 0
+    print(output.color(f"waiting for {len(pending)} host job(s): {', '.join(f'#{n}' for n in sorted(pending))} "
+                       "(Ctrl-C stops waiting, not the jobs)", "dim"), flush=True)  # fmt: skip
+    failed = []
+    try:
+        while pending:
+            for job in HostJob.objects.filter(id__in=pending).order_by("id"):
+                if job.state not in (HostJob.State.DONE, HostJob.State.FAILED):
+                    continue
+                pending.discard(job.id)
+                team = Team.objects.filter(uuid=(job.params or {}).get("team_uuid") or None).first()
+                took = (job.finished_at - (job.started_at or job.requested_at)).total_seconds() if job.finished_at else 0
+                ok = job.state == HostJob.State.DONE
+                print(output.status_cell("ok" if ok else "error", f"#{job.id} {job.kind}{f' {team.name}' if team else ''}: "
+                                         f"{job.state} after {took / 60:.0f} min") + (f": {job.error[:160]}" if job.error else ""),
+                      flush=True)  # fmt: skip
+                if not ok:
+                    failed.append(job.id)
+            if pending:
+                time.sleep(10)
+    except KeyboardInterrupt:
+        output.error(f"stopped waiting; {len(pending)} job(s) go on (`worms status jobs`, `worms log latest -f`)")
+        return 130
+    if failed:
+        output.error(f"{len(failed)} job(s) failed: `worms log {failed[0]}`")
+        return 1
+    return 0
+
+
+def _open_jobs(kind: str) -> list:
+    from core.models.rounds import HostJob
+
+    return list(HostJob.objects.filter(kind=kind, state__in=[HostJob.State.QUEUED, HostJob.State.RUNNING]).order_by("id"))
+
+
+def _build_devboxes(config, rebuild=False, teams=(), wait=False) -> int:
     """`worms build devbox`: a devbox for every team without one (the orchestrator enqueues the
     build; the round agent on the node builds them, docs/04-dev-environment.md). With --rebuild:
-    each team's (or `teams`') devbox from nothing, through the orchestrator as a reset is."""
+    each team's (or `teams`') devbox from nothing, through the orchestrator as a reset is. With
+    `wait`: until those jobs have ended."""
     _with_db(config)
     if not rebuild:
         from django.core.management import call_command
@@ -404,7 +464,7 @@ def _build_devboxes(config, rebuild=False, teams=()) -> int:
         except CommandError as exc:
             output.error(str(exc))
             return 1
-        return 0
+        return _wait_for_jobs(_open_jobs("devbox_provision")) if wait else 0
     from core.models.devbox import Devbox
     from orchestrator.rounds.devbox import request_rebuild
     from worms_cli import queries
@@ -414,14 +474,86 @@ def _build_devboxes(config, rebuild=False, teams=()) -> int:
     except ValueError as exc:
         output.error(str(exc))
         return 1
+    jobs = []
     for team in chosen:
         job, enqueued = request_rebuild(team, fresh=True)
+        jobs.append(job)
         if job is None:
             print(f"{team.name}: no devbox to rebuild (`worms build devbox` builds it)")
         else:
-            print(f"{team.name}: {'enqueued' if enqueued else 'already queued'} devbox_rebuild {job.uuid} (from nothing)")
-    print(output.color("The round agent does the work: tail -F /var/log/worms/jobs/latest.log on the node.", "dim"))
+            print(f"{team.name}: {'enqueued' if enqueued else 'already queued'} devbox_rebuild #{job.id} {job.uuid} (from nothing)")
+    if wait:
+        return _wait_for_jobs(jobs)
+    print(output.color("The round agent does the work: `worms log latest -f` (or --wait).", "dim"))
     return 0
+
+
+def cmd_deploy(config, args) -> int:
+    """`worms deploy [<component>...]`: configure what exists, as the operators did by hand: the
+    configuration (never OpenTofu; no internet window unless --packages), then, when the
+    orchestrator or the round agent was deployed, the gameplans, the round agent (once no host
+    job runs) and the conductor, in that order. Alone: every component that exists, offline."""
+    from worms_cli import components, services
+    from worms_cli.session import SessionError
+
+    pipe = pipeline.Pipeline(config, ansible_args=" ".join(args.ansible_args))
+    code = 0
+    try:
+        exists = _exists(pipe, config)
+        try:
+            names = components.expand(args.components) if args.components else \
+                [n for n, c in components.COMPONENTS.items() if c.kind in ("vm", "node") and exists(c)]  # fmt: skip
+        except KeyError as exc:
+            output.error(f"no component {exc.args[0]!r}: `worms build --help` lists them")
+            return 1
+        not_here = [n for n in names if components.COMPONENTS[n].kind in ("stack", "devbox")]
+        if not_here:
+            output.error(f"{', '.join(not_here)}: not deployed: an OpenTofu stack, or the round agent's devboxes "
+                         f"(`worms build {' '.join(not_here)}`, `worms reset devbox <team>`)")  # fmt: skip
+            return 1
+        missing = [n for n in names if components.COMPONENTS[n].kind in ("vm", "node") and not exists(components.COMPONENTS[n])]
+        if missing:
+            output.error(f"{', '.join(missing)} not there: a deploy only configures what exists. `worms build {' '.join(missing)}` "
+                         "creates it")  # fmt: skip
+            return 1
+        sandboxes = sorted(vm["name"] for vm in pipe.runner.vms() if vm.get("pool") == "sandbox")
+        if sandboxes and not args.during_round:
+            output.error(f"Refusing to deploy during a round ({len(sandboxes)} sandbox VM(s)): it restarts the conductor, "
+                         "which costs the running team its attempt; --during-round if it must")  # fmt: skip
+            return 1
+        follow_up = bool({"orchestrator", "round-agent", "gameplans"} & set(names))
+        if follow_up and "gameplans" not in names and not sandboxes:
+            names.append("gameplans")  # the node's copy and the orchestrator's, checked: as `worms build gameplans`
+        plan = components.plan(names, exists, pending_migrations=_pending_migrations(pipe))
+        if "orchestrator" in plan.names() and "gameplans" not in plan.names() and not sandboxes:
+            # Pending migrations brought the orchestrator in: the gameplans follow it, as above.
+            plan = components.plan([*names, "gameplans"], exists, pending_migrations=_pending_migrations(pipe))
+        new = plan.names("create", "recreate", "dependency")
+        if new:
+            output.error(f"{', '.join(new)} would be created (missing): a deploy never runs OpenTofu. `worms build {' '.join(new)}`")
+            return 1
+        follow_up = follow_up or "orchestrator" in plan.names()
+        _print_plan(plan, args.packages)
+        if follow_up:
+            print(output.color("  then: the round agent restarted once no host job runs, then the conductor", "dim"))
+        if args.plan:
+            return 0
+        pipe.build_components(plan, packages=args.packages)
+        if follow_up:
+            _with_db(config)
+            restarter = services.Restarter(config)
+            for name in ("agent", "conductor"):
+                if name == "agent":
+                    services.wait_until_idle(args.timeout)
+                restarter.restart(name)
+                print(output.status_cell("ok", f"{name}: restarted, active"))
+        print(output.status_cell("ok", f"deployed: {', '.join(plan.names())}"))
+    except (build.BuildError, SessionError, KeyboardInterrupt) as exc:
+        output.error(f"deploy stopped: {exc}" if str(exc) else "deploy stopped: interrupted")
+        code = 130 if isinstance(exc, KeyboardInterrupt) else 1
+    if pipe.services_rolled_back and pipe.devboxes_exist():
+        code = _restore_devbox_map(config) or code
+    return code
 
 
 def _request_devbox_reconfigure(config) -> int:
@@ -739,6 +871,9 @@ def cmd_reset(config, args) -> int:
         finally:
             if pipe.services_rolled_back and pipe.devboxes_exist():
                 _restore_devbox_map(config)
+        if getattr(args, "wait", False):  # the map, written again by the round agent
+            _with_db(config)
+            return _wait_for_jobs(_open_jobs("devbox_reconfigure"))
         return 0
     return _reset_devboxes(config, args)
 
@@ -763,14 +898,16 @@ def _reset_devboxes(config, args) -> int:
     if not build.confirm(f"Reset the devbox of {', '.join(t.name for t in teams) or 'no team'}: its VMs back to their "
                          "snapshot, its dev score starts over?", args.yes):  # fmt: skip
         return 1
+    jobs = []
     for team in teams:
         job, enqueued = request_rebuild(team)
         events.team("devbox_reset", actor=_console(), team=team)
+        jobs.append(job)
         if job is None:
             print(f"{team.name}: no devbox (version bumped all the same)")
         else:
-            print(f"{team.name}: {'enqueued' if enqueued else 'already queued'} devbox_rebuild {job.uuid}")
-    return 0
+            print(f"{team.name}: {'enqueued' if enqueued else 'already queued'} devbox_rebuild #{job.id} {job.uuid}")
+    return _wait_for_jobs(jobs) if getattr(args, "wait", False) else 0
 
 
 ROUND_CRITICAL = ("agent", "processor", "conductor", "scoring", "logging")  # a round's attempt needs them running
@@ -1188,6 +1325,9 @@ SECTIONS = (
         (
             ("build [<component>...]", "build what is missing, configure what exists; --rebuild recreates (`worms build --help`); "
                                        "after `--`: arguments for ansible-playbook"),
+            ("deploy [<component>...]", "configure what exists, never OpenTofu, no internet window unless --packages; then "
+                                        "the gameplans, the agent (once idle) and the conductor; alone: every component "
+                                        "offline; refused during a round"),  # fmt: skip
             ("internet enable|disable", "open or close the internet window by hand (refused during a round; asks to stop running devboxes; "
                                         "closing switches DNS and the caches back to offline mode)"),
         ),
@@ -1419,7 +1559,15 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     p.add_argument("--packages", action="store_true", help="install packages too (opens the internet window)")
     p.add_argument("--plan", action="store_true", help="show the plan, build nothing")
     p.add_argument("--team", action="append", default=[], help="devbox --rebuild: only this team's (repeatable)")
+    p.add_argument("--wait", action="store_true", help="devbox: wait for its host jobs, and say how each ended")
     _yes(p)
+
+    p = _add(sub, "deploy", epilog=_components_overview(), **raw)
+    p.add_argument("components", nargs="*", metavar="component", help="components or groups (default: every one that exists)")
+    p.add_argument("--packages", action="store_true", help="install packages too (opens the internet window)")
+    p.add_argument("--plan", action="store_true", help="show the plan, deploy nothing")
+    p.add_argument("--during-round", action="store_true", help="deploy even while a round is on (costs its attempt)")
+    p.add_argument("--timeout", type=int, default=900, help="how long to wait for the agent's running host job (s, default 900)")
 
     p = _add(sub, "internet")
     p.add_argument("state", choices=["enable", "disable"])
@@ -1429,10 +1577,13 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
                        "VMs or teams' devboxes to their clean state.")  # fmt: skip
     reset_sub = p.add_subparsers(dest="what", required=True, metavar="database|services|devbox")
     _yes(_add(reset_sub, "reset database"))
-    _yes(_add(reset_sub, "reset services"))
+    p_services = _add(reset_sub, "reset services")
+    p_services.add_argument("--wait", action="store_true", help="wait for the round agent to write the devbox map again")
+    _yes(p_services)
     p_devbox = _add(reset_sub, "reset devbox")
     p_devbox.add_argument("teams", nargs="*", metavar="team")
     p_devbox.add_argument("--all-teams", action="store_true", help="every team's devbox")
+    p_devbox.add_argument("--wait", action="store_true", help="wait for its host jobs, and say how each ended")
     _yes(p_devbox)
 
     p = _add(sub, "restart")
@@ -1495,7 +1646,7 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
 
 HANDLERS = {
     "status": cmd_status, "show": cmd_show, "login": cmd_login, "run": cmd_run, "log": cmd_log, "rsync": cmd_rsync,
-    "build": cmd_build,
+    "build": cmd_build, "deploy": cmd_deploy,
     "internet": cmd_internet, "restart": cmd_restart, "power": cmd_power, "backup": cmd_backup,
     "reset": cmd_reset, "devbox-add-key": cmd_devbox_add_key, "devbox-remove-key": cmd_devbox_remove_key,
     "devbox-sync-keys": cmd_devbox_sync_keys,

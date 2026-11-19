@@ -32,6 +32,12 @@ class Service:
     files: str = ""  # its log as a file glob, instead of the journal
     restartable: bool = True
     why_not: str = ""  # what to do instead, when it is not restartable
+    active: tuple[str, ...] | None = None  # the units that are active when it is up (default: units)
+
+    @property
+    def up_units(self) -> tuple[str, ...]:
+        """What `worms status` checks is active: a oneshot that a timer runs is up when its timer is."""
+        return self.units if self.active is None else self.active
 
     @property
     def log(self):
@@ -45,7 +51,8 @@ SERVICES: dict[str, Service] = {
     "agent": Service("node", "the round agent: each host job started, done or failed", ("worms-round-agent",)),
     "firewall": Service("node", "the host firewall, its watchdog and the traffic mirror",
                         ("worms-host-firewall", "worms-firewall-watchdog", "worms-mirror"), restartable=False,
-                        why_not="the node's firewall: `worms build host-network` applies it again"),
+                        why_not="the node's firewall: `worms build host-network` applies it again",
+                        active=("worms-host-firewall", "worms-firewall-watchdog.timer", "worms-mirror")),
     "processor": Service("orchestrator", "captures and worm logs counted; dev uploads run", ("orchestrator-process-attempts",)),
     "api": Service("orchestrator", "the orchestrator's API: simulations, devbox key pushes", ("orchestrator",)),
     "conductor": Service("orchestrator", "rounds and their attempts; the gameplan checks (why one is invalid)",

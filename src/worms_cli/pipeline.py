@@ -700,7 +700,7 @@ def refuse_without_varfile(step: str, ansible_args) -> None:
         raise BuildError(
             f"refusing `worms step {step}` without the round agent's variable file (-e @<file>): the teams' keys "
             "would be written EMPTY, every team locked out of its devbox and the SSH gateway. The keys: "
-            "`worms devbox-sync-keys`; a team's devbox: `worms reset devbox <team>`, or `worms build devbox`"
+            "`worms keys sync`; a team's devbox: `worms reset devbox <team>`, or `worms build devbox`"
         )
 
 

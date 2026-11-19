@@ -34,20 +34,28 @@ PVE_CONFIG_DIR = "/etc/pve"  # exists only on a Proxmox node
 VM_HEADERS = ["VM", "vmid", "kind", "team", "state", "up", "memory"]
 
 
-def _vm_rows(config) -> list[list[str]]:
-    """Every VM: name, vmid, kind, team, state, uptime, memory (Proxmox API, the topology token;
-    the team from the team map, worms_cli/teams.py)."""
-    from worms_cli import teams
+def _list_vms(config) -> tuple[list | None, str]:
+    """(every VM, from the Proxmox API with the topology token, "") or (None, why not as a cell)."""
     from worms_cli.proxmox import Infra
-    from worms_cli.vms import KINDS
 
     infra = Infra(config)
     if not infra.configured:
-        return [["(VMs)", "", "", "", output.status_cell("n/a", infra.error or "no Proxmox API configured (worms secrets issue topology-token)"), "", ""]]
+        return None, output.status_cell("n/a", infra.error or "no Proxmox API configured (worms secrets issue topology-token)")
     try:
-        vms = infra.vms()
+        return infra.vms(), ""
     except Exception as exc:  # noqa: BLE001
-        return [["(VMs)", "", "", "", output.status_cell("error", f"Proxmox API: {exc}"), "", ""]]
+        return None, output.status_cell("error", f"Proxmox API: {exc}")
+
+
+def _vm_rows(config, listing=None) -> list[list[str]]:
+    """Every VM: name, vmid, kind, team, state, uptime, memory (Proxmox API, the topology token;
+    the team from the team map, worms_cli/teams.py)."""
+    from worms_cli import teams
+    from worms_cli.vms import KINDS
+
+    vms, problem = listing or _list_vms(config)
+    if vms is None:
+        return [["(VMs)", "", "", "", problem, "", ""]]
     names = [vm["name"] for vm in vms]
     known = teams.team_map(config, names) if any(teams.of_vm(name) for name in names) else {}
 
@@ -70,7 +78,7 @@ def _vm_rows(config) -> list[list[str]]:
     return rows
 
 
-def _platform_rows(config) -> list[list[str]]:
+def _platform_rows(config, internet=None) -> list[list[str]]:
     from worms_cli.proxmox import Infra
 
     rows = [_system_status(config)]
@@ -81,7 +89,7 @@ def _platform_rows(config) -> list[list[str]]:
             rows.append(["firewall", output.status_cell("active" if enabled else "down", "enabled" if enabled else "DISABLED")])
         except Exception as exc:  # noqa: BLE001
             rows.append(["firewall", output.status_cell("error", f"Proxmox API: {exc}")])
-    rows.append(_internet_status(config))
+    rows.append(internet or _internet_status(config))
     return rows
 
 
@@ -176,14 +184,103 @@ def _system_status(config) -> list[str]:
     return ["system", output.status_cell("ok", f"{system['name']} ({system['node']}, {system['public_name']})")]
 
 
+NODE_PROBE = r"""
+cat {held} 2>/dev/null; echo; echo '#--'
+cat {window} 2>/dev/null; echo; echo '#--'
+grep -lx '\[clean\]' /etc/pve/qemu-server/*.conf 2>/dev/null; echo '#--'
+for unit in {units}; do printf '%s %s\n' "$unit" "$(systemctl is-active "$unit")"; done
+"""
+
+
+def _attention(config, listing, internet) -> list[list[str]]:
+    """`worms status`'s first block: what needs a look. The internet window open; devbox VMs held
+    by a round or stopped by the window; service VMs without a `clean` snapshot; migrations the
+    database lacks; host jobs failed in the last 24 h; node services not active. One command on
+    the node (the records, the VMs' configs, systemd) and the database, each when it answers."""
+    import json
+    import shlex
+
+    from worms_cli import services
+    from worms_cli.pipeline import SERVICE_POOLS
+
+    rows, unchecked = [], []
+    if "ALLOWED" in internet[1]:
+        rows.append(["internet window", output.status_cell("warn", "OPEN: no team VM may run; `worms internet disable`")])
+    vms, _ = listing
+    units = [unit for service in services.SERVICES.values() if service.where == "node" for unit in service.up_units]
+    if config.ssh or os.path.isdir(PVE_CONFIG_DIR):
+        from worms_cli.session import SessionError, for_config
+
+        script = NODE_PROBE.format(held=power.HELD_DEVBOXES, window=power.WINDOW_STOPPED, units=" ".join(map(shlex.quote, units)))
+        try:
+            code, out, err = for_config(config).node_run(["sh", "-c", script])
+            held, window, clean, active = (out.split("#--\n") + ["", "", "", ""])[:4]
+        except (SessionError, OSError) as exc:
+            code, held, window, clean, active, err = 1, "", "", "", "", str(exc)
+        if code != 0 and not active:
+            unchecked.append(f"the node ({err.strip()[:60]})")
+        else:
+            for text, what, hint in ((held, "held by a round", "its release starts them (`worms power start --held` once it is over)"),
+                                     (window, "stopped by the internet window", "`worms internet disable` starts them")):  # fmt: skip
+                try:
+                    listed = (json.loads(text) if text.strip() else {}).get("vms", [])
+                except (ValueError, AttributeError):
+                    listed = [{"name": "(unreadable record)"}]
+                if listed:
+                    rows.append(["devbox VMs", output.status_cell("warn", f"{len(listed)} {what}: {', '.join(vm['name'] for vm in listed[:6])}"
+                                                                  + ("…" if len(listed) > 6 else "") + f"; {hint}")])  # fmt: skip
+            if vms is not None:
+                with_clean = {int(m) for m in re.findall(r"/(\d+)\.conf", clean)}
+                lacking = sorted(vm["name"] for vm in vms if vm.get("pool") in SERVICE_POOLS and int(vm["vmid"]) not in with_clean)
+                if lacking:
+                    rows.append(["snapshots", output.status_cell("warn", f"no `clean` snapshot on {', '.join(lacking)}: a reset "
+                                                                 "leaves them as they are (`worms build services --rebuild`)")])  # fmt: skip
+            down = [line.split()[0] for line in active.splitlines() if line.split() and line.split()[-1] != "active"]
+            if down:
+                rows.append(["node services", output.status_cell("error", f"not active: {', '.join(down)} (`worms log agent`, "
+                                                                 "`worms log firewall`)")])  # fmt: skip
+    else:
+        unchecked.append("the node (not on it: set WORMS_SSH)")
+    try:
+        from worms_cli import django_setup
+
+        django_setup.setup(config)
+        from datetime import timedelta
+
+        from core import clock
+        from core.models.rounds import HostJob
+
+        failed = list(HostJob.objects.filter(state=HostJob.State.FAILED, finished_at__gte=clock.now() - timedelta(hours=24))
+                      .order_by("-id").values_list("id", "kind")[:20])  # fmt: skip
+        if failed:
+            rows.append(["host jobs", output.status_cell("error", f"{len(failed)} failed in 24 h: "
+                                                         + ", ".join(f"#{n} {kind}" for n, kind in failed[:5])
+                                                         + f" (`worms log {failed[0][0]}`)")])  # fmt: skip
+        pending = build.Runner(config).pending_migrations()
+        if pending:
+            rows.append(["migrations", output.status_cell("warn", f"the database lacks {len(pending)} of this checkout's "
+                                                          "(`worms deploy orchestrator`)")])  # fmt: skip
+    except Exception as exc:  # noqa: BLE001  (not configured, not reachable: said, not fatal)
+        unchecked.append(f"the database ({str(exc).splitlines()[0][:60] if str(exc) else type(exc).__name__})")
+    if not rows:
+        rows.append(["", output.status_cell("ok", "nothing found")])
+    if unchecked:
+        rows.append(["not checked", output.status_cell("unknown", "; ".join(unchecked))])
+    return rows
+
+
 def cmd_status(config, args) -> int:
     topic = args.topic
     if topic is None:
+        listing, internet = _list_vms(config), _internet_status(config)
+        print(output.heading("attention"))
+        print(output.table(_attention(config, listing, internet)))
+        print()
         print(output.heading("platform"))
-        print(output.table(_platform_rows(config)))
+        print(output.table(_platform_rows(config, internet)))
         print()
         print(output.heading("VMs"))
-        print(output.table(_vm_rows(config), headers=VM_HEADERS))
+        print(output.table(_vm_rows(config, listing), headers=VM_HEADERS))
         print()
         print(output.heading("competition (database)"))
         print(output.table(_competition_status(config)))
@@ -215,10 +312,6 @@ def cmd_status(config, args) -> int:
         if topic == "devboxes":
             print(output.table(queries.devbox_rows(), headers=["Team", "Devbox", "SSH keys (name, fingerprint)"]))
             return 0
-        if topic == "keys":
-            from worms_cli import keys
-
-            return keys.status(config)
         if topic == "gameplans":
             print(output.table(queries.gameplan_rows(config.repo_root), headers=["Gameplan", "Orchestrator + node", "This checkout"]))
             print(output.color("Why the deployed copy is invalid: `worms log conductor` (the orchestrator's check), "
@@ -573,6 +666,22 @@ def _request_devbox_reconfigure(config) -> int:
     return 0
 
 
+def cmd_keys(config, args) -> int:
+    """`worms keys [status|sync|add|remove]`: the teams' devbox SSH keys (worms_cli/keys.py). The
+    old `worms status keys`, `devbox-sync-keys`, `devbox-add-key`, `devbox-remove-key` (ALIASES)."""
+    action = args.keys_action or "status"
+    if action == "status":
+        _with_db(config)
+        from worms_cli import keys
+
+        try:
+            return keys.status(config)
+        except ValueError as exc:
+            output.error(str(exc))
+            return 1
+    return {"sync": cmd_devbox_sync_keys, "add": cmd_devbox_add_key, "remove": cmd_devbox_remove_key}[action](config, args)
+
+
 def cmd_devbox_sync_keys(config, args) -> int:
     """`worms devbox-sync-keys`: every team's SSH keys, from the database, copied over SSH to the SSH
     gateway and its devbox VMs; then where they are (worms_cli/keys.py)."""
@@ -895,12 +1004,14 @@ def _reset_devboxes(config, args) -> int:
     except ValueError as exc:
         output.error(str(exc))
         return 1
-    if not build.confirm(f"Reset the devbox of {', '.join(t.name for t in teams) or 'no team'}: its VMs back to their "
-                         "snapshot, its dev score starts over?", args.yes):  # fmt: skip
+    fresh = getattr(args, "fresh", False)
+    what = "its VMs DESTROYED and built again from nothing (what is on them is lost)" if fresh else "its VMs back to their snapshot"
+    if not build.confirm(f"Reset the devbox of {', '.join(t.name for t in teams) or 'no team'}: {what}, its dev score "
+                         "starts over?", args.yes):  # fmt: skip
         return 1
     jobs = []
     for team in teams:
-        job, enqueued = request_rebuild(team)
+        job, enqueued = request_rebuild(team, fresh=fresh)  # fresh: as `worms build devbox --rebuild`
         events.team("devbox_reset", actor=_console(), team=team)
         jobs.append(job)
         if job is None:
@@ -1293,68 +1404,71 @@ STATUS_TOPICS = {
     "rounds": "the rounds: window, gameplan and its check, attempts by state",
     "gameplans": "the gameplans: valid on the orchestrator and the node? why not, by this checkout's check",
     "jobs": "the round agent's latest host jobs, and why one failed",
-    "devboxes": "every team's devbox and SSH keys",
-    "keys": "are every team's SSH keys on the SSH gateway and its devbox VMs? (reads them there)",
+    "devboxes": "every team's devbox (t<id> and its VMs) and SSH keys",
 }
 
 SECTIONS = (
     Section(
-        "see",
-        "These change nothing.",
+        "day to day",
+        "Look, reach, fix. status, show and log change nothing. A VM is its name or <team>/a|b|c|gw (alpha/gw, t2/a).",
         (
-            ("status [<topic>]", "every VM and its state, the internet window, the competition; or one topic: "
-                                 + ", ".join(STATUS_TOPICS)),  # fmt: skip
-            ("show <vm>|<team> [<table>]", "one VM in detail: state, resources, networks, snapshots, team, login; "
+            ("status [<topic>]", "what needs attention, the internet window, every VM (team, state), the competition; "
+                                 "or one topic: " + ", ".join(STATUS_TOPICS)),  # fmt: skip
+            ("show <vm>|<team> [<table>]", "one VM in detail: state, resources, networks, snapshots, team, services, login; "
                                            "a team: its four devbox VMs, their states and its keys on each; "
                                            "`show database [<table>]`: its tables, a table's rows or --schema"),  # fmt: skip
-            ("login <vm>", "a shell on a VM over its management SSH, by its name or <team>/a|b|c|gw (`worms login --help` "
-                           "lists them); `login <vm> -- <command>`: that command there, as `worms run`"),  # fmt: skip
             ("log [<job>|<name>|<vm>]", "a host job's log by its number (`worms status jobs`), a service's (agent, "
                                        "conductor, dashboard, scoring, audit, ...) or a VM's journal; `log latest`: the "
                                        "newest host job's; `log build [N]`: the newest (N-th) run log of a build, deploy, "
                                        "reset, ... here; -f follows. Alone: what there is"),
-            ("rsync <source>... <target>", "rsync -avz between here and a VM, in rsync's syntax: `worms rsync dir/ "
-                                           "devbox-t1-a:` up, `worms rsync devbox-t1-a: dir/` down (`worms rsync --help`)"),  # fmt: skip
-        ),
-    ),
-    Section(
-        "build",
-        "`worms build` builds everything; `worms build <component>` one service, and what it needs first (it shows "
-        "the plan and asks). Packages need the internet window: devbox VMs are shut down while it is open, and it is "
-        "refused during a round.",
-        (
-            ("build [<component>...]", "build what is missing, configure what exists; --rebuild recreates (`worms build --help`); "
-                                       "after `--`: arguments for ansible-playbook"),
-            ("deploy [<component>...]", "configure what exists, never OpenTofu, no internet window unless --packages; then "
-                                        "the gameplans, the agent (once idle) and the conductor; alone: every component "
-                                        "offline; refused during a round"),  # fmt: skip
-            ("internet enable|disable", "open or close the internet window by hand (refused during a round; asks to stop running devboxes; "
-                                        "closing switches DNS and the caches back to offline mode)"),
-        ),
-    ),
-    Section(
-        "operate",
-        "The running competition, from the console. Teams, students and rounds are managed on the dashboard "
-        "(/staff/), and a round starts by itself.",
-        (
             ("run <target>... -- <command>", "a command on VMs without a login: a VM, <team>/<role>, node, or a group "
                                               "(infrastructure, services, private-internet: never a team's VM); "
                                               "one prefix per VM; --root: with sudo"),  # fmt: skip
+            ("login <vm>", "a shell on a VM over its management SSH (`worms login --help` lists them); "
+                           "`login <vm> -- <command>`: that command there, as `worms run`"),  # fmt: skip
+            ("deploy [<component>...]", "configure what exists, never OpenTofu, no internet window unless --packages; then "
+                                        "the gameplans, the agent (once idle) and the conductor; alone: every component "
+                                        "offline; refused during a round"),  # fmt: skip
+            ("reset database", "DANGER: wipe the database, migrate and initialise it again"),
+            ("reset services", "the service VMs (ephemeral, private internet) back to their snapshot (--wait)"),
+            ("reset devbox <team>...", "teams' devboxes back to their snapshot, through the orchestrator (--all-teams; "
+                                       "--fresh: rebuilt from nothing; --wait)"),  # fmt: skip
             ("restart <service>...", "restart services in a safe order: the agent first and once no host job runs, "
                                      "then the conductor (`worms log` lists them); refused during a round for what "
                                      "it needs, unless --during-round"),  # fmt: skip
-            ("power start|stop <target>...", "VMs on or off (qm on the node), by the names `worms run` takes; "
-                                             "`start --held`: the devboxes a round holds, once it is over"),  # fmt: skip
-            ("backup database", "a pg_dump -Fc of the platform's database, streamed to a file here (0600)"),
-            ("reset database", "DANGER: wipe the database, migrate and initialise it again"),
-            ("reset services", "the service VMs (ephemeral, private internet) back to their snapshot"),
-            ("reset devbox <team>...", "teams' devboxes back to their snapshot, through the orchestrator (--all-teams)"),
-            ("devbox-add-key <team> <key>", "add an SSH key to a team's devbox (the orchestrator pushes it)"),
-            ("devbox-remove-key <team> <key>", "remove one, by its name or fingerprint"),
-            ("devbox-sync-keys", "copy every team's SSH keys to the SSH gateway and its devbox VMs, then show them"),
+        ),
+    ),
+    Section(
+        "teams and keys",
+        "Teams, students and rounds are managed on the dashboard (/staff/), and a round starts by itself. These are "
+        "the console's part.",
+        (
+            ("keys", "are every team's SSH keys on the SSH gateway and its devbox VMs? (reads them there; = keys status)"),
+            ("keys status", "as `worms keys` alone: every team's SSH keys, read on the SSH gateway and its devbox VMs"),
+            ("keys sync", "copy every team's SSH keys from the database to the SSH gateway and its devbox VMs, then show them"),
+            ("keys add <team> <key>", "add an SSH key to a team's devbox, as on the dashboard, then copy the keys"),
+            ("keys remove <team> <key>", "remove one, by its name or fingerprint, then copy the keys"),
             ("admin-reset-password", "one-time password for the dashboard admin, printed once (created if missing)"),
             ("admin-create-staff <email>", "a staff (tutor) account; one-time password printed once"),
             ("delete-team <name>", "delete a team with everything it owns (its users stay)"),
+        ),
+    ),
+    Section(
+        "build and machines",
+        "`worms build` builds everything; `worms build <component>` one service, and what it needs first (it shows "
+        "the plan, what it touches, and asks). Packages need the internet window: devbox VMs are shut down while it "
+        "is open, and it is refused during a round.",
+        (
+            ("build [<component>...]", "build what is missing, configure what exists; --rebuild recreates (`worms build --help`); "
+                                       "after `--`: arguments for ansible-playbook"),
+            ("internet enable|disable", "open or close the internet window by hand (refused during a round; stops running "
+                                        "devboxes, after asking, and starts them again on closing, which also switches "
+                                        "DNS and the caches back to offline mode)"),  # fmt: skip
+            ("power start|stop <target>...", "VMs on or off (qm on the node), by the names `worms run` takes; "
+                                             "`start --held`: the devboxes a round holds, once it is over"),  # fmt: skip
+            ("backup database", "a pg_dump -Fc of the platform's database, streamed to a file here (0600)"),
+            ("rsync <source>... <target>", "rsync -avz between here and a VM, in rsync's syntax: `worms rsync dir/ "
+                                           "alpha/a:` up, `worms rsync alpha/a: dir/` down (`worms rsync --help`)"),  # fmt: skip
         ),
     ),
     Section(
@@ -1387,6 +1501,28 @@ SECTIONS = (
         ),
     ),
 )
+
+# Commands that moved: the old words, as typed, -> the new ones. main() rewrites argv with it (and
+# says so on stderr); tests/test_docs.py checks the docs' commands through it too.
+ALIASES = {
+    ("status", "keys"): ("keys", "status"),
+    ("devbox-sync-keys",): ("keys", "sync"),
+    ("devbox-add-key",): ("keys", "add"),
+    ("devbox-remove-key",): ("keys", "remove"),
+}
+
+
+def _aliased(argv: list[str]) -> tuple[list[str], str]:
+    """argv with an old command's words replaced by its new ones (ALIASES), and the note that says
+    so ("" if none). Options before the command (--config FILE) stay where they are."""
+    at = 0
+    while at < len(argv) and argv[at].startswith("-") and argv[at] != "--":
+        at += 2 if argv[at] == "--config" else 1
+    for old, new in ALIASES.items():
+        if tuple(argv[at:at + len(old)]) == old:
+            note = f"`worms {' '.join(old)}` is now `worms {' '.join(new)}`"
+            return [*argv[:at], *new, *argv[at + len(old):]], note
+    return list(argv), ""
 
 HELP_WIDTH = 79
 
@@ -1583,6 +1719,7 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     p_devbox = _add(reset_sub, "reset devbox")
     p_devbox.add_argument("teams", nargs="*", metavar="team")
     p_devbox.add_argument("--all-teams", action="store_true", help="every team's devbox")
+    p_devbox.add_argument("--fresh", action="store_true", help="rebuilt from nothing, fresh disks (= build devbox --rebuild)")
     p_devbox.add_argument("--wait", action="store_true", help="wait for its host jobs, and say how each ended")
     _yes(p_devbox)
 
@@ -1602,15 +1739,18 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     p_backup = _add(backup_sub, "backup database")
     p_backup.add_argument("-o", "--output", metavar="FILE", help="the dump's file (default ~/.worms/backups/<system>-<db>-<time>.dump)")
 
-    p = _add(sub, "devbox-add-key")
-    p.add_argument("team")
-    p.add_argument("key", help="the public key (quoted), a .pub file, or - for stdin")
-    p.add_argument("--name", default="", help="a name for it (default: the key's comment)")
-    p = _add(sub, "devbox-remove-key")
-    p.add_argument("team")
-    p.add_argument("key", help="the key's name, or its fingerprint (at least 8 characters of it)")
-    _yes(p)
-    _add(sub, "devbox-sync-keys")
+    p = _add(sub, "keys")
+    keys_sub = p.add_subparsers(dest="keys_action")
+    _add(keys_sub, "keys status")
+    _add(keys_sub, "keys sync")
+    p_add = _add(keys_sub, "keys add")
+    p_add.add_argument("team", help="its name or slug t<id>")
+    p_add.add_argument("key", help="the public key (quoted), a .pub file, or - for stdin")
+    p_add.add_argument("--name", default="", help="a name for it (default: the key's comment)")
+    p_remove = _add(keys_sub, "keys remove")
+    p_remove.add_argument("team", help="its name or slug t<id>")
+    p_remove.add_argument("key", help="the key's name, or its fingerprint (at least 8 characters of it)")
+    _yes(p_remove)
     p = _add(sub, "admin-reset-password")
     p.add_argument("--username", default="admin")
     _yes(p)
@@ -1648,8 +1788,7 @@ HANDLERS = {
     "status": cmd_status, "show": cmd_show, "login": cmd_login, "run": cmd_run, "log": cmd_log, "rsync": cmd_rsync,
     "build": cmd_build, "deploy": cmd_deploy,
     "internet": cmd_internet, "restart": cmd_restart, "power": cmd_power, "backup": cmd_backup,
-    "reset": cmd_reset, "devbox-add-key": cmd_devbox_add_key, "devbox-remove-key": cmd_devbox_remove_key,
-    "devbox-sync-keys": cmd_devbox_sync_keys,
+    "reset": cmd_reset, "keys": cmd_keys,
     "admin-reset-password": cmd_admin_reset_password, "admin-create-staff": cmd_admin_create_staff,
     "delete-team": cmd_delete_team, "secrets": cmd_secrets, "trust-node": cmd_trust_node,
     "emergency-stop": cmd_emergency_stop, "destroy": cmd_destroy, "test": cmd_test, "step": cmd_step,
@@ -1666,6 +1805,9 @@ def _split(argv: list[str]) -> tuple[list[str], list[str]]:
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
+    argv, moved = _aliased(argv)
+    if moved:
+        print(output.color(f"note: {moved}", "dim"), file=sys.stderr)
     vm_list = ""
     if len(argv) >= 2 and argv[0] in ("login", "show", "rsync", "run") and ("-h" in argv or "--help" in argv):
         vm_list = _vm_list(Config.load())
@@ -1688,8 +1830,7 @@ def main(argv=None) -> int:
 
 # The commands that change something: their whole output goes to a run log too (worms_cli/runlog.py).
 # Never one whose output is a secret (admin-reset-password, admin-create-staff) or a VM's (run, login).
-LOGGED = ("build", "deploy", "reset", "internet", "keys", "devbox-sync-keys", "devbox-add-key", "devbox-remove-key", "step",
-          "restart", "power", "destroy", "emergency-stop")  # fmt: skip
+LOGGED = ("build", "deploy", "reset", "internet", "keys", "step", "restart", "power", "destroy", "emergency-stop")
 
 
 def _run_log(config, args):
@@ -1699,6 +1840,8 @@ def _run_log(config, args):
 
     if args.command not in LOGGED or Path(config.repo_root).resolve() == Path(NODE_WORKSPACE):
         return None
+    if args.command == "keys" and getattr(args, "keys_action", None) in (None, "status"):
+        return None  # reads only
     try:
         tee = runlog.Tee(runlog.verb(args)).start()
     except OSError as exc:

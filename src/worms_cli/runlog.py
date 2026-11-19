@@ -49,7 +49,7 @@ def nth(n: int = 1) -> Path:
 def verb(args) -> str:
     """What a run is called in its file's name: `build`, `reset-devbox`, `internet-disable`, `step-offline`."""
     words = [args.command]
-    for name in ("what", "state", "name", "action"):
+    for name in ("what", "state", "name", "keys_action"):
         value = getattr(args, name, None)
         if isinstance(value, str) and value and args.command in ("reset", "internet", "step", "power", "keys"):
             words.append(value)

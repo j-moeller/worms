@@ -1,4 +1,4 @@
-"""`worms status keys`: are every team's devbox SSH keys where they belong? `worms devbox-sync-keys`:
+"""`worms keys status`: are every team's devbox SSH keys where they belong? `worms keys sync`:
 put them there. (docs/04-dev-environment.md)
 
 The dashboard holds each team's keys (devbox_ssh_keys); the round agent pushes them, with every
@@ -39,7 +39,7 @@ LEGEND = ("● ✓  every key the team has, and no other     ✗ n missing / n o
           "SSH gateway: devbox-ssh-gateway, its lines for the team")  # fmt: skip
 
 
-# `worms devbox-sync-keys`: what is written, by one ssh command per VM, the keys on its stdin (never
+# `worms keys sync`: what is written, by one ssh command per VM, the keys on its stdin (never
 # in a command line). A devbox VM: its team's key file, and sshd's drop-in that reads it should it
 # be missing. The gateway: the whole file, as the ssh_gateway role writes it (authorized_keys.j2).
 KEY_TYPE = re.compile(r"(ssh-(ed25519|rsa)|ecdsa-sha2-nistp(256|384|521)|sk-[a-z0-9@.-]+)")
@@ -242,14 +242,14 @@ def status(config) -> int:
     if waiting is not None:
         print(output.color(f"a key push is {waiting.state} (#{waiting.id}, {waiting.kind}): the files change once it has run", "yellow"))
     if wrong:
-        print(output.status_cell("error", f"not in place: {'; '.join(wrong)}") + output.color("  (`worms devbox-sync-keys` copies them)", "dim"))
+        print(output.status_cell("error", f"not in place: {'; '.join(wrong)}") + output.color("  (`worms keys sync` copies them)", "dim"))
         return 1
     print(output.status_cell("ok", "every team's keys are in place (stopped VMs not checked)"))
     return 0
 
 
 def team_cells(config, slug: str, catalogue=None) -> dict[str, str]:
-    """`worms show <team>`: one team's keys where they belong, as `worms status keys` reads them:
+    """`worms show <team>`: one team's keys where they belong, as `worms keys status` reads them:
     {"a", "b", "c": its VMs' cells, "gateway": the SSH gateway's lines for it, "keys": how many}.
     Empty for a team without a devbox; a cell says so when the database cannot be reached."""
     try:
@@ -271,8 +271,8 @@ def team_cells(config, slug: str, catalogue=None) -> dict[str, str]:
 
 
 def sync(config) -> int:
-    """`worms devbox-sync-keys`: copy every team's SSH keys from the database to where they are used,
-    over the management SSH, then show them (`worms status keys`). Nothing else: no round agent, no
+    """`worms keys sync`: copy every team's SSH keys from the database to where they are used,
+    over the management SSH, then show them (`worms keys status`). Nothing else: no round agent, no
     Ansible, no OpenTofu, no internet. A stopped VM is skipped (the next copy, or its reset, writes it)."""
     teams = _teams()
     if not teams:

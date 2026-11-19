@@ -379,13 +379,20 @@ def commands_of(parser, path=()):
 
 def test_help_groups_the_verbs_by_what_they_are_for():
     sections = sections_of(run_cli("--help"))
-    assert list(sections) == ["see", "build", "operate", "set up", "stop and tear down", "develop"]
-    assert "status [<topic>]" in sections["see"] and "login <vm>" in sections["see"]
-    assert "build [<component>...]" in sections["build"] and "secrets issue <name>" in sections["set up"]
-    assert "devbox-add-key <team> <key>" in sections["operate"] and "admin-create-staff <email>" in sections["operate"]
-    assert "reset services" in sections["operate"] and "destroy [--all]" in sections["stop and tear down"]
+    assert list(sections) == ["day to day", "teams and keys", "build and machines", "set up", "stop and tear down", "develop"]
+    # What an operator does every day comes first, in this order.
+    cli = _cli_module()
+    daily = [usage.split()[0] for usage, _ in cli.SECTIONS[0].commands]
+    assert list(dict.fromkeys(daily)) == ["status", "show", "log", "run", "login", "deploy", "reset", "restart"]
+    assert "build [<component>...]" in sections["build and machines"] and "secrets issue <name>" in sections["set up"]
+    assert "keys add <team> <key>" in sections["teams and keys"] and "admin-create-staff <email>" in sections["teams and keys"]
+    assert "reset services" in sections["day to day"] and "destroy [--all]" in sections["stop and tear down"]
     # The flat list of argparse is gone, and with it a second list to keep true.
     assert "positional arguments" not in run_cli("--help")
+    # A command that moved still runs, by its old words (ALIASES), and says where it went.
+    for old, new in cli.ALIASES.items():
+        assert cli._aliased(["--config", "f", *old, "x"])[0] == ["--config", "f", *new, "x"]
+    assert cli._aliased(["devbox-sync-keys"])[1] == "`worms devbox-sync-keys` is now `worms keys sync`"
 
 
 def test_every_command_is_in_exactly_one_section():

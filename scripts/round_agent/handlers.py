@@ -823,32 +823,66 @@ def _snapshot_fresh_devbox_vms(ex, vms):
     snapshots.wait_for_ssh(ex, hosts)
 
 
+# A devbox VM's clean snapshot holds it configured (CA, apt and NTP clients, packages), before any
+# team key or token: a reset rolls back to it and writes the team's keys and new tokens, no
+# configuration. Snapshots from before 2026-11-19 hold the first boot only: the next reset configures
+# the VMs once and takes this one in their place.
+DEVBOX_CONFIGURED = "worms devbox: configured, before any team key"
+
+
+def _configure_devbox_base(ex, teams, slug):
+    """The team's three VMs configured without a team key (an empty key file), and that made their
+    clean snapshot. Nothing of the team has reached them: they were just built or rolled back."""
+    _configure_devbox(ex, [{**t, "authorized_keys": []} for t in teams], limit=[f"devbox-{slug}-{role}" for role in DEVBOX_ROLES])
+    vms = _team_vms(ex, slug)
+    snapshots.take(ex, vms, DEVBOX_CONFIGURED)
+    ips = {info["vmid"]: info["maintenance_ip"] for info in _devbox_vms(ex).values()}
+    snapshots.wait_for_ssh(ex, [ips[vm["vmid"]] for vm in vms])
+
+
+def _write_team_keys(ex, team, vms):
+    """The team's SSH keys on its VMs, directly: the key file `worms devbox-sync-keys` writes too.
+    The SSH gateway's lines do not change with a reset."""
+    from worms_cli import keys
+
+    text = "".join(f"{key}\n" for key in map(keys.canonical, team["authorized_keys"]) if key)
+    for info in vms.values():
+        ex.ssh(info["maintenance_ip"], ["sudo", "sh", "-c", keys.DEVBOX_SCRIPT], input=text)
+
+
 def devbox_rebuild(ex, cfg, params):
     """Give one team a fresh devbox and new tokens, without touching other teams. The team's
     version has already been bumped by the orchestrator (which clears the dashboard score). Its
-    three VMs go back to the snapshot taken before the team was ever on them; VMs without one
-    (built before snapshots), or all three when `fresh` (`worms build devbox --rebuild`), are
-    replaced instead, and snapshotted for the next time."""
+    three VMs go back to their clean snapshot, configured and without any team key: then its keys
+    and new tokens, in seconds, without Ansible or a package. VMs without a snapshot, or all three
+    when `fresh` (`worms build devbox --rebuild`), are replaced, configured and snapshotted."""
     teams = params["teams"]
-    slug = next((t["slug"] for t in teams if t["team_uuid"] == params["team_uuid"]), None)
-    if slug is None:
+    team = next((t for t in teams if t["team_uuid"] == params["team_uuid"]), None)
+    if team is None:
         raise validation.Invalid("team_uuid is not in the teams list")
+    slug = team["slug"]
 
-    ex.generate_devbox(teams, ex.repo_root / DEVBOX_GENERATED)
     vms = _team_vms(ex, slug)
     if not params.get("fresh") and len(vms) == len(DEVBOX_ROLES) and all(snapshots.has_clean(ex, vm) for vm in vms):
         _refuse_while_internet(cfg, "start a devbox")
         snapshots.roll_back(ex, vms)
         ips = {info["vmid"]: info["maintenance_ip"] for info in _devbox_vms(ex).values()}
         snapshots.wait_for_ssh(ex, [ips[vm["vmid"]] for vm in vms])
-        how = "rolled back to its snapshot"
+        if all(snapshots.clean_description(ex, vm) == DEVBOX_CONFIGURED for vm in vms):
+            how = "rolled back to its snapshot"
+        else:
+            _configure_devbox_base(ex, teams, slug)
+            how = "rolled back, configured and snapshotted (once: its snapshot was from before the configuration)"
     else:
         # Replace just this team's three VMs (fresh disks); the rest is a no-op.
+        ex.generate_devbox(teams, ex.repo_root / DEVBOX_GENERATED)
         ex.tofu("devbox", "apply", "-auto-approve", "-input=false", "-parallelism=1", *_devbox_replace_args(slug), timeout=cfg.get("apply_timeout", 5400))
         ex.worms("inventory", timeout=300)
-        _snapshot_fresh_devbox_vms(ex, _team_vms(ex, slug))
-        how = "replaced and snapshotted"
-    _configure_devbox(ex, teams)
+        ips = {info["vmid"]: info["maintenance_ip"] for info in _devbox_vms(ex).values()}
+        snapshots.wait_for_first_boot(ex, [ips[vm["vmid"]] for vm in _team_vms(ex, slug)])
+        _configure_devbox_base(ex, teams, slug)
+        how = "replaced, configured and snapshotted"
+    _write_team_keys(ex, team, {name: info for name, info in _devbox_vms(ex).items() if info["team"] == slug})
 
     # Rewrite this team's tokens only.
     vms = _devbox_vms(ex)
@@ -900,10 +934,10 @@ def devbox_reconfigure(ex, cfg, params):
     return {"reconfigured": [t["slug"] for t in teams], "addresses": _devbox_addresses(teams)}
 
 
-def _configure_devbox(ex, teams, step="devbox-configure"):
+def _configure_devbox(ex, teams, step="devbox-configure", limit=None):
     """Run the devbox + SSH-gateway Ansible with the teams' keys and VM targets
     as extra vars (CA trust, team authorized_keys, confined gateway keys); `step`
-    devbox-keys: the keys alone.
+    devbox-keys: the keys alone. `limit`: only these VMs (a reset: the team's three).
 
     A team's SSH key is attacker-controlled text that Ansible renders into the
     devbox and gateway authorized_keys (on the Proxmox host, as root). Every
@@ -934,7 +968,7 @@ def _configure_devbox(ex, teams, step="devbox-configure"):
     with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False) as fh:
         fh.write(_unsafe_yaml(extra))
         varfile = fh.name
-    ex.worms(step, timeout=1800, args=f"-e @{varfile}")
+    ex.worms(step, timeout=1800, args=f"-e @{varfile}" + (f" --limit {','.join(limit)}" if limit else ""))
 
 
 # -- the devboxes, held shut down for a round (docs/05-live-environment.md) ---------------------

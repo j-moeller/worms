@@ -273,6 +273,7 @@ class FakeExecutor:
         self.sandbox_built = True
         self.pools = {"devbox": [], "ephemeral": [], "private_internet": []}
         self.clean = set()
+        self.descriptions = {}  # vmid -> its clean snapshot's description
         self.fail_on = None
 
     def sandbox_pool(self):
@@ -296,6 +297,7 @@ class FakeExecutor:
 
     def worms(self, component, timeout=3600, args=None):
         self.calls.append(("worms", component))
+        self.worms_args = args
 
     def tofu(self, stack, *args, timeout=3600):
         self.calls.append(("tofu", stack, *args))
@@ -339,9 +341,10 @@ class FakeExecutor:
             return json.dumps(self.sandbox_pool() + [vm for vms in self.pools.values() for vm in vms])
         if argv[:2] == ["pvesh", "get"] and argv[2].endswith("/snapshot"):
             vmid = int(argv[2].split("/")[4])
-            return json.dumps([{"name": "clean"}] if vmid in self.clean else [] + [{"name": "current"}])
+            return json.dumps([{"name": "clean", "description": self.descriptions.get(vmid, "")}] if vmid in self.clean else [] + [{"name": "current"}])
         if argv[:2] == ["qm", "snapshot"]:
             self.clean.add(int(argv[2]))
+            self.descriptions[int(argv[2])] = argv[argv.index("--description") + 1] if "--description" in argv else ""
         if argv[0] == "systemctl":
             return self.systemctl.get(argv[2], "active")
         if argv[:2] == ["qm", "config"]:
@@ -911,7 +914,9 @@ def test_every_devbox_job_reports_where_the_vms_are(job, tmp_path):
 # --- devbox snapshots -------------------------------------------------------------
 
 T1 = "11111111-1111-1111-1111-111111111111"
-DEVBOX_TEAMS = [{"slug": "t1", "index": 0, "team_uuid": T1, "authorized_keys": ["ssh-ed25519 " + "A" * 68 + " t1@laptop"]}]
+# A well-formed ed25519 key: its blob names its type, as `worms_cli.keys.canonical` checks.
+T1_KEY = "ssh-ed25519 " + base64.b64encode(b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20" + b"\x01" * 32).decode() + " t1@laptop"
+DEVBOX_TEAMS = [{"slug": "t1", "index": 0, "team_uuid": T1, "authorized_keys": [T1_KEY]}]
 T1_VMIDS = {116, 117, 118}
 
 
@@ -988,15 +993,35 @@ def _rebuild(ex):
     return handlers.devbox_rebuild(ex, CFG, validation.validate("devbox_rebuild", params))
 
 
+def _key_writes(ex):
+    """The hosts the team's key file was written on, directly (worms_cli/keys.py), and what."""
+    return sorted((c["host"], c["input"]) for c in ex.ssh_calls if c["argv"][:3] == ["sudo", "sh", "-c"] and "authorized_keys_worms_team" in c["argv"][3])
+
+
 def test_a_devbox_reset_rolls_back_to_the_snapshot(tmp_path):
-    """Minutes of OpenTofu and first boot saved; the keys and new tokens still follow."""
+    """Seconds: the snapshot holds the VMs configured, before any team key, so a reset writes only
+    the team's keys and new tokens. A snapshot from before that (the first boot only) is replaced
+    once, at the next reset: configured without a key (the team's VMs only), then snapshotted."""
     ex = DevboxFake(tmp_path, built_before=True)
-    ex.clean = set(T1_VMIDS)
+    ex.clean = set(T1_VMIDS)  # first-boot snapshots
+    result = _rebuild(ex)
+    steps = ex.steps()
+    assert steps.count("devbox-configure") == 1 and "--limit devbox-t1-a,devbox-t1-b,devbox-t1-c" in ex.worms_args
+    configure = steps.index("devbox-configure")
+    for vmid in T1_VMIDS:
+        assert steps.index(f"qm rollback {vmid} clean --start 1") < configure < steps.index(f"qm snapshot {vmid} clean --description {handlers.DEVBOX_CONFIGURED}")
+    assert ex.descriptions == {vmid: handlers.DEVBOX_CONFIGURED for vmid in T1_VMIDS}
+    assert result["devbox"].startswith("rolled back, configured and snapshotted")
+
+    ex.calls.clear()
+    ex.ssh_calls.clear()
     result = _rebuild(ex)
     steps = ex.steps()
     assert not any(c[:2] == ("tofu", "devbox") and "apply" in c for c in ex.calls)
     assert [s for s in steps if "rollback" in s] == [f"qm rollback {vmid} clean --start 1" for vmid in sorted(T1_VMIDS)]
-    assert steps[-1] == "devbox-configure"
+    assert not any(c[0] == "worms" for c in ex.calls) and not any("snapshot" in s for s in steps)  # no Ansible, no new snapshot
+    key = " ".join(DEVBOX_TEAMS[0]["authorized_keys"][0].split()[:2]) + "\n"
+    assert _key_writes(ex) == [(f"10.6.0.{vmid}", key) for vmid in sorted(T1_VMIDS)]
     tokens = [c["host"] for c in ex.ssh_calls if handlers.FLAG_PATH in c["argv"]]
     assert sorted(tokens) == sorted(f"10.6.0.{vmid}" for vmid in T1_VMIDS)
     assert result["devbox"] == "rolled back to its snapshot" and len(result["vms"]) == 3
@@ -1008,8 +1033,12 @@ def test_a_devbox_without_a_snapshot_is_replaced_and_snapshotted(tmp_path):
     result = _rebuild(ex)
     replace = next(c for c in ex.calls if c[:2] == ("tofu", "devbox") and "apply" in c)
     assert sum(arg.startswith("-replace=") for arg in replace) == 3
-    assert ex.clean == T1_VMIDS and result["devbox"] == "replaced and snapshotted"
-    assert not any("rollback" in step for step in ex.steps())
+    assert ex.clean == T1_VMIDS and result["devbox"] == "replaced, configured and snapshotted"
+    assert ex.descriptions == {vmid: handlers.DEVBOX_CONFIGURED for vmid in T1_VMIDS}
+    steps = ex.steps()
+    assert steps.index("devbox-configure") < min(steps.index(f"qm snapshot {vmid} clean --description {handlers.DEVBOX_CONFIGURED}") for vmid in T1_VMIDS)
+    assert not any("rollback" in step for step in steps)
+    assert len(_key_writes(ex)) == 3
 
 
 def test_no_devbox_is_rolled_back_while_internet_access_is_allowed(tmp_path):

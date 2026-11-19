@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import ipaddress
 import re
+import shlex
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
@@ -40,12 +41,13 @@ LEGEND = ("● ✓  every key the team has, and no other     ✗ n missing / n o
 # be missing. The gateway: the whole file, as the ssh_gateway role writes it (authorized_keys.j2).
 KEY_TYPE = re.compile(r"(ssh-(ed25519|rsa)|ecdsa-sha2-nistp(256|384|521)|sk-[a-z0-9@.-]+)")
 SSHD_DROP_IN = "/etc/ssh/sshd_config.d/20-worms-devbox.conf"
-DEVBOX_WRITE = (
-    f"sudo sh -c 'install -d -m 700 /root/.ssh && install -m 600 /dev/stdin {DEVBOX_FILE}"
+DEVBOX_SCRIPT = (
+    f"install -d -m 700 /root/.ssh && install -m 600 /dev/stdin {DEVBOX_FILE}"
     f" && if ! grep -qs authorized_keys_worms_team {SSHD_DROP_IN}; then"
     f" echo \"AuthorizedKeysFile .ssh/authorized_keys .ssh/authorized_keys_worms_team\" > {SSHD_DROP_IN}"
-    " && systemctl reload ssh; fi'"
+    " && systemctl reload ssh; fi"
 )
+DEVBOX_WRITE = f"sudo sh -c {shlex.quote(DEVBOX_SCRIPT)}"  # the round agent runs it too (handlers.devbox_rebuild)
 GATEWAY_WRITE = f"sudo install -m 644 -o root -g root /dev/stdin {GATEWAY_FILE}"
 GATEWAY_HEADER = "# WORMS devbox SSH gateway authorized_keys (`worms devbox-sync-keys`, role ssh_gateway). DO NOT EDIT."
 GATEWAY_LINE = 'restrict,port-forwarding,command="/usr/sbin/nologin",permitopen="{ip}:22" {key} team={slug}'

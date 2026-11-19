@@ -74,9 +74,35 @@ def recording(ex):
 
 def record(ex, vms, event, detail=""):
     """Append `vms` (a list, or a function that lists them, asked only when recording) to the
-    VM history."""
-    if recording(ex):
+    VM history. Nothing of the history may fail a job: a listing that fails is a line in the
+    job's log, and the job goes on."""
+    if not recording(ex):
+        return
+    try:
         ex.history(vms() if callable(vms) else vms, event, detail)
+    except Exception as exc:  # noqa: BLE001
+        _note(ex, f"the VM history did not get {event}: {exc}")
+
+
+def listed(ex, vms):
+    """`vms()` for the history (a list to compare with later), or [] when it fails or nothing is
+    recorded: never an error for the job."""
+    if not recording(ex):
+        return []
+    try:
+        return vms()
+    except Exception as exc:  # noqa: BLE001
+        _note(ex, f"the VM history cannot list the VMs: {exc}")
+        return []
+
+
+def _note(ex, text):
+    note = getattr(ex, "note", None)
+    if note is not None:
+        try:
+            note(text)
+        except Exception:  # noqa: BLE001  (a log line is not worth a job either)
+            pass
 
 
 def take(ex, vms, description):

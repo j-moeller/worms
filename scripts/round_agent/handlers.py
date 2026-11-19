@@ -199,7 +199,7 @@ def _reusable_sandbox(ex, hcl):
 def _destroy_sandbox(ex, cfg):
     # One at a time: VMs destroyed in parallel fight over the storage lock, and a volume
     # Proxmox gives up on then blocks whichever new VM gets that ID.
-    before = snapshots.pool_vms(ex, "sandbox") if snapshots.recording(ex) else []
+    before = snapshots.listed(ex, lambda: snapshots.pool_vms(ex, "sandbox"))  # for the VM history only
     ex.tofu("sandbox", "destroy", "-auto-approve", "-input=false", "-parallelism=1", timeout=cfg.get("apply_timeout", 5400))
     snapshots.record(ex, lambda: [vm for vm in before if vm["vmid"] not in {v["vmid"] for v in snapshots.pool_vms(ex, "sandbox")}],
                      "destroyed", "the round's sandbox")  # fmt: skip

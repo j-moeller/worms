@@ -268,18 +268,20 @@ def event_rows(hours: int = 24, kind: str | None = None, limit: int = 200) -> li
 
 
 def team(name: str):
-    """The current competition's team of that name, or of that slug (`t<id>`, its devbox VMs'
-    names: worms_cli/teams.py). ValueError if there is none."""
-    import re
-
+    """The current competition's team `name` names, by the rule of worms_cli/teams.py (find): its
+    name, its name in another case, its slug `t<id>` (its devbox VMs' names). ValueError if
+    there is none, or the name fits two."""
     from core.models.team import Team
+    from orchestrator.rounds.devbox import team_slug
+
+    from worms_cli import teams
 
     competition = _require_competition()
-    if re.fullmatch(r"t\d+", name) and not Team.objects.filter(competition=competition, name=name).exists():
-        found = Team.objects.filter(competition=competition, id=int(name[1:])).first()
-        if found is not None:
-            return found
-    return _get_team(competition, name)
+    rows = {team_slug(t): t for t in Team.objects.filter(competition=competition)}
+    found = teams.find({slug: teams.Team(slug, t.name) for slug, t in rows.items()}, name)
+    if found is None:
+        raise ValueError(f"no team named {name!r} in {competition.name!r}")
+    return rows[found.slug]
 
 
 # -- rounds, host jobs, devboxes, gameplans (`worms status <topic>`) -----------

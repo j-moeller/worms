@@ -23,6 +23,9 @@ from dataclasses import dataclass
 ROLES = ("a", "b", "c", "gw")
 ROLE_HELP = {"a": "VM A (SSH entry)", "b": "VM B", "c": "VM C", "gw": "its NAT gateway"}
 DEVBOX_VM = re.compile(r"devbox-(t\d+)-(a|b|c|gw)")
+# A team names itself on the dashboard: only such a name is offered to type (handle) or to tab
+# completion (write_cache; completion.SAFE), where a shell may expand it.
+SAFE_NAME = re.compile(r"[A-Za-z0-9._+-]+")
 SHARED_GATEWAY = "devbox-ssh-gateway"
 
 
@@ -39,8 +42,8 @@ class Team:
 
     @property
     def handle(self) -> str:
-        """What `<team>/<role>` is best typed with: the name if it has no space or slash."""
-        return self.name if self.name and not re.search(r"[\s/:]", self.name) else self.slug
+        """What `<team>/<role>` is best typed with: the name if it is a safe word, else the slug."""
+        return self.name if SAFE_NAME.fullmatch(self.name) else self.slug
 
 
 def vm_name(slug: str, role: str) -> str:
@@ -59,7 +62,7 @@ def _from_database(config) -> dict[str, Team] | None:
     try:
         from worms_cli import django_setup
 
-        django_setup.setup(config)
+        django_setup.connected(config)
         from core.models.competition import ApplicationSetting
         from core.models.devbox import Devbox
         from core.models.team import Team as TeamRow
@@ -88,7 +91,9 @@ def write_cache(teams: dict[str, Team]) -> None:
     try:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         tmp = path.with_name(f".{path.name}.{os.getpid()}")
-        tmp.write_text(json.dumps({"teams": [{"slug": t.slug, "name": t.name} for t in teams.values()]}))
+        # A name that is no safe word is left out: tab completion offers the slug instead.
+        tmp.write_text(json.dumps({"teams": [{"slug": t.slug, "name": t.name if SAFE_NAME.fullmatch(t.name) else ""}
+                                             for t in teams.values() if SAFE_NAME.fullmatch(t.slug)]}))  # fmt: skip
         os.chmod(tmp, 0o600)
         os.replace(tmp, path)
     except OSError:
@@ -110,17 +115,15 @@ def team_map(config, vm_names=(), hosts=None, database=True) -> dict[str, Team]:
 
 
 def find(teams: dict[str, Team], text: str) -> Team | None:
-    """The team `text` names: its slug, its name, or its name in another case (when only one
-    team has it). ValueError when two do."""
-    if text in teams:
-        return teams[text]
-    exact = [t for t in teams.values() if t.name == text]
-    if len(exact) == 1:
-        return exact[0]
-    folded = [t for t in teams.values() if t.name and t.name.casefold() == text.casefold()]
-    if len(folded) > 1:
-        raise ValueError(f"{text!r} names {len(folded)} teams ({', '.join(t.label for t in folded)}): use its slug")
-    return folded[0] if folded else None
+    """The team `text` names, by the one rule every command uses (queries.team too): its name,
+    then its name in another case, then its slug t<id>. ValueError when a name fits two teams."""
+    for same in (lambda name: name == text, lambda name: name.casefold() == text.casefold()):
+        named = [t for t in teams.values() if t.name and same(t.name)]
+        if len(named) > 1:
+            raise ValueError(f"{text!r} names {len(named)} teams ({', '.join(t.label for t in named)}): use its slug")
+        if named:
+            return named[0]
+    return teams.get(text)
 
 
 def target(teams: dict[str, Team], text: str) -> str | None:

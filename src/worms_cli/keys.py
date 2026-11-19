@@ -255,7 +255,7 @@ def team_cells(config, slug: str, catalogue=None) -> dict[str, str]:
     try:
         from worms_cli import django_setup
 
-        django_setup.setup(config)
+        django_setup.connected(config)
         from core.models.devbox import DevboxSSHKey
 
         entry = next((t for t in _teams() if t[1] == slug), None)

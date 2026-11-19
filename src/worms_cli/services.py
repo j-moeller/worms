@@ -86,10 +86,16 @@ def in_order(names) -> list[str]:
 
 
 def running_jobs() -> list:
-    """The host jobs the round agent is running now (the database's word)."""
+    """The host jobs the round agent is running now (the database's word). A database that
+    does not answer is a BuildError: without its word the agent is not restarted."""
     from core.models.rounds import HostJob
+    from django.db import DatabaseError
 
-    return list(HostJob.objects.filter(state=HostJob.State.RUNNING).order_by("id"))
+    try:
+        return list(HostJob.objects.filter(state=HostJob.State.RUNNING).order_by("id"))
+    except DatabaseError as exc:
+        raise BuildError(f"the database does not say whether the round agent runs a host job ({str(exc).strip()[:120]}): "
+                         "not restarted. `worms status` says what is down") from None  # fmt: skip
 
 
 def wait_until_idle(timeout: int, poll: float = 5.0, jobs=running_jobs, clock=time.monotonic, sleep=time.sleep) -> None:

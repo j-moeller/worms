@@ -107,9 +107,11 @@ class Remote:
         if team:
             output.warn(f"{', '.join(team)}: a team's VM, assumed rooted by the team: what it prints is escaped")
         several = len(targets) > 1
-        stdin = None if not several else subprocess.DEVNULL  # one VM may read this terminal's input
         with ThreadPoolExecutor(max_workers=min(8, len(targets))) as pool:
-            codes = list(pool.map(lambda t: self._one(t, command, root, several, stdin), targets))
+            # One platform VM may read this terminal's input; a team's VM never (what is typed
+            # there could be a secret), nor several at once.
+            codes = list(pool.map(lambda t: self._one(t, command, root, several, None if not several and not t.untrusted
+                                                      else subprocess.DEVNULL), targets))  # fmt: skip
         if several:
             failed = [f"{t.name} ({code})" for t, code in zip(targets, codes) if code]
             print(output.color(f"{len(targets) - len(failed)} of {len(targets)} ok" + (f"; exit codes: {', '.join(failed)}" if failed else ""),

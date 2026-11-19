@@ -251,7 +251,8 @@ def test_proxmox_url_keeps_its_port(monkeypatch):
     for url, host, port in [("https://10.11.0.1:8006/", "10.11.0.1", 8006), ("https://pve.lab:9443", "pve.lab", 9443),
                             ("127.0.0.1", "127.0.0.1", 8006)]:
         seen.clear()
-        Infra(Config(env={"WORMS_PROXMOX_URL": url, "WORMS_PROXMOX_USER": "topology@pve",
+        # The node named: else it is read from this checkout's platform state, which a test has not.
+        Infra(Config(env={"WORMS_PROXMOX_URL": url, "WORMS_PROXMOX_USER": "topology@pve", "WORMS_PROXMOX_NODE": "pve",
                           "WORMS_PROXMOX_TOKEN_NAME": "readonly", "WORMS_PROXMOX_TOKEN_VALUE": "x"})).api()
         assert (seen["host"], seen["port"]) == (host, port), url
         assert seen["user"] == "topology@pve" and seen["token_name"] == "readonly"
@@ -395,7 +396,7 @@ def test_help_groups_the_verbs_by_what_they_are_for():
     assert cli._aliased(["devbox-sync-keys"])[1] == "`worms devbox-sync-keys` is now `worms keys sync`"
 
 
-def test_every_command_is_in_exactly_one_section():
+def test_every_command_is_in_exactly_one_section(tmp_path, monkeypatch):
     cli = _cli_module()
     listed = [cli._command_name(usage) for section in cli.SECTIONS for usage, _ in section.commands]
     assert sorted(listed) == sorted(name for name, _ in commands_of(cli.build_parser()))
@@ -403,6 +404,21 @@ def test_every_command_is_in_exactly_one_section():
     script = run_cli("completion", "bash")
     offered = next(line for line in script.splitlines() if line.startswith("_WORMS_COMMANDS=")).split("=", 1)[1].strip("'").split()
     assert sorted(offered) == sorted({name.split()[0] for name, _ in commands_of(cli.build_parser())})
+    # ... and never hands a word to `compgen -W`, which expands it: a team names itself, and a
+    # name like $(...) would run as the operator. `__complete` offers safe words only.
+    assert "compgen -W" not in script
+    from worms_cli import completion, teams
+
+    cache = tmp_path / "team-map.json"
+    monkeypatch.setattr(completion, "TEAM_CACHE", str(cache))
+    cache.write_text('{"teams": [{"slug": "t9", "name": "$(touch${IFS}x)"}, {"slug": "t3", "name": "alpha"},'
+                     ' {"slug": "`id`", "name": "beta"}]}')  # fmt: skip
+    words = completion.candidates("teams", str(tmp_path)) + completion.candidates("targets", str(tmp_path))
+    assert {"t9", "alpha", "t9/a", "alpha/gw"} <= set(words)
+    assert not [w for w in words if "$" in w or "`" in w or "beta" in w]
+    monkeypatch.setattr(teams, "CACHE", str(cache))
+    teams.write_cache({"t9": teams.Team("t9", "$(touch${IFS}x)"), "t3": teams.Team("t3", "alpha")})
+    assert "$(" not in cache.read_text() and "alpha" in cache.read_text()
 
 
 def test_build_help_lists_every_component_and_group_with_what_it_needs():

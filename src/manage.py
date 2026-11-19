@@ -158,9 +158,11 @@ def _competition_status(config) -> list[list[str]]:
     from worms_cli import django_setup
 
     try:
-        django_setup.setup(config)
+        django_setup.connected(config)  # once per run: the attention block and the team map asked too
     except django_setup.NotConfigured as exc:
         return [["competition", output.status_cell("n/a", str(exc))]]
+    except Exception as exc:  # noqa: BLE001  (the database is down: said, not a traceback)
+        return [["competition", output.status_cell("error", f"the database does not answer: {str(exc).strip()[:120]}")]]
 
     from worms_cli import queries
 
@@ -283,7 +285,7 @@ def _attention(config, listing, internet, probe) -> list[list[str]]:
     try:
         from worms_cli import django_setup
 
-        django_setup.setup(config)
+        django_setup.connected(config)
         from datetime import timedelta
 
         from core import clock
@@ -968,20 +970,31 @@ def cmd_internet(config, args) -> int:
 
 def _start_window_stopped(runner) -> int:
     """After the window closed: the devbox VMs `worms internet enable` shut down, started again
-    (those still there and stopped, and not held by a round). Those that do not start stay
-    written down."""
-    recorded = power.read_record(runner, power.WINDOW_STOPPED)
-    if not recorded:
+    (those still there and stopped). Not while a round is on (a sandbox VM exists) or holds the
+    devboxes (its record): the record may be stale, and a round with devboxes off must not get
+    them back; it stays, and says so. The window is closed by then: a record that cannot be
+    read is a warning, not a failed close; a VM that does not start is an error (exit 1)."""
+    try:
+        recorded = power.read_record(runner, power.WINDOW_STOPPED)
+        if not recorded:
+            return 0
+        held = power.read_record(runner, power.HELD_DEVBOXES)
+        sandboxes = sorted(vm["name"] for vm in runner.vms() if vm.get("pool") == "sandbox")
+    except build.BuildError as exc:
+        output.warn(f"the devboxes the window stopped are not started again: {exc}. Start them with `worms power start`")
         return 0
-    held = {r["vmid"] for r in power.read_record(runner, power.HELD_DEVBOXES)}
-    vms = [vm for vm in power.still_there(runner, recorded) if int(vm["vmid"]) not in held]
+    names = ", ".join(r["name"] for r in recorded)
+    if held or sandboxes:
+        why = f"a round holds the devboxes ({power.HELD_DEVBOXES})" if held else f"a round is on ({len(sandboxes)} sandbox VM(s))"
+        output.warn(f"{why}: the devbox VM(s) the window stopped stay off and written down ({names}); "
+                    "`worms internet disable` again once it is over, or `worms power start <vm>`")  # fmt: skip
+        return 0
+    vms = power.still_there(runner, recorded)
     failed = power.start(runner, vms)
     power.write_record(runner, power.WINDOW_STOPPED, [r for r in recorded if r["name"] in failed])
     started = [vm["name"] for vm in vms if vm["name"] not in failed]
     if started:
         print(output.status_cell("running", f"started again the devbox VM(s) the window stopped: {', '.join(started)}"))
-    if held & {r["vmid"] for r in recorded}:
-        print(output.color("held by a round, left off: its release starts them", "dim"))
     if failed:
         output.error(f"did not start again: {', '.join(failed)} (`worms power start {failed[0]}`)")
         return 1

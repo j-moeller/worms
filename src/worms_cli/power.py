@@ -28,13 +28,17 @@ INTERNET_FLAG = "/run/worms/internet-allowed"
 SHUTDOWN = "qm shutdown {vmid} --timeout 120 --forceStop 1"  # forced after 120 s: a team's VM may ignore it
 
 
+NO_RECORD = 3  # read_record's exit code for "there is none"
+
+
 def read_record(runner, path: str) -> list[dict]:
-    """The VMs a record on the node lists ([{vmid, name}]); [] when there is none."""
-    code, out, err = runner.session.node_run(["cat", path])
+    """The VMs a record on the node lists ([{vmid, name}]); [] when there is none. A BuildError
+    when it cannot be read: that says nothing about what it holds."""
+    code, out, err = runner.session.node_run(["sh", "-c", f"[ -e {shlex.quote(path)} ] || exit {NO_RECORD}; cat {shlex.quote(path)}"])
+    if code == NO_RECORD:
+        return []
     if code != 0:
-        if "No such file" in err:
-            return []
-        raise BuildError(f"cannot read {path} on the node: {err.strip()[:200]}")
+        raise BuildError(f"cannot read {path} on the node: {err.strip()[:200] or f'exit {code}'}")
     try:
         data = json.loads(out or "{}")
     except ValueError as exc:

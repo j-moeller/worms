@@ -99,9 +99,18 @@ def of_vm(name: str) -> tuple[str, str] | None:
     return None
 
 
+SAFE = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._+-")  # teams.SAFE_NAME
+
+
+def safe(word: str) -> bool:
+    """Only words of these characters reach the shell: a team names itself on the dashboard, and
+    a name like `$(...)` must never be offered to a completion, which bash may expand."""
+    return bool(word) and all(c in SAFE for c in word)
+
+
 def handle(slug: str, name: str) -> str:
-    """teams.Team.handle: the name, if it has no space, slash or colon."""
-    return name if name and not any(c.isspace() or c in "/:" for c in name) else slug
+    """teams.Team.handle: the name when it is a safe word, else the slug."""
+    return name if safe(name) else slug
 
 
 def cached_teams() -> dict[str, str]:
@@ -114,11 +123,13 @@ def cached_teams() -> dict[str, str]:
 
 
 def candidates(kind: str, root: str) -> list[str]:
+    """Safe words only (safe; a target is two of them around a "/"): whatever a file says."""
     hosts: dict[str, str] = {}
     for path in inventories(root):
         hosts.update(inventory_hosts(_read(path)))
-    known = cached_teams()
-    for slug in {*(t for t in hosts.values() if t), *(of_vm(n)[0] for n in hosts if of_vm(n))}:
+    hosts = {name: team for name, team in hosts.items() if safe(name)}
+    known = {slug: name for slug, name in cached_teams().items() if safe(slug)}
+    for slug in {*(t for t in hosts.values() if safe(t)), *(of_vm(n)[0] for n in hosts if of_vm(n))}:
         known.setdefault(slug, "")
     if kind == "teams":
         return sorted({*known, *(handle(slug, name) for slug, name in known.items())})
@@ -130,7 +141,7 @@ def candidates(kind: str, root: str) -> list[str]:
     for slug, name in known.items():
         for role in ROLES:
             out.update({f"devbox-{slug}-{role}", f"{slug}/{role}", f"{handle(slug, name)}/{role}"})
-    return sorted(out)
+    return sorted(word for word in out if all(safe(part) for part in word.split("/", 1)))
 
 
 def complete_main(argv) -> int:
@@ -196,6 +207,17 @@ declare -gA _WORMS_FLAGS=(@FLAGS@)
 declare -gA _WORMS_SUBS=(@SUBS@)
 declare -gA _WORMS_SLOTS=(@SLOTS@)
 
+# Candidates are matched here as plain strings, never handed to compgen as a word list, which it
+# expands (a team names itself on the dashboard: a name like $(...) would run). One per line from
+# `worms __complete`, which offers safe words only; and only safe words are taken here either,
+# as one put on the command line would run when the line does.
+_worms_offer() {  # $1: the word typed so far; stdin: candidates, one per line; $2: a suffix
+    local word safe='^[A-Za-z0-9._+/-]+$'
+    while IFS= read -r word; do
+        [[ $word =~ $safe && $word == "$1"* ]] && COMPREPLY+=("$word$2")
+    done
+}
+
 _worms() {
     local cur prev words cword
     if declare -F _get_comp_words_by_ref >/dev/null 2>&1; then
@@ -230,19 +252,23 @@ _worms() {
         local at=${#pos[@]}
         ((at >= ${#slots[@]})) && at=$((${#slots[@]} - 1))
         local token
-        for token in ${slots[at]}; do
+        local -a tokens
+        read -ra tokens <<< "${slots[at]}"
+        for token in "${tokens[@]}"; do
             case $token in
                 @rsync)
                     [[ $cur == *:* ]] && return 0
-                    list+=" $("${_WORMS_RUN[@]}" __complete targets 2>/dev/null | sed 's/$/:/')"
                     compopt -o nospace 2>/dev/null
-                    COMPREPLY=($(compgen -f -- "$cur")) ;;
-                @*) list+=" $("${_WORMS_RUN[@]}" __complete "${token#@}" 2>/dev/null)" ;;
+                    mapfile -t COMPREPLY < <(compgen -f -- "$cur")
+                    _worms_offer "$cur" ":" < <("${_WORMS_RUN[@]}" __complete targets 2>/dev/null) ;;
+                @*) _worms_offer "$cur" "" < <("${_WORMS_RUN[@]}" __complete "${token#@}" 2>/dev/null) ;;
                 *) list+=" $token" ;;
             esac
         done
     fi
-    COMPREPLY+=($(compgen -W "$list" -- "$cur"))
+    local -a fixed
+    read -ra fixed <<< "$list"  # this script's own words: no glob, no expansion
+    _worms_offer "$cur" "" < <(printf '%s\n' "${fixed[@]}")
     declare -F __ltrim_colon_completions >/dev/null 2>&1 && __ltrim_colon_completions "$cur"
     return 0
 }

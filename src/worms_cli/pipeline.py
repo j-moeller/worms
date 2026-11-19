@@ -386,6 +386,24 @@ class Pipeline:
             self.internet_deny()
         except BuildError as exc:
             raise BuildError("!!! INTERNET ACCESS IS STILL ALLOWED: run `worms internet disable` -- " + str(exc)) from exc
+        self._forget_window_stopped()
+
+    def _forget_window_stopped(self) -> None:
+        """A window that `worms internet enable` opened, closed by a build: the record of the devbox
+        VMs that enable shut down would go stale, and a later `worms internet disable` could start
+        them during a round that holds them off. It is cleared; the VMs stay off and are named.
+        Best effort: the window is closed either way."""
+        from worms_cli import power
+
+        try:
+            recorded = power.read_record(self.runner, power.WINDOW_STOPPED)
+            if recorded:
+                power.write_record(self.runner, power.WINDOW_STOPPED, [])
+        except Exception:  # noqa: BLE001
+            return
+        if recorded:
+            output.warn(f"the devbox VM(s) `worms internet enable` shut down stay off: {', '.join(r['name'] for r in recorded)} "
+                        "(`worms power start <vm>`)")  # fmt: skip
 
     def online(self, step):
         """Run `step` with internet access allowed, then deny it again whatever

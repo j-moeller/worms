@@ -78,42 +78,70 @@ class Tee:
             n += 1
             path = self.path.with_name(f"{self.path.stem}-{n}.log")
         self.path = path
+        # A file that cannot be opened stops nothing: the caller runs the command without a log.
         self._file = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_APPEND, 0o600)
-        if sys.stdout.isatty() and "ANSIBLE_FORCE_COLOR" not in os.environ:
-            os.environ["ANSIBLE_FORCE_COLOR"] = "1"  # Ansible sees a pipe now; the terminal still gets colours
         sys.stdout.flush()
         sys.stderr.flush()
-        for fd in (1, 2):
-            self._saved[fd] = os.dup(fd)
-            read, write = os.pipe()
-            os.dup2(write, fd)
-            os.close(write)
-            thread = threading.Thread(target=self._pump, args=(read, self._saved[fd]), daemon=True)
-            thread.start()
-            self._threads.append(thread)
+        try:
+            for fd in (1, 2):
+                self._saved[fd] = os.dup(fd)
+                read, write = os.pipe()
+                os.dup2(write, fd)
+                os.close(write)
+                thread = threading.Thread(target=self._pump, args=(read, self._saved[fd]), daemon=True)
+                thread.start()
+                self._threads.append(thread)
+        except OSError:  # out of descriptors, say: back as it was, and no log
+            self.stop()
+            raise
+        if os.isatty(self._saved[1]) and "ANSIBLE_FORCE_COLOR" not in os.environ:
+            os.environ["ANSIBLE_FORCE_COLOR"] = "1"  # Ansible sees a pipe now; the terminal still gets colours
         return self
 
     def _pump(self, read: int, terminal: int) -> None:
+        """The terminal first and always; the file while it can be written. A log that fails (a
+        full disk) is closed, said once, and the command goes on: the pipe never fills up."""
         while chunk := os.read(read, 65536):
             try:
-                os.write(terminal, chunk)
+                _write_all(terminal, chunk)
             except OSError:  # the terminal is gone: the file still gets it
                 pass
             with self._lock:
-                os.write(self._file, ANSI.sub(b"", chunk))
+                if self._file is None:
+                    continue
+                try:
+                    _write_all(self._file, ANSI.sub(b"", chunk))
+                except OSError as exc:
+                    os.close(self._file)
+                    self._file = None
+                    try:
+                        _write_all(self._saved.get(2, terminal), f"\nwarning: the run log stopped ({exc}): {self.path} is "
+                                                                   "incomplete; the command goes on\n".encode())  # fmt: skip
+                    except OSError:
+                        pass
         os.close(read)
 
     def stop(self) -> None:
         """Back to the terminal alone, once what is in the pipes is written."""
-        sys.stdout.flush()
-        sys.stderr.flush()
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except OSError:
+            pass
         for fd, saved in self._saved.items():
             os.dup2(saved, fd)  # the pipe's last writer is gone: its thread reads to its end
         for thread in self._threads:
             thread.join(timeout=5)  # a child that outlives the run may hold a pipe open
-        for saved in self._saved.values():
-            os.close(saved)
-        self._saved.clear()
-        if self._file is not None:
-            os.close(self._file)
-            self._file = None
+        if not any(thread.is_alive() for thread in self._threads):
+            for saved in self._saved.values():  # else a pump still writes to them: left open
+                os.close(saved)
+            self._saved.clear()
+        with self._lock:
+            if self._file is not None:
+                os.close(self._file)
+                self._file = None
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    while data:
+        data = data[os.write(fd, data):]

@@ -12,7 +12,10 @@ same way as production's.
   the cache served a fresh VM's whole index.
 - Step 3: passed (22:40–22:48), offline. The plan named `core.0020_round_devboxes_off`; afterwards
   every gameplan was valid on both sides and `tofu-init` initialised the sandbox stack from the mirror.
-- Steps 5, 6 and a test round with `round_one`: in progress. This file is updated as each passes.
+- Step 5: passed (22:52–23:29, three teams). The fresh devbox VMs refreshed apt from the
+  repaired offline cache and installed their packages; every team's keys ✓; on a devbox its own
+  name, DNS, scoring over HTTPS and `rsync` installed.
+- Step 6 and a test round with `round_one` (devboxes off): in progress. This file is updated as each passes.
 
 ## What is broken, and what fixes it
 
@@ -154,7 +157,7 @@ are then a rollback of seconds. The gateways stay, with the `nftables` you insta
 
 ```sh
 worms build --yes devbox --rebuild
-worms status jobs         # one devbox_rebuild per team; wait until all are done (dev's duration follows from the rehearsal)
+worms status jobs         # one devbox_rebuild per team; wait until all are done (12–14 min each on dev, one team after another)
 worms log <number>        # the log of one that failed
 worms status keys         # every cell ✓
 ```
@@ -164,7 +167,7 @@ worms status keys         # every cell ✓
 ```sh
 worms login devbox-t1-a                     # the prompt says devbox-t1-a, not localhost
   getent hosts scoring.worms.internal       # an address
-  curl -sS -o /dev/null -w '%{http_code}\n' https://scoring.worms.internal/   # a status code, no TLS error
+  curl -sS -o /dev/null -w '%{http_code}\n' https://scoring.worms.internal/   # 404 (the API's answer to /), no TLS error
   apt-cache policy rsync | head -2          # Installed: a version
   exit
 ```
@@ -184,7 +187,9 @@ submitted at the end.
 On the dashboard, **Staff → Rounds**:
 
 - **Gameplan:** `round_one` (it must show as valid).
-- **Minutes per team:** at least what `round_one` needs (it ran in about 12 min on dev).
+- **Minutes per team:** at least **24**. `round_one` gives the worm 10 min on A, waits 10 more and
+  churns until 5 min before the end; it's written for 60. Below 24 the round shows `invalid`
+  (the conductor's log says `execute() is still going when the run ends`) and waits.
 - **Start and end:** a slot per team is its minutes + 15 s + 2 min drain + 15 min overhead.
   With 4 teams × 60 min that's 4 × 77¼ min ≈ 5 h 10 min. Add about 20 min for the first attempt's
   sandbox build, and room for retries.

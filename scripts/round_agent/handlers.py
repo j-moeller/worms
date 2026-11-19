@@ -840,6 +840,18 @@ def _configure_devbox_base(ex, teams, slug):
     snapshots.wait_for_ssh(ex, [ips[vm["vmid"]] for vm in vms])
 
 
+def _try_configure_devbox_base(ex, teams, slug):
+    """_configure_devbox_base, or False if it failed: the team still gets its keys and tokens, and
+    its upload runs (on VMs as their snapshot left them); no snapshot is taken, the next reset tries
+    again. A team must never wait on a package the offline apt cache lacks."""
+    try:
+        _configure_devbox_base(ex, teams, slug)
+    except Exception as exc:  # noqa: BLE001  (Ansible's failure, in the job log)
+        ex.note(f"the devbox's configuration failed, it is used as its snapshot left it: {exc}"[:2000])
+        return False
+    return True
+
+
 def _write_team_keys(ex, team, vms):
     """The team's SSH keys on its VMs, directly: the key file `worms devbox-sync-keys` writes too.
     The SSH gateway's lines do not change with a reset."""
@@ -870,9 +882,10 @@ def devbox_rebuild(ex, cfg, params):
         snapshots.wait_for_ssh(ex, [ips[vm["vmid"]] for vm in vms])
         if all(snapshots.clean_description(ex, vm) == DEVBOX_CONFIGURED for vm in vms):
             how = "rolled back to its snapshot"
-        else:
-            _configure_devbox_base(ex, teams, slug)
+        elif _try_configure_devbox_base(ex, teams, slug):
             how = "rolled back, configured and snapshotted (once: its snapshot was from before the configuration)"
+        else:
+            how = "rolled back; its configuration failed (the job log says why), the next reset tries again"
     else:
         # Replace just this team's three VMs (fresh disks); the rest is a no-op.
         ex.generate_devbox(teams, ex.repo_root / DEVBOX_GENERATED)
@@ -880,8 +893,10 @@ def devbox_rebuild(ex, cfg, params):
         ex.worms("inventory", timeout=300)
         ips = {info["vmid"]: info["maintenance_ip"] for info in _devbox_vms(ex).values()}
         snapshots.wait_for_first_boot(ex, [ips[vm["vmid"]] for vm in _team_vms(ex, slug)])
-        _configure_devbox_base(ex, teams, slug)
-        how = "replaced, configured and snapshotted"
+        if _try_configure_devbox_base(ex, teams, slug):
+            how = "replaced, configured and snapshotted"
+        else:
+            how = "replaced; its configuration failed (the job log says why), the next reset tries again"
     _write_team_keys(ex, team, {name: info for name, info in _devbox_vms(ex).items() if info["team"] == slug})
 
     # Rewrite this team's tokens only.

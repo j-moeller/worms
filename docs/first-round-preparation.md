@@ -6,8 +6,13 @@ should see. If you don't see it, stop at that step: everything before it can sta
 
 Only step 4 needs egress. Every other step runs with the node offline.
 
-**Rehearsal on worms-dev, 2026-11-19 evening:** in progress, step by step, with the same code.
-This file is updated as each step passes there; pull it again before step 4.
+**Rehearsal on worms-dev, 2026-11-19 evening,** with the same code. Dev's cache was broken the
+same way as production's.
+- Step 4: passed (22:31–22:38). The fill re-fetched the whole index, and with the window closed
+  the cache served a fresh VM's whole index.
+- Step 3: passed (22:40–22:48), offline. The plan named `core.0020_round_devboxes_off`; afterwards
+  every gameplan was valid on both sides and `tofu-init` initialised the sandbox stack from the mirror.
+- Steps 5, 6 and a test round with `round_one`: in progress. This file is updated as each passes.
 
 ## What is broken, and what fixes it
 
@@ -70,7 +75,7 @@ git status --short        # nothing modified: the node's workspace is synced fro
 
 ```sh
 worms build --plan dashboard round-agent   # read it: database and orchestrator come along if migrations are pending
-worms build --yes dashboard round-agent
+worms build --yes dashboard round-agent   # 8 min on dev
 worms status jobs                          # nothing running, then:
 systemctl restart worms-round-agent
 worms login orchestrator
@@ -107,7 +112,7 @@ keeps that provider for good.
 The build shuts down the devboxes, rolls the service VMs back to their snapshot, opens the window,
 fills the cache, closes the window, switches the caches offline, checks the cache and snapshots the
 service VMs. The round's first attempt rolls the apt cache back to that snapshot, so the repaired
-index must be in it. Its duration on dev follows from the rehearsal.
+index must be in it. On dev the build took 7 minutes.
 
 **What you should see:**
 - `TASK [apt_cache : Re-prime the indexes through the cache, every list a fresh VM fetches (online)]`: `changed`
@@ -116,12 +121,19 @@ index must be in it. Its duration on dev follows from the rehearsal.
   `ok`, and no `Say the cache cannot serve a fresh VM`
 - the build ends without an error
 
+It may end with `warning: no snapshot of …: up before this build without one`. That's harmless for
+the round: without a `clean` snapshot on every service VM, the round's first attempt leaves them
+all as they are (its job log says `not reset: no clean snapshot`), and the cache stays repaired.
+
 **If it fails:**
 - `Say the indexes were not refreshed`: the node had no egress, or lost it. The old index is back
   in place, as it was before. Give egress and run step 4 again.
 - `Say the cache cannot serve a fresh VM`: the fill ran but the offline cache still lacks lists.
   The message names them. Send it to me; don't start the round.
 - `!!! INTERNET ACCESS IS STILL ALLOWED`: run `worms internet disable`.
+- **Whatever failed, and you stop there:** run `worms internet disable`. A build that fails inside
+  the window closes it, but leaves DNS and the caches in online mode, where they answer every
+  request they can't fetch with an error. `disable` switches them back offline and checks the cache.
 
 **Check by hand.** Do this even if the build passed: it's the request the round will make.
 
@@ -204,5 +216,8 @@ worms log <number>        # one job's log: the first prepare builds the sandbox 
 - **No `worms destroy`.** It takes the database VM and its records too.
 - **No `worms build apt-cache --packages` without egress.** It now puts the old index back, but
   achieves nothing.
+- **No `worms step devbox-configure` or `worms step devbox-keys` by hand.** Without the round
+  agent's variables they write empty key files: every team loses SSH access to its devbox and the
+  gateway. If it happened: `worms devbox-sync-keys` writes them back from the database.
 - **If dpkg asks about `/etc/nftables.conf`, answer `N`** (keep your version). The gateway's
   rules are in that file.

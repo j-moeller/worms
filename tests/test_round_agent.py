@@ -1022,13 +1022,14 @@ def test_no_devbox_is_rolled_back_while_internet_access_is_allowed(tmp_path):
 
 
 def test_a_reconfigure_writes_the_map_before_the_minutes_of_configuration(tmp_path):
-    """After a reset of scoring and logging, the map is what is missing."""
+    """After a reset of scoring and logging, the map is what is missing. Then only the keys
+    (devbox-keys: no package, no internet), not the devbox's whole configuration."""
     ex = DevboxFake(tmp_path, built_before=True)
     order = []
     ex.ssh = lambda host, argv, input=None, timeout=120: order.append(("map", host)) if handlers.DEVBOX_TEAMS_FILE in argv else None
     ex.worms = lambda component, timeout=3600, args=None: order.append(("configure", component))
     handlers.devbox_reconfigure(ex, CFG, validation.validate("devbox_reconfigure", {"team_uuid": T1, "teams": DEVBOX_TEAMS}))
-    assert order == [("map", "10.5.0.14"), ("map", "10.5.0.15"), ("configure", "devbox-configure")]
+    assert order == [("map", "10.5.0.14"), ("map", "10.5.0.15"), ("configure", "devbox-keys")]
 
 
 def test_the_agents_copy_of_the_map_is_root_only(tmp_path):

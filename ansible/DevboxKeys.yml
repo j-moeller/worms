@@ -1,0 +1,25 @@
+---
+# Only the teams' SSH keys: the SSH gateway's confined lines (role ssh_gateway) and each devbox
+# VM's key file (role devbox, tasks/keys.yml). The round agent's devbox_reconfigure runs this (a
+# key added or removed, `worms devbox-reconfigure`): no package, no CA, nothing that needs the
+# internet or the apt cache, so a key change arrives however the rest of a devbox is. A build or
+# a reset runs SetupSSHGateway.yml and SetupDevbox.yml, which write the keys too.
+
+- name: The teams' keys on the SSH gateway
+  hosts: ssh_gateway
+  any_errors_fatal: false
+  become: true
+  gather_facts: false
+  roles:
+    - role: ssh_gateway
+
+- name: The teams' keys on the devbox VMs
+  hosts: devbox
+  any_errors_fatal: false # one team's devbox must not block another's
+  become: true
+  gather_facts: false
+  tasks:
+    - name: The team's keys
+      ansible.builtin.import_role:
+        name: devbox
+        tasks_from: keys.yml

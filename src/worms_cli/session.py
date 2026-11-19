@@ -42,7 +42,7 @@ from worms_cli.secrets import SSH_KEY, SSH_PUBLIC_KEY, Vault, VaultError
 NODE_WORKSPACE = "/opt/worms"
 NODE_RUN = "/usr/local/sbin/worms-node-run"  # installed by ansible role round_agent
 NODE_STACKS = frozenset({"sandbox", "devbox"})
-NODE_PLAYBOOKS = frozenset({"SetupSandbox.yml", "SetupSSHGateway.yml", "SetupDevbox.yml"})
+NODE_PLAYBOOKS = frozenset({"SetupSandbox.yml", "SetupSSHGateway.yml", "SetupDevbox.yml", "DevboxKeys.yml"})
 INTERNET_FLAG = "/run/worms/internet-allowed"
 
 

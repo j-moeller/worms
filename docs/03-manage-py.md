@@ -94,7 +94,7 @@ One verb per task ([`src/manage.py`](../src/manage.py)). Commands marked † ask
 | `worms reset devbox <team>... \| --all-teams` † | Each team's devbox back to its first-boot snapshot, through the orchestrator as the dashboard's reset is: its version goes up, its dev score starts over |
 | `worms devbox-add-key <team> <key\|file\|->` | Adds an SSH key to a team's devbox with the dashboard's checks ([`ssh_keys.py`](../projects/dashboard/core/ssh_keys.py)); the orchestrator has the agent push the keys |
 | `worms devbox-remove-key <team> <name\|fingerprint>` † | Removes one, pushed the same way |
-| `worms devbox-reconfigure` | Pushes the teams' SSH keys and the attribution map again |
+| `worms devbox-reconfigure` | Pushes every team's SSH keys (and the attribution map) again: the node gets this checkout's code, the round agent writes only the key files on the SSH gateway and the devbox VMs (`DevboxKeys.yml`: no package, no internet), and the command waits for it and ends with `worms status keys` |
 | `worms admin-reset-password [--username admin]` | A 20-character one-time password, printed once. Creates the admin if missing |
 | `worms admin-create-staff EMAIL` | A staff account with a one-time password. The dashboard cannot create staff |
 | `worms delete-team NAME` † | A team and everything it owns, by database cascade; its users stay. Its VMs are not touched |

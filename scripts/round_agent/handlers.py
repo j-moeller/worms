@@ -890,18 +890,20 @@ def _unsafe_yaml(data) -> str:
 def devbox_reconfigure(ex, cfg, params):
     """Re-push every team's SSH keys to the devbox VMs and the gateway, and the
     source->team map, without rebuilding any VM or touching tokens. Enqueued
-    when a team adds/removes a key or leaves (docs/04-dev-environment.md). Idempotent."""
+    when a team adds/removes a key or leaves (docs/04-dev-environment.md). Idempotent.
+    Only the keys (DevboxKeys.yml): no package and no CA, so nothing here needs the
+    internet or what the offline apt cache holds."""
     teams = params["teams"]
-    # The map first: it is what a reset of scoring and logging takes, and the configuration
-    # takes minutes.
+    # The map first: it is what a reset of scoring and logging takes.
     _write_devbox_map(ex, cfg, teams)
-    _configure_devbox(ex, teams)
+    _configure_devbox(ex, teams, step="devbox-keys")
     return {"reconfigured": [t["slug"] for t in teams], "addresses": _devbox_addresses(teams)}
 
 
-def _configure_devbox(ex, teams):
+def _configure_devbox(ex, teams, step="devbox-configure"):
     """Run the devbox + SSH-gateway Ansible with the teams' keys and VM targets
-    as extra vars (CA trust, team authorized_keys, confined gateway keys).
+    as extra vars (CA trust, team authorized_keys, confined gateway keys); `step`
+    devbox-keys: the keys alone.
 
     A team's SSH key is attacker-controlled text that Ansible renders into the
     devbox and gateway authorized_keys (on the Proxmox host, as root). Every
@@ -932,7 +934,7 @@ def _configure_devbox(ex, teams):
     with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False) as fh:
         fh.write(_unsafe_yaml(extra))
         varfile = fh.name
-    ex.worms("devbox-configure", timeout=1800, args=f"-e @{varfile}")
+    ex.worms(step, timeout=1800, args=f"-e @{varfile}")
 
 
 # -- the devboxes, held shut down for a round (docs/05-live-environment.md) ---------------------

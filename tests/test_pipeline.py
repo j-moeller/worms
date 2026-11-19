@@ -33,6 +33,7 @@ EXPECTED = {
     "round-configure-sandbox": [("ansible", "SetupSandbox.yml")],
     "devbox-apply": [("tofu", "devbox", "apply")],
     "devbox-configure": [("ansible", "SetupSSHGateway.yml"), ("ansible", "SetupDevbox.yml")],
+    "devbox-keys": [("ansible", "DevboxKeys.yml")],
     "all": [*INIT, ("tofu", "platform", "apply"), ("tofu", "firewall", "apply"), ("ansible", "SetupHostNetwork.yml"),
             ALLOW, ("tofu", "private_internet", "apply"), ("tofu", "infrastructure/persistent", "apply"),
             ("tofu", "infrastructure/ephemeral", "apply"), *CONFIGURE, DENY, *OFFLINE],

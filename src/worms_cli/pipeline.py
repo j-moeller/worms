@@ -600,6 +600,11 @@ class Pipeline:
         self._ansible("SetupSSHGateway.yml")
         self._ansible("SetupDevbox.yml")
 
+    def devbox_keys(self):
+        """Only the teams' SSH keys, on the SSH gateway and the devbox VMs: no package, no internet."""
+        self.inventory()
+        self._ansible("DevboxKeys.yml")
+
     def devbox(self):
         self.devbox_apply()
         self.devbox_configure()
@@ -662,4 +667,5 @@ STEPS: dict[str, tuple[str, str]] = {
     "round-configure-sandbox": ("round_configure_sandbox", "configure a round's freshly built sandbox VMs (round agent)"),
     "devbox-apply": ("devbox_apply", "apply the devbox stack (round agent)"),
     "devbox-configure": ("devbox_configure", "configure the devbox VMs and the SSH gateway (round agent)"),
+    "devbox-keys": ("devbox_keys", "only the teams' SSH keys on the SSH gateway and the devbox VMs (round agent)"),
 }

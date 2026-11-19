@@ -427,6 +427,65 @@ def _request_devbox_reconfigure(config) -> int:
     return 0
 
 
+def cmd_devbox_reconfigure(config, args) -> int:
+    """`worms devbox-reconfigure`: every team's SSH keys (and the devbox map) pushed again, from the
+    database, and where they are now. The node first gets this checkout's code; the round agent
+    then writes only the key files (DevboxKeys.yml): no internet, no package. This waits for it
+    and ends with `worms status keys`."""
+    import time
+
+    from worms_cli import keys
+    from worms_cli.build import Runner
+
+    print(output.color("the node gets this checkout's code (the round agent's workspace)", "dim"), flush=True)
+    try:
+        Runner(config).ansible("SetupRoundAgent.yml", "--tags", "agent-sync")
+    except build.BuildError as exc:
+        output.error(f"could not update the node's code: {exc}")
+        return 1
+    _with_db(config)
+    from core.models.competition import ApplicationSetting, Round
+    from core.models.rounds import HostJob
+    from orchestrator.rounds.devbox import request_reconfigure
+
+    competition = ApplicationSetting.get_current_competition()
+    job = request_reconfigure(competition) if competition else None
+    if job is None:  # the same push queued already, or no devbox
+        job = HostJob.objects.filter(kind=HostJob.Kind.DEVBOX_RECONFIGURE, state=HostJob.State.QUEUED).order_by("-id").first()
+    if job is None:
+        print("No devbox is provisioned: nothing to push.")
+        return 0
+    held = Round.objects.filter(devbox_hold__in=("wanted", "held")).order_by("round_start").first()
+    if held is not None:
+        print(f"Queued (#{job.id}). The devboxes are shut down for round {held.name}: the keys are pushed after its last run.")
+        return 0
+    print(f"key push #{job.id} queued for the round agent ...", flush=True)
+    deadline, state = time.monotonic() + 1200, None
+    try:
+        while True:
+            job.refresh_from_db()
+            if job.state != state:
+                state = job.state
+                if state == HostJob.State.RUNNING:
+                    print("the round agent pushes the keys ...", flush=True)
+            if state in (HostJob.State.DONE, HostJob.State.FAILED):
+                break
+            if time.monotonic() > deadline:
+                output.error(f"key push #{job.id} is still {state} after 20 minutes: `worms status keys` shows where the keys are")
+                return 1
+            time.sleep(3)
+    except KeyboardInterrupt:
+        print(f"\nkey push #{job.id} goes on ({state}): `worms status keys` shows where the keys are")
+        return 130
+    print()
+    code = keys.status(config)
+    if state == HostJob.State.FAILED:
+        output.error(f"key push #{job.id} failed: {(job.error or '').strip()[:300]}")
+        print(output.color("its log on the node: /var/log/worms/jobs/" + str(job.uuid) + ".log", "dim"))
+        return 1
+    return code
+
+
 def _restore_devbox_map(config) -> int:
     """After the service VMs were rolled back or rebuilt: the map on scoring and
     logging is newer than their snapshot. Whatever goes wrong here must not read as
@@ -998,7 +1057,8 @@ SECTIONS = (
             ("reset devbox <team>...", "teams' devboxes back to their snapshot, through the orchestrator (--all-teams)"),
             ("devbox-add-key <team> <key>", "add an SSH key to a team's devbox (the orchestrator pushes it)"),
             ("devbox-remove-key <team> <key>", "remove one, by its name or fingerprint"),
-            ("devbox-reconfigure", "push every team's SSH keys and the devbox map again (a reset does this itself)"),
+            ("devbox-reconfigure", "push every team's SSH keys to the SSH gateway and the devbox VMs (no internet needed), "
+                                   "wait, and show where they are"),
             ("admin-reset-password", "one-time password for the dashboard admin, printed once (created if missing)"),
             ("admin-create-staff <email>", "a staff (tutor) account; one-time password printed once"),
             ("delete-team <name>", "delete a team with everything it owns (its users stay)"),
@@ -1238,7 +1298,7 @@ HANDLERS = {
     "status": cmd_status, "show": cmd_show, "login": cmd_login, "rsync": cmd_rsync, "build": cmd_build,
     "internet": cmd_internet,
     "reset": cmd_reset, "devbox-add-key": cmd_devbox_add_key, "devbox-remove-key": cmd_devbox_remove_key,
-    "devbox-reconfigure": lambda config, args: _request_devbox_reconfigure(config),
+    "devbox-reconfigure": cmd_devbox_reconfigure,
     "admin-reset-password": cmd_admin_reset_password, "admin-create-staff": cmd_admin_create_staff,
     "delete-team": cmd_delete_team, "secrets": cmd_secrets, "trust-node": cmd_trust_node,
     "emergency-stop": cmd_emergency_stop, "destroy": cmd_destroy, "test": cmd_test, "step": cmd_step,

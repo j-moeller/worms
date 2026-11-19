@@ -498,15 +498,34 @@ def _vm_list(config) -> str:
     except Exception as exc:  # noqa: BLE001  (the node may be out of reach)
         return f"(the VMs cannot be listed now: {exc})"
     rows = [[name, team, what] for name, team, what in names]
-    return ("VMs there are now; a team's also as <team>/a|b|c|gw (`worms show <team>`: its four):\n"
+    return ("VMs there are now (a team's also as <team>/a|b|c|gw; `worms show <team>`):\n"
             + "\n".join("  " + line for line in output.table(rows, headers=["name", "team", "what"]).splitlines()))  # fmt: skip
 
 
 def cmd_login(config, args) -> int:
+    """`worms login <vm>`: a shell; `worms login <vm> -- <command>`: that command there, as
+    `worms run <vm> -- <command>` runs it (it used to be dropped silently)."""
     from worms_cli.vms import Catalogue
 
+    if args.extra:
+        return _run_on(config, [args.vm], args.extra, root=False)
     try:
         return Catalogue(config).login(args.vm)
+    except build.BuildError as exc:
+        output.error(str(exc))
+        return 1
+
+
+def cmd_run(config, args) -> int:
+    """`worms run <target>... [--root] -- <command>` (worms_cli/remote.py)."""
+    return _run_on(config, args.targets, args.extra, root=args.root)
+
+
+def _run_on(config, targets, words, root) -> int:
+    from worms_cli.remote import Remote
+
+    try:
+        return Remote(config).run(targets, words, root=root)
     except build.BuildError as exc:
         output.error(str(exc))
         return 1
@@ -1051,7 +1070,7 @@ SECTIONS = (
                                            "a team: its four devbox VMs, their states and its keys on each; "
                                            "`show database [<table>]`: its tables, a table's rows or --schema"),  # fmt: skip
             ("login <vm>", "a shell on a VM over its management SSH, by its name or <team>/a|b|c|gw (`worms login --help` "
-                           "lists them)"),  # fmt: skip
+                           "lists them); `login <vm> -- <command>`: that command there, as `worms run`"),  # fmt: skip
             ("log [<job>|<name>|<vm>]", "a host job's log by its number (`worms status jobs`), a service's (agent, "
                                        "conductor, dashboard, scoring, audit, ...) or a VM's journal; -f follows. "
                                        "Alone: what there is"),
@@ -1076,6 +1095,9 @@ SECTIONS = (
         "The running competition, from the console. Teams, students and rounds are managed on the dashboard "
         "(/staff/), and a round starts by itself.",
         (
+            ("run <target>... -- <command>", "a command on VMs without a login: a VM, <team>/<role>, node, or a group "
+                                              "(infrastructure, services, private-internet: never a team's VM); "
+                                              "one prefix per VM; --root: with sudo"),  # fmt: skip
             ("reset database", "DANGER: wipe the database, migrate and initialise it again"),
             ("reset services", "the service VMs (ephemeral, private internet) back to their snapshot"),
             ("reset devbox <team>...", "teams' devboxes back to their snapshot, through the orchestrator (--all-teams)"),
@@ -1138,6 +1160,22 @@ A devbox or sandbox VM is assumed rooted by its team. Downloaded from one, files
 setuid bits, owner or device files, and symbolic links stay inert (--munge-links: a
 backup goes back up as it came); what it prints is escaped. Options after -- can override
 that. rsync has to be on the VM: a devbox has it (devbox_packages), the SSH gateway not."""
+
+
+RUN_HELP = """\
+  worms run dashboard -- systemctl is-active dashboard nginx
+  worms run services -- df -h /           every service VM, a [<vm>] prefix a line
+  worms run node -- qm list               the Proxmox node
+  worms run alpha/a --root -- ls /root    a team's VM: only when named itself
+
+Targets: node; a VM by its name, an alias or <team>/<a|b|c|gw>; a group:
+infrastructure, services, private-internet (platform VMs only: a team's VM never
+runs a command as part of a group). The words after -- are joined with spaces
+and run by the VM's shell, as ssh does: quote a pipe
+(`worms run dns -- 'journalctl -n 50 | grep named'`). Never interactive
+(BatchMode, no terminal); the WORMS key is never forwarded. What a devbox or
+sandbox VM prints is escaped. The exit code is the worst of the VMs'; a stopped
+VM is not started."""
 
 
 def _command_name(usage: str) -> str:
@@ -1248,6 +1286,11 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     p = _add(sub, "login", epilog=vm_list, **raw)
     p.add_argument("vm", help="its name, an alias, or <team>/a|b|c|gw (alpha/gw, t2/a)")
 
+    p = _add(sub, "run", epilog=RUN_HELP + (f"\n\n{vm_list}" if vm_list else ""),
+             usage="worms run [-h] [--root] <target>... -- <command>", **raw)  # fmt: skip
+    p.add_argument("targets", nargs="+", metavar="target", help="node, a VM (its name, an alias, <team>/<role>), a group")
+    p.add_argument("--root", action="store_true", help="run the command as root (sudo -n sh -c); the node's login is root")
+
     p = _add(sub, "log")
     p.add_argument("what", nargs="?", help="a host job's number, a log's name (`worms log` lists them) or a VM's name")
     p.add_argument("-f", "--follow", action="store_true", help="keep showing new lines (Ctrl-C ends it)")
@@ -1325,7 +1368,8 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
 
 
 HANDLERS = {
-    "status": cmd_status, "show": cmd_show, "login": cmd_login, "log": cmd_log, "rsync": cmd_rsync, "build": cmd_build,
+    "status": cmd_status, "show": cmd_show, "login": cmd_login, "run": cmd_run, "log": cmd_log, "rsync": cmd_rsync,
+    "build": cmd_build,
     "internet": cmd_internet,
     "reset": cmd_reset, "devbox-add-key": cmd_devbox_add_key, "devbox-remove-key": cmd_devbox_remove_key,
     "devbox-sync-keys": cmd_devbox_sync_keys,
@@ -1346,7 +1390,7 @@ def _split(argv: list[str]) -> tuple[list[str], list[str]]:
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     vm_list = ""
-    if len(argv) >= 2 and argv[0] in ("login", "show", "rsync") and ("-h" in argv or "--help" in argv):
+    if len(argv) >= 2 and argv[0] in ("login", "show", "rsync", "run") and ("-h" in argv or "--help" in argv):
         vm_list = _vm_list(Config.load())
     parser = build_parser(vm_list)
     own, passed = _split(argv)

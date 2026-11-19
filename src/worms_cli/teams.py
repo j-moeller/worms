@@ -21,7 +21,7 @@ import re
 from dataclasses import dataclass
 
 ROLES = ("a", "b", "c", "gw")
-ROLE_HELP = {"a": "VM A (the SSH gateway forwards to it)", "b": "VM B", "c": "VM C", "gw": "its NAT gateway"}
+ROLE_HELP = {"a": "VM A (SSH entry)", "b": "VM B", "c": "VM C", "gw": "its NAT gateway"}
 DEVBOX_VM = re.compile(r"devbox-(t\d+)-(a|b|c|gw)")
 SHARED_GATEWAY = "devbox-ssh-gateway"
 

@@ -106,37 +106,3 @@ server {
         proxy_set_header X-Forwarded-Proto https;
     }
 }
-{% if nginx_status_page_name %}
-
-# The public status page (src/worms_cli/statuspage.py; docs/06-background-processes.md): static
-# files the Proxmox node writes here every minute. No Django and no database behind it, so it still
-# answers when they are down. GET only, nothing but the page and its JSON.
-server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-
-    server_name {{ nginx_status_page_name }};
-
-    ssl_certificate {{ tls_cert_path }};
-    ssl_certificate_key {{ tls_key_path }};
-
-    root {{ nginx_status_page_root }};
-    index index.html;
-    add_header Strict-Transport-Security "max-age=31536000" always;
-    add_header Cache-Control "no-cache" always;
-    add_header X-Content-Type-Options nosniff always;
-    add_header Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" always;
-
-    location / {
-        limit_except GET {
-            deny all;
-        }
-        try_files $uri $uri/ =404;
-    }
-
-    # The files it writes aside before renaming them into place.
-    location ~ /\. {
-        deny all;
-    }
-}
-{% endif %}

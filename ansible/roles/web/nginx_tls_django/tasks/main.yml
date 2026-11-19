@@ -8,29 +8,6 @@
     mode: "0644"
   notify: Reload nginx
 
-# The status page's files: written by the Proxmox node every minute (worms-status-page.timer); until
-# its first run, a page that says so.
-- name: Create the status page's directory
-  when: nginx_status_page_name | length > 0
-  ansible.builtin.file:
-    path: "{{ nginx_status_page_root }}"
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-
-- name: Put a page there until the node writes the first one
-  when: nginx_status_page_name | length > 0
-  ansible.builtin.copy:
-    dest: "{{ nginx_status_page_root }}/index.html"
-    content: |
-      <!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="refresh" content="60"><title>WORMS status</title></head>
-      <body><p>The status page appears here within a minute of the first check.</p></body></html>
-    owner: root
-    group: root
-    mode: "0644"
-    force: false
-
 - name: Enable nginx site
   ansible.builtin.file:
     src: /etc/nginx/sites-available/worms-tls

@@ -71,23 +71,6 @@
     daemon_reload: true
   tags: [agent-sync]
 
-# The public status page (src/worms_cli/statuspage.py, docs/06-background-processes.md).
-- name: Install the status page's service and timer
-  ansible.builtin.template:
-    src: "{{ item }}.j2"
-    dest: "/etc/systemd/system/{{ item }}"
-    mode: "0644"
-  loop: [worms-status-page.service, worms-status-page.timer]
-  tags: [agent-sync]
-
-- name: Start the status page's timer
-  ansible.builtin.systemd:
-    name: worms-status-page.timer
-    enabled: true
-    state: started
-    daemon_reload: true
-  tags: [agent-sync]
-
 # --- Proxmox ACL: power control of the sandbox pool only --------------------
 # The orchestrator's token (proxmox_api_user!proxmox_api_token_name) does VM
 # power for the game plan. It gets exactly VM.PowerMgmt + VM.Audit, and only on

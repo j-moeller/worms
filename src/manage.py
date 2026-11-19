@@ -436,63 +436,6 @@ def cmd_devbox_sync_keys(config, args) -> int:
     return keys.sync(config)
 
 
-def cmd_incident(config, args) -> int:
-    """`worms incident ...`: the status page's incidents and maintenance (worms_cli/statuspage.py),
-    kept on the node with its checks. A change shows within a minute: the node's timer is started
-    at once."""
-    import base64
-    import json
-    from datetime import datetime, timezone
-
-    from worms_cli import statuspage
-    from worms_cli.session import SessionError, for_config
-
-    session = for_config(config)
-    path = str(statuspage.STATE_DIR / statuspage.NOTICES)
-    try:
-        code, out, _ = session.node_run(["cat", path])
-    except SessionError as exc:
-        output.error(str(exc))
-        return 1
-    notices = json.loads(out) if code == 0 and out.strip() else {"next_id": 1, "notices": []}
-    t = statuspage.now()
-
-    def utc(value):
-        moment = datetime.fromisoformat(value)
-        return (moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
-
-    try:
-        if args.incident_action == "new":
-            notice = statuspage.new_notice(notices, "incident", args.title, statuspage.component_names(args.components),
-                                           args.message, t, impact=args.impact)  # fmt: skip
-        elif args.incident_action == "update":
-            notice = statuspage.update_notice(notices, args.id, args.status, args.message, t)
-        elif args.incident_action == "maintenance":
-            notice = statuspage.new_notice(notices, "maintenance", args.title, statuspage.component_names(args.components),
-                                           args.message, t, starts=utc(args.start), ends=utc(args.until))  # fmt: skip
-        else:
-            rows = [[f"#{n['id']}", n["kind"], n["title"][:40], n["updates"][-1]["status"], n["impact"],
-                     ", ".join(n["components"])[:40] or "—", n["starts"][:16], (n.get("resolved_at") or n.get("ends") or "")[:16]]
-                    for n in sorted(notices["notices"], key=lambda n: (bool(n.get("resolved_at")), -n["id"]))[:20]]  # fmt: skip
-            print(output.table(rows, headers=["#", "Kind", "Title", "Status", "Impact", "Components", "From (UTC)", "Until / over"])
-                  if rows else "No incident or maintenance yet: `worms incident new <title>`.")  # fmt: skip
-            return 0
-    except ValueError as exc:
-        output.error(str(exc))
-        return 1
-    data = base64.b64encode(json.dumps(notices, indent=1).encode()).decode()
-    write = ("import base64, os, sys; p = sys.argv[1]; os.makedirs(os.path.dirname(p), exist_ok=True); "
-             "open(p + '.new', 'wb').write(base64.b64decode(sys.argv[2])); os.replace(p + '.new', p)")  # fmt: skip
-    code, _, err = session.node_run(["python3", "-c", write, path, data])
-    if code != 0:
-        output.error(f"could not save it on the node: {err.strip()[:200]}")
-        return 1
-    session.node_run(["systemctl", "start", "--no-block", "worms-status-page.service"])
-    print(f"#{notice['id']} {notice['kind']} {notice['title']!r}: {notice['updates'][-1]['status']}. "
-          "The status page shows it within a minute.")  # fmt: skip
-    return 0
-
-
 def _restore_devbox_map(config) -> int:
     """After the service VMs were rolled back or rebuilt: the map on scoring and
     logging is newer than their snapshot. Whatever goes wrong here must not read as
@@ -1072,12 +1015,6 @@ SECTIONS = (
             ("devbox-add-key <team> <key>", "add an SSH key to a team's devbox (the orchestrator pushes it)"),
             ("devbox-remove-key <team> <key>", "remove one, by its name or fingerprint"),
             ("devbox-sync-keys", "copy every team's SSH keys to the SSH gateway and its devbox VMs, then show them"),
-            ("incident", "the status page's incidents and maintenance: the open ones and the latest"),
-            ("incident new <title>", "post an incident on the status page (investigating); --impact, --components, --message"),
-            ("incident update <id> <status>", "its next update: identified, monitoring, resolved (a maintenance: in_progress, "
-                                              "completed); --message"),
-            ("incident maintenance <title>", "announce maintenance on the status page: --from, --until (UTC), --components, "
-                                             "--message"),
             ("admin-reset-password", "one-time password for the dashboard admin, printed once (created if missing)"),
             ("admin-create-staff <email>", "a staff (tutor) account; one-time password printed once"),
             ("delete-team <name>", "delete a team with everything it owns (its users stay)"),
@@ -1280,24 +1217,6 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     p.add_argument("key", help="the key's name, or its fingerprint (at least 8 characters of it)")
     _yes(p)
     _add(sub, "devbox-sync-keys")
-    p = _add(sub, "incident")
-    incident_sub = p.add_subparsers(dest="incident_action")
-    components = "comma-separated, as the status page names them (\"Dashboard, Team API\")"
-    p_new = _add(incident_sub, "incident new")
-    p_new.add_argument("title")
-    p_new.add_argument("--impact", choices=["minor", "major", "critical"], default="minor")
-    p_new.add_argument("--components", default="", help=components)
-    p_new.add_argument("--message", default="", help="the first update's text")
-    p_update = _add(incident_sub, "incident update")
-    p_update.add_argument("id", type=int)
-    p_update.add_argument("status", choices=["investigating", "identified", "monitoring", "resolved", "scheduled", "in_progress", "completed"])
-    p_update.add_argument("--message", default="")
-    p_maintenance = _add(incident_sub, "incident maintenance")
-    p_maintenance.add_argument("title")
-    p_maintenance.add_argument("--from", dest="start", required=True, help="UTC, e.g. 2026-11-20T18:00")
-    p_maintenance.add_argument("--until", required=True, help="UTC")
-    p_maintenance.add_argument("--components", default="", help=components)
-    p_maintenance.add_argument("--message", default="")
     p = _add(sub, "admin-reset-password")
     p.add_argument("--username", default="admin")
     _yes(p)
@@ -1336,7 +1255,6 @@ HANDLERS = {
     "internet": cmd_internet,
     "reset": cmd_reset, "devbox-add-key": cmd_devbox_add_key, "devbox-remove-key": cmd_devbox_remove_key,
     "devbox-sync-keys": cmd_devbox_sync_keys,
-    "incident": cmd_incident,
     "admin-reset-password": cmd_admin_reset_password, "admin-create-staff": cmd_admin_create_staff,
     "delete-team": cmd_delete_team, "secrets": cmd_secrets, "trust-node": cmd_trust_node,
     "emergency-stop": cmd_emergency_stop, "destroy": cmd_destroy, "test": cmd_test, "step": cmd_step,

@@ -83,11 +83,11 @@ One verb per task ([`src/manage.py`](../src/manage.py)), grouped as `worms --hel
 
 | Command | Does |
 |---|---|
-| `worms status` | First what needs attention: the internet window open; devbox VMs held by a round or stopped by the window (the node's records); service VMs without a `clean` snapshot; migrations of this checkout the database lacks; host jobs failed in the last 24 h; node services (`worms-round-agent`, the host firewall, its watchdog's timer, the mirror) not active. Each source when it answers, and "not checked" for one that does not. Then the system, the firewall, the internet window, every VM (kind, team, state, uptime, memory), the competition |
+| `worms status` | First what needs attention: the internet window open; devbox VMs held by a round or stopped by the window (the node's records); service VMs without a `clean` snapshot; migrations of this checkout the database lacks; host jobs failed in the last 24 h; node services (`worms-round-agent`, the host firewall, its watchdog's timer, the mirror) not active. Each source when it answers, and "not checked" for one that does not. Then the system, the firewall, the internet window, every VM (kind, team, state, uptime, memory, when it was created and last updated, with the commit: [VM history](#vm-history)), the competition |
 | `worms status teams`, `users`, `leaderboard` | The database's view, with the dashboard's own scoring |
 | `worms status audit [--hours 24] [--kind PREFIX] [--limit 200]` | The event tables ([7](07-security.md#audit-trail)) |
 | `worms status rounds`, `gameplans`, `jobs`, `devboxes` | Rounds with their gameplan and attempts; each gameplan as the orchestrator and the node found it (with its current version's SHA-256), and why one is invalid (this checkout's dry run); the round agent's latest host jobs; every team's devbox (its slug `t<id>` and VM names) and SSH keys |
-| `worms show <vm>` | One VM: state, resources, disks, networks, management address and login user, OpenTofu address, snapshots, its team, the services that run there (the registry), whether it answers over SSH ([`vms.py`](../src/worms_cli/vms.py)) |
+| `worms show <vm>` | One VM: state, resources, disks, networks, management address and login user, OpenTofu address, snapshots, its team, the services that run there (the registry), whether it answers over SSH ([`vms.py`](../src/worms_cli/vms.py)); then its history, newest first ([VM history](#vm-history)) |
 | `worms show <team>` | A team (its name or slug `t<id>`): its devbox's VMs `a`, `b`, `c` and `gw` with vmid, management address and state, and its keys on each (as `worms keys` reads them), with the shared SSH gateway's lines for it |
 | `worms show database [<table>] [--schema] [--limit 20]` | The VM, then its tables (rows, size); a table's newest rows, or its columns, indexes and constraints ([`database.py`](../src/worms_cli/database.py)) |
 | `worms log [<job>\|<name>\|<vm>] [-f] [-n N] [--since T]` | Every log from one place ([`logs.py`](../src/worms_cli/logs.py)): a host job's log by its number (`worms status jobs`; `/var/log/worms/jobs/<uuid>.log` on the node), a service's by its name in the service registry ([`services.py`](../src/worms_cli/services.py), which `worms restart` and `worms show <vm>` read too: `agent`, `firewall`, `conductor`, `processor`, `api`, `dashboard`, `scoring`, `logging`, `database`, `monitor`, `audit`: every platform VM's audit trail on the syslog VM), or any platform VM's whole journal by its name (`node` too). `worms log latest [-f]`: the newest host job's log without its number (`-f` moves on to the next job, as `tail -F latest.log` on the node). `worms log build [N] [-f]`: the newest (N-th newest) run log on this machine (Conventions). `-f` follows. Alone: the run logs, the names and the newest jobs. Not the team VMs |
@@ -246,3 +246,21 @@ Every one is shown by `worms log` ([See](#see)).
 | Dashboard | `journalctl -u dashboard`, nginx logs | `worms log dashboard` |
 | Audit logs of the infrastructure VMs | The syslog VM: `/var/log/remote/<ip>/audit.log` | `worms log audit` |
 | Security events | The database | `worms status audit` |
+
+## VM history
+
+Each VM's history is kept on the node, in `/var/lib/worms/vm-history.jsonl` (root's, 0600, append-only; [`history.py`](../src/worms_cli/history.py)): one JSON line per event, `{"time", "vmid", "name", "event", "commit", "by", "detail"}`, time in UTC. `worms status` shows each VM's creation and last update (date and commit) in the VM table; `worms show <vm>` its whole history, newest first, one run's events of a kind on one line.
+
+| Event | Written by | When |
+|---|---|---|
+| `created`, `recreated`, `destroyed` | the CLI's pipeline; the round agent | after an OpenTofu apply or destroy, by comparing the VMs before and after (`recreated`: a `-replace`, `--rebuild`); the round's sandbox (built, destroyed); a devbox rebuilt from nothing |
+| `configured`, `packages` | the CLI's pipeline (also when the round agent runs it) | after each configure playbook, for the VMs of its `--limit` (else all it configures): the platform's 13, `SetupSandbox.yml`, `SetupDevbox.yml`, `SetupSSHGateway.yml`. `UpdateVMs.yml` with packages is `packages` |
+| `snapshot`, `rolled_back` | the CLI's pipeline; the round agent | a service VM's `clean` snapshot taken or rolled back to (`worms build`, `worms reset services`, a round's prepare); a sandbox's or devbox's snapshot, a devbox reset |
+
+- **commit**: the controller's checkout, `git rev-parse --short=7 HEAD`, with `-dirty` when tracked files differ from it. The round agent's workspace has no `.git`: its sync writes the controller's commit into it (`/opt/worms/.worms-commit`, [`workspace.yml`](../ansible/roles/host/round_agent/tasks/workspace.yml)).
+- **by**: the command (`worms build dashboard`, `worms deploy`), or the round agent's job (`round agent: devbox_rebuild #1834`), which the CLI it runs inherits (`WORMS_HISTORY_BY`).
+- **Only on the node.** Nothing a VM says about itself is taken: sandbox and devbox VMs are assumed rooted by their team.
+- **Two writers at once**, the CLI and the round agent: each takes an exclusive `flock` on the file and appends whole lines in one write; from a laptop over the node session (`flock(1)`, the same lock).
+- **Best effort.** A build never fails for its history; a write that fails is a warning (in a job: a line in its log).
+- **Older VMs** have no `created` line: Proxmox's creation time (`meta: ... ctime=`) stands in, commit `?`.
+- `worms status` reads the last 20000 lines, in the one command it runs on the node anyway; `worms show <vm>` only the VM's lines (`grep -F '"vmid":<n>,'`).

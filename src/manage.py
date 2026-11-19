@@ -39,7 +39,7 @@ PVE_CONFIG_DIR = "/etc/pve"  # exists only on a Proxmox node
 # ---------------------------------------------------------------------------
 
 
-VM_HEADERS = ["VM", "vmid", "kind", "team", "state", "up", "memory"]
+VM_HEADERS = ["VM", "vmid", "kind", "team", "state", "up", "memory", "created", "updated"]
 
 
 def _list_vms(config) -> tuple[list | None, str]:
@@ -55,15 +55,31 @@ def _list_vms(config) -> tuple[list | None, str]:
         return None, output.status_cell("error", f"Proxmox API: {exc}")
 
 
-def _vm_rows(config, listing=None) -> list[list[str]]:
+def _vm_rows(config, listing=None, probe=None) -> list[list[str]]:
     """Every VM: name, vmid, kind, team, state, uptime, memory (Proxmox API, the topology token;
-    the team from the team map, worms_cli/teams.py)."""
-    from worms_cli import teams
+    the team from the team map, worms_cli/teams.py); when it was created and last updated, with
+    the commit (the node's VM history, worms_cli/history.py, read by _node_probe)."""
+    from worms_cli import history, teams
     from worms_cli.vms import KINDS
 
     vms, problem = listing or _list_vms(config)
     if vms is None:
-        return [["(VMs)", "", "", "", problem, "", ""]]
+        return [["(VMs)", "", "", "", problem, "", "", "", ""]]
+    probe = probe or {}
+    ledger = history.summary(history.parse(probe.get("ledger", "")))
+    ctimes = {}
+    for line in probe.get("meta", "").splitlines():  # /etc/pve/qemu-server/<vmid>.conf:meta: ...,ctime=<epoch>
+        path, _, meta = line.partition(":meta:")
+        vmid = path.rsplit("/", 1)[-1].removesuffix(".conf")
+        if vmid.isdigit() and history.ctime(meta):
+            ctimes[int(vmid)] = {"time": history.ctime(meta), "commit": "?"}
+
+    def changes(vm):
+        known = ledger.get(int(vm["vmid"]))
+        if known and known["name"] != vm["name"]:
+            known = None  # another VM had that vmid
+        created = (known or {}).get("created") or ctimes.get(int(vm["vmid"]))
+        return history.cell(created), history.cell((known or {}).get("updated"))
     names = [vm["name"] for vm in vms]
     known = teams.team_map(config, names) if any(teams.of_vm(name) for name in names) else {}
 
@@ -82,6 +98,7 @@ def _vm_rows(config, listing=None) -> list[list[str]]:
             output.status_cell("running" if state == "running" else "stopped", state),
             f"{up // 86400} d {up % 86400 // 3600} h" if up >= 86400 else (f"{up // 3600} h {up % 3600 // 60} min" if up else "—"),
             f"{int(vm.get('mem') or 0) >> 20}/{int(vm.get('maxmem') or 0) >> 20} MB" if state == "running" else "—",
+            *changes(vm),
         ])  # fmt: skip
     return rows
 
@@ -196,59 +213,73 @@ NODE_PROBE = r"""
 cat {held} 2>/dev/null; echo; echo '#--'
 cat {window} 2>/dev/null; echo; echo '#--'
 grep -lx '\[clean\]' /etc/pve/qemu-server/*.conf 2>/dev/null; echo '#--'
-for unit in {units}; do printf '%s %s\n' "$unit" "$(systemctl is-active "$unit")"; done
+for unit in {units}; do printf '%s %s\n' "$unit" "$(systemctl is-active "$unit")"; done; echo '#--'
+tail -n 20000 {ledger} 2>/dev/null; echo '#--'
+grep -H '^meta:' /etc/pve/qemu-server/*.conf 2>/dev/null; echo '#--'
 """
+PROBED = ("held", "window", "clean", "active", "ledger", "meta")
 
 
-def _attention(config, listing, internet) -> list[list[str]]:
-    """`worms status`'s first block: what needs a look. The internet window open; devbox VMs held
-    by a round or stopped by the window; service VMs without a `clean` snapshot; migrations the
-    database lacks; host jobs failed in the last 24 h; node services not active. One command on
-    the node (the records, the VMs' configs, systemd) and the database, each when it answers."""
-    import json
+def _node_probe(config) -> dict:
+    """What `worms status` reads on the node, in one command: the records of held and
+    window-stopped devboxes, which VMs have a `clean` snapshot, the node services' state, the VM
+    history (its last 20000 lines) and the VMs' creation times. {} with "error" when it cannot."""
     import shlex
 
-    from worms_cli import services
+    from worms_cli import history, services
+    from worms_cli.session import SessionError, for_config
+
+    if not config.ssh and not os.path.isdir(PVE_CONFIG_DIR):
+        return {"error": "not on it: set WORMS_SSH"}
+    units = [unit for service in services.SERVICES.values() if service.where == "node" for unit in service.up_units]
+    script = NODE_PROBE.format(held=power.HELD_DEVBOXES, window=power.WINDOW_STOPPED, units=" ".join(map(shlex.quote, units)),
+                               ledger=shlex.quote(history.LEDGER))  # fmt: skip
+    try:
+        code, out, err = for_config(config).node_run(["sh", "-c", script])
+    except (SessionError, OSError) as exc:
+        return {"error": str(exc)[:60]}
+    parts = out.split("#--\n")
+    if code != 0 and len(parts) < len(PROBED):
+        return {"error": err.strip()[:60] or f"exit {code}"}
+    return dict(zip(PROBED, parts + [""] * len(PROBED)))
+
+
+def _attention(config, listing, internet, probe) -> list[list[str]]:
+    """`worms status`'s first block: what needs a look. The internet window open; devbox VMs held
+    by a round or stopped by the window; service VMs without a `clean` snapshot; migrations the
+    database lacks; host jobs failed in the last 24 h; node services not active. The node's part
+    from _node_probe, the database's when it answers."""
+    import json
+
     from worms_cli.pipeline import SERVICE_POOLS
 
     rows, unchecked = [], []
     if "ALLOWED" in internet[1]:
         rows.append(["internet window", output.status_cell("warn", "OPEN: no team VM may run; `worms internet disable`")])
     vms, _ = listing
-    units = [unit for service in services.SERVICES.values() if service.where == "node" for unit in service.up_units]
-    if config.ssh or os.path.isdir(PVE_CONFIG_DIR):
-        from worms_cli.session import SessionError, for_config
-
-        script = NODE_PROBE.format(held=power.HELD_DEVBOXES, window=power.WINDOW_STOPPED, units=" ".join(map(shlex.quote, units)))
-        try:
-            code, out, err = for_config(config).node_run(["sh", "-c", script])
-            held, window, clean, active = (out.split("#--\n") + ["", "", "", ""])[:4]
-        except (SessionError, OSError) as exc:
-            code, held, window, clean, active, err = 1, "", "", "", "", str(exc)
-        if code != 0 and not active:
-            unchecked.append(f"the node ({err.strip()[:60]})")
-        else:
-            for text, what, hint in ((held, "held by a round", "its release starts them (`worms power start --held` once it is over)"),
-                                     (window, "stopped by the internet window", "`worms internet disable` starts them")):  # fmt: skip
-                try:
-                    listed = (json.loads(text) if text.strip() else {}).get("vms", [])
-                except (ValueError, AttributeError):
-                    listed = [{"name": "(unreadable record)"}]
-                if listed:
-                    rows.append(["devbox VMs", output.status_cell("warn", f"{len(listed)} {what}: {', '.join(vm['name'] for vm in listed[:6])}"
-                                                                  + ("…" if len(listed) > 6 else "") + f"; {hint}")])  # fmt: skip
-            if vms is not None:
-                with_clean = {int(m) for m in re.findall(r"/(\d+)\.conf", clean)}
-                lacking = sorted(vm["name"] for vm in vms if vm.get("pool") in SERVICE_POOLS and int(vm["vmid"]) not in with_clean)
-                if lacking:
-                    rows.append(["snapshots", output.status_cell("warn", f"no `clean` snapshot on {', '.join(lacking)}: a reset "
-                                                                 "leaves them as they are (`worms build services --rebuild`)")])  # fmt: skip
-            down = [line.split()[0] for line in active.splitlines() if line.split() and line.split()[-1] != "active"]
-            if down:
-                rows.append(["node services", output.status_cell("error", f"not active: {', '.join(down)} (`worms log agent`, "
-                                                                 "`worms log firewall`)")])  # fmt: skip
+    held, window, clean, active = (probe.get(key, "") for key in ("held", "window", "clean", "active"))
+    if probe.get("error"):
+        unchecked.append(f"the node ({probe['error']})")
     else:
-        unchecked.append("the node (not on it: set WORMS_SSH)")
+        for text, what, hint in ((held, "held by a round", "its release starts them (`worms power start --held` once it is over)"),
+                                 (window, "stopped by the internet window", "`worms internet disable` starts them")):  # fmt: skip
+            try:
+                listed = (json.loads(text) if text.strip() else {}).get("vms", [])
+            except (ValueError, AttributeError):
+                listed = [{"name": "(unreadable record)"}]
+            if listed:
+                rows.append(["devbox VMs", output.status_cell("warn", f"{len(listed)} {what}: {', '.join(vm['name'] for vm in listed[:6])}"
+                                                              + ("…" if len(listed) > 6 else "") + f"; {hint}")])  # fmt: skip
+        if vms is not None:
+            with_clean = {int(m) for m in re.findall(r"/(\d+)\.conf", clean)}
+            lacking = sorted(vm["name"] for vm in vms if vm.get("pool") in SERVICE_POOLS and int(vm["vmid"]) not in with_clean)
+            if lacking:
+                rows.append(["snapshots", output.status_cell("warn", f"no `clean` snapshot on {', '.join(lacking)}: a reset "
+                                                             "leaves them as they are (`worms build services --rebuild`)")])  # fmt: skip
+        down = [line.split()[0] for line in active.splitlines() if line.split() and line.split()[-1] != "active"]
+        if down:
+            rows.append(["node services", output.status_cell("error", f"not active: {', '.join(down)} (`worms log agent`, "
+                                                             "`worms log firewall`)")])  # fmt: skip
     try:
         from worms_cli import django_setup
 
@@ -280,15 +311,15 @@ def _attention(config, listing, internet) -> list[list[str]]:
 def cmd_status(config, args) -> int:
     topic = args.topic
     if topic is None:
-        listing, internet = _list_vms(config), _internet_status(config)
+        listing, internet, probe = _list_vms(config), _internet_status(config), _node_probe(config)
         print(output.heading("attention"))
-        print(output.table(_attention(config, listing, internet)))
+        print(output.table(_attention(config, listing, internet, probe)))
         print()
         print(output.heading("platform"))
         print(output.table(_platform_rows(config, internet)))
         print()
         print(output.heading("VMs"))
-        print(output.table(_vm_rows(config, listing), headers=VM_HEADERS))
+        print(output.table(_vm_rows(config, listing, probe), headers=VM_HEADERS))
         print()
         print(output.heading("competition (database)"))
         print(output.table(_competition_status(config)))
@@ -829,6 +860,12 @@ def cmd_show(config, args) -> int:
             return _show_team(config, catalogue, team)
         print(output.heading(args.vm))
         print(output.table(catalogue.details(args.vm)))
+        rows, note = catalogue.history_rows(args.vm)
+        print()
+        print(output.heading("history, newest first"))
+        if rows:
+            print(output.table(rows, headers=["time (UTC)", "event", "commit", "by", "detail"]))
+        print(output.color(note, "dim"))
     except build.BuildError as exc:
         output.error(str(exc))
         return 1
@@ -1860,6 +1897,8 @@ def main(argv=None) -> int:
     own, passed = _split(argv)
     args = parser.parse_args(own)
     args.ansible_args = args.extra = passed
+    # What the VM history says did it (worms_cli/history.py); the round agent sets its job's.
+    os.environ.setdefault("WORMS_HISTORY_BY", "worms " + " ".join(own))
     config = Config.load(args.config)
     if args.command == "completion":  # read at every shell start: no notice, no node
         return cmd_completion(config, args)

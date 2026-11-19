@@ -80,6 +80,19 @@ CONFIGURE_PLAYBOOKS = [
 ]
 
 
+# The VM history (worms_cli/history.py): the playbooks after which their VMs count as configured
+# (UpdateVMs.yml with packages: "packages"), as (pools, names) of the VMs they configure; their
+# --limit narrows it. Stacks without VMs are not compared before and after.
+PLATFORM_POOLS = ("persistent", "ephemeral", "private_internet")
+HISTORY_PLAYBOOKS = {
+    **{playbook: (PLATFORM_POOLS, ()) for playbook in CONFIGURE_PLAYBOOKS if playbook not in ("WaitForVMs.yml", "SetupRoundAgent.yml")},
+    "SetupSandbox.yml": (("sandbox",), ()),
+    "SetupSSHGateway.yml": ((), ("devbox-ssh-gateway",)),
+    "SetupDevbox.yml": (("devbox",), ()),
+}
+VM_FREE_STACKS = ("platform", "firewall")
+
+
 def start_command(vmids) -> str:
     """What starts these VMs again, on the node: `qm start` takes one vmid."""
     return "; ".join(f"qm start {vmid}" for vmid in vmids)
@@ -133,6 +146,56 @@ class Pipeline:
         if self.ansible_args and user_args:
             extra.append(self.ansible_args)
         self.runner.ansible(playbook, *extra, vault=vault)
+        if playbook in HISTORY_PLAYBOOKS:
+            self._configured(playbook, " ".join(extra))
+
+    # -- the VMs' history (worms_cli/history.py): best effort, never a reason to stop ---------
+
+    def _vms_now(self) -> list[dict]:
+        return list(self.runner.vms())
+
+    def _history(self, vms, event: str, detail: str = "") -> None:
+        if not vms:
+            return
+        try:
+            from worms_cli import history
+
+            commit, by = self.runner.commit(), history.who()
+            self.runner.record_history([history.entry(vm["vmid"], vm["name"], event, commit, by, detail) for vm in vms])
+        except Exception as exc:  # noqa: BLE001
+            output.warn(f"the VM history did not get {event} of {', '.join(vm['name'] for vm in vms)}: {exc}")
+
+    def _vms_or_none(self):
+        try:
+            return self._vms_now()
+        except Exception as exc:  # noqa: BLE001
+            output.warn(f"the VM history cannot tell what changed: {exc}")
+            return None
+
+    def _changed(self, before, recreate=()) -> None:
+        """After OpenTofu: created (a name that was not there, or under another vmid), recreated
+        (`recreate`, -replace), destroyed (gone)."""
+        after = self._vms_or_none()
+        if before is None or after is None:
+            return
+        was = {vm["name"]: int(vm["vmid"]) for vm in before}
+        now = {vm["name"]: vm for vm in after}
+        self._history([vm for name, vm in now.items() if name in recreate], "recreated", "OpenTofu -replace")
+        self._history([vm for name, vm in now.items() if name not in recreate and was.get(name) != int(vm["vmid"])], "created",
+                      "OpenTofu")  # fmt: skip
+        self._history([vm for vm in before if vm["name"] not in now], "destroyed", "OpenTofu")
+
+    def _configured(self, playbook: str, args: str) -> None:
+        """After a playbook that configures VMs: each VM it ran on (its --limit, else its VMs)."""
+        pools, names = HISTORY_PLAYBOOKS[playbook]
+        tokens = shlex.split(args)
+        limit = {t.replace("_", "-") for i, t in enumerate(tokens[1:], 1) if tokens[i - 1] in ("--limit", "-l") for t in t.split(",")}
+        limit |= {t.replace("_", "-") for a in tokens if a.startswith("--limit=") for t in a[len("--limit="):].split(",")}
+        vms = self._vms_or_none() or []
+        hosts = [vm for vm in vms if (vm.get("pool") in pools or vm["name"] in names) and (not limit or vm["name"] in limit)
+                 and not (playbook == "SetupDevbox.yml" and vm["name"] == "devbox-ssh-gateway")]  # SetupSSHGateway.yml's  # fmt: skip
+        packages = playbook == "UpdateVMs.yml" and "packages" not in " ".join(t for i, t in enumerate(tokens) if i and tokens[i - 1] == "--skip-tags")
+        self._history(hosts, "packages" if packages else "configured", playbook)
 
     # -- running steps -----------------------------------------------------------
 
@@ -245,14 +308,24 @@ class Pipeline:
 
     def _apply(self, stack: str):
         self._facts_fresh = False
-        self.runner.tofu(stack, "apply", "-auto-approve", "-parallelism=1", "-input=false")
+        before = self._vms_or_none() if stack not in VM_FREE_STACKS else None
+        try:
+            self.runner.tofu(stack, "apply", "-auto-approve", "-parallelism=1", "-input=false")
+        finally:  # a failed apply may have created some
+            if before is not None:
+                self._changed(before)
 
     def _destroy(self, stack: str):
         self._facts_fresh = False
+        before = self._vms_or_none() if stack not in VM_FREE_STACKS else None
         # One at a time, like _apply: VMs destroyed in parallel fight over the storage
         # lock, and Proxmox gives up on their disks with only a warning. The volume
         # left behind then blocks whichever new VM gets that ID.
-        self.runner.tofu(stack, "destroy", "-auto-approve", "-parallelism=1")
+        try:
+            self.runner.tofu(stack, "destroy", "-auto-approve", "-parallelism=1")
+        finally:
+            if before is not None:
+                self._changed(before)
 
     def platform(self):
         self.firewall_migrate()
@@ -400,6 +473,7 @@ class Pipeline:
         if vm.get("status") == "running":
             self.runner.node_sh(f"qm shutdown {vmid} --timeout 120 --forceStop 1")
         self.runner.node_sh(f"qm snapshot {vmid} {SERVICE_SNAPSHOT} --description {shlex.quote(f'worms {self.runner.commit()}')}")
+        self._history([vm], "snapshot", SERVICE_SNAPSHOT)
         self.runner.node_sh(f"qm start {vmid}")
 
     def refuse_during_round(self) -> None:
@@ -449,6 +523,7 @@ class Pipeline:
         clean = [vm for vm in self._service_vms() if self.runner.snapshot(vm, SERVICE_SNAPSHOT)]
         for vm in clean:
             self.runner.node_sh(f"qm rollback {vm['vmid']} {SERVICE_SNAPSHOT} --start 1")
+            self._history([vm], "rolled_back", SERVICE_SNAPSHOT)
         self._wait_for(clean)
         self.services_rolled_back = self.services_rolled_back or bool(clean)
         return {vm["vmid"] for vm in clean}
@@ -497,6 +572,7 @@ class Pipeline:
         print(output.color(f"resetting {len(vms)} VMs to their snapshot of {taken} ({oldest.get('description', '').strip()})", "dim"))
         for vm in vms:
             self.runner.node_sh(f"qm rollback {vm['vmid']} {SERVICE_SNAPSHOT} --start 1")
+            self._history([vm], "rolled_back", SERVICE_SNAPSHOT)
         self._wait_for(vms)
         self.services_rolled_back = True
 
@@ -586,7 +662,12 @@ class Pipeline:
         self._facts_fresh = False
         args = [f"-target={shlex.quote(c.module)}" for c in targets]
         args += [f"-replace={shlex.quote(f'{c.module}.{c.resource}')}" for c in recreate]
-        self.runner.tofu(stack, "apply", "-auto-approve", "-parallelism=1", "-input=false", *args)
+        before = self._vms_or_none()
+        try:
+            self.runner.tofu(stack, "apply", "-auto-approve", "-parallelism=1", "-input=false", *args)
+        finally:
+            if before is not None:
+                self._changed(before, recreate=tuple(c.name for c in recreate))
 
     def offline_services(self) -> None:
         """DNS and the private internet's caches back to offline mode, as a build does after its

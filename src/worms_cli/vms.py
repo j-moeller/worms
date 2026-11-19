@@ -257,6 +257,7 @@ class Catalogue:
         vm = self.resolve(name)
         node, vmid = vm["node"], vm["vmid"]
         config = self.runner._node_json("pvesh", "get", f"/nodes/{node}/qemu/{vmid}/config", "--output-format", "json")
+        self._shown = (vm, config)  # for history_rows
         snapshots = [s for s in self.runner._node_json("pvesh", "get", f"/nodes/{node}/qemu/{vmid}/snapshot",
                                                          "--output-format", "json") if s.get("name") != "current"]  # fmt: skip
         host = self.hosts().get(vm["name"], {})
@@ -293,6 +294,28 @@ class Catalogue:
         if vm.get("status") == "running":
             rows.append(["reachable", self.reachable(vm)])
         return rows
+
+
+    def history_rows(self, name: str) -> tuple[list[list[str]], str]:
+        """`worms show <vm>`: its history on the node (worms_cli/history.py), newest first, one
+        run's events of a kind together; and a note: from when, or why there is none."""
+        from worms_cli import history
+
+        vm, config = getattr(self, "_shown", (None, None))
+        if vm is None or vm["name"] != self.vm_name(name):
+            vm, config = self.resolve(name), {}
+        try:
+            code, out, err = self.runner.session.node_run(["grep", "-F", history.vmid_filter(vm["vmid"]), history.LEDGER])
+        except Exception as exc:  # noqa: BLE001  (the rest of `show` stands without it)
+            return [], f"the history on the node could not be read: {exc}"
+        if code not in (0, 1):
+            return [], f"the history on the node could not be read: {err.strip()[:120]}"
+        events = [e for e in history.parse(out) if e["name"] == vm["name"]]  # a vmid is given again after a destroy
+        rows = history.grouped(events)
+        created = history.ctime(str((config or {}).get("meta", "")))
+        if created and not any(e["event"] in history.CREATED for e in events):
+            rows.append([created.replace("T", " ").rstrip("Z"), "created", "?", "Proxmox (ctime: before the history)", ""])
+        return rows, (f"{history.LEDGER} on the node" if rows else f"nothing in {history.LEDGER} for {vm['name']}")
 
 
 def _bridge(net: str) -> str:

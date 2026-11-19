@@ -44,7 +44,8 @@ PASSWORD_ALPHABETS = {
 
 def new_secret(secret):
     """{field: value} for a secret of the spec, new for this run (an SSH key pair is made by
-    ssh-keygen: scripts/round_agent/handlers.py)."""
+    ssh-keygen, and encrypted by encrypt_ssh_key if it has a passphrase:
+    scripts/round_agent/handlers.py)."""
     import secrets
 
     if secret["kind"] == "totp":
@@ -53,6 +54,18 @@ def new_secret(secret):
         alphabet = PASSWORD_ALPHABETS[secret["charset"]]
         return {"password": "".join(secrets.choice(alphabet) for _ in range(int(secret["length"])))}
     return {"password": secrets.token_urlsafe(15)}
+
+
+def encrypt_ssh_key(private, passphrase):
+    """An OpenSSH private key, as ssh-keygen writes it unencrypted, encrypted with `passphrase`
+    in the same format (aes256-ctr, bcrypt KDF), as `ssh-keygen -p -N` would. Here, not with
+    ssh-keygen: its passphrase would be an argument, which every process on the node can read.
+    (cryptography needs the bcrypt module for it; the round agent's role installs both.)"""
+    from cryptography.hazmat.primitives import serialization
+
+    key = serialization.load_ssh_private_key(private.encode(), password=None)
+    return key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH,
+                             serialization.BestAvailableEncryption(passphrase.encode())).decode()  # fmt: skip
 
 
 def fill(spec, values):

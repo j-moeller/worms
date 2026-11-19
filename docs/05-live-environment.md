@@ -211,7 +211,7 @@ class RoundOne(Gameplan):                       # gameplans/round_one.py
 
 - **VMs.** Assign them to `self.<attr>`; the VM is then named `sandbox-<attr>`, with `_` becoming `-`. A list becomes `sandbox-<attr>-<i>`. `gw` is reserved.
 - **VM classes.**
-  - `BasicVM(cores=1, memory=512, disk=5)`: Debian 13. Class attributes `packages`, `files`, `setup` (root shell commands), `remove`, `purge` and `services`; per instance, `install()`, `uninstall()`, `add_setup()`, `add_service()` and `add_user()`.
+  - `BasicVM(cores=1, memory=512, disk=5)`: Debian 13. Class attributes `packages`, `files`, `setup` (root shell commands), `remove`, `purge`, `services` and `ssh_port`; per instance, `install()`, `uninstall()`, `add_setup()`, `add_service()`, `add_user()` and `set_ssh_port()`.
   - `DjangoVM`: a Django project served by gunicorn on :8000.
   - `PostgreVM`: PostgreSQL on :5432, password logins from the sandbox networks.
   - Subclass `BasicVM` for your own.
@@ -240,7 +240,7 @@ class RoundOne(Gameplan):                       # gameplans/round_one.py
 
   | Call | Gives | In a file |
   |---|---|---|
-  | `generate_ssh_key(name="id_ed25519", type="ed25519"\|"rsa"\|"ecdsa")` | a key pair; `name` is its file name in `~/.ssh` | `key.private`, `key.public` |
+  | `generate_ssh_key(name="id_ed25519", type="ed25519"\|"rsa"\|"ecdsa", passphrase=None)` | a key pair; `name` is its file name in `~/.ssh`. With a passphrase the private key is encrypted with it (OpenSSH's format, as `ssh-keygen -p` writes it) | `key.private`, `key.public`, `key.passphrase` |
   | `generate_login(user=None, length=None, charset=None)` (also `generate_ssh_pwd_login`) | a user and a password: long and random, or as weak as `length`/`charset` say, for a worm to guess (`length=4, charset="digits"`) | `login.user`, `login.pwd` |
   | `generate_password(length=16, charset="alnum"\|"digits"\|"hex")` | a password of no user, itself a string | `pw` |
   | `generate_totp(account, issuer="worms", digits=6, period=30, algorithm="SHA1")` | an authenticator's seed | `totp.secret`, `totp.uri` (`otpauth://…`) |
@@ -256,6 +256,20 @@ class RoundOne(Gameplan):                       # gameplans/round_one.py
   | `add_ftp_login(vms, login)` | the password, on port 21 (`vsftpd`), passive mode on `FTP_PASSIVE_PORTS` (40000–40019: open them too). Read and write wherever the user may, not chrooted: fetch a file, or put `~/.ssh/authorized_keys` and log in over SSH |
   | `add_local_login(vms, login)` | the password, from the VM itself: `su`, and `sudo` for a user in the group `sudo`. No way in from outside |
   | `add_private_ssh_key(vms, key, user="debian")` | nothing: puts `~/.ssh/<name>` (0600) there for the worm to find |
+
+  - **A key's passphrase** is text: fixed, for a worm to guess from hints, the run's own (`generate_password()`, a login's `pwd`), or both. It may hold the run's passwords and TOTP secrets, not a key; it is one line. The node encrypts the key with it in Python, so the passphrase is never a command's argument there. `key.passphrase` stands for it in a file.
+  - **SSH on another port.** `vm.set_ssh_port(2222)` (or `ssh_port = 2222` on a VM class): sshd answers there, and every SSH login of the VM with it. It keeps listening on 22, which the node logs in on over the management NIC; the gameplan's firewall decides which port the sandbox networks see, so open the new one and leave 22 closed. Validation refuses a port one of the VM's services takes (23 for telnet, 21 and 40000–40019 for FTP, 8000 for `DjangoVM`, 5432 for `PostgreVM`).
+
+  ```python
+  pin = self.generate_password(length=4, charset="digits")
+  key = self.generate_ssh_key("id_backup", passphrase=f"rex{pin}")    # the dog's name, then a PIN
+  self.add_ssh_key_login(self.vault, key)
+  self.vault.set_ssh_port(2222)
+  self.register_fw_rule(self.vault, FirewallRule(Allow, 2222, Incoming, peers=[self.files]))
+  self.register_fw_rule(self.files, FirewallRule(Allow, 2222, Outgoing, peers=[self.vault]))
+  self.add_private_ssh_key(self.files, key)
+  self.files.write_file("~/todo.txt", "the backup key: rex + the PIN of the garage door\n")
+  ```
 
   Users, logins and sudo rules make steps up on one VM. The numbers are the worm's steps:
 

@@ -132,6 +132,24 @@ TELNET_SETUP = (
 # rule has to open them as well as 21.
 FTP_PASSIVE_PORTS = (40000, 40019)
 FTP_USERS = "/etc/vsftpd.user_list"
+
+# SSH on another port (BasicVM.set_ssh_port): sshd answers there as well as on 22, which the
+# node logs in on over the management NIC (its rule is the platform's, not the gameplan's). The
+# gameplan's firewall decides which of the two the sandbox networks see. A drop-in with any Port
+# replaces sshd's default, so 22 is listed too. sshd re-binds on reload (SIGHUP).
+SSH_PORT_CONF = "/etc/ssh/sshd_config.d/20-worms-port.conf"
+# The ports the framework's own services take on a VM that runs them, by their unit: sshd cannot
+# have one of them.
+SERVICE_PORTS = {
+    "inetutils-inetd": [(23, 23)],  # add_telnet_login
+    "vsftpd": [(21, 21), FTP_PASSIVE_PORTS],  # add_ftp_login
+    "django-site": [(8000, 8000)],  # DjangoVM
+    "postgresql": [(5432, 5432)],  # PostgreVM
+}
+# A key's passphrase: text, which may hold the run's passwords (a Password, a login's pwd, a
+# TOTP's secret), never a key. No line breaks: ssh reads it as one line.
+PASSPHRASE_SIZE = 1024
+PASSPHRASE_FIELDS = ("password", "secret")
 FTP_CONF = f"""# Written by the gameplan framework (Gameplan.add_ftp_login).
 listen=YES
 listen_ipv6=NO
@@ -170,12 +188,15 @@ class Secret(str):
 
 class SSHKey:
     """A key pair, generated for every run (`Gameplan.generate_ssh_key`). `name` is its file
-    name in ~/.ssh; `public` and `private` stand for the run's keys in a file's content."""
+    name in ~/.ssh; `public` and `private` stand for the run's keys in a file's content. With a
+    passphrase the private key is encrypted with it, as `ssh-keygen -p` does; `passphrase` is
+    that text, for a file's content (None: the key is not encrypted)."""
 
-    def __init__(self, ident, name, type):
+    def __init__(self, ident, name, type, passphrase=None):
         self.id, self.name, self.type = ident, name, type
         self.public = Secret(ident, "public")
         self.private = Secret(ident, "private")
+        self.passphrase = passphrase
 
     def __repr__(self):
         return f"SSHKey({self.name!r})"
@@ -369,6 +390,7 @@ class BasicVM:
     The resources are the class's unless given: BasicVM(cores=2, memory=1024, disk=8).
     `install`/`uninstall`, `add_setup` and `add_service` add to them for one VM, and
     `add_user(user, shell=, groups=, sudo=)` makes a user (the owner of files and logins).
+    `ssh_port` is the port sshd answers on in the sandbox networks (22; `set_ssh_port`).
 
     Per run: `write_file(path, content)`, text or a document, archive or vault (also
     Gameplan.write_file).
@@ -386,6 +408,7 @@ class BasicVM:
     files: dict = {}
     setup: tuple = ()
     services: tuple = ()
+    ssh_port = 22
 
     def __init__(self, *, cores=None, memory=None, disk=None, image=None):
         cls = type(self)
@@ -393,6 +416,7 @@ class BasicVM:
         self.memory = cls.memory if memory is None else memory
         self.disk = cls.disk if disk is None else disk
         self.image = cls.image if image is None else image
+        self.ssh_port = cls.ssh_port
         self._install = list(cls.packages)
         self._purge = list(cls.purge)
         self._uninstall = [p for p in cls.remove if p not in self._purge]
@@ -443,6 +467,22 @@ class BasicVM:
         """systemd units enabled and running when the sandbox is built."""
         self._defining("add_service")
         self._services.extend(unit for unit in units if unit not in self._services)
+
+    def set_ssh_port(self, port):
+        """sshd answers on `port` in the sandbox networks instead of 22: open it with a firewall
+        rule, and leave 22 closed, for a worm to find it (or a file to tell). sshd still listens
+        on 22, for the node's own access over the management NIC, which gameplan rules do not
+        reach. Every login over SSH (keys, passwords, TOTP) is on this port then."""
+        self._defining("set_ssh_port")
+        self.ssh_port = port
+
+    def _setup_commands(self):
+        """The setup commands as the sandbox is built with them: the SSH port first."""
+        if self.ssh_port == 22:
+            return list(self._setup)
+        port = (f"set -e; printf 'Port 22\\nPort {self.ssh_port}\\n' > {SSH_PORT_CONF}; "
+                "sshd -t; systemctl reload ssh")  # fmt: skip
+        return [port, *self._setup]
 
     def _gameplan(self, what):
         if self._plan is None:
@@ -708,7 +748,7 @@ class _Plan:
                 "nics": nics,
                 "install": list(vm._install), "uninstall": list(vm._uninstall), "purge": list(vm._purge),
                 "files": [{"path": p, "content": c} for p, c in sorted(vm._files.items())],
-                "setup": list(vm._setup), "services": list(vm._services),
+                "setup": vm._setup_commands(), "services": list(vm._services), "ssh_port": vm.ssh_port,
                 "users": list(self.users.get(vm.name, [])),
                 "accounts": {user: self._account(vm, user) for user in self.users.get(vm.name, [])},
                 "ssh_password_users": list(self.ssh_password.get(vm.name, [])),
@@ -727,7 +767,10 @@ class _Plan:
         secrets = []
         for secret in self.secrets:
             if isinstance(secret, SSHKey):
-                secrets.append({"id": secret.id, "kind": "ssh_key", "type": secret.type})
+                entry = {"id": secret.id, "kind": "ssh_key", "type": secret.type}
+                if secret.passphrase is not None:
+                    entry["passphrase"] = secret.passphrase
+                secrets.append(entry)
             elif isinstance(secret, TOTP):
                 secrets.append({"id": secret.id, "kind": "totp"})
             elif isinstance(secret, Password):
@@ -848,6 +891,14 @@ class _Plan:
         for command in vm._setup:
             if not isinstance(command, str) or not command.strip() or len(command) > LIMITS["command_size"]:
                 out.append(f"{name}: a setup command is a non-empty string of at most {LIMITS['command_size']} characters")
+        port = vm.ssh_port
+        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+            out.append(f"{name}: the SSH port is a number in [1, 65535]")
+        else:
+            for unit in vm._services:
+                for low, high in SERVICE_PORTS.get(unit, []):
+                    if low <= port <= high:
+                        out.append(f"{name}: SSH cannot be on port {port}: {unit} uses it")
         for path, content in vm._files.items():
             if _file_path(path, "root") != path:
                 out.append(f"{name}: {path!r} is not an absolute, normalised path outside /etc/worms")
@@ -926,17 +977,39 @@ class Gameplan:
         targets = [plan.known(vm, "register_fw_rule") for vm in _as_list(vms, "register_fw_rule")]
         plan.rules.append((targets, rule))
 
-    def generate_ssh_key(self, name="id_ed25519", type="ed25519"):
-        """A key pair, new for every run. `name` is its file name in ~/.ssh."""
+    def generate_ssh_key(self, name="id_ed25519", type="ed25519", passphrase=None):
+        """A key pair, new for every run. `name` is its file name in ~/.ssh.
+
+        With `passphrase` the private key is encrypted with it (OpenSSH's own format, as
+        `ssh-keygen -p` writes it): ssh asks for it before the key logs in. The passphrase is
+        text: fixed, for a worm to guess from hints ("rex2019"), or the run's own, from
+        generate_password() or a login's pwd, or both (f"rex{pin}"). `key.passphrase` is that
+        text, so a note can tell it."""
         plan = self._plan
         plan.defining("generate_ssh_key")
         if not isinstance(name, str) or not KEY_NAME.fullmatch(name) or name in ("authorized_keys", "known_hosts", "config"):
             raise GameplanError(f"generate_ssh_key: {name!r} is not a key file name")
         if type not in KEY_TYPES:
             raise GameplanError(f"generate_ssh_key: the type is one of {', '.join(KEY_TYPES)}")
-        key = SSHKey(f"key{len(plan.secrets)}", name, type)
+        if passphrase is not None:
+            passphrase = self._passphrase(passphrase)
+        key = SSHKey(f"key{len(plan.secrets)}", name, type, passphrase)
         plan.secrets.append(key)
         return key
+
+    def _passphrase(self, text):
+        """A key's passphrase, checked: one line of text, the run's secrets in it known and no key."""
+        if not isinstance(text, str):
+            raise GameplanError("generate_ssh_key: the passphrase is text (a generate_password() or a login's pwd too)")
+        if not text or len(text) > PASSPHRASE_SIZE or any(c in text for c in "\x00\r\n"):
+            raise GameplanError(f"generate_ssh_key: the passphrase is one line of 1-{PASSPHRASE_SIZE} characters "
+                                "(leave it out for none)")  # fmt: skip
+        known = {(s.id, f) for s in self._plan.secrets if not isinstance(s, SSHKey) for f in _fields(s)}
+        for owner, field in SECRET_MARKER.findall(text):
+            if (owner, field) not in known or field not in PASSPHRASE_FIELDS:
+                raise GameplanError("generate_ssh_key: the passphrase may hold this gameplan's passwords and TOTP "
+                                    "secrets, not a key")  # fmt: skip
+        return str(text)
 
     def generate_login(self, user=None, length=None, charset=None):
         """A user and a password, new for every run (the user name stays). Put it on VMs with a

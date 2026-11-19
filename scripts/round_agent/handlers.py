@@ -282,17 +282,23 @@ def _load_run_state(cfg, run_uuid):
 def _generate_secrets(ex, spec):
     """{secret id: {field: value}}, new for this run: key pairs from ssh-keygen, passwords and
     TOTP seeds from `secrets` (gameplan/render.py). They stay on the node; the database never
-    sees them."""
+    sees them. Keys come last: a key's passphrase may hold the run's passwords."""
     out = {}
+    keys = []
     for secret in spec["secrets"]:
-        if secret["kind"] != "ssh_key":
+        if secret["kind"] == "ssh_key":
+            keys.append(secret)
+        else:
             out[secret["id"]] = gameplan_render.new_secret(secret)
-            continue
+    for secret in keys:
         with tempfile.TemporaryDirectory() as tmp:
             key = Path(tmp) / "key"
             bits = ["-b", "3072"] if secret["type"] == "rsa" else []
             ex.run(["ssh-keygen", "-q", "-t", secret["type"], *bits, "-N", "", "-C", "worms-gameplan", "-f", key], timeout=120)
-            out[secret["id"]] = {"private": key.read_text(), "public": (Path(tmp) / "key.pub").read_text().strip()}
+            private = key.read_text()
+            if secret.get("passphrase"):
+                private = gameplan_render.encrypt_ssh_key(private, _fill(secret["passphrase"], out))
+            out[secret["id"]] = {"private": private, "public": (Path(tmp) / "key.pub").read_text().strip()}
     return out
 
 

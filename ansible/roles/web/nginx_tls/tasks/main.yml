@@ -37,11 +37,13 @@
     mode: "0644"
   register: nginx_tls_pin
 
-# apt_updates (UpdateVMs.yml) refreshed the lists within the hour, before the repository was there.
+# apt_updates (UpdateVMs.yml) refreshed the lists within the hour, before the repository was
+# there: refreshed again however recent they are (0), only when the repository changed.
 - name: Read nginx.org's package list
   when: (internet_enabled | bool) and (nginx_tls_key is changed or nginx_tls_repo is changed or nginx_tls_pin is changed)
   ansible.builtin.apt:
     update_cache: true
+    cache_valid_time: 0
 
 # Before the package: dpkg keeps this file then (the apt module passes --force-confold), so
 # nginx.org's nginx starts on it, never on its own default, which would leave the sites

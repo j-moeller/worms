@@ -969,10 +969,11 @@
             sbMembership = {};
             for (const net of sbNets) for (const m of net.members) (sbMembership[m] = sbMembership[m] || []).push(net.id);
         }
-        const perRow = clamp(Math.ceil(sbVMs.length / 2), 3, 7);
-        const SB_W = Math.max(620, perRow * (VM_CARD.w + 16) + 40);
-        const rowsEach = Math.max(1, Math.ceil(sbVMs.length / 2 / perRow));
-        const SB_H = Math.max(240, 100 + (2 * rowsEach) * (VM_CARD.h + 30) + 40);
+        // The sandbox as a tree (sandboxLayout): its size gives the box's.
+        const sbLayout = sandboxLayout(sbVMs, sbNets, sbMembership, tl && tl.run ? tl.run.start_vm : null);
+        const SB_PAD = { x: 36, top: 64, bottom: 30 };
+        const SB_W = Math.max(620, sbLayout.w + 2 * SB_PAD.x);
+        const SB_H = Math.max(240, sbLayout.h + SB_PAD.top + SB_PAD.bottom);
         const sbBox = {
             id: "group:sandbox", kind: "sandbox", x: SB_X, y: GROUPS_TOP, w: withSandbox ? SB_W : 0, h: withSandbox ? SB_H : 0,
             label: opts.simulation && tl ? `SANDBOX · ${tl.run.team} · simulated` : opts.mode === "round" && tl ? `SANDBOX · ${tl.run.team} · ${tl.run.round}` : "SANDBOX",
@@ -980,36 +981,18 @@
             empty: sbVMs.length === 0,
         };
         if (withSandbox) scene.groups.push(sbBox);
-        // Network hubs on the box's middle line, VMs above and below, each
-        // placed near the barycentre of its networks.
-        const hubY = sbBox.y + sbBox.h / 2 + 8;
-        sbNets.forEach((net, i) => {
-            const hx = sbBox.x + (sbBox.w / (sbNets.length + 1)) * (i + 1);
-            const hub = { id: net.id, kind: "hub", net, x: hx, y: hubY, w: clamp(7 * String(net.bridge).length + 30, 92, 150), h: 24, group: sbBox.id };
-            scene.hubs.set(hub.id, hub);
-        });
-        const bary = (vm) => {
-            const nets = (sbMembership[vm.id] || []).map((id) => scene.hubs.get(id)).filter(Boolean);
-            return nets.length ? nets.reduce((s, h) => s + h.x, 0) / nets.length : sbBox.x + sbBox.w / 2;
-        };
-        const sorted = sbVMs.slice().sort((a, b) => bary(a) - bary(b) || String(a.name).localeCompare(String(b.name)));
-        const above = sorted.filter((_, i) => i % 2 === 0);
-        const below = sorted.filter((_, i) => i % 2 === 1);
-        const placeRows = (list, dir) => {
-            const rows = Math.max(1, Math.ceil(list.length / perRow));
-            for (let r = 0; r < rows; r++) {
-                const row = list.slice(r * perRow, (r + 1) * perRow);
-                const step = VM_CARD.w + 16;
-                const x0 = sbBox.x + sbBox.w / 2 - ((row.length - 1) * step) / 2;
-                row.forEach((vm, i) => {
-                    const y = hubY + dir * (70 + r * (VM_CARD.h + 30));
-                    const node = addNode(vm, x0 + i * step, y, VM_CARD, { group: sbBox.id, sub: sandboxSub(vm) });
-                    if (vm.run) scene.alias.set(vm.id, node.id);
-                });
-            }
-        };
-        placeRows(above, -1);
-        placeRows(below, 1);
+        // The layout's origin: centred in the box, below its label and the event badges' room.
+        const ox = sbBox.x + (sbBox.w - sbLayout.w) / 2;
+        const oy = sbBox.y + SB_PAD.top + (sbBox.h - SB_PAD.top - SB_PAD.bottom - sbLayout.h) / 2;
+        for (const net of sbNets) {
+            const p = sbLayout.at.get(`n:${net.id}`);
+            scene.hubs.set(net.id, { id: net.id, kind: "hub", net, x: ox + p.x, y: oy + p.y, w: sbLayout.hubW(net), h: HUB_H, group: sbBox.id });
+        }
+        for (const vm of sbVMs) {
+            const p = sbLayout.at.get(`v:${vm.id}`);
+            const node = addNode(vm, ox + p.x, oy + p.y, sbLayout.card, { group: sbBox.id, sub: sandboxSub(vm) });
+            if (vm.run) scene.alias.set(vm.id, node.id);
+        }
 
         // Private internet (right): DNS first, then the caches.
         const piNodes = [...(byRole.dns || []), ...(byRole.private_internet || [])];
@@ -1090,14 +1073,14 @@
             } else if (e.kind === "lan_hub" && opts.mode !== "round") {
                 const a = nodeAt(e.source);
                 const hub = scene.hubs.get(e.target);
-                if (a && hub) scene.edges.push({ id: e.id, kind: "lan_hub", from: a.id, to: hub.id, points: [pt(a), pt(hub)], info: e, verified: true });
+                if (a && hub) scene.edges.push({ id: e.id, kind: "lan_hub", from: a.id, to: hub.id, points: link(a, hub), info: e, verified: true });
             }
         }
         if (opts.mode === "round" && tl) {
             for (const e of tl.edges || []) {
                 const a = scene.nodes.get(e.source);
                 const hub = scene.hubs.get(`net:${e.target}`);
-                if (a && hub) scene.edges.push({ id: `lan_hub:${e.source}->${e.target}`, kind: "lan_hub", from: a.id, to: hub.id, points: [pt(a), pt(hub)], info: e, verified: true });
+                if (a && hub) scene.edges.push({ id: `lan_hub:${e.source}->${e.target}`, kind: "lan_hub", from: a.id, to: hub.id, points: link(a, hub), info: e, verified: true });
             }
         }
         // Service edges: every group -> scoring, logging, the private internet.
@@ -1130,7 +1113,7 @@
         // Bounds.
         const xs = [];
         const ys = [];
-        for (const n of scene.order) {
+        for (const n of [...scene.order, ...scene.hubs.values()]) {
             xs.push(n.x - n.w / 2, n.x + n.w / 2);
             ys.push(n.y - n.h / 2, n.y + n.h / 2);
         }
@@ -1143,6 +1126,142 @@
     }
 
     const pt = (n) => ({ x: n.x, y: n.y });
+
+    // ------------------------------------------------------------------
+    // The sandbox: a tree, from the entry VM down
+    // ------------------------------------------------------------------
+
+    const HUB_H = 24;
+    const SB_ROW_GAP = 54; // between rows: the edges' bends, and the event badges above a card
+    const SB_SLOT_GAP = 22; // between neighbours in a row
+    const natural = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true });
+
+    // Where each VM (`v:<id>`) and network (`n:<id>`) of the sandbox goes, relative to the
+    // layout's top-left corner, and the layout's size. VMs and networks form a graph (a VM is on
+    // its networks); a breadth-first walk from the entry VM makes it a tree, drawn from the top
+    // down: the entry VM, its networks, the VMs on them, their other networks, ..., one row per
+    // hop (VMs and networks alternate). Each leaf has a column of its own and each parent sits
+    // centred above its children, so no two cards overlap; an edge only joins neighbouring rows,
+    // in the columns' order, so the tree's edges never cross. An edge the tree leaves out (a VM
+    // reached twice: a cycle) is drawn too, and may cross. VMs the entry VM does not reach, and
+    // networks no VM is on, follow as trees of their own. Siblings go in name order (a network:
+    // by the first VM below it), so b1 comes before b2, and c1-2 before c1-10.
+    function sandboxLayout(vms, nets, membership, startName) {
+        const longest = Math.max(0, ...vms.map((vm) => String(vm.name || "").length));
+        const card = { w: clamp(Math.ceil(longest * 7.8) + 34, VM_CARD.w, 200), h: VM_CARD.h };
+        const hubW = (net) => clamp(7 * String(net.bridge).length + 30, 92, 150);
+        const name = new Map();
+        const adj = new Map();
+        for (const vm of vms) {
+            adj.set(`v:${vm.id}`, []);
+            name.set(`v:${vm.id}`, String(vm.name || vm.id));
+        }
+        for (const net of nets) {
+            adj.set(`n:${net.id}`, []);
+            name.set(`n:${net.id}`, String(net.bridge || net.id));
+        }
+        for (const vm of vms) {
+            for (const id of membership[vm.id] || []) {
+                const a = `v:${vm.id}`;
+                const b = `n:${id}`;
+                if (adj.has(b) && !adj.get(a).includes(b)) {
+                    adj.get(a).push(b);
+                    adj.get(b).push(a);
+                }
+            }
+        }
+        const byName = (a, b) => natural(name.get(a), name.get(b));
+        for (const list of adj.values()) list.sort(byName);
+        const entry = vms.find((vm) => vm.run && vm.run.start_vm) || vms.find((vm) => startName && vm.name === startName);
+        const roots = [
+            ...(entry ? [`v:${entry.id}`] : []),
+            ...vms.map((vm) => `v:${vm.id}`).sort(byName),
+            ...nets.map((net) => `n:${net.id}`).sort(byName),
+        ];
+        // Breadth-first: each one's row (its depth) and the children it reached first.
+        const depth = new Map();
+        const kids = new Map();
+        const trees = [];
+        for (const root of roots) {
+            if (depth.has(root)) continue;
+            depth.set(root, root.startsWith("v:") ? 0 : 1); // a network without VMs: in a networks' row
+            const queue = [root];
+            for (let i = 0; i < queue.length; i++) {
+                const k = queue[i];
+                kids.set(k, []);
+                for (const m of adj.get(k)) {
+                    if (depth.has(m)) continue;
+                    depth.set(m, depth.get(k) + 1);
+                    kids.get(k).push(m);
+                    queue.push(m);
+                }
+            }
+            trees.push(root);
+        }
+        const key = new Map();
+        const keyOf = (k) => {
+            if (!key.has(k)) {
+                const below = kids.get(k).map(keyOf).sort(natural);
+                key.set(k, k.startsWith("v:") || !below.length ? name.get(k) : below[0]);
+            }
+            return key.get(k);
+        };
+        // Columns: leaves one each, from the left; a parent in the middle of its children's.
+        const col = new Map();
+        let next = 0;
+        const place = (k) => {
+            const c = kids.get(k).sort((a, b) => natural(keyOf(a), keyOf(b)));
+            if (!c.length) {
+                col.set(k, next++);
+                return;
+            }
+            for (const m of c) place(m);
+            col.set(k, (col.get(c[0]) + col.get(c[c.length - 1])) / 2);
+        };
+        for (const root of trees) place(root);
+        const slotW = Math.max(card.w, ...nets.map(hubW)) + SB_SLOT_GAP;
+        const rows = Math.max(-1, ...depth.values()) + 1;
+        const rowY = [];
+        let y = 0;
+        for (let d = 0; d < rows; d++) {
+            const h = d % 2 ? HUB_H : card.h;
+            rowY.push(y + h / 2);
+            y += h + SB_ROW_GAP;
+        }
+        const at = new Map();
+        for (const [k, d] of depth) at.set(k, { x: col.get(k) * slotW + slotW / 2, y: rowY[d] });
+        return { at, card, hubW, w: Math.max(1, next) * slotW, h: Math.max(0, y - SB_ROW_GAP) };
+    }
+
+    // An edge between a VM and a network in neighbouring rows: out of the upper card's bottom,
+    // a curve, into the lower card's top. Vertical at both ends, and the same curve for every
+    // edge between two rows, so those edges keep the order of their ends and never cross. Points
+    // from `a` to `b` (the dots of a connection travel along them).
+    function link(a, b) {
+        const [up, low] = a.y <= b.y ? [a, b] : [b, a];
+        const y0 = up.y + up.h / 2;
+        const y1 = low.y - low.h / 2;
+        const points = [pt(up)];
+        if (Math.abs(up.x - low.x) >= 0.5 && y1 > y0) {
+            const ym = (y0 + y1) / 2;
+            for (let i = 0; i <= 16; i++) { // the cubic Bézier (up.x, y0) (up.x, ym) (low.x, ym) (low.x, y1)
+                const t = i / 16;
+                const u = 1 - t;
+                const s = 3 * u * t * t + t * t * t;
+                points.push({ x: up.x + (low.x - up.x) * s, y: u * u * u * y0 + 3 * u * t * (u + t) * ym + t * t * t * y1 });
+            }
+        }
+        points.push(pt(low));
+        return a === up ? points : points.reverse();
+    }
+
+    // The drawn edge between two scene nodes, as points from `a` to `b`; a straight line where
+    // none is drawn.
+    function along(a, b) {
+        const e = S.scene.edges.find((x) => (x.from === a.id && x.to === b.id) || (x.from === b.id && x.to === a.id));
+        if (!e) return [pt(a), pt(b)];
+        return e.from === a.id ? e.points.slice() : e.points.slice().reverse();
+    }
 
     // The point where the line from n's centre towards `to` leaves n's card.
     function boundary(n, to) {
@@ -1203,7 +1322,7 @@
         if (g.kind === "devbox") {
             return [pt(node), { x: node.x, y: g.anchor.y }, pt(g.anchor)];
         }
-        return hubs.length ? [pt(node), pt(hubs[0]), pt(g.anchor)] : [pt(node), pt(g.anchor)];
+        return hubs.length ? [...along(node, hubs[0]), pt(g.anchor)] : [pt(node), pt(g.anchor)];
     }
 
     // Points from a group's gateway to an infrastructure node: along the
@@ -1233,7 +1352,7 @@
             const shared = hubsOf(a).find((h) => hubsOf(b).includes(h));
             const direct = S.scene.edges.find((e) => e.kind.startsWith("lan devbox") && ((e.from === a.id && e.to === b.id) || (e.from === b.id && e.to === a.id)));
             if (direct) points = [pt(a), pt(b)];
-            else if (shared) points = [pt(a), pt(shared), pt(b)];
+            else if (shared) points = [...along(a, shared), ...along(shared, b).slice(1)];
             else points = [...upToAnchor(a), ...upToAnchor(b).reverse().slice(1)];
         } else if (a && untrusted(ga)) {
             const tail = b ? anchorTo(ga, b) : null;
@@ -1542,12 +1661,15 @@
             zoomAt(0.8, r.width / 2, r.height / 2);
         });
         $("topo-fit").addEventListener("click", fit);
-        window.addEventListener("resize", () => {
+        const resized = () => {
             resizeCanvas();
             if (!S.view.user) fit();
             else drawFrame();
             drawDensity();
-        });
+        };
+        window.addEventListener("resize", resized);
+        // The stage also changes size without the window (the side panel filling): fit it again.
+        if (typeof ResizeObserver === "function") new ResizeObserver(resized).observe(svg);
     }
 
     // ------------------------------------------------------------------
@@ -2679,6 +2801,8 @@
             if (!doc.simulation) throw new Error("the server sent no simulation");
             showProgression(doc, t);
             S.model = doc.scene;
+            // The fit above was the empty scene's (while it loaded): fit the sandbox, unless moved meanwhile.
+            S.needsFit = !S.view.user;
         } catch (error) {
             if (S.simFile !== wanted[0] || S.simDuration !== wanted[1]) return;
             S.timelineError = error;

@@ -1001,11 +1001,27 @@ def _key_writes(ex):
 
 
 def test_a_devbox_reset_rolls_back_to_the_snapshot(tmp_path):
-    """Seconds: a reset rolls the team's three VMs back to their snapshot and writes, over SSH, the
-    internal CA, the team's keys and new tokens. No Ansible, no package, no inventory, nothing of
-    another team, whichever snapshot the VMs have (their first boot's or a configured one)."""
+    """A first-boot snapshot (before 2026-11-19): the team's next reset sets its three VMs up once,
+    without the network (no apt refresh, no package, no team key) and only them, and snapshots
+    that. Every reset after it: the rollback, then the internal CA, the team's keys and new tokens
+    over SSH, seconds: no Ansible, no package, no new snapshot."""
+    import yaml
+
     ex = DevboxFake(tmp_path, built_before=True)
-    ex.clean = set(T1_VMIDS)
+    ex.clean = set(T1_VMIDS)  # first-boot snapshots
+    result = _rebuild(ex)
+    steps = ex.steps()
+    assert steps.count("devbox-configure") == 1 and "--limit devbox-t1-a,devbox-t1-b,devbox-t1-c" in ex.worms_args
+    varfile = yaml.safe_load(open(ex.worms_args.split()[1].lstrip("@")).read().replace("!unsafe ", ""))
+    assert varfile["apt_client_refresh_offline"] is False and varfile["devbox_packages"] == []
+    assert varfile["devbox_team_keys"] == {"t1": []}  # the snapshot holds no team key
+    configure = steps.index("devbox-configure")
+    for vmid in T1_VMIDS:
+        assert steps.index(f"qm rollback {vmid} clean --start 1") < configure < steps.index(f"qm snapshot {vmid} clean --description {handlers.DEVBOX_CONFIGURED}")
+    assert result["devbox"].startswith("rolled back, set up once")
+
+    ex.calls.clear()
+    ex.ssh_calls.clear()
     result = _rebuild(ex)
     steps = ex.steps()
     assert not any(c[:2] == ("tofu", "devbox") and "apply" in c for c in ex.calls)

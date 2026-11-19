@@ -823,31 +823,35 @@ def _snapshot_fresh_devbox_vms(ex, vms):
     snapshots.wait_for_ssh(ex, hosts)
 
 
-# A devbox VM's clean snapshot is from before any team key or token: its first boot, or (VMs
-# replaced since 2026-11-19) configured as well. A reset rolls back to it and writes, directly over
-# SSH, what a worm needs that the snapshot may lack (the internal CA), the team's keys and new
-# tokens: no Ansible, no package, no inventory, seconds.
+# A devbox VM's clean snapshot is from before any team key or token. A reset rolls back to it and
+# writes, over SSH, the internal CA, the team's keys and new tokens: seconds. A snapshot from the
+# first boot only (before 2026-11-19) lacks the devbox's setup (apt and pip pointed at the private
+# internet, NTP, hostname, CA): the team's next reset sets it up once, without the network (no apt
+# refresh, no package), and takes the snapshot again; every reset after that is the rollback alone.
 DEVBOX_CONFIGURED = "worms devbox: configured, before any team key"
-CA_CERT = "ansible/pki/worms/ca.crt"  # in the workspace (tasks/workspace.yml copies it)
-CA_INSTALL = "install -m 644 /dev/stdin /usr/local/share/ca-certificates/worms-internal-ca.crt && update-ca-certificates"
+CA_CERT = "ansible/pki/worms/ca.crt"  # in the workspace (tasks/workspace.yml copies it); worms_cli.keys.CA_FILE
+CA_INSTALL = "install -m 644 /dev/stdin /usr/local/share/ca-certificates/worms-internal-ca.crt && update-ca-certificates"  # worms_cli.keys.CA_SCRIPT
 
 
-def _configure_devbox_base(ex, teams, slug):
+def _configure_devbox_base(ex, teams, slug, network=True):
     """The team's three VMs configured without a team key (an empty key file), and that made their
-    clean snapshot. Nothing of the team has reached them: they were just built or rolled back."""
-    _configure_devbox(ex, [{**t, "authorized_keys": []} for t in teams], limit=[f"devbox-{slug}-{role}" for role in DEVBOX_ROLES])
+    clean snapshot. Nothing of the team has reached them: they were just built or rolled back.
+    Without `network`: no apt refresh and no package, only files (a reset's one-time setup)."""
+    overrides = {} if network else {"apt_client_refresh_offline": False, "devbox_packages": []}
+    _configure_devbox(ex, [{**t, "authorized_keys": []} for t in teams], limit=[f"devbox-{slug}-{role}" for role in DEVBOX_ROLES],
+                      overrides=overrides)  # fmt: skip
     vms = _team_vms(ex, slug)
     snapshots.take(ex, vms, DEVBOX_CONFIGURED)
     ips = {info["vmid"]: info["maintenance_ip"] for info in _devbox_vms(ex).values()}
     snapshots.wait_for_ssh(ex, [ips[vm["vmid"]] for vm in vms])
 
 
-def _try_configure_devbox_base(ex, teams, slug):
+def _try_configure_devbox_base(ex, teams, slug, network=True):
     """_configure_devbox_base, or False if it failed: the team still gets its keys and tokens, and
     its upload runs (on VMs as their snapshot left them); no snapshot is taken, the next reset tries
     again. A team must never wait on a package the offline apt cache lacks."""
     try:
-        _configure_devbox_base(ex, teams, slug)
+        _configure_devbox_base(ex, teams, slug, network)
     except Exception as exc:  # noqa: BLE001  (Ansible's failure, in the job log)
         ex.note(f"the devbox's configuration failed, it is used as its snapshot left it: {exc}"[:2000])
         return False
@@ -892,7 +896,12 @@ def devbox_rebuild(ex, cfg, params):
         snapshots.roll_back(ex, vms)
         ips = {info["vmid"]: info["maintenance_ip"] for info in _devbox_vms(ex).values()}
         snapshots.wait_for_ssh(ex, [ips[vm["vmid"]] for vm in vms])
-        how = "rolled back to its snapshot"
+        if all(snapshots.clean_description(ex, vm) == DEVBOX_CONFIGURED for vm in vms):
+            how = "rolled back to its snapshot"
+        elif _try_configure_devbox_base(ex, teams, slug, network=False):
+            how = "rolled back, set up once (no network) and snapshotted: later resets are the rollback alone"
+        else:
+            how = "rolled back; its one-time setup failed (the job log says why), the next reset tries again"
     else:
         # Replace just this team's three VMs (fresh disks); the rest is a no-op.
         ex.generate_devbox(teams, ex.repo_root / DEVBOX_GENERATED)
@@ -958,7 +967,7 @@ def devbox_reconfigure(ex, cfg, params):
     return {"reconfigured": [t["slug"] for t in teams], "addresses": _devbox_addresses(teams)}
 
 
-def _configure_devbox(ex, teams, step="devbox-configure", limit=None):
+def _configure_devbox(ex, teams, step="devbox-configure", limit=None, overrides=None):
     """Run the devbox + SSH-gateway Ansible with the teams' keys and VM targets
     as extra vars (CA trust, team authorized_keys, confined gateway keys); `step`
     devbox-keys: the keys alone. `limit`: only these VMs (a reset: the team's three).
@@ -988,7 +997,7 @@ def _configure_devbox(ex, teams, step="devbox-configure", limit=None):
             continue
         for key in t["authorized_keys"]:
             gateway_keys.append({"public_key": _Unsafe(key), "comment": f"team={t['slug']}", "permitopen": targets})
-    extra = {"devbox_team_keys": team_keys, "ssh_gateway_authorized_keys": gateway_keys}
+    extra = {"devbox_team_keys": team_keys, "ssh_gateway_authorized_keys": gateway_keys, **(overrides or {})}
     with tempfile.NamedTemporaryFile("w", suffix=".yml", delete=False) as fh:
         fh.write(_unsafe_yaml(extra))
         varfile = fh.name

@@ -23,12 +23,15 @@
 # The offline apt cache serves only what it was filled with while the internet window was open
 # (apt_cache_seed_packages). A package added to devbox_packages since (rsync, 2026-11-18, on a
 # production cache filled before) is named and skipped, not a failure: a reset must work offline.
+# No packages (the reset's one-time setup, devbox_packages=[]): nothing here touches the network.
 - name: Read the package index (from the private apt cache)
+  when: devbox_packages | length > 0
   ansible.builtin.apt:
     update_cache: true
     cache_valid_time: 3600
 
 - name: Find which expected packages the apt cache holds
+  when: devbox_packages | length > 0
   ansible.builtin.command:
     argv: [apt-cache, show, --no-all-versions, "{{ item }}"]
   loop: "{{ devbox_packages }}"
@@ -39,7 +42,7 @@
 - name: Install expected packages
   vars:
     devbox_packages_held: "{{ devbox_package_check.results | selectattr('rc', 'equalto', 0) | map(attribute='item') | list }}"
-  when: devbox_packages_held | length > 0
+  when: devbox_packages | length > 0 and devbox_packages_held | length > 0
   ansible.builtin.apt:
     name: "{{ devbox_packages_held }}"
     state: present
@@ -48,7 +51,7 @@
 - name: Name the expected packages the apt cache lacks
   vars:
     devbox_packages_lacking: "{{ devbox_package_check.results | rejectattr('rc', 'equalto', 0) | map(attribute='item') | list }}"
-  when: devbox_packages_lacking | length > 0
+  when: devbox_packages | length > 0 and devbox_packages_lacking | length > 0
   ansible.builtin.debug:
     msg: >-
       Not installed, the offline apt cache lacks them: {{ devbox_packages_lacking | join(', ') }}.

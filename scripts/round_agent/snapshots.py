@@ -39,6 +39,13 @@ def has_clean(ex, vm):
     return any(snapshot.get("name") == CLEAN for snapshot in json.loads(out or "[]"))
 
 
+def clean_description(ex, vm):
+    """The description of `vm`'s clean snapshot ("" without one): which state it holds."""
+    path = f"/nodes/{vm['node']}/qemu/{int(vm['vmid'])}/snapshot"
+    out = ex.run(["pvesh", "get", path, "--output-format", "json"], timeout=60)
+    return next((str(s.get("description") or "").strip() for s in json.loads(out or "[]") if s.get("name") == CLEAN), "")
+
+
 def shut_down(ex, vms):
     """Shut the running ones down (hard after SHUTDOWN_TIMEOUT). Returns those it shut down."""
     running = [vm for vm in vms if vm.get("status") == "running"]

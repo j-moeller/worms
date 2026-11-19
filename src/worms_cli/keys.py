@@ -49,6 +49,11 @@ DEVBOX_SCRIPT = (
 )
 DEVBOX_WRITE = f"sudo sh -c {shlex.quote(DEVBOX_SCRIPT)}"  # the round agent runs it too (handlers.devbox_rebuild)
 GATEWAY_WRITE = f"sudo install -m 644 -o root -g root /dev/stdin {GATEWAY_FILE}"
+# The internal CA a devbox VM must trust: a worm reaches scoring and logging over verified HTTPS. A VM
+# rolled back to its first-boot snapshot lacks it (role ca_distribute installs it in a configuration).
+CA_FILE = "ansible/pki/worms/ca.crt"  # in the checkout, and in the node's workspace
+CA_SCRIPT = "install -m 644 /dev/stdin /usr/local/share/ca-certificates/worms-internal-ca.crt && update-ca-certificates"
+CA_WRITE = f"sudo sh -c {shlex.quote(CA_SCRIPT)}"
 GATEWAY_HEADER = "# WORMS devbox SSH gateway authorized_keys (`worms devbox-sync-keys`, role ssh_gateway). DO NOT EDIT."
 GATEWAY_LINE = 'restrict,port-forwarding,command="/usr/sbin/nologin",permitopen="{ip}:22" {key} team={slug}'
 
@@ -252,6 +257,7 @@ def sync(config) -> int:
     vms = {vm["name"]: vm for vm in check.catalogue.vms()}
     hosts = check.catalogue.hosts()
     gateway, writes = [GATEWAY_HEADER], []
+    ca = (config.repo_root / CA_FILE).read_text()
     for name, slug, texts, has_devbox in teams:
         if not has_devbox:
             continue
@@ -267,14 +273,18 @@ def sync(config) -> int:
         gateway += [GATEWAY_LINE.format(ip=a, key=key, slug=slug) for key in keys] if a else []
         for role in ROLES:
             writes.append((f"devbox-{slug}-{role}", DEVBOX_WRITE, "".join(f"{key}\n" for key in keys)))
+            writes.append((f"devbox-{slug}-{role}", CA_WRITE, ca))
     writes.append((GATEWAY, GATEWAY_WRITE, "\n".join(gateway) + "\n"))
-    print(f"copying the keys of {sum(1 for t in teams if t[3])} team(s) to {len(writes)} VMs ...", flush=True)
+    print(f"copying the keys of {sum(1 for t in teams if t[3])} team(s), and the internal CA, to their devboxes ...", flush=True)
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(lambda w: (w[0], check.write(vms.get(w[0]), w[1], w[2])), writes))
-    for vm, why in results:
+    for vm, why in sorted(set(results)):  # each VM once (its keys and the CA)
         if why == "off":
             print(output.status_cell("stopped", f"{vm}: stopped, skipped"))
         elif why == "failed":
             print(output.status_cell("error", f"{vm}: could not write (`worms login {vm}`)"))
+    trusted = sorted({vm for (vm, why), (_, command, _) in zip(results, writes) if command == CA_WRITE and not why})
+    if trusted:
+        print(output.status_cell("ok", f"the internal CA is trusted on {len(trusted)} devbox VM(s)"))
     print()
     return status(config)

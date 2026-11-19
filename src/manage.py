@@ -31,24 +31,38 @@ PVE_CONFIG_DIR = "/etc/pve"  # exists only on a Proxmox node
 # ---------------------------------------------------------------------------
 
 
+VM_HEADERS = ["VM", "vmid", "kind", "team", "state", "up", "memory"]
+
+
 def _vm_rows(config) -> list[list[str]]:
-    """Every VM: name, vmid, kind, state, uptime, memory (Proxmox API, the topology token)."""
+    """Every VM: name, vmid, kind, team, state, uptime, memory (Proxmox API, the topology token;
+    the team from the team map, worms_cli/teams.py)."""
+    from worms_cli import teams
     from worms_cli.proxmox import Infra
     from worms_cli.vms import KINDS
 
     infra = Infra(config)
     if not infra.configured:
-        return [["(VMs)", "", "", output.status_cell("n/a", infra.error or "no Proxmox API configured (worms secrets issue topology-token)"), "", ""]]
+        return [["(VMs)", "", "", "", output.status_cell("n/a", infra.error or "no Proxmox API configured (worms secrets issue topology-token)"), "", ""]]
     try:
         vms = infra.vms()
     except Exception as exc:  # noqa: BLE001
-        return [["(VMs)", "", "", output.status_cell("error", f"Proxmox API: {exc}"), "", ""]]
+        return [["(VMs)", "", "", "", output.status_cell("error", f"Proxmox API: {exc}"), "", ""]]
+    names = [vm["name"] for vm in vms]
+    known = teams.team_map(config, names) if any(teams.of_vm(name) for name in names) else {}
+
+    def team(name):
+        if name == teams.SHARED_GATEWAY:
+            return "(every team)"
+        found = teams.of_vm(name)
+        return (known.get(found[0]) or teams.Team(found[0])).label if found else ""
+
     rows = []
     for vm in sorted(vms, key=lambda vm: (list(KINDS).index(vm["pool"]) if vm.get("pool") in KINDS else 9, vm["name"])):
         up = int(vm.get("uptime") or 0)
         state = vm.get("status", "?")
         rows.append([
-            vm["name"], str(vm["vmid"]), KINDS.get(vm.get("pool") or "", vm.get("pool") or "—"),
+            vm["name"], str(vm["vmid"]), KINDS.get(vm.get("pool") or "", vm.get("pool") or "—"), team(vm["name"]),
             output.status_cell("running" if state == "running" else "stopped", state),
             f"{up // 86400} d {up % 86400 // 3600} h" if up >= 86400 else (f"{up // 3600} h {up % 3600 // 60} min" if up else "—"),
             f"{int(vm.get('mem') or 0) >> 20}/{int(vm.get('maxmem') or 0) >> 20} MB" if state == "running" else "—",
@@ -169,7 +183,7 @@ def cmd_status(config, args) -> int:
         print(output.table(_platform_rows(config)))
         print()
         print(output.heading("VMs"))
-        print(output.table(_vm_rows(config), headers=["VM", "vmid", "kind", "state", "up", "memory"]))
+        print(output.table(_vm_rows(config), headers=VM_HEADERS))
         print()
         print(output.heading("competition (database)"))
         print(output.table(_competition_status(config)))
@@ -483,8 +497,9 @@ def _vm_list(config) -> str:
         names = Catalogue(config).names()
     except Exception as exc:  # noqa: BLE001  (the node may be out of reach)
         return f"(the VMs cannot be listed now: {exc})"
-    width = max(len(name) for name, _ in names)
-    return "VMs there are now:\n" + "\n".join(f"  {name:<{width}}  {what}" for name, what in names)
+    rows = [[name, team, what] for name, team, what in names]
+    return ("VMs there are now; a team's also as <team>/a|b|c|gw (`worms show <team>`: its four):\n"
+            + "\n".join("  " + line for line in output.table(rows, headers=["name", "team", "what"]).splitlines()))  # fmt: skip
 
 
 def cmd_login(config, args) -> int:
@@ -535,9 +550,13 @@ def cmd_show(config, args) -> int:
 
     if args.vm == "database" and args.table:
         return _show_table(config, args)
+    catalogue = Catalogue(config)
     try:
+        team = catalogue.find_team(args.vm) if "/" not in args.vm and not catalogue.knows(args.vm) else None
+        if team is not None:
+            return _show_team(config, catalogue, team)
         print(output.heading(args.vm))
-        print(output.table(Catalogue(config).details(args.vm)))
+        print(output.table(catalogue.details(args.vm)))
     except build.BuildError as exc:
         output.error(str(exc))
         return 1
@@ -548,6 +567,19 @@ def cmd_show(config, args) -> int:
         print()
         print(output.heading("tables (`worms show database <table>`)"))
         print(output.table(database.tables(), headers=["table", "rows (estimate)", "size"]))
+    return 0
+
+
+def _show_team(config, catalogue, team) -> int:
+    """`worms show <team>`: its devbox's four VMs (vmid, address, state) and its keys on each."""
+    from worms_cli import keys
+
+    print(output.heading(f"team {team.label}"))
+    cells = keys.team_cells(config, team.slug, catalogue) if team.devbox else {}
+    print(output.table(catalogue.team_rows(team, cells), headers=["target", "VM", "vmid", "address", "state", "team keys"]))
+    if cells.get("keys"):
+        print(output.color(f"{cells['keys']} key(s) in the database; `worms status keys`: every team's", "dim"))
+    print(output.color(f"worms login {team.handle}/a · worms show {team.handle}/gw · worms reset devbox {team.handle}", "dim"))
     return 0
 
 
@@ -1015,9 +1047,11 @@ SECTIONS = (
         (
             ("status [<topic>]", "every VM and its state, the internet window, the competition; or one topic: "
                                  + ", ".join(STATUS_TOPICS)),  # fmt: skip
-            ("show <vm> [<table>]", "one VM in detail: state, resources, networks, snapshots, login; "
-                                    "`show database [<table>]`: its tables, a table's rows or --schema"),  # fmt: skip
-            ("login <vm>", "a shell on a VM over its management SSH (`worms login --help` lists them)"),
+            ("show <vm>|<team> [<table>]", "one VM in detail: state, resources, networks, snapshots, team, login; "
+                                           "a team: its four devbox VMs, their states and its keys on each; "
+                                           "`show database [<table>]`: its tables, a table's rows or --schema"),  # fmt: skip
+            ("login <vm>", "a shell on a VM over its management SSH, by its name or <team>/a|b|c|gw (`worms login --help` "
+                           "lists them)"),  # fmt: skip
             ("log [<job>|<name>|<vm>]", "a host job's log by its number (`worms status jobs`), a service's (agent, "
                                        "conductor, dashboard, scoring, audit, ...) or a VM's journal; -f follows. "
                                        "Alone: what there is"),
@@ -1091,6 +1125,7 @@ rsync's own syntax, with a VM's name (below) for the host:
   worms rsync team-1-backup/ devbox-t1-a:       the directory's contents into the home
   worms rsync devbox-t2-a: team-2-backup/       the home's contents into the directory
   worms rsync devbox-t2-a:notes :src/a.py .     two files from that VM (`:path`: the same VM)
+  worms rsync alpha/a: team-alpha-backup/       a team's VM as <team>/<a|b|c|gw>: alpha's VM A
   worms rsync debian@dashboard:.bashrc .        as another user, from their home
   worms rsync ./a:b devbox-t1-a:                a local file with a ":" (after a "/": local)
   worms rsync dir/ devbox-t1-a:dir -- --exclude .cache --progress   rsync's options after --
@@ -1205,13 +1240,13 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=200, help="audit, jobs: at most this many rows")
 
     p = _add(sub, "show", epilog=vm_list, **raw)
-    p.add_argument("vm")
+    p.add_argument("vm", help="a VM (its name, an alias or <team>/a|b|c|gw), or a team (its name or slug t<id>)")
     p.add_argument("table", nargs="?", help="with `database`: a table's newest rows")
     p.add_argument("--schema", action="store_true", help="the table's columns, indexes and constraints instead")
     p.add_argument("--limit", type=int, default=20, help="rows to show (default 20)")
 
     p = _add(sub, "login", epilog=vm_list, **raw)
-    p.add_argument("vm")
+    p.add_argument("vm", help="its name, an alias, or <team>/a|b|c|gw (alpha/gw, t2/a)")
 
     p = _add(sub, "log")
     p.add_argument("what", nargs="?", help="a host job's number, a log's name (`worms log` lists them) or a VM's name")

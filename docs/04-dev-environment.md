@@ -90,7 +90,8 @@ worms devbox-add-key alpha ~/alpha.pub  # a key for team alpha (removed again: w
 worms reset devbox alpha                # its VMs back to their snapshot, as its Reset button
 worms devbox-sync-keys                  # copy every team's keys to its devbox and the gateway, show them
 worms status keys                       # are every team's keys on the gateway and its VMs?
-worms login ssh-gateway-t1              # a shell on team t1's gateway (`worms login --help` lists the VMs)
+worms show alpha                        # its four VMs (a, b, c, gw): vmids, addresses, states, keys
+worms login alpha/gw                    # a shell on team alpha's NAT gateway, devbox-t<id>-gw (`worms login --help` lists the VMs)
 tail -F /var/log/worms/jobs/latest.log  # on the node: the running job
 ```
 

@@ -33,7 +33,7 @@ import sys
 import threading
 from dataclasses import dataclass
 
-from worms_cli import output
+from worms_cli import output, teams
 from worms_cli.build import BuildError
 from worms_cli.vms import UNTRUSTED_POOLS, Catalogue
 
@@ -46,6 +46,8 @@ GUARD_DOWN = ["--munge-links", "--no-perms", "--no-owner", "--no-group", "--no-d
 GUARD_UP = ["--munge-links"]  # unmunges what a download munged
 # Ours to set: the transport and the remote command.
 REFUSED = ("-e", "--rsh", "--rsync-path", "--daemon", "--server", "--sender")
+# A team's VM as `[<user>@]<team>/<role>:<path>` (Rsync._team_spec).
+TEAM_TARGET = re.compile(r"(?:([^/:@]+)@)?([^/:@]+/(?:a|b|c|gw)):(.*)", re.S)
 
 # The VM's end, as `--rsync-path`: rsync as user $1, from $1's home.
 REMOTE = r"""
@@ -113,12 +115,11 @@ class Rsync:
             # -e, also in a cluster (-avze ssh); not a filter rule's argument (-f "- secret").
             if option.split("=", 1)[0] in REFUSED or re.match(r"-[A-Za-z]*e", option):
                 raise BuildError(f"{option}: `worms rsync` sets the transport and the remote rsync itself")
-        specs = [parse(arg) for arg in args]
+        specs = [self._team_spec(parse(arg)) for arg in args]
         named = [s for s in specs if s.vm]
         if named:
-            known = {name for name, _ in self.catalogue.names()}
             for s in named:
-                if s.vm not in known:
+                if not self.catalogue.knows(s.vm):
                     raise BuildError(f"{s.arg}: no VM {s.vm!r} (`worms rsync --help` lists them); "
                                      f"a local path with a \":\" is ./{s.arg}")  # fmt: skip
         *sources, target = specs
@@ -142,6 +143,20 @@ class Rsync:
                 raise BuildError("a VM's path comes first among the sources (or is the target)")
             raise BuildError("neither the target nor the sources are on a VM: that is rsync's own job")
         return self._resolve(specs, side, down, [*(PREVIEW if preview else DEFAULT)], options)
+
+    def _team_spec(self, spec: Spec) -> Spec:
+        """`[<user>@]<team>/<role>:<path>` (`alpha/a:notes`) names a team's VM, though rsync reads a
+        "/" before the ":" as a local path: when that team is there and no such local file is.
+        `./alpha/a:notes` stays local."""
+        match = TEAM_TARGET.fullmatch(spec.arg)
+        if spec.remote or match is None or os.path.lexists(spec.arg):
+            return spec
+        try:
+            if teams.target(self.catalogue.teams(), match.group(2)) is None:
+                return spec
+        except ValueError:
+            return spec
+        return Spec(spec.arg, match.group(2), match.group(1) or None, match.group(3))
 
     def _resolve(self, specs: list[Spec], side: Spec, down: bool, base: list[str], options: list[str]) -> Plan:
         env = self.session.env()

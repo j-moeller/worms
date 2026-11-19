@@ -24,6 +24,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
 from worms_cli import output
+from worms_cli.teams import vm_name
 
 GATEWAY = "devbox-ssh-gateway"
 GATEWAY_FILE = "/home/team/.ssh/authorized_keys"
@@ -33,7 +34,9 @@ PUSH_KINDS = ("devbox_reconfigure", "devbox_provision", "devbox_rebuild")
 MAX_BYTES = 1024 * 1024
 HEADERS = ["Team", "Keys", "SSH gateway", "A", "B", "C"]
 LEGEND = ("● ✓  every key the team has, and no other     ✗ n missing / n old  a key not there yet / one removed, still there\n"
-          "○ off  the VM is stopped (not checked)     ? not readable     — no such VM")  # fmt: skip
+          "○ off  the VM is stopped (not checked)     ? not readable     — no such VM\n"
+          "A, B, C: devbox-<slug>-a, -b, -c (`worms show <team>`, `worms login <team>/a`); "
+          "SSH gateway: devbox-ssh-gateway, its lines for the team")  # fmt: skip
 
 
 # `worms devbox-sync-keys`: what is written, by one ssh command per VM, the keys on its stdin (never
@@ -118,10 +121,10 @@ def cell(expected: set[str], found: set[str]) -> tuple[bool, str]:
 
 
 class KeyCheck:
-    def __init__(self, config):
+    def __init__(self, config, catalogue=None):
         from worms_cli.vms import Catalogue
 
-        self.catalogue = Catalogue(config)
+        self.catalogue = catalogue or Catalogue(config)
 
     def read(self, vm: dict | None, path: str) -> tuple[str | None, str]:
         """(the file's text, "") or (None, why not): "off", "absent", "unreadable"."""
@@ -159,7 +162,7 @@ class KeyCheck:
         for _, slug, _, has_devbox in teams:
             if has_devbox:
                 for role in ROLES:
-                    name = f"devbox-{slug}-{role}"
+                    name = vm_name(slug, role)
                     wanted[(name, DEVBOX_FILE)] = vms.get(name)
         with ThreadPoolExecutor(max_workers=8) as pool:
             got = dict(zip(wanted, pool.map(lambda item: self.read(item[1], item[0][1]), wanted.items())))
@@ -172,7 +175,7 @@ class KeyCheck:
                 rows.append([label, str(len(expected)), output.status_cell("n/a", "no devbox"), "", "", ""])
                 continue
             problems, cells = [], []
-            a = vms.get(f"devbox-{slug}-a")
+            a = vms.get(vm_name(slug, "a"))
             if gateway is None:
                 ok, text = gateway_problem in ("off", "absent"), self._unread(gateway_problem)
             elif a is None:
@@ -183,7 +186,7 @@ class KeyCheck:
             if not ok:
                 problems.append("gateway")
             for role in ROLES:
-                body, why = got[(f"devbox-{slug}-{role}", DEVBOX_FILE)]
+                body, why = got[(vm_name(slug, role), DEVBOX_FILE)]
                 ok, text = (cell(expected, devbox_keys(body)) if body is not None else (why in ("off", "absent"), self._unread(why)))
                 cells.append(text)
                 if not ok:
@@ -245,6 +248,28 @@ def status(config) -> int:
     return 0
 
 
+def team_cells(config, slug: str, catalogue=None) -> dict[str, str]:
+    """`worms show <team>`: one team's keys where they belong, as `worms status keys` reads them:
+    {"a", "b", "c": its VMs' cells, "gateway": the SSH gateway's lines for it, "keys": how many}.
+    Empty for a team without a devbox; a cell says so when the database cannot be reached."""
+    try:
+        from worms_cli import django_setup
+
+        django_setup.setup(config)
+        from core.models.devbox import DevboxSSHKey
+
+        entry = next((t for t in _teams() if t[1] == slug), None)
+    except Exception as exc:  # noqa: BLE001  (no database: say so in the cells, show the rest)
+        unknown = output.status_cell("unknown", f"no database ({str(exc).splitlines()[0][:40]})")
+        return {"a": unknown, "b": unknown, "c": unknown, "gateway": unknown}
+    if entry is None or not entry[3]:
+        return {}
+    name, slug, texts, has_devbox = entry
+    rows, _ = KeyCheck(config, catalogue).rows([(name, slug, {DevboxSSHKey.fingerprint(k) for k in texts}, has_devbox)])
+    _, count, gateway, a, b, c = rows[0]
+    return {"keys": count, "gateway": gateway, "a": a, "b": b, "c": c}
+
+
 def sync(config) -> int:
     """`worms devbox-sync-keys`: copy every team's SSH keys from the database to where they are used,
     over the management SSH, then show them (`worms status keys`). Nothing else: no round agent, no
@@ -265,15 +290,15 @@ def sync(config) -> int:
         if len(keys) != len(texts):
             output.warn(f"{name}: {len(texts) - len(keys)} key(s) are not SSH public keys and are left out")
         # The gateway lets a key forward to its team's VM A only; without one, no line (role ssh_gateway).
-        a = hosts.get(f"devbox-{slug}-a", {}).get("devbox_ssh_ip")
+        a = hosts.get(vm_name(slug, "a"), {}).get("devbox_ssh_ip")
         try:
-            a = str(ipaddress.ip_address(a)) if a and f"devbox-{slug}-a" in vms else None
+            a = str(ipaddress.ip_address(a)) if a and vm_name(slug, "a") in vms else None
         except ValueError:
             a = None
         gateway += [GATEWAY_LINE.format(ip=a, key=key, slug=slug) for key in keys] if a else []
         for role in ROLES:
-            writes.append((f"devbox-{slug}-{role}", DEVBOX_WRITE, "".join(f"{key}\n" for key in keys)))
-            writes.append((f"devbox-{slug}-{role}", CA_WRITE, ca))
+            writes.append((vm_name(slug, role), DEVBOX_WRITE, "".join(f"{key}\n" for key in keys)))
+            writes.append((vm_name(slug, role), CA_WRITE, ca))
     writes.append((GATEWAY, GATEWAY_WRITE, "\n".join(gateway) + "\n"))
     print(f"copying the keys of {sum(1 for t in teams if t[3])} team(s), and the internal CA, to their devboxes ...", flush=True)
     with ThreadPoolExecutor(max_workers=8) as pool:

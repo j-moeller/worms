@@ -823,11 +823,13 @@ def _snapshot_fresh_devbox_vms(ex, vms):
     snapshots.wait_for_ssh(ex, hosts)
 
 
-# A devbox VM's clean snapshot holds it configured (CA, apt and NTP clients, packages), before any
-# team key or token: a reset rolls back to it and writes the team's keys and new tokens, no
-# configuration. Snapshots from before 2026-11-19 hold the first boot only: the next reset configures
-# the VMs once and takes this one in their place.
+# A devbox VM's clean snapshot is from before any team key or token: its first boot, or (VMs
+# replaced since 2026-11-19) configured as well. A reset rolls back to it and writes, directly over
+# SSH, what a worm needs that the snapshot may lack (the internal CA), the team's keys and new
+# tokens: no Ansible, no package, no inventory, seconds.
 DEVBOX_CONFIGURED = "worms devbox: configured, before any team key"
+CA_CERT = "ansible/pki/worms/ca.crt"  # in the workspace (tasks/workspace.yml copies it)
+CA_INSTALL = "install -m 644 /dev/stdin /usr/local/share/ca-certificates/worms-internal-ca.crt && update-ca-certificates"
 
 
 def _configure_devbox_base(ex, teams, slug):
@@ -852,6 +854,16 @@ def _try_configure_devbox_base(ex, teams, slug):
     return True
 
 
+def _install_ca(ex, vms):
+    """The internal CA, trusted on the team's VMs: a worm reaches scoring and logging over
+    verified HTTPS (role ca_distribute does the same in a configuration)."""
+    if not vms:
+        return
+    ca = (ex.repo_root / CA_CERT).read_text()
+    for info in vms.values():
+        ex.ssh(info["maintenance_ip"], ["sudo", "sh", "-c", CA_INSTALL], input=ca)
+
+
 def _write_team_keys(ex, team, vms):
     """The team's SSH keys on its VMs, directly: the key file `worms devbox-sync-keys` writes too.
     The SSH gateway's lines do not change with a reset."""
@@ -865,9 +877,9 @@ def _write_team_keys(ex, team, vms):
 def devbox_rebuild(ex, cfg, params):
     """Give one team a fresh devbox and new tokens, without touching other teams. The team's
     version has already been bumped by the orchestrator (which clears the dashboard score). Its
-    three VMs go back to their clean snapshot, configured and without any team key: then its keys
-    and new tokens, in seconds, without Ansible or a package. VMs without a snapshot, or all three
-    when `fresh` (`worms build devbox --rebuild`), are replaced, configured and snapshotted."""
+    three VMs go back to their clean snapshot; then the CA, its keys and new tokens over SSH: no
+    Ansible, seconds. VMs without a snapshot, or all three when `fresh` (`worms build devbox
+    --rebuild`), are replaced, configured and snapshotted: a full rebuild."""
     teams = params["teams"]
     team = next((t for t in teams if t["team_uuid"] == params["team_uuid"]), None)
     if team is None:
@@ -880,12 +892,7 @@ def devbox_rebuild(ex, cfg, params):
         snapshots.roll_back(ex, vms)
         ips = {info["vmid"]: info["maintenance_ip"] for info in _devbox_vms(ex).values()}
         snapshots.wait_for_ssh(ex, [ips[vm["vmid"]] for vm in vms])
-        if all(snapshots.clean_description(ex, vm) == DEVBOX_CONFIGURED for vm in vms):
-            how = "rolled back to its snapshot"
-        elif _try_configure_devbox_base(ex, teams, slug):
-            how = "rolled back, configured and snapshotted (once: its snapshot was from before the configuration)"
-        else:
-            how = "rolled back; its configuration failed (the job log says why), the next reset tries again"
+        how = "rolled back to its snapshot"
     else:
         # Replace just this team's three VMs (fresh disks); the rest is a no-op.
         ex.generate_devbox(teams, ex.repo_root / DEVBOX_GENERATED)
@@ -897,7 +904,9 @@ def devbox_rebuild(ex, cfg, params):
             how = "replaced, configured and snapshotted"
         else:
             how = "replaced; its configuration failed (the job log says why), the next reset tries again"
-    _write_team_keys(ex, team, {name: info for name, info in _devbox_vms(ex).items() if info["team"] == slug})
+    own = {name: info for name, info in _devbox_vms(ex).items() if info["team"] == slug}
+    _install_ca(ex, own)
+    _write_team_keys(ex, team, own)
 
     # Rewrite this team's tokens only.
     vms = _devbox_vms(ex)

@@ -926,6 +926,8 @@ class DevboxFake(FakeExecutor):
     def __init__(self, tmp_path, built_before=False):
         super().__init__()
         self.repo_root = tmp_path
+        (tmp_path / handlers.CA_CERT).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / handlers.CA_CERT).write_text("-----BEGIN CERTIFICATE-----\nworms CA\n-----END CERTIFICATE-----\n")
         self.devbox_built = built_before
         self._sync()
 
@@ -999,31 +1001,22 @@ def _key_writes(ex):
 
 
 def test_a_devbox_reset_rolls_back_to_the_snapshot(tmp_path):
-    """Seconds: the snapshot holds the VMs configured, before any team key, so a reset writes only
-    the team's keys and new tokens. A snapshot from before that (the first boot only) is replaced
-    once, at the next reset: configured without a key (the team's VMs only), then snapshotted."""
+    """Seconds: a reset rolls the team's three VMs back to their snapshot and writes, over SSH, the
+    internal CA, the team's keys and new tokens. No Ansible, no package, no inventory, nothing of
+    another team, whichever snapshot the VMs have (their first boot's or a configured one)."""
     ex = DevboxFake(tmp_path, built_before=True)
-    ex.clean = set(T1_VMIDS)  # first-boot snapshots
-    result = _rebuild(ex)
-    steps = ex.steps()
-    assert steps.count("devbox-configure") == 1 and "--limit devbox-t1-a,devbox-t1-b,devbox-t1-c" in ex.worms_args
-    configure = steps.index("devbox-configure")
-    for vmid in T1_VMIDS:
-        assert steps.index(f"qm rollback {vmid} clean --start 1") < configure < steps.index(f"qm snapshot {vmid} clean --description {handlers.DEVBOX_CONFIGURED}")
-    assert ex.descriptions == {vmid: handlers.DEVBOX_CONFIGURED for vmid in T1_VMIDS}
-    assert result["devbox"].startswith("rolled back, configured and snapshotted")
-
-    ex.calls.clear()
-    ex.ssh_calls.clear()
+    ex.clean = set(T1_VMIDS)
     result = _rebuild(ex)
     steps = ex.steps()
     assert not any(c[:2] == ("tofu", "devbox") and "apply" in c for c in ex.calls)
     assert [s for s in steps if "rollback" in s] == [f"qm rollback {vmid} clean --start 1" for vmid in sorted(T1_VMIDS)]
-    assert not any(c[0] == "worms" for c in ex.calls) and not any("snapshot" in s for s in steps)  # no Ansible, no new snapshot
+    assert not any(c[0] == "worms" for c in ex.calls) and not any("snapshot" in s for s in steps)
+    hosts = sorted(f"10.6.0.{vmid}" for vmid in T1_VMIDS)
+    ca = sorted(c["host"] for c in ex.ssh_calls if c["argv"] == ["sudo", "sh", "-c", handlers.CA_INSTALL] and "worms CA" in c["input"])
+    assert ca == hosts
     key = " ".join(DEVBOX_TEAMS[0]["authorized_keys"][0].split()[:2]) + "\n"
-    assert _key_writes(ex) == [(f"10.6.0.{vmid}", key) for vmid in sorted(T1_VMIDS)]
-    tokens = [c["host"] for c in ex.ssh_calls if handlers.FLAG_PATH in c["argv"]]
-    assert sorted(tokens) == sorted(f"10.6.0.{vmid}" for vmid in T1_VMIDS)
+    assert _key_writes(ex) == [(host, key) for host in hosts]
+    assert sorted(c["host"] for c in ex.ssh_calls if handlers.FLAG_PATH in c["argv"]) == hosts
     assert result["devbox"] == "rolled back to its snapshot" and len(result["vms"]) == 3
 
 

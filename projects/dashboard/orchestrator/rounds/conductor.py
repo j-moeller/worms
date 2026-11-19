@@ -38,6 +38,7 @@ from core.models.rounds import HostJob, RoundRun, RunEvent
 from core.models.vm import VirtualMachine
 from django.conf import settings
 from django.db import connection, transaction
+from django.db.models import Case, Value, When
 from django.utils import timezone
 
 from orchestrator.rounds import gameplans
@@ -244,6 +245,7 @@ class Conductor:
         self.stopping = False
         self._checked_at, self._valid, self._waiting = None, {}, {}
         self._next_look = {}  # round pk -> when a waiting round is looked at again
+        self._release_after = None  # after a failed release of the devboxes: when to try again
         gameplans.framework()  # the framework's modules, for what follows
 
     def now(self):
@@ -392,6 +394,10 @@ class Conductor:
             RoundRun.objects.filter(round=round_, gameplan_sha256="").update(
                 gameplan=round_.gameplan, gameplan_sha256=valid[round_.gameplan],
                 gameplan_version_id=valid[round_.gameplan], duration=round_.team_duration)  # fmt: skip
+            # Staff's devboxes_off, recorded once: from here on only the record counts (it can no
+            # longer change on the dashboard either, the round has started).
+            Round.objects.filter(pk=round_.pk, devbox_hold="").update(
+                devbox_hold=Case(When(devboxes_off=True, then=Value("wanted")), default=Value("no")))  # fmt: skip
         self._waiting.pop(round_.pk, None)
         self._next_look.pop(round_.pk, None)
         log.info("round %s begins: gameplan %s, version %s", round_.name, round_.gameplan, valid[round_.gameplan][:12])
@@ -430,12 +436,15 @@ class Conductor:
         # until that teardown has finished (S7).
         if self._teardown_pending():
             return False
+        if self._release_devboxes():
+            return True
 
         nxt = self._next()
         if nxt is not None:
             if nxt.upload_id is None:
                 self.set_state(nxt, S.SKIPPED, finished_at=self.now(), error="no upload before the round's start")
                 return True
+            self._hold_devboxes(nxt.round)
             self.run_attempt(nxt)
             return True
         # Nothing to run now (no attempt left, or every round left waits for its gameplan).
@@ -445,6 +454,56 @@ class Conductor:
             self.jobs.request(kept, HostJob.Kind.TEARDOWN, keep=False, run_uuid=str(kept.uuid))
             return True
         return False
+
+    # -- the devboxes of a round with devboxes_off ---------------------------------
+    # The node holds them for every such round at once (round_agent/handlers.py, hold_devboxes):
+    # one record of the VMs it shut down, while which it takes no devbox job.
+
+    HOLDING = ("wanted", "held")
+
+    def _hold_devboxes(self, round_):
+        """Before an attempt of a round that recorded devboxes_off when it began: every devbox VM
+        and gateway shut down, until _release_devboxes. A failure is logged and the attempt goes
+        ahead: the node recorded what it did shut down, and starts those again after the round."""
+        from gameplan.definition import RoundError
+
+        if not Round.objects.filter(pk=round_.pk, devbox_hold="wanted").exists():
+            return
+        try:
+            result = self.jobs.run(None, HostJob.Kind.HOLD_DEVBOXES, round_uuid=str(round_.uuid))
+            log.info("round %s: the devboxes are shut down while its attempts run (%s VMs now)",
+                     round_.name, len(result.get("stopped") or []))  # fmt: skip
+        except RoundError as error:
+            log.error("round %s: the devboxes were not all shut down, its attempts go ahead: %s", round_.name, error)
+        Round.objects.filter(pk=round_.pk, devbox_hold="wanted").update(devbox_hold="held")
+
+    def _release_devboxes(self):
+        """Once no round that holds the devboxes has a run to come or under way: the round agent
+        starts again the ones it shut down. True if it did. A failure (the internet window open,
+        ...) is logged and tried again after gameplan_poll seconds; the next round goes ahead
+        meanwhile, and if it holds them too, they stay off until it is over."""
+        from gameplan.definition import RoundError
+
+        holding = Round.objects.filter(devbox_hold__in=self.HOLDING)
+        if not holding.exists():
+            return False
+        busy = RoundRun.objects.filter(state__in=[S.PENDING, *ACTIVE]).values("round_id")
+        if holding.filter(pk__in=busy).exists():
+            return False
+        now = self.now()
+        if self._release_after is not None and now < self._release_after:
+            return False
+        names = ", ".join(holding.order_by("round_start", "id").values_list("name", flat=True))
+        try:
+            result = self.jobs.run(None, HostJob.Kind.RELEASE_DEVBOXES, round_uuid=str(holding.order_by("-id").first().uuid))
+        except RoundError as error:
+            self._release_after = now + timedelta(seconds=self.cfg["gameplan_poll"])
+            log.error("round %s: the devboxes were not started again (tried again in %s s): %s", names, self.cfg["gameplan_poll"], error)
+            return False
+        self._release_after = None
+        holding.exclude(pk__in=busy).update(devbox_hold="released")
+        log.info("round %s is over: the devboxes are started again (%s VMs)", names, len(result.get("started") or []))
+        return True
 
     def recover(self, run):
         """An attempt a previous conductor left behind. Before its end it cannot be resumed

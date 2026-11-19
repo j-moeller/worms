@@ -22,6 +22,7 @@
                 {% if version.sha256 %}<div><dt>Version</dt><dd><a class="mono" href="{% url 'staff_gameplans' %}#v-{{ version.sha256 }}" title="{{ version.sha256 }}">{{ version.sha256|slice:":12" }}</a> {% if version.pinned %}<span class="badge badge--accent">pinned</span> every attempt runs it{% else %}<span class="badge">current</span> the file's version now: pinned when the first attempt starts{% endif %}{% if not version.recorded %} · <span class="muted">known by its hash only</span>{% endif %}</dd></div>{% endif %}
                 <div><dt>Duration</dt><dd>{{ round.team_duration }} s from the worm's start ({{ timing.worm_start_delay }} s after it is deployed)</dd></div>
                 <div><dt>Attempts</dt><dd>up to {{ max_retries|add:1 }} per team: an attempt the infrastructure fails is thrown away and run again</dd></div>
+                <div><dt>Devboxes</dt><dd>{% if round.devbox_hold == "held" %}<span class="badge badge--warn">shut down</span> while its attempts run, started again after its last run{% elif round.devbox_hold == "wanted" %}<span class="badge badge--warn">shut down</span> before its next attempt, started again after its last run{% elif round.devbox_hold == "released" %}<span class="badge">started again</span> after its last run (they were shut down while its attempts ran){% elif round.devbox_hold == "no" %}running during its attempts{% elif round.devboxes_off %}to be shut down while its attempts run <span class="muted">(recorded when the round begins)</span>{% else %}running during its attempts <span class="muted">(can change until its start)</span>{% endif %}</dd></div>
             </dl>
             <p class="form__note">The gameplan is a file on the node and the orchestrator (<code>gameplans/</code>); this page knows its name, its versions by SHA-256 and their descriptions for teams, never its code. Every team meets the same sandbox, rolled back for each.</p>
         </div>
@@ -109,6 +110,7 @@
         <fieldset class="fieldset"><legend>Each team's run</legend><div class="fields">
             {% include "staff/_field.html" with field=form.gameplan %}
             {% include "staff/_field.html" with field=form.team_duration %}
+            {% include "staff/_field.html" with field=form.devboxes_off %}
         </div></fieldset>
         {% endif %}
         <div class="form__actions"><button type="submit" class="btn btn--primary">Save</button></div>

@@ -58,7 +58,7 @@ laptop ──22 (prod) / 2222 (dev)──► node DNAT ──► devbox-ssh-gate
 
 - **Version.** A reset bumps the team's `devbox_version` at once, so the dev score and logs start over. Nothing is deleted.
 - **Queueing.** A rebuild already queued or running is reused, not stacked ([`orchestrator/rounds/devbox.py`](../projects/dashboard/orchestrator/rounds/devbox.py)).
-- **Rounds.** While a round builds its sandbox, the devbox VMs are shut down and started again afterwards: a reboot, not a reset.
+- **Rounds.** While a round builds its sandbox, the devbox VMs are shut down and started again afterwards: a reboot, not a reset. A round with **Shut down every devbox while its attempts run** keeps them off from its first attempt to its last run; resets, key updates and dev uploads wait until then ([5](05-live-environment.md#devboxes-during-a-round)).
 - **REST API.** The dashboard reaches the orchestrator over HTTPS with a bearer token (`/devbox/<team>/reset/`, `/devbox/<team>/reconfigure/`; and `/gameplans/<file>/simulation/` for staff's Simulations page, [5](05-live-environment.md#simulation)). The orchestrator writes the host jobs; the dashboard never does.
 
 ## Dev uploads and runs
@@ -71,7 +71,7 @@ PENDING → RESETTING → DEPLOYING → ARMED → RUNNING → FINISHED
 ```
 
 - **Which upload runs.** Only a team's newest dev upload runs.
-- **Waiting.** A run waits while any round attempt is between PREPARING and TEARING_DOWN. The agent also takes round jobs before devbox jobs.
+- **Waiting.** A run waits while any round attempt is between PREPARING and TEARING_DOWN, and while a round holds the devboxes shut down. The agent also takes round jobs before devbox jobs.
 - **Deploy.** The zip goes to VM A and is started as `bash main.sh` (user `debian`) after a 10 s fuse. systemd stops it after 3600 s (`RuntimeMaxSec`). Processes it started on B or C keep running until the next reset.
 - **Errors.** The error text is for staff only. Teams see a status line on the Upload page.
 

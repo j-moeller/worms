@@ -935,6 +935,65 @@ def _configure_devbox(ex, teams):
     ex.worms("devbox-configure", timeout=1800, args=f"-e @{varfile}")
 
 
+# -- the devboxes, held shut down for a round (docs/05-live-environment.md) ---------------------
+
+HELD_DEVBOXES = "held-devboxes.json"
+
+
+def held_devboxes_path(cfg):
+    """The node's record of the devbox VMs shut down for rounds with devboxes_off: while it
+    exists the agent takes no devbox job (agent.py, claim), which would start one (a reset) or
+    need it running."""
+    return Path(cfg.get("state_dir", STATE_DIR)) / HELD_DEVBOXES
+
+
+def _write_held(path, held):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(json.dumps(held))
+    os.replace(tmp, path)
+
+
+def hold_devboxes(ex, cfg, params):
+    """Shut down every devbox VM and gateway that runs (the pool devbox), until release_devboxes.
+    The record comes first (no devbox job from then on), and each VM is in it before it is shut
+    down: release_devboxes starts exactly these again, after a crash or a second hold too."""
+    path = held_devboxes_path(cfg)
+    held = json.loads(path.read_text()) if path.exists() else {"rounds": [], "vms": []}
+    if params["round_uuid"] not in held["rounds"]:
+        held["rounds"].append(params["round_uuid"])
+    _write_held(path, held)
+    stopped = []
+    for vm in snapshots.pool_vms(ex, "devbox"):
+        if vm.get("status") != "running":
+            continue
+        entry = {"vmid": int(vm["vmid"]), "name": vm["name"]}
+        if entry not in held["vms"]:
+            held["vms"].append(entry)
+            _write_held(path, held)
+        snapshots.shut_down(ex, [vm])
+        stopped.append(vm["name"])
+    return {"stopped": stopped, "held": [entry["name"] for entry in held["vms"]]}
+
+
+def release_devboxes(ex, cfg, params):
+    """Start again the devbox VMs hold_devboxes shut down: those still there (same vmid and
+    name) and stopped. Then the hold is over. Not while internet access is allowed."""
+    path = held_devboxes_path(cfg)
+    if not path.exists():
+        return {"started": []}
+    held = json.loads(path.read_text())
+    _refuse_while_internet(cfg, "start the devbox VMs again")
+    there = {int(vm["vmid"]): vm for vm in snapshots.pool_vms(ex, "devbox")}
+    start = [
+        there[entry["vmid"]] for entry in held.get("vms", [])
+        if entry["vmid"] in there and there[entry["vmid"]]["name"] == entry["name"] and there[entry["vmid"]].get("status") == "stopped"
+    ]  # fmt: skip
+    snapshots.start(ex, start)
+    path.unlink()
+    return {"started": [vm["name"] for vm in start]}
+
+
 HANDLERS = {
     "gameplans": gameplans,
     "prepare": prepare,
@@ -949,4 +1008,6 @@ HANDLERS = {
     "devbox_rebuild": devbox_rebuild,
     "devbox_reconfigure": devbox_reconfigure,
     "devbox_deploy": devbox_deploy,
+    "hold_devboxes": hold_devboxes,
+    "release_devboxes": release_devboxes,
 }

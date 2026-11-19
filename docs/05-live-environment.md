@@ -372,11 +372,21 @@ PYTHONPATH=src python3 -c "from gameplan import loader, runtime; print(runtime.v
 
 ## Running a round
 
-1. **Create the round** on **Staff → Rounds**: its window (the start is the upload deadline; teams' latest Live uploads before it are used) and its duration per team. The gameplan is optional here.
+1. **Create the round** on **Staff → Rounds**: its window (the start is the upload deadline; teams' latest Live uploads before it are used) and its duration per team. The gameplan is optional here. Tick **Shut down every devbox while its attempts run** when the node needs the memory ([Devboxes during a round](#devboxes-during-a-round)).
 2. **Commit and deploy** the gameplan: `worms build gameplans`, outside a round. It copies `gameplans/` and the framework (`src/gameplan`) to the node, then to the orchestrator, and restarts the conductor, which checks them at once. Nothing else is configured and no package installed, so it needs no internet and takes seconds. The round agent reads gameplan files fresh for every job, and restarts itself, between jobs, when the framework or its own code changed on disk ([`agent.py`](../scripts/round_agent/agent.py), `LoadedCode`).
 3. **Check it is valid, and the version.** **Staff → Rounds** marks it valid. The gameplan choice, the rounds list, the round's page and **Staff → Simulations** name each gameplan's version by the first 12 hex digits of its SHA-256: compare them with `sha256sum gameplans/<file> | cut -c1-12` in your checkout. A file missing from the choice is not valid. If not, read `journalctl -u orchestrator-conduct-rounds` on the orchestrator and the `gameplans` job log on the node. **Staff → Simulations** (or **Simulate** on the round's page) replays its attempt at the round's duration per team ([Simulation](#simulation)).
 4. **Choose it** on the round's page. That works until the round's first attempt starts: a round without a valid gameplan waits alone, and the conductor looks again every minute ([`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py), `_pin`). Then the gameplan's version is pinned for every attempt.
 5. **Watch it** (next section). `worms status` shows the active run. On the node, `tail -F /var/log/worms/jobs/latest.log`.
+
+### Devboxes during a round
+
+A round can run with every devbox shut down, for the node's memory: the switch **Shut down every devbox while its attempts run** (`rounds.devboxes_off`).
+- **Until the round's start** staff can set it, on creating the round or on its page. After the start it is no longer on the form.
+- **When the round begins** (its gameplan pinned, [`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py), `_pin`), the conductor records it once, in `rounds.devbox_hold`: `no`, or `wanted`. From then on only the record counts, whatever the switch says. The round's page shows it.
+- **Before its first attempt** the conductor asks the round agent (`hold_devboxes`): every devbox VM and gateway that runs (the Proxmox pool `devbox`) is shut down, each one recorded on the node first (`/var/lib/worms/held-devboxes.json`); the round is `held`. A failure is logged and the attempts go ahead.
+- **Meanwhile** the agent takes no `devbox_*` job (resets, key updates, dev uploads wait in the queue) and dev uploads wait to start.
+- **Once no round that holds them has a run to come or under way** (after the last run's teardown), the agent starts again exactly the VMs it recorded (`release_devboxes`) and the round is `released`. A failed release (the internet window open, ...) is tried again every minute; a next round that holds them too keeps them off until it is over.
+- **By hand**, if the conductor is gone: `qm start` the VMs listed in that file on the node, then delete the file (the agent takes devbox jobs again).
 
 ### Following a round
 

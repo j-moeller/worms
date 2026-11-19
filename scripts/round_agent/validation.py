@@ -254,6 +254,11 @@ def teardown(params):
     return out
 
 
+def devbox_hold(params):
+    """hold_devboxes / release_devboxes: the round it is for (the record names it)."""
+    return {"round_uuid": team_uuid(params.get("round_uuid"), "round_uuid")}
+
+
 # Job kind -> validator. CHECK takes no parameters.
 VALIDATORS = {
     "gameplans": lambda params: {},
@@ -269,6 +274,8 @@ VALIDATORS = {
     "devbox_rebuild": devbox_rebuild,
     "devbox_reconfigure": devbox_reconfigure,
     "devbox_deploy": devbox_deploy,
+    "hold_devboxes": devbox_hold,
+    "release_devboxes": devbox_hold,
 }
 
 

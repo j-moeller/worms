@@ -257,6 +257,11 @@ class HostJob(models.Model):
         # Put a team's dev upload on its devbox VM A and arm the fuse: `deploy` for
         # the devbox (orchestrator/rounds/devbox_runs.py).
         DEVBOX_DEPLOY = "devbox_deploy"
+        # A round with devboxes_off: every devbox VM and gateway shut down before its first
+        # attempt, started again after its last run. Not named devbox_*: the agent takes no
+        # devbox_* job while the devboxes are held (round_agent/agent.py, claim).
+        HOLD_DEVBOXES = "hold_devboxes"
+        RELEASE_DEVBOXES = "release_devboxes"
 
     class State(models.TextChoices):
         QUEUED = "queued"

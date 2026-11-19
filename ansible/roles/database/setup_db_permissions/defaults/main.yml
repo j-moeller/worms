@@ -66,8 +66,9 @@ postgresql_table_privileges:
     - privs: INSERT, DELETE
       tables: [rounds]
     # A round names its gameplan by file only (docs/05-live-environment.md); editing one clears the
-    # orchestrator's check of it (gameplan_status), which the orchestrator then redoes.
-    - privs: UPDATE (name, seed, round_start, round_end, gameplan, team_duration, gameplan_status)
+    # orchestrator's check of it (gameplan_status), which the orchestrator then redoes. Whether its
+    # attempts run with the devboxes shut down (devboxes_off), until its start.
+    - privs: UPDATE (name, seed, round_start, round_end, gameplan, team_duration, gameplan_status, devboxes_off)
       tables: [rounds]
 
   # Reads competition/round/team/upload/VM state; writes only its own results.
@@ -95,7 +96,8 @@ postgresql_table_privileges:
       tables: [gameplan_versions]
     - privs: INSERT (filename, sha256)
       tables: [gameplan_changes]
-    - privs: UPDATE (gameplan_status, gameplan_checked_at)
+    # Its check of a round's gameplan, and what it did about the round's devboxes (devbox_hold).
+    - privs: UPDATE (gameplan_status, gameplan_checked_at, devbox_hold)
       tables: [rounds]
     - privs: INSERT
       tables: [host_jobs, run_events]

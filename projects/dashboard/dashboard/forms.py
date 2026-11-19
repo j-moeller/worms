@@ -194,8 +194,15 @@ class RoundForm(StyledForm):
         required=False, min_value=0, max_value=2**62,
         help_text="Empty: random. The order the teams run in derives from it.",
     )  # fmt: skip
+    devboxes_off = forms.BooleanField(
+        required=False, label="Shut down every devbox while its attempts run",
+        help_text="For the node's memory: every team's devbox VMs and gateway are shut down before the round's "
+                  "first attempt and started again after its last run; meanwhile devbox resets and dev uploads wait. "
+                  "Until the round's start; the conductor records it when the round begins.",
+    )  # fmt: skip
 
-    # A round that has begun: its end, and its gameplan until the first attempt starts.
+    # A round that has begun: its end, and its gameplan until the first attempt starts. Not
+    # devboxes_off: the conductor acts on what it recorded when the round began.
     STARTED_FIELDS = ("round_end", "gameplan", "team_duration")
 
     def __init__(self, *args, competition=None, instance=None, started=False, **kwargs):
@@ -255,6 +262,7 @@ class RoundForm(StyledForm):
             "seed": round_obj.seed,
             "gameplan": round_obj.gameplan,
             "team_duration": round_obj.team_duration // 60,
+            "devboxes_off": round_obj.devboxes_off,
         }
 
 

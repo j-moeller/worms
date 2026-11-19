@@ -98,13 +98,17 @@ class Agent:
 
     def claim(self):
         """Claim the oldest queued job, a round's before a devbox's: a round's jobs are timed, and
-        a team's test must not hold them up. Returns (id, uuid, kind, params) or None."""
+        a team's test must not hold them up. While a round holds the devboxes shut down
+        (handlers.hold_devboxes), no devbox job: it would start one (a reset) or need it running;
+        it waits, queued, for the release. Returns (id, uuid, kind, params) or None."""
+        held = handlers.held_devboxes_path(self.cfg).exists()
         conn = self.conn()
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE host_jobs SET state = 'running', started_at = now(), heartbeat_at = now() "
                 "WHERE id = (SELECT id FROM host_jobs WHERE state = 'queued' "
-                "ORDER BY kind LIKE 'devbox%%', id FOR UPDATE SKIP LOCKED LIMIT 1) "
+                + ("AND kind NOT LIKE 'devbox%%' " if held else "")
+                + "ORDER BY kind LIKE 'devbox%%', id FOR UPDATE SKIP LOCKED LIMIT 1) "
                 "RETURNING id, uuid, kind, params"
             )
             row = cur.fetchone()

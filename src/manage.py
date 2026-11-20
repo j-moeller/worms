@@ -532,6 +532,7 @@ def cmd_build(config, args) -> int:
                                              plan.notes)  # fmt: skip
             if infrastructure.steps:
                 pipe.build_components(infrastructure, packages=args.packages)
+                _record_deployed(pipe, infrastructure.names())
             if "devbox" in dict(plan.steps):
                 code = _build_devboxes(config, rebuild=args.rebuild, teams=args.team, wait=getattr(args, "wait", False))
     except (build.BuildError, SessionError, KeyboardInterrupt) as exc:
@@ -669,12 +670,27 @@ def cmd_deploy(config, args) -> int:
                 restarter.restart(name)
                 print(output.status_cell("ok", f"{name}: restarted, active"))
         print(output.status_cell("ok", f"deployed: {', '.join(plan.names())}"))
+        _record_deployed(pipe, plan.names())
     except (build.BuildError, SessionError, KeyboardInterrupt) as exc:
         output.error(f"deploy stopped: {exc}" if str(exc) else "deploy stopped: interrupted")
         code = 130 if isinstance(exc, KeyboardInterrupt) else 1
     if pipe.services_rolled_back and pipe.devboxes_exist():
         code = _restore_devbox_map(config) or code
     return code
+
+
+def _record_deployed(pipe, names) -> None:
+    """These components run this checkout now (worms_cli/changes.py: what `apply --changed` starts
+    from). Best effort: a build never fails for its record."""
+    from worms_cli import changes, components
+
+    kept = [n for n in names if components.COMPONENTS[n].kind in ("vm", "node", "gameplans")]
+    if not kept:
+        return
+    try:
+        changes.record_deployed(pipe.runner.session, kept, pipe.runner.commit())
+    except Exception as exc:  # noqa: BLE001
+        output.warn(f"the record of what runs ({changes.DEPLOYED}) did not get {', '.join(kept)}: {exc}")
 
 
 def _request_devbox_reconfigure(config) -> int:
@@ -1651,10 +1667,13 @@ SECTIONS = (
             ("plan [<component>...]", "what `worms apply` would do and touch, changing nothing: its steps, what each VM "
                                       "runs now against this checkout, and OpenTofu's own plan; on production before a "
                                       "release, after dev: the two should match"),  # fmt: skip
-            ("release [<component>...]", "this checkout onto the platform, one step after the other: the plan (as "
-                                         "`worms plan`), then, once you agree, a restore point (a database dump, and "
-                                         "what each VM ran), `worms configure`, `worms check` of every team's devbox; "
-                                         "recorded in ~/.worms/releases/"),  # fmt: skip
+            ("apply --changed", "only what changed since what runs: per component, the files of it this checkout changed "
+                                "since its last apply (git), and its packages; OpenTofu's in-place changes from its saved "
+                                "plans; then `worms configure` of those. `plan --changed` shows it"),  # fmt: skip
+            ("release [<component>...]", "this checkout onto the platform, one step after the other: what changed (as "
+                                         "`apply --changed`; or the components named, as `worms plan`), then, once you "
+                                         "agree, a restore point (a database dump, and what each VM ran), the change, "
+                                         "`worms check` of every team's devbox; recorded in ~/.worms/releases/"),  # fmt: skip
             ("rollback [--db] [--code]", "back to before the newest release: --db the database from its dump (what was "
                                          "written since is lost), --code the checkout at the commit the VMs ran before "
                                          "and that commit's own `worms configure`; alone: what it would do"),  # fmt: skip
@@ -1997,6 +2016,8 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     # -- platform
     for verb in ("apply", "plan"):
         p = _add(sub, verb, epilog=_components_overview(), **raw)
+        p.add_argument("--changed", action="store_true", help="only what changed since what runs: the components this "
+                       "checkout changes (git, since each one's last apply), and OpenTofu's in-place changes")
         if verb == "plan":
             _json(p)
         p.add_argument("components", nargs="*", metavar="component", help="components or groups (default: everything)")
@@ -2258,13 +2279,139 @@ def verb_rebuild(config, args) -> int:
 
 
 def verb_apply(config, args) -> int:
+    if args.changed:
+        if args.components:
+            output.error("--changed finds the components itself: name none")
+            return 2
+        return apply_changed(config, args, plan_only=args.plan)
     return cmd_build(config, args)
+
+
+def _changed_report(config, pipe):
+    """What changed since what runs (worms_cli/changes.py), said; (changes, stack plans, the
+    directory of the saved plans, files nobody claims)."""
+    import tempfile
+
+    from worms_cli import changes, components
+
+    found, bases, unclaimed = changes.analyse(config, pipe.runner.session)
+    exists = _exists(pipe, config)
+    print(output.heading(f"what changed since what runs, up to this checkout ({pipe.runner.commit()})"))
+    rows = []
+    for change in found:
+        component = components.COMPONENTS[change.component]
+        files = [w for w in change.why if "/" in w]
+        reasons = [w for w in change.why if "/" not in w]
+        text = "; ".join([*reasons, *(files[:3]), *([f"+{len(files) - 3} more"] if len(files) > 3 else [])])
+        missing = component.kind in ("vm", "node") and not exists(component)
+        rows.append([change.component, change.base or "?", text[:150], ", ".join(change.packages)[:60] or "—",
+                     "not built: `worms apply " + change.component + "`" if missing else change.note])  # fmt: skip
+    if rows:
+        print(output.table(rows, headers=["component", "runs", "why", "packages", "note"]))
+    else:
+        print(output.status_cell("ok", "every component runs this checkout"))
+    if unclaimed:
+        print(output.color(f"changed, but no component is made from it (checked by nothing here): {', '.join(unclaimed[:8])}"
+                           + (f" (+{len(unclaimed) - 8})" if len(unclaimed) > 8 else ""), "yellow"))  # fmt: skip
+    print()
+    print(output.heading("OpenTofu's own plan of each stack (saved: what is applied is what is shown)"))
+    directory = tempfile.mkdtemp(prefix="worms-plans-")
+    plans = []
+    for stack in changes.stacks_to_plan():
+        plan = changes.plan_stack(pipe, stack, directory)
+        plans.append(plan)
+        if plan.error:
+            print(output.status_cell("error", f"{stack}: not planned: {plan.error}"))
+        elif plan.empty:
+            print(output.status_cell("ok", f"{stack}: no changes"))
+        else:
+            counts = f"{len(plan.updates)} in place, {len(plan.creates)} new, {len(plan.replaces)} REPLACED, {len(plan.deletes)} DESTROYED"
+            print(output.status_cell("warn" if plan.safe else "error", f"{stack}: {counts}"
+                                     + ("" if plan.safe else ": not applied here (a VM made anew, replaced or destroyed)")))  # fmt: skip
+            for address in [*plan.replaces, *plan.deletes, *plan.creates, *plan.updates][:12]:
+                print(output.color(f"    {address}", "dim"))
+    return found, plans, directory, unclaimed
+
+
+def apply_changed(config, args, plan_only=False, release=None) -> int:
+    """`worms apply --changed` (and `worms release` without components): OpenTofu's in-place changes
+    first, applied from the plans shown, then `worms configure` of what changed; packages only
+    with --packages. `release`: (before, after) callbacks around the change, for the restore point
+    and the check."""
+    import shutil
+
+    from worms_cli import components
+
+    pipe = pipeline.Pipeline(config)
+    try:
+        found, plans, directory, _unclaimed = _changed_report(config, pipe)
+    except build.BuildError as exc:
+        output.error(str(exc))
+        return 1
+    try:
+        exists = _exists(pipe, config)
+        names = [c.component for c in found if components.COMPONENTS[c.component].kind in ("vm", "node", "gameplans")
+                 and (components.COMPONENTS[c.component].kind == "gameplans" or exists(components.COMPONENTS[c.component]))]
+        stacks = [plan for plan in plans if not plan.empty and plan.safe]
+        left = [plan for plan in plans if not plan.empty and not plan.safe]
+        notes = [c for c in found if c.note]
+        if not names and not stacks:
+            print()
+            print(output.status_cell("ok", "nothing to apply: the platform runs this checkout"
+                                     + (" (but see the OpenTofu changes above)" if left else "")))  # fmt: skip
+            return 1 if left else 0
+        packaged = [c.component for c in found if c.packages and c.component in names]
+        print()
+        print(output.heading("what `apply --changed` does"))
+        for plan in stacks:
+            print(f"  OpenTofu: apply {plan.stack}'s saved plan ({len(plan.updates)} in place, {len(plan.creates)} new)")
+        if names:
+            print(f"  configure: {', '.join(names)}" + (" --packages (the internet window opens)" if args.packages else ""))
+        for plan in left:
+            print(output.color(f"  not here: {plan.stack} ({len(plan.replaces)} replaced, {len(plan.deletes)} destroyed): "
+                               "`worms plan` shows it; `worms rebuild <component>` or `worms apply <stack>` does it, by name",
+                               "yellow"))  # fmt: skip
+        for change in notes:
+            print(output.color(f"  {change.component}: {change.note}", "dim"))
+        if packaged and not args.packages:
+            output.error(f"the packages of {', '.join(packaged)} changed: with --packages (it opens the internet window; on "
+                         "production the node needs egress), or they would be missing")  # fmt: skip
+            return 1
+        if plan_only:
+            return 0
+        if not build.confirm("Apply these changes?", args.yes):
+            return 1
+        if release is not None and release[0](names) != 0:
+            return 1
+        for plan in stacks:
+            print(output.heading(f"OpenTofu: {plan.stack}"), flush=True)
+            try:
+                pipe.runner.tofu(plan.stack, "apply", "-input=false", plan.file)
+            except build.BuildError as exc:
+                output.error(f"{plan.stack}: {exc}; nothing after it was applied")
+                return release[1](1) if release else 1
+        code = 0
+        if names:
+            print(output.heading("configure"), flush=True)
+            code = cmd_deploy(config, _with(args, components=names, plan=False, during_round=False, timeout=900))
+        if release is not None:
+            return release[1](code)
+        return code or (1 if left else 0)
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
 
 
 def verb_plan(config, args) -> int:
     """The steps (`apply --plan`), then what each VM of it runs now against this checkout, and
-    OpenTofu's own plan for the stacks and VMs concerned (worms_cli/release.py)."""
+    OpenTofu's own plan for the stacks and VMs concerned (worms_cli/release.py). --changed: what
+    `worms apply --changed` would do."""
     from worms_cli import components, release
+
+    if getattr(args, "changed", False):
+        if args.components:
+            output.error("--changed finds the components itself: name none")
+            return 2
+        return apply_changed(config, _with(args, yes=False), plan_only=True)
 
     code = cmd_build(config, _with(args, plan=True, rebuild=False, team=[], wait=False, yes=False))
     if code:
@@ -2296,7 +2443,9 @@ def verb_release(config, args) -> int:
     each step recorded (worms_cli/release.py), the way back said at the end."""
     from worms_cli import components, database, release
 
-    code = verb_plan(config, _with(args, plan=True))
+    if not args.components:
+        return _release_changed(config, args)
+    code = verb_plan(config, _with(args, plan=True, changed=False))
     if code:
         return code
     pipe = pipeline.Pipeline(config)
@@ -2328,6 +2477,47 @@ def verb_release(config, args) -> int:
     print(output.color("The way back: `worms rollback --code` (the commit before, configured again), `worms rollback --db` "
                        "(the database from the dump: what was written since is lost).", "dim"))  # fmt: skip
     return code or (checked or 0)
+
+
+def _release_changed(config, args) -> int:
+    """`worms release` alone: what changed (as `apply --changed`), with a restore point before it and
+    every team's devbox checked after, all recorded."""
+    from worms_cli import components, database, release
+
+    pipe = pipeline.Pipeline(config)
+    if pipe.runner.commit().endswith("-dirty"):
+        output.error("this checkout has uncommitted changes: a release is a commit (its record says what runs). "
+                     "Commit first; `worms apply --changed` takes the working tree as it is")  # fmt: skip
+        return 1
+    state: dict = {}
+
+    def before(names) -> int:
+        print(output.heading("restore point"), flush=True)
+        try:
+            dump, size = database.backup(config)
+        except build.BuildError as exc:
+            output.error(f"no restore point, nothing released: {exc}")
+            return 1
+        print(output.status_cell("ok", f"database dump {size / 1e6:.1f} MB: {dump}"), flush=True)
+        vms = [name for name in names if components.COMPONENTS[name].kind == "vm"]
+        state["record"] = release.start_record(pipe, list(names), vms, dump)
+        return 0
+
+    def after(code: int) -> int:
+        checked = None
+        if code == 0 and pipe.devboxes_exist():
+            print(output.heading("check: every team's devbox"), flush=True)
+            _with_db(config)
+            checked = cmd_validate(config, _with(args, teams=[]))
+        record = state["record"]
+        release.finish_record(record, code, checked)
+        print()
+        print(output.heading("the release"))
+        print(output.table(release.describe(record)))
+        print(output.color("The way back: `worms rollback --code`, `worms rollback --db` (what was written since is lost).", "dim"))
+        return code or (checked or 0)
+
+    return apply_changed(config, _with(args, changed=True), release=(before, after))
 
 
 def verb_rollback(config, args) -> int:

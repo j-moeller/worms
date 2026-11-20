@@ -6,6 +6,9 @@ should see. If you don't see it, stop at that step: everything before it can sta
 
 Only step 4 needs egress. Every other step runs with the node offline.
 
+**Superseded for the procedure** by [`migrate-on-production.md`](migrate-on-production.md), which uses
+the new commands and covers tonight's offline repair. This page keeps the dev rehearsal's results.
+
 **Rehearsal on worms-dev, 2026-11-19 evening,** with the same code. Dev's cache was broken the
 same way as production's.
 - Step 4: passed (22:31–22:38). The fill re-fetched the whole index, and with the window closed

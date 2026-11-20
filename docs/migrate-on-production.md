@@ -1,346 +1,248 @@
-# Migrating production: `33dae12` → `3ce1751`
+# Migrating production: the unified CLI, a working apt cache, the first round
 
-An operational runbook for the cutover on the real platform, for the specific
-situation at hand: **the database has never been dumped**, we will **tear down
-every devbox** (they need the private‑internet changes), and we want nginx on
-the dashboard brought up to the **latest security build** (which is *not* a code
-change — see [§6](#6-nginx-security-update-on-the-dashboard)).
+The procedure that brings production from its state on the night of 2026-11-19/20 to this
+document's commit or later. It runs in two parts: **tonight, offline**, so the teams can work again, and
+**tomorrow's egress window**, which refills the caches and gives the devboxes their packages.
+Every step was rehearsed on worms-dev with the same code; [`first-round-preparation.md`](first-round-preparation.md)
+has the rehearsal's details and timings.
 
-Read this together with **[`16-10-merge.md`](16-10-merge.md)**, which is the
-full code/migration review of this exact range (production `33dae12` → `main`).
-This page is the *procedure*; that page is the *why* for every migration and the
-detailed rollback. Where they overlap, that page is authoritative.
+Run everything **on the node, in your checkout** (`<checkout>`), unless a step says otherwise.
+Each step says what you should see. If you don't see it, stop there.
 
-> **One‑line answer to "can I just run `worms build` (everything)?"** No — not
-> cleanly, and not for what you want. (There is no `worms build all`: `worms
-> build` without a component is the whole build.) It opens the internet window,
-> which is **refused while a sandbox VM exists** and shuts every running devbox
-> down meanwhile; it does not, on its own, dump the database first; and it
-> applies every stack and playbook, far more than this deploy needs. Do the ordered steps below instead.
-> They are mostly `worms build <component>`, just sequenced so nothing is lost.
+## Where production stands
 
----
-
-## Command sequence (copy‑paste)
-
-Run on the **controller** (where `worms` = `src/manage.py`) unless a line is
-marked *inside …*. Pick a window with no round running. Each numbered block is
-explained in [Procedure](#procedure) below.
-
-```sh
-# 0. PRE-FLIGHT — all must be clean/empty before going on
-worms status            # components up, NO sandbox VM, internet window closed
-worms status rounds     # nothing running
-worms status jobs       # nothing running or queued
-git status              # clean working tree (the node workspace rsyncs from it)
-
-# 1. BACK UP THE DATABASE FIRST (nothing else does)
-worms login database
-# inside the database VM:
-  df -h /var/lib/postgresql
-  sudo -u postgres pg_dump -Fc -f /var/lib/postgresql/mydb-before-3ce1751.dump mydb
-  ls -lh /var/lib/postgresql/mydb-before-3ce1751.dump
-  exit
-# recommended: copy the dump off the VM (address from `worms show database`):
-#   scp -J root@<node> debian@<database-ip>:/var/lib/postgresql/mydb-before-3ce1751.dump .
-
-# 2. UPDATE THE CHECKOUT to the target
-git pull --ff-only      # -> 3ce1751 (origin/main is bdb461f = 3ce1751 + this doc)
-git rev-parse --short HEAD
-
-# 3. DEPLOY CODE + MIGRATIONS (no internet window)
-worms build --plan dashboard round-agent    # review: must name migrations 0010-0019
-worms build dashboard round-agent            # migrates (services stopped), restarts dashboard + conductor
-
-# 4. RESTART THE ROUND AGENT, THEN THE CONDUCTOR (by hand — the silent-failure step)
-worms login node
-# inside the node:
-  systemctl restart worms-round-agent
-  journalctl -u worms-round-agent -n 20
-  exit
-worms login orchestrator
-# inside the orchestrator:
-  sudo systemctl restart orchestrator-conduct-rounds
-  sudo journalctl -u orchestrator-conduct-rounds -n 20     # "version ... recorded" per gameplan
-  exit
-
-# 5. PRIVATE INTERNET SEED + NGINX SECURITY UPDATE (one internet window; devboxes go down)
-worms build apt-cache devpi dashboard --packages
-
-# 6. TEAR DOWN + REBUILD EVERY DEVBOX FROM NOTHING (fresh disks; new pip index + offline NTP)
-worms build devbox --rebuild    # every team (--team <name> repeatable for a subset); prompts to DESTROY
-worms status jobs               # watch the devbox_rebuild jobs drain on the node
-# not an alternative here: worms reset devbox --all-teams (a snapshot rollback, then CA/keys/tokens over SSH: no update)
-
-# 7. VERIFY
-worms status            # everything up, internet window CLOSED
-worms status gameplans  # round_one valid on both sides
-# by hand: Staff -> Rounds (URLs are now /staff/rounds/<uuid>/), Staff -> Simulations;
-#          create+revoke a token; add+delete a devbox key; SSH a rebuilt devbox
-#          (pip resolves, `timedatectl` shows ntp.worms.internal); dashboard: `nginx -v`.
-```
-
-**If a migration stops** on a duplicate `uuid` (steps 3): on the database VM,
-`UPDATE rounds SET uuid = gen_random_uuid() WHERE uuid IS NULL;` (and the same
-for `access_tokens`, `devbox_ssh_keys`), then re-run step 3.
-
-**Rollback** (only if needed; full detail in [`16-10-merge.md`](16-10-merge.md#rollback)) —
-keep the new schema, let old code run:
-```sh
-worms login database
-# inside the database VM, as postgres (psql mydb):
-  ALTER TABLE rounds          ALTER COLUMN uuid SET DEFAULT gen_random_uuid();
-  ALTER TABLE access_tokens   ALTER COLUMN uuid SET DEFAULT gen_random_uuid();
-  ALTER TABLE devbox_ssh_keys ALTER COLUMN uuid SET DEFAULT gen_random_uuid();
-# then on the controller: git checkout 33dae12 && worms build dashboard round-agent
-# and redo step 4 (restart the agent, then the conductor).
-```
-
----
-
-## What's actually changing (at a glance)
-
-27 commits, ~110 files. Nothing touches the platform, firewall, host network,
-scoring/logging/monitor, `group_vars` or the vault, and **no new secret**. The
-parts that matter for a deploy:
-
-| Area | Change | Lands with |
+| What | Effect | Fixed by |
 |---|---|---|
-| **Database** | 10 migrations `0010`–`0019`: UUIDs for rounds, access tokens and devbox SSH keys (`0010`–`0015`); `host_jobs.read_file` (`0016`); `gameplan_simulations` (`0017`); `gameplans.description` (`0018`); `gameplan_versions` + `gameplan_changes` (`0019`). Only small tables are rewritten; seconds. | the orchestrator build (migrates with its services stopped), then the DB grants play |
-| **Dashboard / API** | Rounds, tokens, SSH keys and progression are addressed by **UUID**, not a number. New **Staff → Simulations** and **Simulate** on a round. Favicon, Dev‑view round badge. | `worms build dashboard` |
-| **Gameplans** (new feature) | `src/gameplan`: documents, archives, KeePass vaults, TOTP/telnet logins, `read_file`, simulation, immutable versions. A second example, `credential_chain.py`. | orchestrator + round agent |
-| **Round agent (node)** | the `read_file` job, new secret kinds, `python3-cryptography`. **Must be restarted by hand** after the deploy. | `worms build round-agent` **+ `systemctl restart`** |
-| **Devbox** | pip now points at the seeded devpi mirror; time syncs from `ntp.worms.internal` (offline). | **`worms build devbox --rebuild`** ([§7](#7-tear-down-and-rebuild-every-devbox)) |
-| **Private internet** | larger devpi seed (116 pkgs), new apt‑cache packages, stale‑index guard. | `worms build apt-cache devpi --packages` ([§4](#4-refresh-the-private-internet-internet-window)) |
-| **DNS** | every BIND log is a bounded file (failed lookups were filling the DNS VM's disk). | `worms build dns` (or the full build) |
+| **The apt cache has no package index.** Its `InRelease` files exist only under temporary names and none of the `Packages` lists does, so offline it answers `503 Unable to download in offline mode`. Its `clean` snapshot, if it has one, holds the same broken index. | Teams can't use apt. A fresh VM (a sandbox gateway at a round's first attempt, a rebuilt devbox) finds no package (`No package matching 'nftables'`), so the round's first attempt and every retry would fail. | Tonight: the offline repair, then a new snapshot (step 5). Tomorrow: the refill (window, step 1). |
+| **Devboxes in mixed states.** Some were rolled back to a bare first-boot snapshot: Debian's sources, `root@localhost`, no CA, no `/etc/worms/flag`. | Teams can't work on them, and dev uploads that run on them fail. | Tonight: a reset of every team's devboxes (step 6). Tomorrow: a rebuild with packages (window, step 3). |
+| **The round agent may be stuck on a job** (an apt task that never returns). | It runs one job at a time, so every dev upload, devbox reset and key push queues behind it. | Step 1. |
+| The devbox gateways had no `nftables`. | Nothing. | Done by hand. |
 
-**Good news already in production:** `33dae12` already contains the
-migration‑deadlock fix (services stopped before `migrate`, `lock_timeout`) and
-the sshd‑bind fix, so the migration step will not hang.
+## What changes
 
----
+| Area | Change |
+|---|---|
+| **The CLI** | One verb per task. Day to day: `status`, `show`, `log`, `run`, `login`, `deploy`, `reset`, `restart`. A team VM can be named as `<team>/a\|b\|c\|gw` (`alpha/gw`, `t2/a`). Every command used so far still works, as an alias. Table below. |
+| **`worms status`** | Starts with an *attention* block: internet window open, devboxes held or stopped, missing `clean` snapshots, pending migrations, failed jobs, node services down. A team column; *created* and *updated* columns from the per-VM history. |
+| **`worms deploy`** | Configures what exists, never OpenTofu, no internet window unless `--packages`. Then it syncs the gameplans and restarts the agent (once no job runs), then the conductor: no more manual restarts. Refused during a round. `--plan` shows what each line touches. |
+| **`worms run`** | `worms run <vm>... [--root] -- <command>` runs a command on VMs without a login; `worms login <vm> -- <command>` too. Groups (`services`, `private-internet`, `infrastructure`) never include team VMs; a team VM's output is escaped. |
+| **Logs** | Every changing command keeps its whole output in `~/.worms/runs/` (`worms log build`); `worms log latest -f` follows the newest host job. |
+| **The apt cache** | The fill keeps the old index until the new one is complete, fetches every list a fresh VM needs, and checks offline that the cache serves a fresh VM. `scripts/apt-cache-offline-index.py` rebuilds the index offline from the apt-cache VM's own lists. `worms internet disable` switches DNS and the caches back to offline mode. 13 more apt packages, 2 more PyPI packages (step 1 of the window). |
+| **Safety** | `worms step devbox-configure`/`devbox-keys` by hand are refused (they erased every team's keys). A build that fails inside the window switches DNS and the caches offline. Tab completion offers only plain names. |
+| **Per-VM history** | `/var/lib/worms/vm-history.jsonl` on the node: when each VM was created, configured, snapshotted or rolled back, by which commit and command. `worms show <vm>` lists it. |
+| **Database** | Migration `0020` (the round's "shut down every devbox" switch), if production lacks it. |
 
-## The three things you flagged
+| Old command | Now |
+|---|---|
+| `worms build <existing component>` | still works; `worms deploy <component>` is the configure-only form |
+| `worms status keys`, `worms devbox-sync-keys`, `worms devbox-add-key`, `worms devbox-remove-key` | `worms keys status`, `worms keys sync`, `worms keys add`, `worms keys remove` |
+| `worms build devbox --rebuild --team X` | `worms reset devbox X --fresh` |
+| `worms login X`, then a command | `worms run X -- <command>` |
+| `systemctl restart worms-round-agent`, then the conductor on the orchestrator | `worms restart agent conductor` (waits for the agent's running job) |
+| `pg_dump` on the database VM | `worms backup database` |
 
-1. **The database is not backed up.** Dump it *first* ([§1](#1-back-up-the-database-first-nothing-else-does)). The UUID steps `0011`/`0014` rewrite rows; a dump is your floor. Nothing in the platform backs the database up on its own.
-2. **Tearing down every devbox.** Use **`worms build devbox --rebuild`** ([§7](#7-tear-down-and-rebuild-every-devbox)) — it rebuilds every team's three VMs **from nothing** (fresh disks), re‑applies the new pip index + NTP and re‑snapshots them clean; dev scores restart, dev records are kept. (`worms reset devbox --all-teams` is no substitute: it rolls each devbox back to its `clean` snapshot and writes the internal CA, the team's keys and new tokens over SSH, without Ansible, so the VMs stay on the snapshot's pip index and NTP.) **Do _not_ use `worms destroy`** — it tears down the VM stacks **and the database VM and its records**. See [Don'ts](#donts).
-3. **nginx security update.** This is *not* in `3ce1751`. nginx is a plain Debian package installed `state: present` (install, never upgrade), so a normal build never moves it. The security build comes from an **apt upgrade during an internet window** — i.e. a `--packages` build of the dashboard. Details and the "newer than Debian stable" case in [§6](#6-nginx-security-update-on-the-dashboard).
+## Tonight, offline
 
----
+### 1. The code, and a stuck agent
 
-## Procedure
-
-Run everything from the controller (the laptop/host where `worms` = `src/manage.py`).
-Pick a window with **no round running and none starting within ~1 hour** (a
-deploy mid‑round costs that team its attempt), and tell teams that devboxes will
-be down for a while and that **round links and the team‑API round ids change to
-UUIDs**.
-
-### 0. Pre‑flight
-
-```sh
-worms status                 # components up; NO sandbox VM exists; internet window closed
-worms status rounds          # nothing running
-worms status jobs            # nothing running or queued
-git -C <checkout> status      # clean: the node workspace is rsynced from the working tree, uncommitted edits included
-```
-A leftover sandbox or a running job blocks the internet window later. Resolve before continuing.
-
-### 1. Back up the database first (nothing else does)
+Bring the checkout to this document's commit or later, the way you always push code there. The new CLI works at
+once; the node's round agent runs the new code only after step 4.
 
 ```sh
-worms login database
-sudo -i
-df -h /var/lib/postgresql        # the dump needs room; network_flows has no retention
-sudo -u postgres pg_dump -Fc -f /var/lib/postgresql/mydb-before-3ce1751.dump mydb
-ls -lh /var/lib/postgresql/mydb-before-3ce1751.dump
-exit; exit
+git log --oneline -1           # this document's commit, or later
+git status --short             # nothing modified: the node's workspace is synced from the working tree
+worms status jobs              # a job `running` for a long time, others `queued` behind it?
 ```
-Then **copy it off the VM** (e.g. `scp` via the node) if the database disk itself
-is the worry. Keep it until the deploy is proven. This is the line that makes
-everything below reversible.
 
-### 2. Update the checkout
+If one job is stuck, end it, so the queue moves again:
 
 ```sh
-git -C <checkout> pull --ff-only     # to 3ce1751 (write the hash down)
-git -C <checkout> rev-parse --short HEAD
+worms log <its number>                 # the last lines: where it hangs
+systemctl restart worms-round-agent    # up to ~90 s: systemd ends the hung job
+worms status jobs                      # the queued jobs run again, one at a time
 ```
 
-### 3. Deploy the code + migrations (no internet window)
+Use plain `systemctl` here. `worms restart agent` waits for the running job to finish, up to 15
+minutes, and a stuck job never does. The ended job is lost; rerun it later if it was a reset.
+
+### 2. Pre-flight
 
 ```sh
-worms build --plan dashboard round-agent
+pgrep -af 'manage.py|ansible-playbook'   # nothing: a second worms run can close the window under a build
+worms status                             # read the attention block; internet access ● denied; no sandbox VM
 ```
-Expect the plan to pull in **database** and **orchestrator** ("configure again:
-the database lacks migrations"), naming migrations **`0010`–`0019`**, then
-**dashboard** and **round-agent**. If the plan does *not* name all ten
-migrations, stop and investigate before applying.
+
+### 3. Back up the database
 
 ```sh
-worms build dashboard round-agent
+worms backup database          # ● <size>: ~/.worms/backups/<node>-mydb-<time>.dump, readable by you only
 ```
-One Ansible run configures the database, orchestrator and dashboard **together**
-(so the dashboard is never new against an old schema): the orchestrator migrates
-with its services stopped, the dashboard restarts, the DB grants play runs, the
-conductor restarts. Then the node play: workspace sync, `python3-cryptography`,
-the unit. **No internet window is opened** (packages are skipped without
-`--packages`) — nginx is *not* touched here; that is [§6](#6-nginx-security-update-on-the-dashboard).
 
-> If `0012` or `0015` stops on a duplicate `uuid` (the old dashboard inserted a
-> row in the one‑second gap), fill the empties and re‑run — the SQL is in
-> [`16-10-merge.md` §The migrations](16-10-merge.md#the-migrations).
-
-### 4. Restart the round agent, then the conductor (the step that bites)
-
-The build **syncs** the agent's code but **does not restart it**. A running
-agent keeps the old gameplan code in memory while the new sandbox role is on
-disk — `round_one`'s password login would then silently stop working. So, while
-`worms status jobs` shows nothing running:
+### 4. Deploy the code (offline)
 
 ```sh
-# on the node:
-systemctl restart worms-round-agent
-journalctl -u worms-round-agent -n 20
+worms deploy --plan dashboard orchestrator round-agent   # database comes along if migration 0020 is pending
+worms deploy dashboard orchestrator round-agent          # 12 min on dev
 ```
-```sh
-worms login orchestrator
-sudo systemctl restart orchestrator-conduct-rounds
-sudo journalctl -u orchestrator-conduct-rounds -n 20   # "version ... recorded" for each gameplan
-exit
-```
-Restart the conductor **after** the agent, so its first gameplan check runs
-against an agent that already lists every file (otherwise the new
-`credential_chain.py` shows up only on the next 10‑minute check).
 
-### 5. Refresh the private internet (internet window)
-
-This is what the devboxes' new pip index needs, and it also carries the nginx
-upgrade if you fold it in (next step). It **shuts the devboxes down**, opens the
-window, seeds, closes the window, snapshots `clean`:
+It ends with `● agent: restarted, active`, `● conductor: restarted, active` and
+`● deployed: …`. Name the components: a bare `worms deploy` configures everything, the node's host
+network included, and rolls every service VM back to its snapshot.
 
 ```sh
-worms build apt-cache devpi --packages
+worms status gameplans         # round_one: valid on the orchestrator and the node
 ```
-- devpi fetches ~116 packages in batches; this is the slow part (many minutes).
-- `round_one` needs nothing from here, so this step can wait for a quieter hour
-  if you must — but the devbox rebuild in §7 depends on it, so do it before §7.
 
-### 6. nginx security update on the dashboard
-
-Fold the nginx upgrade into the same window (do it in the same sitting as §5):
+### 5. Repair the apt cache (offline), and snapshot it
 
 ```sh
-worms build dashboard --packages
+worms run apt-cache --root -- python3 - < scripts/apt-cache-offline-index.py
 ```
-`--packages` opens the internet window and runs `UpdateVMs.yml`
-(`apt upgrade: safe`) on the dashboard, which apts **directly from Debian
-stable + security** (the dashboard is *not* behind the offline apt‑cache). nginx
-upgrades to the current security build and its handler reloads. A plain
-`worms build dashboard` would **not** move nginx (`state: present`).
 
-> **If you need a version newer than Debian stable ships** (a CVE fixed only in
-> nginx mainline or a backport), apt can't give it to you — that needs a repo +
-> pin added to the `nginx_tls` role. That's a code change, not in `3ce1751`;
-> tell me and I'll add it. For an ordinary Debian security update, the command
-> above is all you need.
+It ends with `OK: the cache gives a fresh VM its whole index, offline.` It was tested on dev, on a
+cache broken exactly like production's. The many `W: Tried to start delayed item … but failed`
+lines are expected: apt tries the compressed lists, which the cache lacks, before the uncompressed
+ones. If it fails, it prints the command that puts the previous index back.
 
-You can combine §5 and §6 into one window: `worms build apt-cache devpi dashboard --packages`.
-
-### 7. Tear down and rebuild every devbox
-
-Now that the private internet is seeded and the window is closed:
+Then the snapshot. A round's first attempt rolls the service VMs back to `clean`; without a new
+snapshot it would roll the cache back to the broken index.
 
 ```sh
-worms build devbox --rebuild    # every team; add --team <name> (repeatable) for a subset
-worms status jobs               # watch the devbox_rebuild jobs run and drain
+worms show apt-cache           # its vmid, and under "snapshots" whether it has `clean`
 ```
-This is the literal "tear down all devbox VMs": through the orchestrator → round
-agent, each team's three VMs are **replaced from nothing (fresh disks)**, keys
-re‑installed, the **new pip index + NTP drop‑in applied**, and a fresh `clean`
-snapshot taken (so later team resets roll back to the new config). Dev scores
-restart; earlier dev records are kept. It prompts to DESTROY first (`--yes` skips).
 
-> `worms reset devbox --all-teams` is **not** an alternative: it rolls each
-> devbox back to its *pre‑deploy* `clean` snapshot and writes the internal CA,
-> the team's keys and new tokens over SSH (no Ansible, no package), so the VMs
-> keep the snapshot's old pip index and NTP. (A devbox whose snapshot is from its
-> first boot only gets a one-time offline setup, still without packages.)
-> `--rebuild` is the one that picks up the private‑internet change. Never use `worms destroy` —
-> it takes the database VM too.
-
-### 8. Verify
+If it has `clean`, retake it:
 
 ```sh
-worms status                 # everything up; internet window CLOSED
-worms status gameplans       # round_one valid both sides; credential_chain valid after §5
+qm shutdown <vmid> --timeout 120 && qm delsnapshot <vmid> clean && qm snapshot <vmid> clean --description "worms: offline index $(date +%F)" && qm start <vmid>
 ```
-- **Staff → Rounds** opens; a round's URL is now `/staff/rounds/<uuid>/`.
-- **Staff → Simulations** lists the gameplans; `round_one` simulates `ok`.
-- As a team member: create+revoke an access token, add+delete a devbox SSH key (these write the new UUID columns).
-- SSH into a rebuilt devbox and check `pip` resolves and `timedatectl` shows NTP from `ntp.worms.internal`.
-- Dashboard over HTTPS still loads (nginx reloaded cleanly): `nginx -v` on the dashboard shows the new build.
 
----
+Check from a team gateway that apt works again:
 
-## What teams and staff notice
+```sh
+worms run <team>/gw --root -- apt-get update     # Get:/Hit: lines from apt-cache.worms.internal, no Err:
+```
 
-- **Round links change.** Old numeric links (`/staff/rounds/12/`,
-  `/progression/rounds/12/...`) answer 404; open rounds from the lists again.
-- **Team API:** `GET /api/v1/rounds/` returns each round's `id` as a UUID and
-  every `/api/v1/rounds/<id>/...` takes that UUID. Scripts that read the id from
-  the list keep working; scripts with a numeric id hard‑coded get 404. Access
-  **tokens themselves are unchanged**.
-- Downloaded replays made before the deploy still open.
-- `credential_chain.py` becomes an offered gameplan the moment it deploys — to
-  keep it out of production, delete it in a commit before deploying.
+### 6. Reset every team's devboxes (offline)
 
----
+```sh
+worms reset devbox --all-teams --wait     # about 1–3 min per team, one after another
+worms keys status                         # every cell ✓
+```
+
+Each team's VMs go back to their snapshot. One that never got its one-time setup gets it now,
+with no network: hostname, CA, apt and pip pointed at the private internet, time sync. Then the
+keys, the CA and `/etc/worms/flag`. The teams lose what's on their devboxes. Packages (`rsync`,
+`pip`) come with the rebuild in tomorrow's window.
+
+Check one team (`worms show <team>` lists its VMs):
+
+```sh
+worms run <team>/a --root -- sh -c 'hostname; cat /etc/worms/flag; getent hosts scoring.worms.internal'
+```
+
+You should see `devbox-tN-a`, a `FLAG{…}`, and an address.
+
+## Tomorrow: the egress window
+
+### 1. Refill the caches
+
+The lists now hold 13 more apt packages and 2 more PyPI packages, every name checked against
+trixie's index:
+- **The Python libraries for `round_one`'s files and logins, as Debian packages:**
+  `python3-pykeepass`, `python3-pyotp`, `python3-docx`, `python3-odf`, `python3-pexpect`,
+  `python3-py7zr`, `python3-pyzipper`, `python3-asyncssh`. A worm on a sandbox VM can then
+  `apt install` them; pip there needs an index URL and `--break-system-packages`.
+- **Compiled worms:** `golang-go`, `musl-tools`, `upx-ucl`. Go and static C binaries need nothing on
+  the target.
+- **KeePass on the shell:** `keepassxc-minimal`, `kpcli`.
+- **On PyPI:** `pex`, `shiv`, for a Python worm and its dependencies as one runnable file.
+
+Give the node egress, then:
+
+```sh
+worms build --yes apt-cache devpi --packages
+```
+
+Take egress away again afterwards. The build opens and closes the worms window itself. apt-cache
+took 7 min on dev; devpi takes longer (its list holds large packages).
+
+**What you should see:**
+- `Re-prime the indexes through the cache, every list a fresh VM fetches (online)`: `changed`
+- `Check every suite's index arrived under its own name`: `ok`
+- after the window, `Ask the cache for a fresh VM's package index, offline`: `ok`
+- the service VMs snapshotted again: the round rolls back to the refilled cache
+
+**If it fails:** `Say the indexes were not refreshed` means the egress wasn't there; the previous
+index is back. Whatever failed, run `worms internet disable` before you stop: it closes the window
+and switches DNS and the caches back to offline mode.
+
+### 2. Check from a team gateway
+
+```sh
+worms run apt-cache -- sh -c 'grep -c . /etc/apt-cache-package-list; cat /etc/seed-version'
+worms run <team>/gw --root -- apt-get update --error-on=any
+```
+
+The first shows `156` and this checkout's commit: the fill writes them only once every package
+and its dependencies were fetched. The second shows no `Err:`. (`apt-cache policy` alone proves
+nothing: it names a candidate for every package in trixie's index, cached or not.)
+
+### 3. Rebuild the devboxes with their packages
+
+```sh
+worms reset devbox --all-teams --fresh --wait   # 12–14 min per team, one after another
+worms keys status
+```
+
+A team's A, B and C are replaced (fresh disks), configured with their packages from the refilled
+cache and snapshotted. Later resets are a rollback of seconds. The gateways stay. The teams lose
+what's on their devboxes, so warn them first.
+
+## The round
+
+On the dashboard, **Staff → Rounds**:
+
+- **Gameplan:** `round_one` (valid).
+- **Minutes per team: at least 24.** `round_one` gives the worm 10 min on A, waits 10 more, and
+  churns until 5 min before the end; it's written for 60. Below 24 the round shows `invalid` and
+  waits.
+- **Start and end:** a team's slot is its minutes + 17¼ min. Add **about an hour for the first
+  attempt's sandbox build**: 67 min on dev, for 21 VMs. With 4 teams × 60 min that's about 6½ h,
+  plus room for retries.
+- **"Shut down every devbox while its attempts run":** on, for the node's memory. It can only be
+  set before the round starts.
+- **Simulate** the round: `ok`.
+- Each team runs its latest **Live** upload from before the start; a team without one is skipped.
+
+**Following it:**
+
+```sh
+worms status                 # attention: devboxes held by the round, any failed job
+worms status rounds
+worms log latest -f          # the newest host job: the first prepare builds the sandbox (about 1 h)
+worms log conductor -f
+worms emergency-stop         # hard-stop every VM, destroy nothing: the only hard stop
+```
 
 ## Rollback
 
-Full detail (two rehearsed, data‑preserving options) is in
-**[`16-10-merge.md` §Rollback](16-10-merge.md#rollback)**. In short:
-
-- **Option 1 (recommended, nothing lost):** give the three UUID columns a DB
-  default, then check out `33dae12` and `worms build dashboard round-agent`:
-  ```sql
-  ALTER TABLE rounds           ALTER COLUMN uuid SET DEFAULT gen_random_uuid();
-  ALTER TABLE access_tokens    ALTER COLUMN uuid SET DEFAULT gen_random_uuid();
-  ALTER TABLE devbox_ssh_keys  ALTER COLUMN uuid SET DEFAULT gen_random_uuid();
-  ```
-  Production's code then ignores the new columns and works. The UUIDs stay, so a
-  later re‑deploy keeps the URLs.
-- **Option 2 (back to the exact old schema):** on `main`'s code, stop the
-  orchestrator services and `manage.py migrate core 0009 --database=migrator`,
-  then check out `33dae12` and rebuild.
-- **From the dump** (step 1) is the last resort — it loses everything since the
-  dump. The private internet needs no rollback.
-
----
+- **The code:** check out `9d1382a` (the last commit before the CLI merge), then
+  `worms build --yes dashboard round-agent` and restart the agent, then the conductor. The migrations
+  stay; nothing of the old code depends on their absence.
+- **The database:** step 3's dump, restored on the database VM with `pg_restore`. It loses
+  everything since the dump.
+- **The apt cache:** the offline repair keeps the previous index as `dists.before-offline-index`
+  in each backend directory of `/var/cache/apt-cacher-ng`.
 
 ## Don'ts
 
-- **Don't `worms destroy`** to clear devboxes — it destroys the VM stacks **and
-  the database VM and its records**. Use `worms build devbox --rebuild` (a
-  `worms reset devbox --all-teams` is only a snapshot rollback plus keys and tokens).
-  (`worms destroy --all` is even broader.) There is no undo but the step‑1 dump.
-- **Don't deploy during a round** — the running team loses its attempt.
-- **Don't skip the agent restart** (§4). Nothing reports the error; a flag just
-  becomes unreachable.
-- **Don't open the internet window while a sandbox or devbox exists** — any
-  `--packages` build shuts devboxes down for you, but a stray sandbox VM will
-  make it refuse (`worms internet disable`, remove the sandbox, retry).
-- **Don't run `migrate` by hand** on a VM whose services are up — the deploy
-  stops them for you; doing it manually re‑introduces the lock contention.
-
----
-
-## Worth doing soon (not required for this cutover)
-
-- **Scheduled database dumps** (security review S1) — this cutover is the second
-  time "nothing backs it up" has been the first risk.
-- **Restart the agent on code change** automatically (a handler on the sync),
-  which would remove §4 and its silent‑failure risk.
-- **`db_default` on the UUID columns**, which would make rollback option 1
-  unnecessary and the migration gap harmless.
+- **No deploy during a round.** It restarts the conductor, and that costs the running team its
+  attempt. `worms deploy` refuses unless `--during-round`.
+- **No bare `worms deploy` tonight.** It reconfigures the host network and rolls every service VM
+  back. Name the components.
+- **No `worms destroy`.** It takes the database VM and its records too.
+- **No `worms build apt-cache --packages` without egress.** It puts the old index back and achieves
+  nothing.
+- **If dpkg asks about `/etc/nftables.conf` on a gateway, answer `N`.** The gateway's rules are in
+  that file.

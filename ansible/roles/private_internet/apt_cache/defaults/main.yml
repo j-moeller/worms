@@ -173,3 +173,20 @@ apt_cache_seed_packages:
   - parallel
   - time
   - expect
+  # A worm on a sandbox VM: the Python libraries for round_one's files and logins as Debian
+  # packages, so `apt install` is enough (no pip, index URL or --break-system-packages there);
+  # compiled worms (Go and static C binaries need nothing on the target); KeePass on the shell.
+  # Each name checked against trixie's index on 2026-11-20.
+  - python3-pykeepass
+  - python3-pyotp
+  - python3-docx
+  - python3-odf
+  - python3-pexpect
+  - python3-py7zr
+  - python3-pyzipper
+  - python3-asyncssh
+  - golang-go
+  - musl-tools
+  - upx-ucl
+  - keepassxc-minimal
+  - kpcli

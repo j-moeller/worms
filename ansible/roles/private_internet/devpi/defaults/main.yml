@@ -182,6 +182,9 @@ devpi_seed_packages:
   - ecdsa
   - pycryptodomex
   - pyinstaller
+  # A Python worm and its dependencies as one runnable file (a sandbox VM has no pip index set up).
+  - pex
+  - shiv
   - pytest-mock
   - pytest-xdist
   - pytest-timeout

@@ -128,15 +128,27 @@ Account rules ([`core/accounts.py`](../projects/dashboard/core/accounts.py), [`m
 |---|---|---|
 | Proxmox cluster/node firewall | input DROP. The node accepts its own subnet plus the operator rules for 2222 and 8006, which are added by hand | [`stacks/firewall`](../opentofu/stacks/firewall/main.tf) |
 | Per-VM firewall | Every VM: DROP in and out, `ipfilter` and `macfilter` (each NIC pinned to its address). Security groups per role; replaced with the VM | the VM modules, [`stacks/firewall`](../opentofu/stacks/firewall/main.tf) |
-| Node nftables | Zone firewall: forwards only the flows below. Bridge filters on services, sandbox and devbox bridges: allowed addresses and ports only, gateway↔gateway dropped. Per-VM rates (services SYN 20/s; any SYN 500/s; UDP 5000 pps) | [`worms.nft.j2`](../ansible/roles/host/host_network/templates/worms.nft.j2) |
+| Node nftables | Zone firewall: forwards only the flows below. Bridge filters on services, sandbox and devbox bridges: allowed addresses and ports only; on the services bridge every packet has a sandbox or devbox gateway at one end (gateway↔gateway and service VM↔service VM dropped). Management bridges (vmbr2, vmbr4, vmbr5, vmbr6): VM↔VM dropped, a VM reaches the node only. Per-VM rates (services SYN 20/s; any SYN 500/s; UDP 5000 pps) | [`worms.nft.j2`](../ansible/roles/host/host_network/templates/worms.nft.j2) |
 | Gateways | sandbox-gw and devbox-gw forward only team networks → service ports and → LLM:443, SNATed to their own address. No default route. **No forwarding between sandbox networks or between a devbox's two links** | [`sandbox-gw.tftpl`](../opentofu/stacks/sandbox/templates/sandbox-gw.tftpl), [`devbox-gw.tftpl`](../opentofu/stacks/devbox/templates/devbox-gw.tftpl) |
 | Gameplan rules | Per sandbox VM; peers limited to sandbox CIDRs | [`stacks/sandbox`](../opentofu/stacks/sandbox/main.tf), [5](05-live-environment.md#writing-a-gameplan) |
+
+### Trust zones
+
+| Zone | VMs | Reaches | Reached by |
+|---|---|---|---|
+| Trusted | the node, the orchestrator, the dashboard (internet-facing: T3) | the database; dashboard → orchestrator; orchestrator → Proxmox API | the internet (dashboard:443 only) |
+| Choke point | the database | nothing | the trusted zone and the semi-trusted one, each role from its own VM, with its own grants |
+| Semi-trusted | scoring, logging, the monitor | the database (INSERT-only roles) | the sandbox and devbox gateways (scoring, logging); the sandbox mirror (monitor) |
+| For the untrusted | DNS, the private internet (apt-cache, devpi, docker-registry, manpages, ntp, cve-search, wikipedia) | nothing (their packages: the Debian mirrors, in the internet window) | the sandbox and devbox gateways only |
+| Untrusted | sandbox and devbox VMs, their gateways | through their gateway: DNS, scoring, logging, the private internet; the LLM endpoint | the node (SSH); devbox VMs: the SSH gateway |
+
+The database is the one place where the trusted zone meets the rest. Nothing on the trusted side reaches scoring, logging, DNS or the private internet, and nothing but the sandbox and devbox gateways reaches DNS or the private internet: their per-VM rules accept the gateways' addresses only (sandbox-gw `10.2.0.2`, the devbox gateways `10.2.0.32/27`), and the node's bridge filter drops service VM↔service VM on the services bridge a second time. On the management bridges every VM reaches the node only. Besides the database, one other flow crosses zones: every infrastructure VM's audit log to the syslog VM (TCP 514, rate-limited per sender).
 
 **Allowed flows** (everything else is dropped):
 - internet → dashboard:443; internet → SSH gateway:22 (dev: 2222). Both by DNAT; the client address is kept.
 - dashboard → database:5432 and orchestrator:443. Orchestrator → database and Proxmox API:8006.
 - scoring, logging, monitor → database:5432. Every infrastructure VM → syslog:514.
-- sandbox/devbox VMs → their gateway → DNS, scoring, logging and private internet, on service ports only (TCP 53, 80, 443, 3141, 3142, 5000, 8888; UDP 53, 123).
+- sandbox/devbox VMs → their gateway → DNS, scoring, logging and private internet, on service ports only (TCP 53, 80, 443, 3141, 3142, 5000, 8888; UDP 53, 123). DNS and the private internet accept nothing else; no service VM reaches another.
 - sandbox VMs ↔ sandbox VMs: only on a shared network and as the gameplan's rules allow. Devbox VMs ↔ their team's VMs on the team's links.
 - sandbox/devbox VMs → `teachllm.mlsec.tu-berlin.de:443` (141.23.117.34): **the one outside exception**. Every layer allows only this address and port, and DNS answers only this outside name. Whatever that server does with requests is part of the containment.
 - node → every VM:22 on its management NIC.
@@ -196,7 +208,7 @@ IDs are cited in code comments. S = team VMs, D = dashboard, C = cross-cutting. 
 
 | ID | Severity | Finding |
 |---|---|---|
-| S4 | High | **No port isolation** on vmbr4/vmbr6/vmbr7: the hookscript is attached to no VM. Teams share layer 2 there; only the per-VM firewall separates them |
+| S4 | High | **No port isolation** on vmbr7 (the devbox SSH fabric): the hookscript is attached to no VM. Teams' devbox VMs share layer 2 there; only the per-VM firewall separates them. The other management bridges (vmbr2, vmbr4, vmbr5, vmbr6) are isolated by the node's bridge filter since 2026-11-20 (VM↔VM dropped); vmbr7 cannot be, as the SSH gateway reaches the devbox VMs there |
 | S18 | High | **Conntrack exhaustion.** One table for all VMs (262 144 entries, 5 days for established TCP; the role's sysctls are overridden). A team could fill it and stop every new connection on the node. Fix: per-source `ct count` limits |
 | S19 | Medium–High | **ICMP errors pass every per-VM rule** (Proxmox accepts them before `ipfilter`/`macfilter`). Any source address and MAC: a channel between teams, and MAC poisoning of the SSH gateway. Fix: with S4 |
 | S9 | Medium | KSM merges pages across VMs (live): a side channel |

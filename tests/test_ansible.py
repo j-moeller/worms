@@ -123,6 +123,10 @@ def test_host_firewall_ruleset(render, tmp_path):
     text = path.read_text()
     # The mirror bridge is receive-only.
     assert 'meta ibrname "vmbr3" counter drop' in text
+    # On the services bridge only the gateways open connections: no service VM reaches another.
+    assert "ip saddr != { 10.2.0.2, 10.2.0.32/27 } ip daddr != { 10.2.0.2, 10.2.0.32/27 } counter drop" in text
+    # Management bridges: VM <-> VM never; the devbox SSH fabric (vmbr7) is not one of them.
+    assert 'meta ibrname { "vmbr2", "vmbr5", "vmbr4", "vmbr6" } counter drop' in text
 
 
 def test_host_firewall_publishes_the_dashboard(render, tmp_path):

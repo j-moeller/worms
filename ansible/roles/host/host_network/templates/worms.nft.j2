@@ -170,7 +170,7 @@ table inet worms {
 }
 
 # -----------------------------------------------------------------------------
-# Bridge layer: the sandbox and services bridges.
+# Bridge layer: the sandbox, devbox, services and management bridges.
 #
 # Backstop for the sandbox -> services boundary that does not depend on the
 # Proxmox firewall (proxmox-firewall), and per sandbox VM rate limits. They have
@@ -232,6 +232,14 @@ table bridge worms_bridge {
   chain forward {
     type filter hook forward priority filter; policy accept;
     meta ibrname "{{ b.mirror }}" counter drop comment "mirror: receive-only"
+    # Management bridges: a VM reaches the host only (SSH from it, and whatever the host routes:
+    # audit logs, the internet window, the LLM endpoint), never another VM. Frames between two
+    # VMs' ports are what this hook sees; the host's own go through input and output. Port
+    # isolation, as the hookscript (opentofu/stacks/platform) would set it, but without needing
+    # root@pam to attach it (docs/07-security.md, S4). Here the private-internet VMs and DNS share
+    # vmbr5 with the dashboard, scoring and logging. Not the devbox SSH fabric: the SSH gateway
+    # reaches the devbox VMs there.
+    meta ibrname { "{{ b.mgmt_trusted }}", "{{ b.mgmt_exposed }}", "{{ b.mgmt_sandbox }}", "{{ b.mgmt_devbox }}" } counter drop comment "management: VM <-> VM never"
     meta ibrname "{{ b.services }}" jump services
     meta ibrname "{{ b.sandbox_glob }}" jump sandbox
     meta ibrname "{{ b.devbox_glob }}" jump devbox
@@ -247,7 +255,8 @@ table bridge worms_bridge {
   }
 
   # Only the services protocol (allowed ports, both directions) within the
-  # services subnet; everything else on this bridge is dropped.
+  # services subnet, between a gateway and a service VM; everything else on this
+  # bridge is dropped.
   chain services {
     ether type arp accept
     ether type ip6 drop
@@ -260,6 +269,11 @@ table bridge worms_bridge {
 {% if devbox_services_block %}
     ip saddr { {{ services_ips.sandbox_gw }}, {{ devbox_services_block }} } ip daddr { {{ services_ips.sandbox_gw }}, {{ devbox_services_block }} } counter drop comment "no gateway<->gateway: devbox/sandbox isolation"
 {% endif %}
+    # Only the gateways open connections here, so every packet has one at an end (a request from
+    # it, or the answer to it). DNS, scoring, logging and the private internet serve the sandbox
+    # and devbox VMs and nothing else: never one another (docs/07-security.md, "Trust zones").
+{% set gateways = [services_ips.sandbox_gw] + ([devbox_services_block] if devbox_services_block else []) %}
+    ip saddr != { {{ gateways | join(', ') }} } ip daddr != { {{ gateways | join(', ') }} } counter drop comment "service VM <-> service VM: never"
     icmp type { echo-request, echo-reply, destination-unreachable, time-exceeded } accept
     tcp dport { {{ tcp_ports }} } accept
     tcp sport { {{ tcp_ports }} } accept

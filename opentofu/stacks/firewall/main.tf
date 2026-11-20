@@ -76,6 +76,13 @@ locals {
     [local.services_ips.dns, local.services_ips.scoring, local.services_ips.logging],
     [for name, ips in local.private_internet_ips : ips.network],
   )
+
+  # Who may open a connection to DNS and the private internet: the sandbox and devbox
+  # gateways (the SNAT address of every sandbox and devbox VM), nothing else. Not the whole
+  # services subnet, which also holds scoring, logging, DNS and the private-internet VMs
+  # themselves: the rest of the infrastructure has no business there (docs/07-security.md,
+  # "Trust zones"). The host's bridge filter drops service VM <-> service VM a second time.
+  services_gateways = join(",", [local.services_ips.sandbox_gw, local.devbox_services_block])
 }
 
 # SSH is only ever initiated by the Proxmox host (Ansible), from
@@ -236,8 +243,8 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "dns" {
     action  = "ACCEPT"
     proto   = "udp"
     dport   = "53"
-    source  = local.networks.services
-    comment = "DNS over UDP from the services bridge"
+    source  = local.services_gateways
+    comment = "DNS over UDP from the sandbox/devbox gateways"
   }
 
   rule {
@@ -245,8 +252,8 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "dns" {
     action  = "ACCEPT"
     proto   = "tcp"
     dport   = "53"
-    source  = local.networks.services
-    comment = "DNS over TCP from the services bridge"
+    source  = local.services_gateways
+    comment = "DNS over TCP from the sandbox/devbox gateways"
   }
 }
 
@@ -265,7 +272,7 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "private_
     action  = "ACCEPT"
     proto   = "tcp"
     dport   = local.private_internet_ports.tcp
-    source  = local.networks.services
+    source  = local.services_gateways
     comment = "Private-internet services (TCP)"
   }
 
@@ -274,13 +281,14 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "private_
     action  = "ACCEPT"
     proto   = "udp"
     dport   = local.private_internet_ports.udp
-    source  = local.networks.services
+    source  = local.services_gateways
     comment = "Private-internet services (UDP)"
   }
 }
 
 # Per-service private-internet groups: one per service, opening ONLY the port
-# that service listens on. The service VMs attach these instead of the broad
+# that service listens on, and only to the sandbox/devbox gateways: the private
+# internet is for the sandbox and devbox VMs alone. The service VMs attach these instead of the broad
 # group above, so each VM accepts just its own service (wikipedia stops
 # answering on 3142, apt-cache on 8888, ...). The CLIENT direction is unchanged:
 # sandbox VMs / sandbox-gw keep using the union in local.private_internet_ports.
@@ -299,8 +307,8 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "private_
       action  = "ACCEPT"
       proto   = "tcp"
       dport   = rule.value
-      source  = local.networks.services
-      comment = "${each.key} (TCP) from the services bridge"
+      source  = local.services_gateways
+      comment = "${each.key} (TCP) from the sandbox/devbox gateways"
     }
   }
 
@@ -312,8 +320,8 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "private_
       action  = "ACCEPT"
       proto   = "udp"
       dport   = rule.value
-      source  = local.networks.services
-      comment = "${each.key} (UDP) from the services bridge"
+      source  = local.services_gateways
+      comment = "${each.key} (UDP) from the sandbox/devbox gateways"
     }
   }
 }
@@ -350,26 +358,18 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "services
 }
 
 # Private-internet VMs are a dead end: they SERVE the services bridge (ingress,
-# `private_internet` group) and otherwise initiate nothing. Their own package
-# installs went through the shared apt-cache by IP; now they fetch from the
-# Debian mirrors (role apt_client), so this group is unused, to be detached in
-# opentofu/stacks/private_internet and then deleted here. Their only egress on
-# the services bridge is to apt-cache:3142; nothing else on
-# the services bridge, no scoring/logging, no other PI VM's services. This is
-# what makes "PI is a dead end, no egress" true (it previously had the broad
-# services_client, reaching the whole services subnet on every service port).
+# their per-service group, from the sandbox/devbox gateways only) and initiate
+# nothing there. Their own packages come from the Debian mirrors, through the
+# internet window on their management NIC (role apt_client).
+#
+# This group let them reach apt-cache:3142 while their apt went through the cache.
+# Empty now: it allows nothing. It stays defined while VMs still attach it (the
+# firewall stack applies before the VM stacks, and a group in use cannot be
+# deleted); opentofu/stacks/private_internet no longer attaches it, so drop it once
+# every private-internet VM has been applied again.
 resource "proxmox_virtual_environment_cluster_firewall_security_group" "pi_apt_client" {
   name    = "pi_apt_client"
-  comment = "Private-internet VM -> apt-cache only (own package installs)"
-
-  rule {
-    type    = "out"
-    action  = "ACCEPT"
-    proto   = "tcp"
-    dport   = "3142"
-    dest    = local.private_internet_ips.apt_cache.network
-    comment = "-> apt-cache:3142"
-  }
+  comment = "Unused: private-internet VMs fetch from the Debian mirrors (empty, allows nothing)"
 }
 
 # Sandbox VMs (assumed root-compromised): the service hosts only (scoring, logging,

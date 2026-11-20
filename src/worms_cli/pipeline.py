@@ -80,6 +80,19 @@ CONFIGURE_PLAYBOOKS = [
 ]
 
 
+# The VM history (worms_cli/history.py): the playbooks after which their VMs count as configured
+# (UpdateVMs.yml with packages: "packages"), as (pools, names) of the VMs they configure; their
+# --limit narrows it. Stacks without VMs are not compared before and after.
+PLATFORM_POOLS = ("persistent", "ephemeral", "private_internet")
+HISTORY_PLAYBOOKS = {
+    **{playbook: (PLATFORM_POOLS, ()) for playbook in CONFIGURE_PLAYBOOKS if playbook not in ("WaitForVMs.yml", "SetupRoundAgent.yml")},
+    "SetupSandbox.yml": (("sandbox",), ()),
+    "SetupSSHGateway.yml": ((), ("devbox-ssh-gateway",)),
+    "SetupDevbox.yml": (("devbox",), ()),
+}
+VM_FREE_STACKS = ("platform", "firewall")
+
+
 def start_command(vmids) -> str:
     """What starts these VMs again, on the node: `qm start` takes one vmid."""
     return "; ".join(f"qm start {vmid}" for vmid in vmids)
@@ -133,6 +146,56 @@ class Pipeline:
         if self.ansible_args and user_args:
             extra.append(self.ansible_args)
         self.runner.ansible(playbook, *extra, vault=vault)
+        if playbook in HISTORY_PLAYBOOKS:
+            self._configured(playbook, " ".join(extra))
+
+    # -- the VMs' history (worms_cli/history.py): best effort, never a reason to stop ---------
+
+    def _vms_now(self) -> list[dict]:
+        return list(self.runner.vms())
+
+    def _history(self, vms, event: str, detail: str = "") -> None:
+        if not vms:
+            return
+        try:
+            from worms_cli import history
+
+            commit, by = self.runner.commit(), history.who()
+            self.runner.record_history([history.entry(vm["vmid"], vm["name"], event, commit, by, detail) for vm in vms])
+        except Exception as exc:  # noqa: BLE001
+            output.warn(f"the VM history did not get {event} of {', '.join(vm['name'] for vm in vms)}: {exc}")
+
+    def _vms_or_none(self):
+        try:
+            return self._vms_now()
+        except Exception as exc:  # noqa: BLE001
+            output.warn(f"the VM history cannot tell what changed: {exc}")
+            return None
+
+    def _changed(self, before, recreate=()) -> None:
+        """After OpenTofu: created (a name that was not there, or under another vmid), recreated
+        (`recreate`, -replace), destroyed (gone)."""
+        after = self._vms_or_none()
+        if before is None or after is None:
+            return
+        was = {vm["name"]: int(vm["vmid"]) for vm in before}
+        now = {vm["name"]: vm for vm in after}
+        self._history([vm for name, vm in now.items() if name in recreate], "recreated", "OpenTofu -replace")
+        self._history([vm for name, vm in now.items() if name not in recreate and was.get(name) != int(vm["vmid"])], "created",
+                      "OpenTofu")  # fmt: skip
+        self._history([vm for vm in before if vm["name"] not in now], "destroyed", "OpenTofu")
+
+    def _configured(self, playbook: str, args: str) -> None:
+        """After a playbook that configures VMs: each VM it ran on (its --limit, else its VMs)."""
+        pools, names = HISTORY_PLAYBOOKS[playbook]
+        tokens = shlex.split(args)
+        limit = {t.replace("_", "-") for i, t in enumerate(tokens[1:], 1) if tokens[i - 1] in ("--limit", "-l") for t in t.split(",")}
+        limit |= {t.replace("_", "-") for a in tokens if a.startswith("--limit=") for t in a[len("--limit="):].split(",")}
+        vms = self._vms_or_none() or []
+        hosts = [vm for vm in vms if (vm.get("pool") in pools or vm["name"] in names) and (not limit or vm["name"] in limit)
+                 and not (playbook == "SetupDevbox.yml" and vm["name"] == "devbox-ssh-gateway")]  # SetupSSHGateway.yml's  # fmt: skip
+        packages = playbook == "UpdateVMs.yml" and "packages" not in " ".join(t for i, t in enumerate(tokens) if i and tokens[i - 1] == "--skip-tags")
+        self._history(hosts, "packages" if packages else "configured", playbook)
 
     # -- running steps -----------------------------------------------------------
 
@@ -186,8 +249,10 @@ class Pipeline:
             self._close_window()
 
     def _leave_after_failure(self, active: list) -> None:
-        """After a failed step: close the window and start the devbox VMs again. A window
-        that does not close is the louder error, and replaces the step's."""
+        """After a failed step: close the window, switch DNS and the caches back to offline
+        mode, and start the devbox VMs again. A window that does not close is the louder
+        error, and replaces the step's. A cache left in online mode answers every request it
+        cannot fetch with an error (503): said loudly, but the step's error stays the one."""
         still_open = None
         for scope in reversed(active):
             if scope == INTERNET:
@@ -196,6 +261,13 @@ class Pipeline:
                     self._close_window()
                 except BuildError as exc:
                     still_open = exc
+                    continue
+                _stopping("switching DNS and the caches back to offline mode")
+                try:
+                    self.offline_services()
+                except BuildError as exc:
+                    output.error(f"!!! DNS AND THE CACHES MAY STILL BE IN ONLINE MODE (they answer what they cannot fetch "
+                                 f"with errors): run `worms internet disable` once fixed -- {exc}")  # fmt: skip
             else:
                 try:
                     self._devboxes_on()
@@ -236,14 +308,24 @@ class Pipeline:
 
     def _apply(self, stack: str):
         self._facts_fresh = False
-        self.runner.tofu(stack, "apply", "-auto-approve", "-parallelism=1", "-input=false")
+        before = self._vms_or_none() if stack not in VM_FREE_STACKS else None
+        try:
+            self.runner.tofu(stack, "apply", "-auto-approve", "-parallelism=1", "-input=false")
+        finally:  # a failed apply may have created some
+            if before is not None:
+                self._changed(before)
 
     def _destroy(self, stack: str):
         self._facts_fresh = False
+        before = self._vms_or_none() if stack not in VM_FREE_STACKS else None
         # One at a time, like _apply: VMs destroyed in parallel fight over the storage
         # lock, and Proxmox gives up on their disks with only a warning. The volume
         # left behind then blocks whichever new VM gets that ID.
-        self.runner.tofu(stack, "destroy", "-auto-approve", "-parallelism=1")
+        try:
+            self.runner.tofu(stack, "destroy", "-auto-approve", "-parallelism=1")
+        finally:
+            if before is not None:
+                self._changed(before)
 
     def platform(self):
         self.firewall_migrate()
@@ -304,6 +386,24 @@ class Pipeline:
             self.internet_deny()
         except BuildError as exc:
             raise BuildError("!!! INTERNET ACCESS IS STILL ALLOWED: run `worms internet disable` -- " + str(exc)) from exc
+        self._forget_window_stopped()
+
+    def _forget_window_stopped(self) -> None:
+        """A window that `worms internet enable` opened, closed by a build: the record of the devbox
+        VMs that enable shut down would go stale, and a later `worms internet disable` could start
+        them during a round that holds them off. It is cleared; the VMs stay off and are named.
+        Best effort: the window is closed either way."""
+        from worms_cli import power
+
+        try:
+            recorded = power.read_record(self.runner, power.WINDOW_STOPPED)
+            if recorded:
+                power.write_record(self.runner, power.WINDOW_STOPPED, [])
+        except Exception:  # noqa: BLE001
+            return
+        if recorded:
+            output.warn(f"the devbox VM(s) `worms internet enable` shut down stay off: {', '.join(r['name'] for r in recorded)} "
+                        "(`worms power start <vm>`)")  # fmt: skip
 
     def online(self, step):
         """Run `step` with internet access allowed, then deny it again whatever
@@ -391,6 +491,7 @@ class Pipeline:
         if vm.get("status") == "running":
             self.runner.node_sh(f"qm shutdown {vmid} --timeout 120 --forceStop 1")
         self.runner.node_sh(f"qm snapshot {vmid} {SERVICE_SNAPSHOT} --description {shlex.quote(f'worms {self.runner.commit()}')}")
+        self._history([vm], "snapshot", SERVICE_SNAPSHOT)
         self.runner.node_sh(f"qm start {vmid}")
 
     def refuse_during_round(self) -> None:
@@ -440,6 +541,7 @@ class Pipeline:
         clean = [vm for vm in self._service_vms() if self.runner.snapshot(vm, SERVICE_SNAPSHOT)]
         for vm in clean:
             self.runner.node_sh(f"qm rollback {vm['vmid']} {SERVICE_SNAPSHOT} --start 1")
+            self._history([vm], "rolled_back", SERVICE_SNAPSHOT)
         self._wait_for(clean)
         self.services_rolled_back = self.services_rolled_back or bool(clean)
         return {vm["vmid"] for vm in clean}
@@ -488,6 +590,7 @@ class Pipeline:
         print(output.color(f"resetting {len(vms)} VMs to their snapshot of {taken} ({oldest.get('description', '').strip()})", "dim"))
         for vm in vms:
             self.runner.node_sh(f"qm rollback {vm['vmid']} {SERVICE_SNAPSHOT} --start 1")
+            self._history([vm], "rolled_back", SERVICE_SNAPSHOT)
         self._wait_for(vms)
         self.services_rolled_back = True
 
@@ -577,7 +680,12 @@ class Pipeline:
         self._facts_fresh = False
         args = [f"-target={shlex.quote(c.module)}" for c in targets]
         args += [f"-replace={shlex.quote(f'{c.module}.{c.resource}')}" for c in recreate]
-        self.runner.tofu(stack, "apply", "-auto-approve", "-parallelism=1", "-input=false", *args)
+        before = self._vms_or_none()
+        try:
+            self.runner.tofu(stack, "apply", "-auto-approve", "-parallelism=1", "-input=false", *args)
+        finally:
+            if before is not None:
+                self._changed(before, recreate=tuple(c.name for c in recreate))
 
     def offline_services(self) -> None:
         """DNS and the private internet's caches back to offline mode, as a build does after its
@@ -662,6 +770,39 @@ class Pipeline:
         self.runner.node_sh("qm list | awk 'NR>1 {print $1}' | xargs -r -I {} qm destroy {}", check=False)
 
 
+def has_varfile(ansible_args) -> bool:
+    """Whether ansible-playbook's arguments load a variable file (`-e @<file>`, `-e@<file>`,
+    `--extra-vars @<file>`, `--extra-vars=@<file>`), as the round agent passes its own."""
+    args = list(ansible_args)
+    for i, arg in enumerate(args):
+        value = None
+        if arg in ("-e", "--extra-vars"):
+            value = args[i + 1] if i + 1 < len(args) else ""
+        elif arg.startswith("--extra-vars="):
+            value = arg[len("--extra-vars="):]
+        elif arg.startswith("-e") and not arg.startswith("--"):
+            value = arg[2:]
+        if value and value.startswith("@") and len(value) > 1:
+            return True
+    return False
+
+
+# Steps only the round agent runs, with the teams' keys in a variable file of its own
+# (round_agent/handlers.py, _configure_devbox). Without it the roles' defaults apply
+# (devbox_team_keys: {}, ssh_gateway_authorized_keys: []), and the exclusive key files are
+# written EMPTY: every team is locked out of its devbox and the SSH gateway.
+AGENT_VARFILE_STEPS = ("devbox-configure", "devbox-keys")
+
+
+def refuse_without_varfile(step: str, ansible_args) -> None:
+    if step in AGENT_VARFILE_STEPS and not has_varfile(ansible_args):
+        raise BuildError(
+            f"refusing `worms step {step}` without the round agent's variable file (-e @<file>): the teams' keys "
+            "would be written EMPTY, every team locked out of its devbox and the SSH gateway. The keys: "
+            "`worms keys sync`; a team's devbox: `worms reset devbox <team>`, or `worms build devbox`"
+        )
+
+
 # `worms step <name>`: single steps of the pipeline, for the round agent (it runs them in its
 # workspace, never interactively) and for troubleshooting. name -> (method, one-line help).
 STEPS: dict[str, tuple[str, str]] = {
@@ -674,6 +815,8 @@ STEPS: dict[str, tuple[str, str]] = {
                           "snapshot the service VMs as they are, as what a reset returns to (no team VM may exist)"),
     "round-configure-sandbox": ("round_configure_sandbox", "configure a round's freshly built sandbox VMs (round agent)"),
     "devbox-apply": ("devbox_apply", "apply the devbox stack (round agent)"),
-    "devbox-configure": ("devbox_configure", "configure the devbox VMs and the SSH gateway (round agent)"),
-    "devbox-keys": ("devbox_keys", "only the teams' SSH keys on the SSH gateway and the devbox VMs (round agent)"),
+    "devbox-configure": ("devbox_configure", "configure the devbox VMs and the SSH gateway (round agent only: "
+                                             "refused without its -e @<varfile>)"),
+    "devbox-keys": ("devbox_keys", "only the teams' SSH keys on the SSH gateway and the devbox VMs (round agent only: "
+                                   "refused without its -e @<varfile>)"),
 }

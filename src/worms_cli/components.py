@@ -164,6 +164,55 @@ class Plan:
         }
         return [[name, what[action], COMPONENTS[name].help] for name, action in self.steps]
 
+    def touches(self, packages: bool = False) -> tuple[dict[str, str], list[str]]:
+        """What the build of this plan touches, as worms_cli/pipeline.py (_plan_components) runs
+        it: per component its OpenTofu stack and targets, its playbooks and their --limit; then,
+        for the whole plan, the internet window, the devboxes off, the service VMs rolled back
+        and snapshotted again, what restarts."""
+        from worms_cli.pipeline import CONFIGURE_PLAYBOOKS
+
+        actions = dict(self.steps)
+        vms = [COMPONENTS[n] for n in actions if COMPONENTS[n].kind == "vm"]
+        new = [c for c in vms if actions[c.name] in ("create", "recreate", "dependency")]
+        services = [c for c in vms if c.service]
+        window = bool(new) or (packages and bool(vms))
+        hosts = [c.group for c in vms] + (["database"] if "orchestrator" in actions and "database" not in actions else [])
+        limit = ",".join([*hosts, "localhost"])
+        rows = {}
+        for name, action in self.steps:
+            c = COMPONENTS[name]
+            if c.kind == "stack":
+                rows[name] = f"OpenTofu: init + apply {c.stack}"
+            elif c.kind == "node":
+                rows[name] = f"Ansible: {c.playbook} on the node" + (" (the agent restarts once idle)" if name == "round-agent" else "")
+            elif c.kind == "gameplans":
+                rows[name] = "Ansible: SetupRoundAgent.yml --tags agent-sync; SetupDbAndDashboard.yml --limit orchestrator --tags gameplans"
+            elif c.kind == "devbox":
+                rows[name] = "a host job for the round agent (devbox_rebuild per team)" if action == "recreate" else \
+                    "a host job for the round agent (devbox_provision)"  # fmt: skip
+            else:
+                tofu = (f"OpenTofu: apply -target {c.stack}" + (" -replace" if action == "recreate" else "") + "; ") if c in new else ""
+                rows[name] = tofu + f"Ansible: the configure playbooks for {c.group}"
+        summary = []
+        if vms:
+            summary.append(f"Ansible: the {len(CONFIGURE_PLAYBOOKS) - 1} configure playbooks once, --limit {limit}"
+                           + ("" if window else " --skip-tags packages"))  # fmt: skip
+            summary.append("internet window: " + ("OPEN for the VMs' part (" + ("new VMs" if new else "--packages") + ")" if window else "closed"))
+            off = window or bool(services)
+            summary.append("devbox VMs: " + ("shut down for the VMs' part, started again after" if off else "left running"))
+            if services:
+                summary.append(f"service VMs rolled back to `clean`, configured, snapshotted again: {', '.join(c.name for c in services)}")
+            if window and any(c.name == "dns" or c.stack == "private_internet" for c in vms):
+                summary.append("after the window: DNS and the caches back to offline mode")
+        restarts = []
+        if "orchestrator" in actions:
+            restarts.append("the orchestrator's services (it migrates with them stopped)")
+        if "gameplans" in actions:
+            restarts.append("the conductor (it checks the gameplans)")
+        if restarts:
+            summary.append("restarts: " + "; ".join(restarts))
+        return rows, summary
+
 
 def plan(requested, exists, rebuild=False, pending_migrations=lambda: []) -> Plan:
     """The plan for `worms build <requested>`. `exists(component)` says whether it is built."""

@@ -9,10 +9,29 @@ import os
 import sys
 
 _READY = False
+_UNREACHABLE = None  # the error of this run's one failed connection (connected)
+CONNECT_TIMEOUT = "10"  # seconds: libpq's PGCONNECT_TIMEOUT, when nothing else sets one
 
 
 class NotConfigured(RuntimeError):
     pass
+
+
+def connected(config) -> None:
+    """setup(), then one connection: for what reads the database only if it answers (the team
+    map, `worms status`). A database that is down costs a run one timeout, not one per question:
+    its error is kept and raised again at once (NotConfigured, or the connection's)."""
+    global _UNREACHABLE
+    if _UNREACHABLE is not None:
+        raise _UNREACHABLE
+    try:
+        setup(config)
+        from django.db import connection
+
+        connection.ensure_connection()
+    except Exception as exc:
+        _UNREACHABLE = exc
+        raise
 
 
 def setup(config) -> None:
@@ -41,6 +60,7 @@ def setup(config) -> None:
 
     for key, value in db_env.items():
         os.environ.setdefault(key, value)
+    os.environ.setdefault("PGCONNECT_TIMEOUT", CONNECT_TIMEOUT)  # a database that is down: no minutes-long wait
     os.environ["DJANGO_SETTINGS_MODULE"] = "config.settings.manage"
     os.environ["PRODUCTION"] = "1"  # the deployed settings, DEBUG off: on both systems
     _name_the_system(config)

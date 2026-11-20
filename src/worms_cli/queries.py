@@ -268,8 +268,20 @@ def event_rows(hours: int = 24, kind: str | None = None, limit: int = 200) -> li
 
 
 def team(name: str):
-    """The current competition's team of that name (ValueError if there is none)."""
-    return _get_team(_require_competition(), name)
+    """The current competition's team `name` names, by the rule of worms_cli/teams.py (find): its
+    name, its name in another case, its slug `t<id>` (its devbox VMs' names). ValueError if
+    there is none, or the name fits two."""
+    from core.models.team import Team
+    from orchestrator.rounds.devbox import team_slug
+
+    from worms_cli import teams
+
+    competition = _require_competition()
+    rows = {team_slug(t): t for t in Team.objects.filter(competition=competition)}
+    found = teams.find({slug: teams.Team(slug, t.name) for slug, t in rows.items()}, name)
+    if found is None:
+        raise ValueError(f"no team named {name!r} in {competition.name!r}")
+    return rows[found.slug]
 
 
 # -- rounds, host jobs, devboxes, gameplans (`worms status <topic>`) -----------
@@ -318,7 +330,9 @@ def devbox_rows() -> list[list[str]]:
     for t in Team.objects.filter(competition=_require_competition()).order_by("name"):
         box = Devbox.objects.filter(team=t).first()
         keys = [f"{k.name or '(no name)'} {k.key_fingerprint[:16]}" for k in DevboxSSHKey.objects.filter(team=t).order_by("id")]
-        devbox = f"t{t.id}: index {box.index}, version {t.devbox_version}, {box.vms.count()} VMs" if box else "none"
+        names = sorted(box.vms.values_list("vm_identifier", flat=True)) if box else []
+        devbox = (f"t{t.id}: {', '.join([*names, f'devbox-t{t.id}-gw'])} (index {box.index}, version {t.devbox_version})"
+                  if box else "none")  # fmt: skip
         rows.append([t.name, devbox, "; ".join(keys) or "no key"])
     return rows
 

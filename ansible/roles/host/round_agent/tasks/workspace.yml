@@ -79,6 +79,28 @@
     use_ssh_args: true
     rsync_opts: "{{ round_agent_sync_rsync_opts }}"
 
+# The workspace has no .git: the commit it was synced from goes with it, for the VM history the
+# agent and the CLI it runs write (src/worms_cli/history.py). "-dirty": tracked files differ from it.
+- name: Read the commit the workspace is synced from
+  ansible.builtin.shell: |
+    repo={{ round_agent_controller_repo | quote }}
+    commit=$(git -C "$repo" rev-parse --short=7 HEAD 2>/dev/null) || { echo unknown; exit 0; }
+    git -C "$repo" diff --quiet HEAD 2>/dev/null || commit="$commit-dirty"
+    echo "$commit"
+  delegate_to: localhost
+  become: false
+  register: round_agent_commit
+  changed_when: false
+  check_mode: false
+
+- name: Record it in the workspace
+  ansible.builtin.copy:
+    content: "{{ round_agent_commit.stdout | trim }}\n"
+    dest: "{{ round_agent_repo_root }}/.worms-commit"
+    owner: root
+    group: root
+    mode: "0644"
+
 # rsync leaves excluded files alone. A vault in the workspace (made there by mistake on
 # 2026-11-06) made every job take the workspace for a controller and fail on it.
 - name: Remove any vault from the workspace

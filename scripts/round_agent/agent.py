@@ -145,7 +145,7 @@ class Agent:
         stop = threading.Event()
         beat = threading.Thread(target=self._heartbeat_loop, args=(job_id, stop), daemon=True)
         beat.start()
-        with self.executor.job_log(uuid, kind) as job_log:
+        with self.executor.job_log(uuid, kind, job_id) as job_log:
             if job_log.path:
                 log.info("job %s output: %s", uuid, job_log.path)
             try:

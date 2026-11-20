@@ -202,10 +202,35 @@ class Runner:
         return next((s for s in self._node_json("pvesh", "get", path, "--output-format", "json") if s.get("name") == name), None)
 
     def commit(self) -> str:
-        """The checkout's commit, to record what a snapshot was taken from ("unknown"
-        outside a git checkout: it only describes the snapshot)."""
-        proc = subprocess.run(["git", "-C", str(self.repo_root), "rev-parse", "--short", "HEAD"], capture_output=True, text=True)
-        return proc.stdout.strip() or "unknown"
+        """The checkout's commit, to record what a snapshot was taken from and what built a VM
+        (worms_cli/history.py): "-dirty" when tracked files differ from it. In the round agent's
+        workspace, which has no .git, the commit its sync came from (.worms-commit); "unknown"
+        when neither says."""
+        if getattr(self, "_commit", None) is None:
+            git = ["git", "-C", str(self.repo_root)]
+            commit = subprocess.run([*git, "rev-parse", "--short=7", "HEAD"], capture_output=True, text=True).stdout.strip()
+            if commit:
+                if subprocess.run([*git, "diff", "--quiet", "HEAD"], capture_output=True).returncode == 1:
+                    commit += "-dirty"
+            else:
+                try:
+                    commit = (self.repo_root / ".worms-commit").read_text().strip() or "unknown"
+                except OSError:
+                    commit = "unknown"
+            self._commit = commit
+        return self._commit
+
+    def record_history(self, lines) -> None:
+        """Append to the node's VM history (worms_cli/history.py): here on the node, over SSH
+        from a laptop. Raises on failure; the caller decides that it is no reason to stop."""
+        from worms_cli import history
+
+        if not lines:
+            return
+        if not self.session.laptop:
+            history.append(lines)
+        elif self.node_sh(history.append_command(lines), check=False, quiet=True) != 0:
+            raise BuildError(f"could not append to {history.LEDGER} on {self.config.ssh}")
 
 
 def confirm(prompt: str, assume_yes: bool) -> bool:

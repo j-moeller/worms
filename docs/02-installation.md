@@ -92,11 +92,13 @@ cd opentofu/modules/os_images && make images/debian-13-generic-amd64-with-guest-
   images/resolute-server-cloudimg-amd64-with-guest-agent.qcow2 && cd /root/app
 python3 -m venv .venv-test && .venv-test/bin/pip install -q -r tests/requirements.txt
 echo 'worms() { /root/app/.venv-test/bin/python /root/app/src/manage.py "$@"; }' >> ~/.bashrc && . ~/.bashrc
+worms completion bash > /etc/bash_completion.d/worms   # tab completion (again after an update), or in ~/.bashrc: eval "$(worms completion bash)"
 tmux new -s worms                                 # builds take about an hour
 ```
 
 - **Images.** They are git-ignored, so a fresh clone has none.
 - **The venv.** It provides Django, psycopg2 and proxmoxer for the database and status commands.
+- **Tab completion.** Commands, flags, components, steps and services come with the script; VM names and `<team>/<role>` targets from the generated inventories and the last team map read from the database (`~/.worms/team-map.json`). A new shell picks it up ([3](03-manage-py.md#tab-completion)).
 - **Config.** The node needs no `~/.worms/config`.
 
 ## 3. Secrets and tokens
@@ -164,7 +166,7 @@ Without them the platform has to be rebuilt. Nothing backs up the database ([6](
 2. **Devboxes.** Run `worms build devbox`. It takes about 17 minutes for 3 teams; follow it with `tail -F /var/log/worms/jobs/latest.log` on the node. Teams then add SSH keys on their profile ([4](04-dev-environment.md)).
 3. **Rounds.**
    - Create the round on **Staff → Rounds**. Its gameplan can follow later, until the round's first attempt starts ([5](05-live-environment.md#running-a-round)). A round that reaches its start without one waits, alone, and every staff page says so.
-   - Commit a gameplan under `gameplans/` and deploy it with `worms build orchestrator round-agent`: the orchestrator's copy, and the node's (the round agent's workspace).
+   - Commit a gameplan under `gameplans/` and deploy it with `worms build gameplans`: the node's copy (the round agent's workspace) first, then the orchestrator's, whose conductor checks it. No packages, no internet window; refused during a round.
    - Within 10 minutes it shows as valid on **Staff → Rounds**. Choose it on the round's page.
 
 ## Troubleshooting
@@ -187,7 +189,7 @@ Without them the platform has to be rebuilt. Nothing backs up the database ([6](
 | A round shows "queued" | Its gameplan is ready; another round is under way and runs to its end first (one round at a time) |
 | `the node has no such file` for a gameplan the node has, or a gameplan the orchestrator finds valid missing from a round's choices (`the node finds it invalid`; the node's `gameplans` job log names an `AttributeError` of the framework) | The round agent running then predates its code on disk. Since 2026-11-19 it restarts itself between jobs; one started before needs `systemctl restart worms-round-agent` on the node once. Then `worms build gameplans` (or restart the conductor as above) to check at once |
 | `Could not resolve provider bpg/proxmox: could not connect to registry.opentofu.org` on the node (`TASK [round_agent : Initialise the node's stacks ...]`, a round's sandbox build) | A plain `tofu init` asks the registry even for a provider it has installed. Since 2026-11-19 the node's stacks are initialised from its provider mirror, `/var/lib/worms/tofu-providers`, which keeps what they installed ([`scripts/tofu-init`](../scripts/tofu-init)): no internet needed. Only a provider version the code pins anew needs it, once |
-| `worms status keys`: the SSH gateway ✓, but the devbox VMs A, B, C miss the keys | `worms devbox-sync-keys` copies them and shows them again. Before 2026-11-19 the round agent's key push ran the devboxes' whole configuration, and a package the offline apt cache lacks (`rsync`, added on 2026-11-18) stopped it before the keys |
+| `worms keys`: the SSH gateway ✓, but the devbox VMs A, B, C miss the keys | `worms keys sync` copies them and shows them again. Before 2026-11-19 the round agent's key push ran the devboxes' whole configuration, and a package the offline apt cache lacks (`rsync`, added on 2026-11-18) stopped it before the keys |
 | `unknown job kind: 'gameplans'` in the orchestrator's journal | The node still runs the old round agent: the build stopped before its playbook. Run `worms build` again |
 | `dataset already exists` | A leftover volume: `pvesm free <storage>:<volume>` |
 | `known_hosts has lines OpenTofu's Proxmox provider cannot read` | Delete the lines it names from `/root/.ssh/known_hosts` |

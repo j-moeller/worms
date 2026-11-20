@@ -169,16 +169,39 @@ class Executor:
         self.ssh_user = ssh_user
         self.log_dir = log_dir
         self._log = JobLog()
+        self.job = ""  # what the VM history says did it: "round agent: <kind> #<id>"
 
     @contextmanager
-    def job_log(self, job_uuid, kind):
-        """Everything run inside this block is logged for that job."""
+    def job_log(self, job_uuid, kind, job_id=None):
+        """Everything run inside this block is logged for that job. The VM history names it as
+        what did it, here and in the worms CLI it runs (WORMS_HISTORY_BY, worms_cli/history.py)."""
         self._log = JobLog.open(self.log_dir, job_uuid, kind)
+        self.job = f"round agent: {kind}" + (f" #{job_id}" if job_id is not None else "")
+        os.environ["WORMS_HISTORY_BY"] = self.job
         try:
             yield self._log
         finally:
             self._log.close()
             self._log = JobLog()
+            self.job = ""
+            os.environ.pop("WORMS_HISTORY_BY", None)
+
+    def history(self, vms, event, detail=""):
+        """Append to the node's VM history (worms_cli/history.py; the workspace's src is on the
+        agent's PYTHONPATH). Best effort: a job never fails for it, its log says so."""
+        if not vms:
+            return
+        try:
+            from worms_cli import history
+
+            try:
+                commit = (self.repo_root / history.COMMIT_FILE).read_text().strip() or "unknown"
+            except OSError:
+                commit = "unknown"
+            by = self.job or "round agent"
+            history.append([history.entry(vm["vmid"], vm["name"], event, commit, by, detail) for vm in vms])
+        except Exception as exc:  # noqa: BLE001
+            self._log.note(f"the VM history did not get {event}: {exc}")
 
     def run(self, argv, cwd=None, input=None, timeout=1800, check=True, stream=False):
         """Run argv (a list). Returns stdout. Raises CommandError on failure.

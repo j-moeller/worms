@@ -18,6 +18,7 @@ round_agent_sync_rsync_opts:
   - "--exclude=/ansible/pki/"
   - "--exclude=/ansible/inventory.generated.yml"
   - "--exclude=/ansible/.facts/"
+  - "--exclude=/.worms-commit"  # the workspace's own (tasks/workspace.yml): --delete leaves it
   - "--exclude=terraform.tfstate*"
   - "--exclude=.terraform/"
   - "--exclude=.terraform.lock.hcl"

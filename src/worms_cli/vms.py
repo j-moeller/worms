@@ -1,5 +1,8 @@
-"""The VMs `worms status`, `worms login`, `worms show` and `worms download` know: every VM on the
-node by its name, with where it belongs and how to reach it.
+"""The VMs `worms status`, `worms login`, `worms show`, `worms log` and `worms rsync` know: every
+VM on the node by its name, with where it belongs, which team's it is, and how to reach it.
+
+A VM is named by its own name, an alias (below), or `<team>/<role>` (`alpha/gw`, `t2/a`: the team
+map, worms_cli/teams.py).
 
 Proxmox says which VMs exist (name, vmid, pool, state). The management address and login user
 come from the Ansible inventories: this checkout's (the platform's VMs and the private internet)
@@ -13,7 +16,7 @@ from __future__ import annotations
 import os
 import shlex
 
-from worms_cli import output
+from worms_cli import output, services, teams
 from worms_cli.build import BuildError, Runner
 
 DOMAIN = ".worms.internal"
@@ -28,12 +31,18 @@ KINDS = {
 
 
 def aliases(name: str) -> list[str]:
-    """The names `worms login` accepts for a VM besides its own."""
-    if name == "devbox-ssh-gateway":
+    """The names `worms login` accepts for a VM besides its own and `<team>/<role>`. The old
+    `ssh-gateway-t<n>` is the team's NAT gateway devbox-t<n>-gw, not the shared SSH gateway:
+    still accepted, but `<team>/gw` is what the help shows (shown_aliases)."""
+    if name == teams.SHARED_GATEWAY:
         return ["ssh-gateway"]
     if name.startswith("devbox-") and name.endswith("-gw"):
         return [f"ssh-gateway-{name[len('devbox-'):-len('-gw')]}"]
     return []
+
+
+def shown_aliases(name: str) -> list[str]:
+    return [alias for alias in aliases(name) if not alias.startswith("ssh-gateway-")]
 
 
 class Catalogue:
@@ -41,9 +50,38 @@ class Catalogue:
         self.config = config
         self.runner = Runner(config)
         self._hosts = None
+        self._vms = None
+        self._teams = None
 
     def vms(self) -> list[dict]:
-        return sorted(self.runner.vms(), key=lambda vm: (vm.get("pool") or "", vm["name"]))
+        if self._vms is None:
+            self._vms = sorted(self.runner.vms(), key=lambda vm: (vm.get("pool") or "", vm["name"]))
+        return self._vms
+
+    def teams(self) -> dict:
+        """slug -> teams.Team: the database's, or the devbox VMs' (worms_cli/teams.py)."""
+        if self._teams is None:
+            names = [vm["name"] for vm in self.vms()]
+            try:
+                hosts = self.hosts()
+            except Exception:  # noqa: BLE001  (the node's inventory is a fallback's fallback)
+                hosts = {}
+            self._teams = teams.team_map(self.config, names, hosts)
+        return self._teams
+
+    def team_of(self, name: str):
+        """The teams.Team whose devbox VM `name` is, or None."""
+        found = teams.of_vm(name)
+        if found is None:
+            return None
+        return self.teams().get(found[0]) or teams.Team(found[0])
+
+    def team_label(self, name: str) -> str:
+        """The team column of a VM: `alpha (t2)`, `(every team)` for the shared SSH gateway."""
+        if name == teams.SHARED_GATEWAY:
+            return "(every team)"
+        team = self.team_of(name)
+        return team.label if team else ""
 
     def _inventory(self, text: str) -> dict:
         import yaml
@@ -77,23 +115,87 @@ class Catalogue:
             self._hosts = hosts
         return self._hosts
 
-    def names(self) -> list[tuple[str, str]]:
-        """(login name, what it is) for every VM there is now."""
-        out = [("node", "the Proxmox node (root)")]
+    def names(self) -> list[tuple[str, str, str]]:
+        """(login name, team, what it is) for every VM there is now; a team's VM also by
+        `<team>/<role>`, which is what to type."""
+        out = [("node", "", "the Proxmox node (root)")]
         for vm in self.vms():
             kind = KINDS.get(vm.get("pool") or "", vm.get("pool") or "")
             state = vm.get("status", "?")
-            for name in [vm["name"], *aliases(vm["name"])]:
-                out.append((name, f"{kind}, {state}" + ("" if name == vm["name"] else f" (= {vm['name']})")))
+            team, found = self.team_of(vm["name"]), teams.of_vm(vm["name"])
+            what = f"{kind}, {state}"
+            if team and found:
+                what = f"{team.handle}/{found[1]}: {teams.ROLE_HELP[found[1]]}, {state}"
+            out.append((vm["name"], self.team_label(vm["name"]), what))
+            for alias in shown_aliases(vm["name"]):
+                out.append((alias, self.team_label(vm["name"]), f"= {vm['name']}"))
         return out
 
-    def resolve(self, name: str) -> dict:
-        """The VM a login name means."""
-        vms = {vm["name"]: vm for vm in self.vms()}
-        for vm_name in vms:
+    def vm_name(self, name: str) -> str | None:
+        """The VM's own name that a VM name, an alias or `<team>/<role>` means, or None."""
+        vms = {vm["name"] for vm in self.vms()}
+        for vm_name in sorted(vms):
             if name == vm_name or name in aliases(vm_name):
-                return vms[vm_name]
-        raise BuildError(f"no VM {name!r}: `worms login --help` lists them")
+                return vm_name
+        if "/" not in name:
+            return None
+        try:
+            meant = teams.target(self.teams(), name)
+        except ValueError as exc:
+            raise BuildError(str(exc)) from None
+        if meant is not None and meant not in vms:
+            raise BuildError(f"{name!r} is {meant}, which is not there (`worms show {name.rpartition('/')[0]}`)")
+        return meant
+
+    def knows(self, name: str) -> bool:
+        """Whether `name` is a VM there is now (or the node), by any of its names."""
+        if name == "node":
+            return True
+        try:
+            return self.vm_name(name) is not None
+        except BuildError:
+            return False
+
+    def find_team(self, text: str):
+        """The teams.Team `text` names (its slug or its name), or None."""
+        try:
+            return teams.find(self.teams(), text)
+        except ValueError as exc:
+            raise BuildError(str(exc)) from None
+
+    def team_rows(self, team, key_cells: dict) -> list[list[str]]:
+        """`worms show <team>`: its VMs a, b, c and gw, and the shared SSH gateway's lines for it:
+        VM, vmid, management address, state, the team's keys there (`key_cells`, keys.team_cells)."""
+        vms = {vm["name"]: vm for vm in self.vms()}
+        try:
+            hosts = self.hosts()
+        except Exception:  # noqa: BLE001  (the addresses are a detail; the node may be out of reach)
+            hosts = {}
+        rows = []
+        for role in teams.ROLES:
+            name = teams.vm_name(team.slug, role)
+            vm = vms.get(name)
+            if vm is None:
+                rows.append([f"{team.handle}/{role}", name, "", "", output.status_cell("n/a", "— not there"), ""])
+                continue
+            state = vm.get("status", "?")
+            keys = key_cells.get(role, "") if role != "gw" else output.color("(no team key: its NAT gateway)", "dim")
+            rows.append([f"{team.handle}/{role}", name, str(vm["vmid"]), hosts.get(name, {}).get("ansible_host", "?"),
+                         output.status_cell("running" if state == "running" else "stopped", state), keys])  # fmt: skip
+        gateway = vms.get(teams.SHARED_GATEWAY)
+        rows.append(["ssh-gateway", f"{teams.SHARED_GATEWAY} (shared)", str(gateway["vmid"]) if gateway else "",
+                     hosts.get(teams.SHARED_GATEWAY, {}).get("ansible_host", "") if gateway else "",
+                     output.status_cell("running" if gateway and gateway.get("status") == "running" else "stopped",
+                                        gateway.get("status", "?") if gateway else "— not there"),
+                     key_cells.get("gateway", "")])  # fmt: skip
+        return rows
+
+    def resolve(self, name: str) -> dict:
+        """The VM a login name means: its name, an alias, or `<team>/<role>`."""
+        vm_name = self.vm_name(name)
+        if vm_name is None:
+            raise BuildError(f"no VM {name!r}: `worms login --help` lists them; a team's is <team>/a|b|c|gw")
+        return next(vm for vm in self.vms() if vm["name"] == vm_name)
 
     def destination(self, vm: dict) -> str:
         """login user@management address."""
@@ -155,15 +257,20 @@ class Catalogue:
         vm = self.resolve(name)
         node, vmid = vm["node"], vm["vmid"]
         config = self.runner._node_json("pvesh", "get", f"/nodes/{node}/qemu/{vmid}/config", "--output-format", "json")
+        self._shown = (vm, config)  # for history_rows
         snapshots = [s for s in self.runner._node_json("pvesh", "get", f"/nodes/{node}/qemu/{vmid}/snapshot",
                                                          "--output-format", "json") if s.get("name") != "current"]  # fmt: skip
         host = self.hosts().get(vm["name"], {})
         component = components.COMPONENTS.get(vm["name"])
         uptime = int(vm.get("uptime") or 0)
+        team, found = self.team_of(vm["name"]), teams.of_vm(vm["name"])
+        also = shown_aliases(vm["name"]) + ([f"{team.handle}/{found[1]}"] if team and found else [])
         rows = [
-            ["name", vm["name"] + (f" (also: {', '.join(aliases(vm['name']))})" if aliases(vm["name"]) else "")],
+            ["name", vm["name"] + (f" (also: {', '.join(also)})" if also else "")],
             ["vmid", f"{vmid} on {node}"],
             ["kind", KINDS.get(vm.get("pool") or "", vm.get("pool") or "(no pool)")],
+            *([["team", f"{team.label}: {teams.ROLE_HELP[found[1]]} (`worms show {team.handle}`: its four VMs)"]]
+              if team and found else []),  # fmt: skip
             ["state", output.status_cell("running" if vm.get("status") == "running" else "stopped",
                                          f"{vm.get('status')}" + (f", up {uptime // 3600} h {uptime % 3600 // 60} min" if uptime else ""))],  # fmt: skip
             ["resources", f"{config.get('cores', '?')} core(s) ({config.get('cpu', 'default')}), {config.get('memory', '?')} MB"
@@ -177,11 +284,38 @@ class Catalogue:
             ["snapshots", ", ".join(f"{s['name']} ({s.get('description', '').strip()})" for s in snapshots) or "none"],
             ["login", f"worms login {vm['name']}"],
         ]
+        running = services.on(vm["name"])
+        if running:
+            rows.append(["services", ", ".join(f"{name} ({' '.join(services.SERVICES[name].units) or 'a log'})" for name in running)
+                         + f": `worms log {running[0]}`"
+                         + (f", `worms restart {running[0]}`" if services.SERVICES[running[0]].restartable else "")])  # fmt: skip
         if component:
             rows.append(["build", f"worms build {component.name} [--rebuild]; needs {', '.join(component.deps) or 'nothing'}"])
         if vm.get("status") == "running":
             rows.append(["reachable", self.reachable(vm)])
         return rows
+
+
+    def history_rows(self, name: str) -> tuple[list[list[str]], str]:
+        """`worms show <vm>`: its history on the node (worms_cli/history.py), newest first, one
+        run's events of a kind together; and a note: from when, or why there is none."""
+        from worms_cli import history
+
+        vm, config = getattr(self, "_shown", (None, None))
+        if vm is None or vm["name"] != self.vm_name(name):
+            vm, config = self.resolve(name), {}
+        try:
+            code, out, err = self.runner.session.node_run(["grep", "-F", history.vmid_filter(vm["vmid"]), history.LEDGER])
+        except Exception as exc:  # noqa: BLE001  (the rest of `show` stands without it)
+            return [], f"the history on the node could not be read: {exc}"
+        if code not in (0, 1):
+            return [], f"the history on the node could not be read: {err.strip()[:120]}"
+        events = [e for e in history.parse(out) if e["name"] == vm["name"]]  # a vmid is given again after a destroy
+        rows = history.grouped(events)
+        created = history.ctime(str((config or {}).get("meta", "")))
+        if created and not any(e["event"] in history.CREATED for e in events):
+            rows.append([created.replace("T", " ").rstrip("Z"), "created", "?", "Proxmox (ctime: before the history)", ""])
+        return rows, (f"{history.LEDGER} on the node" if rows else f"nothing in {history.LEDGER} for {vm['name']}")
 
 
 def _bridge(net: str) -> str:

@@ -199,7 +199,10 @@ def _reusable_sandbox(ex, hcl):
 def _destroy_sandbox(ex, cfg):
     # One at a time: VMs destroyed in parallel fight over the storage lock, and a volume
     # Proxmox gives up on then blocks whichever new VM gets that ID.
+    before = snapshots.listed(ex, lambda: snapshots.pool_vms(ex, "sandbox"))  # for the VM history only
     ex.tofu("sandbox", "destroy", "-auto-approve", "-input=false", "-parallelism=1", timeout=cfg.get("apply_timeout", 5400))
+    snapshots.record(ex, lambda: [vm for vm in before if vm["vmid"] not in {v["vmid"] for v in snapshots.pool_vms(ex, "sandbox")}],
+                     "destroyed", "the round's sandbox")  # fmt: skip
     ex.worms("inventory", timeout=300)
 
 
@@ -239,6 +242,7 @@ def _build_sandbox(ex, cfg, hcl, config):
         ex.install_sandbox_definition(hcl)
         ex.tofu("sandbox", "init", "-input=false", timeout=600)
         ex.tofu("sandbox", "apply", "-auto-approve", "-input=false", "-parallelism=1", timeout=cfg.get("apply_timeout", 5400))
+        snapshots.record(ex, lambda: snapshots.pool_vms(ex, "sandbox"), "created", "the round's sandbox")
         # Refresh the inventory and configure the sandbox: the internal CA (a worm reaches scoring
         # and logging over verified HTTPS) and what the gameplan installs on each VM.
         with tempfile.TemporaryDirectory() as tmp:
@@ -906,6 +910,7 @@ def devbox_rebuild(ex, cfg, params):
         # Replace just this team's three VMs (fresh disks); the rest is a no-op.
         ex.generate_devbox(teams, ex.repo_root / DEVBOX_GENERATED)
         ex.tofu("devbox", "apply", "-auto-approve", "-input=false", "-parallelism=1", *_devbox_replace_args(slug), timeout=cfg.get("apply_timeout", 5400))
+        snapshots.record(ex, lambda: _team_vms(ex, slug), "recreated", "fresh disks (devbox rebuild)")
         ex.worms("inventory", timeout=300)
         ips = {info["vmid"]: info["maintenance_ip"] for info in _devbox_vms(ex).values()}
         snapshots.wait_for_first_boot(ex, [ips[vm["vmid"]] for vm in _team_vms(ex, slug)])

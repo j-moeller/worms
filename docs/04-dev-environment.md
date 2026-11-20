@@ -38,13 +38,13 @@ laptop ──22 (prod) / 2222 (dev)──► node DNAT ──► devbox-ssh-gate
 - **Firewall.** The gateway accepts 22 only from the node's DNAT address. A devbox VM's fabric NIC accepts 22 only from the gateway.
 - **Recording.** The node's collector writes every gateway login, with the key's fingerprint and the client's public address, to `ssh_gateway_logins` once a minute (`worms-audit-gateway.timer`).
 
-**Key lifecycle** ([`ssh_keys.py`](../projects/dashboard/core/ssh_keys.py), [`views/devbox.py`](../projects/dashboard/dashboard/views/devbox.py), [`membership.py`](../projects/dashboard/dashboard/membership.py)). Members add keys on their profile; operators with `worms devbox-add-key` and `worms devbox-remove-key`, under the same rules:
+**Key lifecycle** ([`ssh_keys.py`](../projects/dashboard/core/ssh_keys.py), [`views/devbox.py`](../projects/dashboard/dashboard/views/devbox.py), [`membership.py`](../projects/dashboard/dashboard/membership.py)). Members add keys on their profile; operators with `worms keys add` and `worms keys remove`, under the same rules:
 - Validation:
   - one OpenSSH public key line of a known type;
   - the comment matches `[A-Za-z0-9._@/+:,-]`;
   - at most 64 keys per team;
   - a key may belong to one team only.
-- Adding or removing a key, or a member leaving (which removes the keys they added), enqueues `devbox_reconfigure`. The round agent then writes only the key files ([`DevboxKeys.yml`](../ansible/DevboxKeys.yml): no package, no internet), on the SSH gateway (`/home/team/.ssh/authorized_keys`, lines ending in `team=<slug>`) and on the team's VMs A, B and C (`/root/.ssh/authorized_keys_worms_team`). `worms status keys` shows whether they arrived; `worms devbox-sync-keys` copies them all again, directly over SSH, and shows them.
+- Adding or removing a key, or a member leaving (which removes the keys they added), enqueues `devbox_reconfigure`. The round agent then writes only the key files ([`DevboxKeys.yml`](../ansible/DevboxKeys.yml): no package, no internet), on the SSH gateway (`/home/team/.ssh/authorized_keys`, lines ending in `team=<slug>`) and on the team's VMs A, B and C (`/root/.ssh/authorized_keys_worms_team`). `worms keys` shows whether they arrived; `worms keys sync` copies them all again, directly over SSH, and shows them.
 
 ## Build and reset
 
@@ -86,11 +86,12 @@ PENDING → RESETTING → DEPLOYING → ARMED → RUNNING → FINISHED
 ```sh
 worms build devbox                      # new teams; idempotent
 worms status devboxes                   # every team's devbox and keys
-worms devbox-add-key alpha ~/alpha.pub  # a key for team alpha (removed again: worms devbox-remove-key alpha <name>)
+worms keys add alpha ~/alpha.pub        # a key for team alpha (removed again: worms keys remove alpha <name>)
 worms reset devbox alpha                # its VMs back to their snapshot, as its Reset button
-worms devbox-sync-keys                  # copy every team's keys to its devbox and the gateway, show them
-worms status keys                       # are every team's keys on the gateway and its VMs?
-worms login ssh-gateway-t1              # a shell on team t1's gateway (`worms login --help` lists the VMs)
+worms keys sync                         # copy every team's keys to its devbox and the gateway, show them
+worms keys                              # are every team's keys on the gateway and its VMs?
+worms show alpha                        # its four VMs (a, b, c, gw): vmids, addresses, states, keys
+worms login alpha/gw                    # a shell on team alpha's NAT gateway, devbox-t<id>-gw (`worms login --help` lists the VMs)
 tail -F /var/log/worms/jobs/latest.log  # on the node: the running job
 ```
 

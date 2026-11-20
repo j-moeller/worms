@@ -288,7 +288,7 @@ class FakeExecutor:
     def qm_steps(self):
         return [" ".join(c[1:]) for c in self.calls if c[:2] == ("run", "qm") and c[2] not in ("config", "status")]
 
-    def job_log(self, job_uuid, kind):
+    def job_log(self, job_uuid, kind, job_id=None):
         from contextlib import nullcontext
 
         from round_agent.executor import JobLog

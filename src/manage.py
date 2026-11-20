@@ -491,6 +491,11 @@ def cmd_build(config, args) -> int:
     pipe = pipeline.Pipeline(config, ansible_args=" ".join(args.ansible_args))
     code = 0
     try:
+        if not args.components and args.plan:
+            # The plan of everything: every component (never the build itself, which --plan forgot).
+            from worms_cli import components
+
+            args = _with(args, components=[name for name in components.COMPONENTS if components.COMPONENTS[name].kind != "devbox"])
         if not args.components:
             if args.rebuild:
                 output.error("--rebuild needs components: everything at once is `worms destroy`, then `worms apply`")
@@ -1135,7 +1140,7 @@ def cmd_backup(config, args) -> int:
         output.error(str(exc))
         return 1
     print(output.status_cell("ok", f"{size / 1e6:.1f} MB: {path}"))
-    print(output.color(f"readable by you only (0600). Restore on the database VM: pg_restore -d <db> {Path(path).name}", "dim"))
+    print(output.color(f"readable by you only (0600). Restore it: `worms restore db {path}`", "dim"))
     return 0
 
 
@@ -1537,6 +1542,7 @@ VERBS = {
     "open": "open the internet window",
     "close": "close the internet window",
     "backup": "a dump of the database, here",
+    "restore": "the database back to a dump",
     "destroy": "destroy the VM stacks",
     "emergency-stop": "hard-stop every VM",
     "add": "add a team's SSH key, a staff account, packages to a cache's list",
@@ -1639,7 +1645,9 @@ SECTIONS = (
             ("configure [<component>...]", "configure what exists, never OpenTofu, no window unless --packages; then the "
                                            "gameplans, the agent (once idle) and the conductor; alone: every component "
                                            "offline; refused during a round"),  # fmt: skip
-            ("plan [<component>...]", "what `worms apply` would do and touch, changing nothing"),
+            ("plan [<component>...]", "what `worms apply` would do and touch, changing nothing: its steps, what each VM "
+                                      "runs now against this checkout, and OpenTofu's own plan; on production before a "
+                                      "release, after dev: the two should match"),  # fmt: skip
             ("refill apt|pypi|caches", "the caches' lists checked (as `worms check`), then filled in the internet "
                                        "window (`worms apply apt-cache|devpi --packages`): a bad name fails before "
                                        "anything is opened"),  # fmt: skip
@@ -1651,6 +1659,8 @@ SECTIONS = (
             ("close window", "close it: starts the devboxes it stopped again, and switches DNS and the caches back to "
                              "offline mode"),  # fmt: skip
             ("backup db", "a pg_dump -Fc of the platform's database, streamed to a file here (0600)"),
+            ("restore db <dump>", "DANGER: the database back to a dump (`worms backup db`): what was written since is lost; "
+                                  "the dashboard, the orchestrator and the round agent stop meanwhile (asks first)"),  # fmt: skip
             ("destroy [--all]", "destroy the VM stacks (keeps firewall and platform); --all: everything (asks first)"),
             ("emergency-stop", "freeze: hard-stop ALL VMs (destroys nothing); the only hard stop of a round (asks first)"),
         ),
@@ -1780,7 +1790,7 @@ VM is not started."""
 
 
 # Verbs whose objects are fixed words, each a command of its own (`worms add key`, `worms issue token`).
-OBJECT_VERBS = ("open", "close", "backup", "add", "remove", "sync", "delete", "issue", "set", "trust", "completion",
+OBJECT_VERBS = ("open", "close", "backup", "restore", "add", "remove", "sync", "delete", "issue", "set", "trust", "completion",
                 "pause", "resume", "cancel")
 CACHE_KINDS = ("apt", "pypi", "caches")
 
@@ -1990,6 +2000,9 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     p = _add(sub, "refill")
     p.add_argument("kind", choices=CACHE_KINDS, metavar="apt|pypi|caches")
     p.add_argument("--plan", action="store_true", help="the check and the plan, change nothing")
+    _yes(p)
+    p = _objects(sub, "restore", {"db": None})["db"]
+    p.add_argument("file", metavar="dump", help="a dump `worms backup db` wrote (~/.worms/backups/)")
     _yes(p)
     p = _objects(sub, "backup", {"db": None})["db"]
     p.add_argument("-o", "--output", metavar="FILE", help="the dump's file (default ~/.worms/backups/<system>-<db>-<time>.dump)")
@@ -2223,11 +2236,46 @@ def verb_apply(config, args) -> int:
 
 
 def verb_plan(config, args) -> int:
-    return cmd_build(config, _with(args, plan=True, rebuild=False, team=[], wait=False, yes=False))
+    """The steps (`apply --plan`), then what each VM of it runs now against this checkout, and
+    OpenTofu's own plan for the stacks and VMs concerned (worms_cli/release.py)."""
+    from worms_cli import components, release
+
+    code = cmd_build(config, _with(args, plan=True, rebuild=False, team=[], wait=False, yes=False))
+    if code:
+        return code
+    pipe = pipeline.Pipeline(config)
+    names = args.components or [n for n in components.COMPONENTS if components.COMPONENTS[n].kind != "devbox"]
+    try:
+        plan = components.plan(components.expand(names), _exists(pipe, config), unfinished=_unfinished(pipe))
+    except (KeyError, ValueError) as exc:
+        output.error(str(exc))
+        return 1
+    vms = [name for name, _ in plan.steps if components.COMPONENTS[name].kind == "vm"]
+    if vms:
+        print()
+        print(output.heading("what each VM runs now (its last configuration's commit) and this checkout"))
+        print(output.table(release.deployed_commits(pipe, vms), headers=["VM", "configured from", "this checkout", ""]))
+    print()
+    print(output.heading("OpenTofu's own plan (nothing is applied)"))
+    release.tofu_plans(pipe, plan)
+    return 0
 
 
 def verb_window(config, args) -> int:
     return cmd_internet(config, _with(args, state="enable" if args.command == "open" else "disable"))
+
+
+def verb_restore(config, args) -> int:
+    from worms_cli import release
+
+    if not build.confirm(f"Replace the WHOLE database with {args.file}? Everything written since that dump is lost; the "
+                         "dashboard, the orchestrator and the round agent stop meanwhile", args.yes):  # fmt: skip
+        return 1
+    try:
+        return release.restore_db(config, args.file)
+    except (build.BuildError, OSError) as exc:
+        output.error(str(exc))
+        return 1
 
 
 def verb_add(config, args) -> int:
@@ -2278,7 +2326,7 @@ HANDLERS = {
     "apply": verb_apply, "configure": cmd_deploy, "plan": verb_plan,
     "open": verb_window, "close": verb_window, "backup": cmd_backup,
     "destroy": cmd_destroy, "emergency-stop": cmd_emergency_stop,
-    "add": verb_add, "remove": verb_remove, "sync": cmd_devbox_sync_keys, "refill": verb_refill,
+    "restore": verb_restore, "add": verb_add, "remove": verb_remove, "sync": cmd_devbox_sync_keys, "refill": verb_refill,
     "delete": cmd_delete_team,
     "issue": lambda config, args: cmd_secrets(config, _with(args, secrets_action="issue")),
     "set": lambda config, args: cmd_secrets(config, _with(args, secrets_action="set")),
@@ -2313,10 +2361,17 @@ def main(argv=None) -> int:
     if args.command == "completion":  # read at every shell start: no notice, no node
         return cmd_completion(config, args)
     tee = _run_log(config, args)
+    lock = None
     try:
         _internet_notice(config)
+        lock = _lock(config, args, own)
         code = HANDLERS[args.command](config, args)
+    except build.BuildError as exc:  # the lock refused
+        output.error(str(exc))
+        code = 1
     finally:
+        if lock is not None:
+            lock.release()
         if tee is not None:
             tee.stop()
     if tee is not None and code:
@@ -2329,6 +2384,27 @@ def main(argv=None) -> int:
 # (run, login).
 LOGGED = ("apply", "configure", "rebuild", "reset", "start", "stop", "restart", "open", "close", "sync", "add",
           "remove", "delete", "destroy", "emergency-stop", "step", "pause", "resume", "cancel", "refill")
+
+
+# The verbs that change the platform: one at a time, by the node's lock (worms_cli/release.py). Never
+# emergency-stop, pause, resume, cancel: they must work while a build runs.
+LOCKED = ("apply", "configure", "rebuild", "reset", "start", "stop", "restart", "open", "close", "destroy", "refill",
+          "sync", "step", "restore")
+
+
+def _lock(config, args, own):
+    """The node's lock, when this verb changes the platform (and is not the round agent's own run)."""
+    from worms_cli import release
+    from worms_cli.session import NODE_WORKSPACE, for_config
+
+    if args.command not in LOCKED or Path(config.repo_root).resolve() == Path(NODE_WORKSPACE):
+        return None
+    what = getattr(args, "what", None) or getattr(args, "targets", None) or []
+    if (args.command == "reset" and what[:1] == ["password"]) or (args.command == "start" and what[:1] == ["round"]):
+        return None  # the database's, no VM
+    if getattr(args, "plan", False):
+        return None  # changes nothing
+    return release.Lock(for_config(config), " ".join(own)).acquire()
 
 
 def _run_log(config, args):

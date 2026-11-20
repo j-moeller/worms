@@ -108,7 +108,7 @@ elif grep -qxE 'FLAG\{[0-9a-f]{32}\}' /etc/worms/flag; then say flag ok ""
 else say flag fail "/etc/worms/flag is not FLAG{<32 hex>}"; fi
 
 for api in scoring logging; do
-    code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -X POST -H 'Content-Type: application/json' \
+    code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 --retry 2 --retry-all-errors --retry-delay 2 -X POST -H 'Content-Type: application/json' \
            -d '{}' "https://$api.worms.internal/submit" 2>"$d/curl")
     case "$?:$code" in
         0:400) say "$api" ok "" ;;
@@ -150,7 +150,7 @@ if getent hosts scoring.worms.internal apt-cache.worms.internal >/dev/null 2>&1;
 else say DNS fail "the private DNS does not answer (/etc/resolv.conf: $(grep -m 1 '^nameserver' /etc/resolv.conf 2>/dev/null))"; fi
 # -k: the gateway has no internal CA (only the team's VMs get it), and this checks the path, sending {}.
 for api in scoring logging; do
-    code=$(curl -ksS -o /dev/null -w '%{http_code}' --max-time 10 -X POST -H 'Content-Type: application/json' \
+    code=$(curl -ksS -o /dev/null -w '%{http_code}' --max-time 10 --retry 2 --retry-all-errors --retry-delay 2 -X POST -H 'Content-Type: application/json' \
            -d '{}' "https://$api.worms.internal/submit" 2>/tmp/worms-check-curl)
     case "$?:$code" in
         0:400|0:429) say "$api" ok "" ;;

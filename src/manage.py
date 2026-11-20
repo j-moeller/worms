@@ -723,6 +723,19 @@ def cmd_keys(config, args) -> int:
     return {"sync": cmd_devbox_sync_keys, "add": cmd_devbox_add_key, "remove": cmd_devbox_remove_key}[action](config, args)
 
 
+def cmd_validate(config, args) -> int:
+    """`worms validate devbox [<team>...]`: can each team work on its devbox, as it does: login
+    through the SSH gateway, the flag, scoring, logging, apt, PyPI (worms_cli/validate.py)."""
+    _with_db(config)
+    from worms_cli import validate
+
+    try:
+        return validate.devbox(config, args.teams)
+    except (ValueError, build.BuildError) as exc:
+        output.error(str(exc))
+        return 1
+
+
 def cmd_devbox_sync_keys(config, args) -> int:
     """`worms devbox-sync-keys`: every team's SSH keys, from the database, copied over SSH to the SSH
     gateway and its devbox VMs; then where they are (worms_cli/keys.py)."""
@@ -1167,6 +1180,7 @@ def completion_slots() -> dict[str, list[str]]:
         "reset devbox": ["@teams"],
         "keys add": ["@teams", ""],
         "keys remove": ["@teams", ""],
+        "validate devbox": ["@teams"],
         "delete-team": ["@teams", ""],
         "step": [" ".join([*pipeline.STEPS, "debug"]), ""],
     }
@@ -1539,6 +1553,9 @@ SECTIONS = (
             ("keys sync", "copy every team's SSH keys from the database to the SSH gateway and its devbox VMs, then show them"),
             ("keys add <team> <key>", "add an SSH key to a team's devbox, as on the dashboard, then copy the keys"),
             ("keys remove <team> <key>", "remove one, by its name or fingerprint, then copy the keys"),
+            ("validate devbox [<team>...]", "can each team work on its devbox? As the team does, changing nothing: login "
+                                            "through the SSH gateway with its registered keys, then on A, B and C the "
+                                            "flag, scoring, logging, apt and PyPI; and the gateway's sshd penalties"),  # fmt: skip
             ("admin-reset-password", "one-time password for the dashboard admin, printed once (created if missing)"),
             ("admin-create-staff <email>", "a staff (tutor) account; one-time password printed once"),
             ("delete-team <name>", "delete a team with everything it owns (its users stay)"),
@@ -1843,6 +1860,11 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     p_remove.add_argument("team", help="its name or slug t<id>")
     p_remove.add_argument("key", help="the key's name, or its fingerprint (at least 8 characters of it)")
     _yes(p_remove)
+    p = sub.add_parser("validate", help="check a part end to end", description="Check a part end to end, as it is "
+                       "used; changes nothing.")  # fmt: skip
+    validate_sub = p.add_subparsers(dest="what", required=True, metavar="devbox")
+    p_validate = _add(validate_sub, "validate devbox")
+    p_validate.add_argument("teams", nargs="*", metavar="team", help="its name or slug t<id> (default: every team with a devbox)")
     p = _add(sub, "admin-reset-password")
     p.add_argument("--username", default="admin")
     _yes(p)
@@ -1883,7 +1905,7 @@ HANDLERS = {
     "status": cmd_status, "show": cmd_show, "login": cmd_login, "run": cmd_run, "log": cmd_log, "rsync": cmd_rsync,
     "build": cmd_build, "deploy": cmd_deploy,
     "internet": cmd_internet, "restart": cmd_restart, "power": cmd_power, "backup": cmd_backup,
-    "reset": cmd_reset, "keys": cmd_keys,
+    "reset": cmd_reset, "keys": cmd_keys, "validate": cmd_validate,
     "admin-reset-password": cmd_admin_reset_password, "admin-create-staff": cmd_admin_create_staff,
     "delete-team": cmd_delete_team, "secrets": cmd_secrets, "trust-node": cmd_trust_node, "completion": cmd_completion,
     "emergency-stop": cmd_emergency_stop, "destroy": cmd_destroy, "test": cmd_test, "step": cmd_step,

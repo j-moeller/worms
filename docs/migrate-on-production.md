@@ -135,13 +135,26 @@ with no network: hostname, CA, apt and pip pointed at the private internet, time
 keys, the CA and `/etc/worms/flag`. The teams lose what's on their devboxes. Packages (`rsync`,
 `pip`) come with the rebuild in tomorrow's window.
 
-Check one team (`worms show <team>` lists its VMs):
+Then check every team's devbox as the team uses it:
 
 ```sh
-worms run <team>/a --root -- sh -c 'hostname; cat /etc/worms/flag; getent hosts scoring.worms.internal'
+worms validate devbox          # or: worms validate devbox <team>...
 ```
 
-You should see `devbox-tN-a`, a `FLAG{…}`, and an address.
+For each team, A, B and C, it checks:
+- **login:** through the SSH gateway, with the team's registered keys;
+- **flag:** `/etc/worms/flag` is there;
+- **scoring**, **logging:** both answer;
+- **apt**, **PyPI:** a fresh index and a package through the caches.
+
+Every cell should be ✓. Tonight, `PyPI` may say `no pip` on a VM whose packages wait for
+tomorrow's rebuild; the line under the table says why. The command changes nothing on the VMs.
+
+**The SSH gateway's line** may be yellow, or red. Every team reaches the gateway from one address:
+the node masquerades them. OpenSSH's per-source penalties are on by default, so a few failed
+logins by anyone shut all teams out for up to 10 minutes. Red means that happened in the last
+24 h, which may be the teams' failed SSH logins last night. Whether to turn the penalties off
+there (`PerSourcePenalties no` in its sshd) is still to be decided.
 
 ## Tomorrow: the egress window
 
@@ -193,6 +206,7 @@ nothing: it names a candidate for every package in trixie's index, cached or not
 ```sh
 worms reset devbox --all-teams --fresh --wait   # 12–14 min per team, one after another
 worms keys status
+worms validate devbox                           # every cell ✓, apt and PyPI too
 ```
 
 A team's A, B and C are replaced (fresh disks), configured with their packages from the refilled

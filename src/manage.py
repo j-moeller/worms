@@ -1166,7 +1166,7 @@ def completion_slots() -> dict[str, list[str]]:
     return {
         "show": [f"@targets @teams {' '.join(STATUS_TOPICS)} keys secrets db", ""],
         "logs": [f"@targets @teams {' '.join(services.SERVICES)} run latest", ""],
-        "check": ["@teams devboxes tokens"],
+        "check": ["@teams devboxes tokens apt pypi caches"],
         "trace": ["@teams upload", ""],
         "login": ["@targets", ""],
         "run": [f"@targets {groups}"],
@@ -1539,8 +1539,9 @@ VERBS = {
     "backup": "a dump of the database, here",
     "destroy": "destroy the VM stacks",
     "emergency-stop": "hard-stop every VM",
-    "add": "add a team's SSH key, a staff account",
-    "remove": "remove a team's SSH key",
+    "add": "add a team's SSH key, a staff account, packages to a cache's list",
+    "remove": "remove a team's SSH key, packages from a cache's list",
+    "refill": "fill the private internet's caches again, their lists checked first",
     "sync": "copy every team's SSH keys to its VMs",
     "delete": "delete a team",
     "issue": "create or rotate a Proxmox token",
@@ -1571,6 +1572,8 @@ SECTIONS = (
                                   "SSH gateway with its keys, then on A, B and C the flag, scoring, logging, apt and PyPI; "
                                   "and the gateway's sshd penalties (default: every team)"),  # fmt: skip
             ("check tokens", "do the stored Proxmox tokens work, with exactly their rights?"),
+            ("check apt|pypi|caches", "do the caches' listed packages exist and install together? apt: offline, against "
+                                      "the index the cache holds; pypi: on PyPI, with internet here"),  # fmt: skip
             ("trace <team>|upload <n>", "a team's newest dev uploads on their way to its devbox: picked up, the reset "
                                         "(its job), put on VM A (its job), its hour; what each waits for and why "
                                         "(a round holding the devboxes, the agent, the queue)"),  # fmt: skip
@@ -1637,6 +1640,12 @@ SECTIONS = (
                                            "gameplans, the agent (once idle) and the conductor; alone: every component "
                                            "offline; refused during a round"),  # fmt: skip
             ("plan [<component>...]", "what `worms apply` would do and touch, changing nothing"),
+            ("refill apt|pypi|caches", "the caches' lists checked (as `worms check`), then filled in the internet "
+                                       "window (`worms apply apt-cache|devpi --packages`): a bad name fails before "
+                                       "anything is opened"),  # fmt: skip
+            ("add package apt|pypi <name>...", "packages added to a cache's list (in this checkout: commit it), each "
+                                               "checked first; the cache gets them with `worms refill`"),  # fmt: skip
+            ("remove package apt|pypi <name>...", "packages taken off a cache's list (in this checkout)"),
             ("open window", "open the internet window by hand (refused during a round; stops running devboxes, after "
                             "asking)"),  # fmt: skip
             ("close window", "close it: starts the devboxes it stopped again, and switches DNS and the caches back to "
@@ -1773,6 +1782,7 @@ VM is not started."""
 # Verbs whose objects are fixed words, each a command of its own (`worms add key`, `worms issue token`).
 OBJECT_VERBS = ("open", "close", "backup", "add", "remove", "sync", "delete", "issue", "set", "trust", "completion",
                 "pause", "resume", "cancel")
+CACHE_KINDS = ("apt", "pypi", "caches")
 
 
 def _command_name(usage: str) -> str:
@@ -1977,6 +1987,10 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     p.add_argument("--timeout", type=int, default=900, help="how long to wait for the agent's running host job (s, default 900)")
     for verb in ("open", "close"):
         _yes(_objects(sub, verb, {"window": None})["window"])
+    p = _add(sub, "refill")
+    p.add_argument("kind", choices=CACHE_KINDS, metavar="apt|pypi|caches")
+    p.add_argument("--plan", action="store_true", help="the check and the plan, change nothing")
+    _yes(p)
     p = _objects(sub, "backup", {"db": None})["db"]
     p.add_argument("-o", "--output", metavar="FILE", help="the dump's file (default ~/.worms/backups/<system>-<db>-<time>.dump)")
     p = _add(sub, "destroy")
@@ -1985,14 +1999,19 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     _yes(_add(sub, "emergency-stop"))
 
     # -- teams and accounts
-    added = _objects(sub, "add", {"key": None, "staff": None})
+    added = _objects(sub, "add", {"key": None, "staff": None, "package": None})
+    added["package"].add_argument("kind", choices=("apt", "pypi"), metavar="apt|pypi")
+    added["package"].add_argument("names", nargs="+", metavar="name")
     added["key"].add_argument("team", help="its name or slug t<id>")
     added["key"].add_argument("key", help="the public key (quoted), a .pub file, or - for stdin")
     added["key"].add_argument("--name", default="", help="a name for it (default: the key's comment)")
     added["staff"].add_argument("email")
     added["staff"].add_argument("--first-name", default="")
     added["staff"].add_argument("--last-name", default="")
-    p = _objects(sub, "remove", {"key": None})["key"]
+    removed = _objects(sub, "remove", {"key": None, "package": None})
+    removed["package"].add_argument("kind", choices=("apt", "pypi"), metavar="apt|pypi")
+    removed["package"].add_argument("names", nargs="+", metavar="name")
+    p = removed["key"]
     p.add_argument("team", help="its name or slug t<id>")
     p.add_argument("key", help="the key's name, or its fingerprint (at least 8 characters of it)")
     _yes(p)
@@ -2087,6 +2106,15 @@ def verb_logs(config, args) -> int:
 def verb_check(config, args) -> int:
     if args.what == ["tokens"]:
         return cmd_secrets(config, _with(args, secrets_action="check"))
+    if args.what and set(args.what) <= set(CACHE_KINDS):
+        from worms_cli import caches
+
+        kinds = ["apt", "pypi"] if "caches" in args.what else list(dict.fromkeys(args.what))
+        try:
+            return max(caches.check(config, kind) for kind in kinds)
+        except build.BuildError as exc:
+            output.error(str(exc))
+            return 1
     _every, teams = _team_words(args.what)
     return cmd_validate(config, _with(args, teams=teams))
 
@@ -2205,7 +2233,40 @@ def verb_window(config, args) -> int:
 def verb_add(config, args) -> int:
     if args.object == "staff":
         return cmd_admin_create_staff(config, args)
+    if args.object == "package":
+        from worms_cli import caches
+
+        try:
+            return caches.add(config, args.kind, args.names)
+        except build.BuildError as exc:
+            output.error(str(exc))
+            return 1
     return cmd_devbox_add_key(config, args)
+
+
+def verb_remove(config, args) -> int:
+    if args.object == "package":
+        from worms_cli import caches
+
+        return caches.remove(config, args.kind, args.names)
+    return cmd_devbox_remove_key(config, args)
+
+
+def verb_refill(config, args) -> int:
+    """The lists checked, then `worms apply <caches> --packages`: a bad name fails before the window."""
+    from worms_cli import caches
+
+    kinds = ["apt", "pypi"] if args.kind == "caches" else [args.kind]
+    try:
+        failed = max(caches.check(config, kind) for kind in kinds)
+    except build.BuildError as exc:
+        output.error(str(exc))
+        return 1
+    if failed:
+        output.error("not refilled: fix the list first (`worms remove package ...`, or correct the name), nothing was opened")
+        return 1
+    return cmd_build(config, _with(args, components=caches.components(args.kind), packages=True, rebuild=False, team=[],
+                                   wait=False, ansible_args=getattr(args, "ansible_args", [])))
 
 
 HANDLERS = {
@@ -2217,7 +2278,7 @@ HANDLERS = {
     "apply": verb_apply, "configure": cmd_deploy, "plan": verb_plan,
     "open": verb_window, "close": verb_window, "backup": cmd_backup,
     "destroy": cmd_destroy, "emergency-stop": cmd_emergency_stop,
-    "add": verb_add, "remove": cmd_devbox_remove_key, "sync": cmd_devbox_sync_keys,
+    "add": verb_add, "remove": verb_remove, "sync": cmd_devbox_sync_keys, "refill": verb_refill,
     "delete": cmd_delete_team,
     "issue": lambda config, args: cmd_secrets(config, _with(args, secrets_action="issue")),
     "set": lambda config, args: cmd_secrets(config, _with(args, secrets_action="set")),
@@ -2267,7 +2328,7 @@ def main(argv=None) -> int:
 # Never one whose output is a secret (`add staff`, `reset password`: a one-time password) or a VM's
 # (run, login).
 LOGGED = ("apply", "configure", "rebuild", "reset", "start", "stop", "restart", "open", "close", "sync", "add",
-          "remove", "delete", "destroy", "emergency-stop", "step", "pause", "resume", "cancel")
+          "remove", "delete", "destroy", "emergency-stop", "step", "pause", "resume", "cancel", "refill")
 
 
 def _run_log(config, args):

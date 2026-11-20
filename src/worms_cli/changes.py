@@ -204,11 +204,11 @@ def _packages(tree: Tree, found: Reach) -> set:
 # -- what runs, what changed -----------------------------------------------------------------------
 
 
-def deployed(session) -> dict[str, str]:
-    """{component: the commit it was last brought up to}, from the node's record."""
+def deployed(session) -> dict[str, tuple[str, str]]:
+    """{component: (the commit it was last brought up to, when)}, from the node's record."""
     code, out, _err = session.node_run(["cat", DEPLOYED])
     try:
-        return {k: v["commit"] for k, v in (json.loads(out) if code == 0 and out.strip() else {}).items()}
+        return {k: (v["commit"], v.get("time", "")) for k, v in (json.loads(out) if code == 0 and out.strip() else {}).items()}
     except (ValueError, KeyError, TypeError, AttributeError):
         return {}
 
@@ -242,16 +242,32 @@ def vm_commits(session) -> dict[str, str]:
     return last
 
 
-def changed_files(repo, base: str) -> list[str] | None:
+def changed_files(repo, base: str, since: str = "") -> list[str] | None:
     """The files that differ between `base` and the working tree (None: `base` is not in this
-    repository's history)."""
+    repository's history). An untracked file has no history: it counts when it was modified after
+    `since` (the record's time, UTC), or always when that is not known."""
     repo = str(repo)
     if subprocess.run(["git", "-C", repo, "cat-file", "-e", f"{base}^{{commit}}"], capture_output=True).returncode != 0:
         return None
     tracked = subprocess.run(["git", "-C", repo, "diff", "--name-only", base], capture_output=True, text=True).stdout.split()
     untracked = subprocess.run(["git", "-C", repo, "ls-files", "--others", "--exclude-standard"], capture_output=True,
                                text=True).stdout.split()  # fmt: skip
+    if since:
+        try:
+            limit = datetime.strptime(since, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+            untracked = [f for f in untracked if (Path(repo) / f).stat().st_mtime > limit]
+        except (ValueError, OSError):
+            pass
     return sorted(set(tracked) | set(untracked))
+
+
+def _oldest(repo, commits) -> str:
+    """Of these commits, the one furthest behind HEAD (the devboxes: the team reset longest ago)."""
+    def behind(commit: str) -> int:
+        proc = subprocess.run(["git", "-C", str(repo), "rev-list", "--count", f"{commit.removesuffix('-dirty')}..HEAD"],
+                              capture_output=True, text=True)  # fmt: skip
+        return int(proc.stdout.strip()) if proc.returncode == 0 and proc.stdout.strip().isdigit() else 10**9
+    return max(commits, key=behind) if commits else ""
 
 
 @dataclass
@@ -283,7 +299,11 @@ def analyse(config, session) -> tuple[list[Change], dict, list[str]]:
     for name, component in components.COMPONENTS.items():
         if component.kind == "stack":
             continue  # OpenTofu's own plan says (plan_stacks)
-        base = record.get(name) or (vms.get(name, "") if component.kind == "vm" else "")
+        base, since = record.get(name, ("", ""))
+        if not base and component.kind == "vm":
+            base = vms.get(name, "")
+        if not base and component.kind == "devbox":
+            base = _oldest(repo, {c for vm, c in vms.items() if re.fullmatch(r"devbox-t\d+-(a|b|c|gw)", vm)})
         bases[name] = base
         if component.kind == "devbox":
             playbooks, group = ["SetupDevbox.yml", "SetupSSHGateway.yml"], "devbox"
@@ -307,7 +327,7 @@ def analyse(config, session) -> tuple[list[Change], dict, list[str]]:
             prefixes += list(WORKSPACE)  # its workspace: a copy of these, synced whenever it is configured
         devbox_note = "the devboxes take it when they are reset (`worms reset devboxes`): never by itself, it is the teams' work"
         clean_base = base.removesuffix("-dirty")
-        files = changed_files(repo, clean_base) if clean_base else None
+        files = changed_files(repo, clean_base, since) if clean_base else None
         if files is None:
             reason = "runs an unknown commit" if not base else f"runs {base}, not in this checkout's history"
             changes.append(Change(name, base, [reason], note=devbox_note if component.kind == "devbox" else ""))

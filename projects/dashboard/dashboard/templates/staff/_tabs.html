@@ -1,5 +1,5 @@
 {% comment %}The staff sections. Database records only: infrastructure is built
-from the console (worms build, worms build devbox) and by the round agent. Under them, on every
+from the console (worms apply, worms apply devbox) and by the round agent. Under them, on every
 staff page, the rounds whose gameplan is missing or not valid (views/util.py, render_with_base_info).{% endcomment %}
 <nav class="round-tabs" aria-label="Staff sections">
     <a class="round-tabs__tab" href="{% url 'staff_competition' %}"{% if section == 'competition' %} aria-current="page"{% endif %}>Competition</a>

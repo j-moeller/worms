@@ -71,7 +71,7 @@ def request_rebuild(team, fresh=False):
     A rebuild carries every team's keys, so it takes the devbox-job queue lock that key
     updates take too: a later rebuild cannot undo a revocation.
 
-    `fresh`: the team's VMs are built again from nothing (`worms build devbox --rebuild`),
+    `fresh`: the team's VMs are built again from nothing (`worms rebuild devboxes`),
     not rolled back to their snapshot (a reset)."""
     with serialized_resource("devbox-jobs", "queue"):
         Team.objects.select_for_update().get(pk=team.pk)
@@ -142,7 +142,7 @@ def provision(competition):
     services-source address, and enqueue one devbox_provision host job with
     the full team list. The agent's provisioning is idempotent, so this is
     safe whenever teams change (`manage.py provision_devboxes`, run by the
-    operator as `worms build devbox`). Indices are assigned once and kept.
+    operator as `worms apply devbox`). Indices are assigned once and kept.
 
     Returns (spec, job): job is None when a queued provision job already
     carries exactly this spec (nothing new to build)."""

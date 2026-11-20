@@ -1184,6 +1184,7 @@ def completion_slots() -> dict[str, list[str]]:
         "apply": [built],
         "plan": [built],
         "configure": [built],
+        "release": [built],
         "add key": ["@teams", ""],
         "remove key": ["@teams", ""],
         "delete team": ["@teams", ""],
@@ -1539,6 +1540,8 @@ VERBS = {
     "apply": "build what is missing, configure what exists",
     "configure": "configure what exists, never OpenTofu",
     "plan": "what `apply` would do, changing nothing",
+    "release": "this checkout onto the platform, with a restore point and a check",
+    "rollback": "back to before the newest release: the database, the code",
     "open": "open the internet window",
     "close": "close the internet window",
     "backup": "a dump of the database, here",
@@ -1648,6 +1651,13 @@ SECTIONS = (
             ("plan [<component>...]", "what `worms apply` would do and touch, changing nothing: its steps, what each VM "
                                       "runs now against this checkout, and OpenTofu's own plan; on production before a "
                                       "release, after dev: the two should match"),  # fmt: skip
+            ("release [<component>...]", "this checkout onto the platform, one step after the other: the plan (as "
+                                         "`worms plan`), then, once you agree, a restore point (a database dump, and "
+                                         "what each VM ran), `worms configure`, `worms check` of every team's devbox; "
+                                         "recorded in ~/.worms/releases/"),  # fmt: skip
+            ("rollback [--db] [--code]", "back to before the newest release: --db the database from its dump (what was "
+                                         "written since is lost), --code the checkout at the commit the VMs ran before "
+                                         "and that commit's own `worms configure`; alone: what it would do"),  # fmt: skip
             ("refill apt|pypi|caches", "the caches' lists checked (as `worms check`), then filled in the internet "
                                        "window (`worms apply apt-cache|devpi --packages`): a bad name fails before "
                                        "anything is opened"),  # fmt: skip
@@ -1869,6 +1879,12 @@ def _yes(parser) -> None:
     parser.add_argument("--yes", action="store_true", help="do not ask first")
 
 
+def _json(parser) -> argparse.ArgumentParser:
+    parser.add_argument("--json", action="store_true", help="what it shows as one JSON document on stdout (sections: "
+                        "heading, tables as rows keyed by their headers, lines), for scripts")
+    return parser
+
+
 def _objects(sub, verb: str, objects: dict, **kwargs) -> dict[str, argparse.ArgumentParser]:
     """`worms <verb> <object> ...` for a verb whose objects are fixed (add key, issue token, ...):
     one parser each, with its line of SECTIONS."""
@@ -1898,8 +1914,8 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
                                     "tables, or a table's newest rows")], 12))  # fmt: skip
 
     # -- look
-    p = _add(sub, "status")
-    p = _add(sub, "show", epilog=topics + (f"\n\n{vm_list}" if vm_list else ""), **raw)
+    p = _json(_add(sub, "status"))
+    p = _json(_add(sub, "show", epilog=topics + (f"\n\n{vm_list}" if vm_list else ""), **raw))
     p.add_argument("what", nargs="+", metavar="what", help="a VM (its name, an alias or <team>/a|b|c|gw), a team (its name "
                    "or slug t<id>), a list, or `db [<table>]`")  # fmt: skip
     p.add_argument("--schema", action="store_true", help="db <table>: its columns, indexes and constraints instead")
@@ -1915,10 +1931,10 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     p.add_argument("-n", "--lines", type=int, default=100, help="lines to show first (default 100)")
     p.add_argument("--since", help="journals only: from this time on (\"1 hour ago\", \"2026-11-19 18:00\")")
 
-    p = _add(sub, "trace")
+    p = _json(_add(sub, "trace"))
     p.add_argument("what", nargs="+", metavar="what", help="a team (its name or slug t<id>), or `upload <n>`")
 
-    p = _add(sub, "check")
+    p = _json(_add(sub, "check"))
     p.add_argument("what", nargs="*", metavar="team", help="teams (their names or slugs t<id>; default: every team with a "
                    "devbox), `devboxes` (every team), or `tokens`")  # fmt: skip
 
@@ -1981,6 +1997,8 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     # -- platform
     for verb in ("apply", "plan"):
         p = _add(sub, verb, epilog=_components_overview(), **raw)
+        if verb == "plan":
+            _json(p)
         p.add_argument("components", nargs="*", metavar="component", help="components or groups (default: everything)")
         p.add_argument("--packages", action="store_true", help="install packages too (opens the internet window)")
         if verb == "apply":
@@ -1997,6 +2015,14 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     p.add_argument("--timeout", type=int, default=900, help="how long to wait for the agent's running host job (s, default 900)")
     for verb in ("open", "close"):
         _yes(_objects(sub, verb, {"window": None})["window"])
+    p = _add(sub, "release", epilog=_components_overview(), **raw)
+    p.add_argument("components", nargs="*", metavar="component", help="components or groups (default: every one that exists)")
+    p.add_argument("--packages", action="store_true", help="install packages too (opens the internet window)")
+    _yes(p)
+    p = _add(sub, "rollback")
+    p.add_argument("--db", action="store_true", help="the database back to the release's dump")
+    p.add_argument("--code", action="store_true", help="the checkout back to the commit before, and its own configure")
+    _yes(p)
     p = _add(sub, "refill")
     p.add_argument("kind", choices=CACHE_KINDS, metavar="apt|pypi|caches")
     p.add_argument("--plan", action="store_true", help="the check and the plan, change nothing")
@@ -2265,6 +2291,80 @@ def verb_window(config, args) -> int:
     return cmd_internet(config, _with(args, state="enable" if args.command == "open" else "disable"))
 
 
+def verb_release(config, args) -> int:
+    """`worms release`: the plan, then (once agreed) a restore point, `worms configure`, `worms check`;
+    each step recorded (worms_cli/release.py), the way back said at the end."""
+    from worms_cli import components, database, release
+
+    code = verb_plan(config, _with(args, plan=True))
+    if code:
+        return code
+    pipe = pipeline.Pipeline(config)
+    here = pipe.runner.commit()
+    if not build.confirm(f"Release {here} as planned above: a database dump, then configure, then check every team's "
+                         "devbox?", args.yes):  # fmt: skip
+        return 1
+    names = args.components or [n for n in components.COMPONENTS if components.COMPONENTS[n].kind not in ("devbox", "gameplans")]
+    vms = [n for n in components.expand(names) if components.COMPONENTS[n].kind == "vm"]
+    print(output.heading("restore point"), flush=True)
+    try:
+        dump, size = database.backup(config)
+    except build.BuildError as exc:
+        output.error(f"no restore point, nothing released: {exc}")
+        return 1
+    print(output.status_cell("ok", f"database dump {size / 1e6:.1f} MB: {dump}"), flush=True)
+    record = release.start_record(pipe, list(args.components), vms, dump)
+    print(output.heading("configure"), flush=True)
+    code = cmd_deploy(config, _with(args, plan=False, during_round=False, timeout=900))
+    checked = None
+    if code == 0 and pipe.devboxes_exist():
+        print(output.heading("check: every team's devbox"), flush=True)
+        _with_db(config)
+        checked = cmd_validate(config, _with(args, teams=[]))
+    release.finish_record(record, code, checked)
+    print()
+    print(output.heading("the release"))
+    print(output.table(release.describe(record)))
+    print(output.color("The way back: `worms rollback --code` (the commit before, configured again), `worms rollback --db` "
+                       "(the database from the dump: what was written since is lost).", "dim"))  # fmt: skip
+    return code or (checked or 0)
+
+
+def verb_rollback(config, args) -> int:
+    from worms_cli import release
+
+    try:
+        record = release.newest_record()
+    except build.BuildError as exc:
+        output.error(str(exc))
+        return 1
+    print(output.heading("the newest release"))
+    print(output.table(release.describe(record)))
+    if not args.db and not args.code:
+        print(output.color("`worms rollback --db`: the database back to its dump; `--code`: the checkout back to "
+                           f"{record['from'] or '?'} and that commit's `worms configure`; both: --db first.", "dim"))  # fmt: skip
+        return 0
+    if args.db:
+        if not build.confirm(f"Replace the WHOLE database with the release's dump {record['dump']}? What was written "
+                             "since is lost", args.yes):  # fmt: skip
+            return 1
+        try:
+            release.restore_db(config, record["dump"])
+        except (build.BuildError, OSError) as exc:
+            output.error(str(exc))
+            return 1
+    if args.code:
+        if not build.confirm(f"Check out {record['from']} here and configure {', '.join(record['components']) or 'everything'} "
+                             "with it?", args.yes):  # fmt: skip
+            return 1
+        try:
+            release.rollback_code(config, record)  # replaces this process
+        except build.BuildError as exc:
+            output.error(str(exc))
+            return 1
+    return 0
+
+
 def verb_restore(config, args) -> int:
     from worms_cli import release
 
@@ -2326,7 +2426,7 @@ HANDLERS = {
     "apply": verb_apply, "configure": cmd_deploy, "plan": verb_plan,
     "open": verb_window, "close": verb_window, "backup": cmd_backup,
     "destroy": cmd_destroy, "emergency-stop": cmd_emergency_stop,
-    "restore": verb_restore, "add": verb_add, "remove": verb_remove, "sync": cmd_devbox_sync_keys, "refill": verb_refill,
+    "restore": verb_restore, "release": verb_release, "rollback": verb_rollback, "add": verb_add, "remove": verb_remove, "sync": cmd_devbox_sync_keys, "refill": verb_refill,
     "delete": cmd_delete_team,
     "issue": lambda config, args: cmd_secrets(config, _with(args, secrets_action="issue")),
     "set": lambda config, args: cmd_secrets(config, _with(args, secrets_action="set")),
@@ -2362,6 +2462,13 @@ def main(argv=None) -> int:
         return cmd_completion(config, args)
     tee = _run_log(config, args)
     lock = None
+    code = 1
+    captured = getattr(args, "json", False)
+    if captured:  # --json: what it shows, gathered (worms_cli/output.py), printed as one document at the end
+        import json
+
+        output.capture_start()
+        terminal, sys.stdout = sys.stdout, output.Sink()
     try:
         _internet_notice(config)
         lock = _lock(config, args, own)
@@ -2374,6 +2481,10 @@ def main(argv=None) -> int:
             lock.release()
         if tee is not None:
             tee.stop()
+        if captured:
+            sys.stdout.flush()
+            sys.stdout = terminal
+            print(json.dumps(output.capture_result("worms " + " ".join(own), code), indent=2, ensure_ascii=False))
     if tee is not None and code:
         print(output.color(f"this run's whole output: {tee.path} (`worms logs run`)", "dim"), file=sys.stderr)
     return code
@@ -2383,13 +2494,14 @@ def main(argv=None) -> int:
 # Never one whose output is a secret (`add staff`, `reset password`: a one-time password) or a VM's
 # (run, login).
 LOGGED = ("apply", "configure", "rebuild", "reset", "start", "stop", "restart", "open", "close", "sync", "add",
-          "remove", "delete", "destroy", "emergency-stop", "step", "pause", "resume", "cancel", "refill")
+          "remove", "delete", "destroy", "emergency-stop", "step", "pause", "resume", "cancel", "refill", "release",
+          "rollback")
 
 
 # The verbs that change the platform: one at a time, by the node's lock (worms_cli/release.py). Never
 # emergency-stop, pause, resume, cancel: they must work while a build runs.
 LOCKED = ("apply", "configure", "rebuild", "reset", "start", "stop", "restart", "open", "close", "destroy", "refill",
-          "sync", "step", "restore")
+          "sync", "step", "restore", "release", "rollback")
 
 
 def _lock(config, args, own):
@@ -2402,7 +2514,7 @@ def _lock(config, args, own):
     what = getattr(args, "what", None) or getattr(args, "targets", None) or []
     if (args.command == "reset" and what[:1] == ["password"]) or (args.command == "start" and what[:1] == ["round"]):
         return None  # the database's, no VM
-    if getattr(args, "plan", False):
+    if getattr(args, "plan", False) or (args.command == "rollback" and not (args.db or args.code)):
         return None  # changes nothing
     return release.Lock(for_config(config), " ".join(own)).acquire()
 

@@ -130,6 +130,11 @@ def trace(session, words) -> int:
                  f"sha256 {upload.artifact.content_hash[:12]}…" + ("" if upload.devbox else " · a round upload, not the devbox's"))
         print(output.heading(title if index == 0 else f"{title} (older)"))
         links = chain(session, upload)
+        if output.capturing():
+            words = {"ok": "done", "wait": "waits", "error": "failed", "todo": "to come", "run": "running"}
+            print(output.table([[words[state], link, text] for state, link, text in links], headers=["state", "step", "detail"]))
+            worst = worst or int(index == 0 and any(state == "error" for state, _l, _t in links))
+            continue
         width = max(len(link) for _state, link, _text in links)
         for state, link, text in links:
             mark, colour = MARK[state]

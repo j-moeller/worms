@@ -27,6 +27,7 @@ import getpass
 import os
 import shlex
 import subprocess
+import sys
 from datetime import datetime, timezone
 
 from worms_cli import output
@@ -214,3 +215,100 @@ def restore_db(config, path: str) -> int:
     print(output.color("The grants are the dump's; this checkout's: `worms configure database`.", "dim"))
     return 0
 
+
+
+# -- worms release / worms rollback: a record of each release, and the way back ---------------------
+
+RELEASES = "~/.worms/releases"  # one JSON file per release, newest last (0600, directory 0700)
+
+
+def _releases_dir():
+    from pathlib import Path
+
+    directory = Path(RELEASES).expanduser()
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(directory, 0o700)
+    return directory
+
+
+def start_record(pipe, components: list[str], vms: list[str], dump: str) -> dict:
+    """Before a release changes anything: what each VM runs now, this checkout, the dump."""
+    import json
+
+    previous = {row[0]: row[1] for row in deployed_commits(pipe, vms)}
+    counts: dict[str, int] = {}
+    for commit in previous.values():
+        if commit and not commit.startswith("unknown"):
+            counts[commit] = counts.get(commit, 0) + 1
+    record = {
+        "time": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "by": getpass.getuser(),
+        "components": components,
+        "from": max(counts, key=counts.get) if counts else "",  # what most of them ran
+        "from_per_vm": previous,
+        "to": pipe.runner.commit(),
+        "dump": dump,
+        "configure": None,
+        "check": None,
+    }
+    path = _releases_dir() / f"{datetime.now():%Y%m%d-%H%M%S}.json"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as out:
+        json.dump(record, out, indent=2)
+    record["_path"] = str(path)
+    return record
+
+
+def finish_record(record: dict, configure: int, check: int | None) -> None:
+    import json
+
+    record["configure"], record["check"] = configure, check
+    path = record.pop("_path")
+    with open(path, "w") as out:
+        json.dump(record, out, indent=2)
+    record["_path"] = path
+
+
+def newest_record() -> dict:
+    import json
+
+    files = sorted(_releases_dir().glob("*.json"))
+    if not files:
+        raise BuildError("no release recorded here (`worms release` records each one in ~/.worms/releases/)")
+    record = json.loads(files[-1].read_text())
+    record["_path"] = str(files[-1])
+    return record
+
+
+def describe(record: dict) -> list[list[str]]:
+    return [
+        ["release", f"{record['time']} by {record.get('by', '?')} ({record['_path']})"],
+        ["components", ", ".join(record["components"]) or "every one that exists"],
+        ["from", record["from"] or "unknown"],
+        ["to", record["to"]],
+        ["database dump", record["dump"]],
+        ["configure", "—" if record["configure"] is None else "ok" if record["configure"] == 0 else f"failed (exit {record['configure']})"],
+        ["check", "—" if record["check"] is None else "ok" if record["check"] == 0 else f"problems (exit {record['check']})"],
+    ]
+
+
+def rollback_code(config, record: dict) -> None:
+    """The checkout back to the commit most VMs ran before the release, then that commit's own CLI
+    configures the release's components (this process is replaced: its code and that commit's
+    never mix). Refused when the checkout has uncommitted changes, or the commit was dirty."""
+    repo = str(config.repo_root)
+    target = record["from"]
+    if not target or target.endswith("-dirty"):
+        raise BuildError(f"the release came from {target or 'an unknown commit'}: no commit to go back to "
+                         "(a -dirty one had uncommitted changes); check one out yourself and `worms configure`")  # fmt: skip
+    dirty = subprocess.run(["git", "-C", repo, "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True)
+    if dirty.stdout.strip():
+        raise BuildError(f"this checkout has uncommitted changes ({len(dirty.stdout.splitlines())} file(s)): commit or "
+                         "stash them first, nothing was changed")  # fmt: skip
+    if subprocess.run(["git", "-C", repo, "checkout", "--detach", target], capture_output=True).returncode != 0:
+        raise BuildError(f"git cannot check out {target} here")
+    print(output.status_cell("warn", f"the checkout is at {target} now (detached; `git -C {repo} checkout main` to come back)"),
+          flush=True)  # fmt: skip
+    argv = [sys.executable, os.path.join(repo, "src", "manage.py"), "configure", *record["components"]]
+    print(output.color(f"$ {' '.join(argv[1:])}  [that commit's own CLI]", "dim"), flush=True)
+    os.execv(sys.executable, argv)

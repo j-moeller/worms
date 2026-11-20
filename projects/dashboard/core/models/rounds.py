@@ -108,7 +108,7 @@ class GameplanVersion(models.Model):
       - the SHA-256 is the content's (a CHECK computes it), and `size` its length;
       - no role may UPDATE or DELETE a row, and a trigger refuses both to the owner too;
       - `first_seen_at` and `recorded_by` (the inserting account) are the database's;
-      - `worms reset database` keeps the table.
+      - `worms reset db` keeps the table.
     `content` is readable by the admin only: the dashboard and the orchestrator (which writes it)
     may read every other column (setup_db_permissions, postgresql_restricted_columns). Use
     `GameplanVersion.objects`, which leaves `content` out unless asked for it (`.content_of(sha256)`,

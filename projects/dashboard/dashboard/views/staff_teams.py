@@ -2,10 +2,10 @@
 
 Staff create, rename and resize teams and move people in and out of them.
 Building a new team's devbox is infrastructure work and stays on the console
-(`worms build devbox`, docs/04-dev-environment.md); this page says when one is
+(`worms apply devbox`, docs/04-dev-environment.md); this page says when one is
 missing. A team is deleted here only while nothing refers to it; a team with
-history (uploads, runs, access tokens, a devbox) is deleted with `worms status teams
-delete`, which removes it with everything it owns.
+history (uploads, runs, access tokens, a devbox) is deleted with `worms delete
+team`, which removes it with everything it owns.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from django.http import HttpRequest
 from django.shortcuts import get_object_or_404, redirect
 from django.views.decorators.http import require_POST
 
-DEVBOX_HINT = "Build its devbox from the console: worms build devbox."
+DEVBOX_HINT = "Build its devbox from the console: worms apply devbox."
 
 
 def _team(request, uuid):
@@ -190,7 +190,7 @@ def team_delete(request: HttpRequest, uuid):
         messages.error(
             request,
             f"{team.name} has {', '.join(reasons)} and is kept. To remove it with everything it owns: "
-            f"worms delete-team {team.name!r} (console).",
+            f"worms delete team {team.name!r} (console).",
         )
         return redirect("staff_team", uuid=team.uuid)
     events.team("deleted", request=request, team=team)

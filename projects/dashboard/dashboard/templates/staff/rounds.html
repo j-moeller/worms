@@ -50,7 +50,7 @@
                 <tbody>
                     {% for row in live_rounds %}
                     <tr>
-                        <th scope="row"><a href="{% url 'staff_round' row.round.uuid %}">{{ row.round.name }}</a> <span class="badge{% if row.phase.tone %} badge--{{ row.phase.tone }}{% endif %}" title="{{ row.phase.text }}">{{ row.phase.label }}</span></th>
+                        <th scope="row"><a href="{% url 'staff_round' row.round.uuid %}">{{ row.round.name }}</a> <span class="badge{% if row.phase.tone %} badge--{{ row.phase.tone }}{% endif %}" title="{{ row.phase.text }}">{{ row.phase.label }}</span>{% if row.round.on_hold %} <span class="badge badge--warn" title="paused on the console: no attempt of it starts until `worms resume round {{ row.round.id }}`">on hold</span>{% endif %}</th>
                         <td>{{ row.round.round_start|date:"Y-m-d H:i" }} – {{ row.round.round_end|date:"H:i" }}</td>
                         <td>{% include "staff/_gameplan.html" with round=row.round sha256=row.version %}</td>
                         <td>{% for state, count in row.states %}<span class="badge badge--state">{{ state }} {{ count }}</span> {% empty %}<span class="muted">planned at the start</span>{% endfor %}</td>

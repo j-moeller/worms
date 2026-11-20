@@ -1,5 +1,5 @@
 """The Proxmox tokens (src/worms_cli/tokens.py): one definition of what each may
-do, and `worms secrets issue` / `check` as the only way to write and verify them.
+do, and `worms issue token` / `check` as the only way to write and verify them.
 No Proxmox needed: pveum and the API are faked.
 """
 

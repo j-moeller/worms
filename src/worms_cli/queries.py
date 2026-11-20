@@ -200,7 +200,7 @@ def leaderboard() -> dict:
 
 def event_rows(hours: int = 24, kind: str | None = None, limit: int = 200) -> list[list[str]]:
     """The event tables (core/models/events.py) as one timeline, newest first, for `worms
-    audit`. Each row is named `<table>.<kind>` (login.ok, password.reset, ...). An SSH
+    show audit`. Each row is named `<table>.<kind>` (login.ok, password.reset, ...). An SSH
     gateway login is matched by its key's fingerprint to who registered the key."""
     import json
     from datetime import timedelta

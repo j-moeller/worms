@@ -17,7 +17,7 @@ of the build uses that agent and nothing else: the CLI's to the node, OpenTofu's
 Proxmox provider (snippet uploads), Ansible to the node and the VMs, rsync. Your
 own keys, a forwarded agent and ~/.ssh/id_* are never offered (IdentityFile=none,
 IdentityAgent=SSH_AUTH_SOCK, SSH_AUTH_SOCK = the WORMS agent). Root on the node
-has to accept the key: `worms trust-node`, once, with your own login, says so
+has to accept the key: `worms trust node`, once, with your own login, says so
 when it does not (check_node).
 """
 
@@ -174,7 +174,7 @@ class Session:
 
     def values(self) -> dict:
         """The vault, complete (Vault.check): a missing secret is an error that says how to
-        fix it, never generated on the side (`worms secrets` does that)."""
+        fix it, never generated on the side (`worms show secrets` does that)."""
         if self._values is None:
             try:
                 values = self.vault.load()
@@ -273,7 +273,7 @@ class Session:
         self.check_node()
         token = self.values().get("vault_tofu_proxmox_api_token", "")
         if not token:
-            raise SessionError("the Proxmox provisioning token is not in the vault: `worms secrets issue proxmox-token`")
+            raise SessionError("the Proxmox provisioning token is not in the vault: `worms issue token proxmox-token`")
         env["TF_VAR_proxmox_api_token"] = token
         env["TF_VAR_proxmox_api_url"] = self.proxmox_api_url()
         env["TF_VAR_ssh_public_key"] = str(self.public_key_file())
@@ -341,19 +341,19 @@ class Session:
             if proc.returncode != 0:
                 raise SessionError(
                     f"cannot log in to root@127.0.0.1 port {port} with the WORMS key: {proc.stderr.strip()[:200].rstrip('.')}. "
-                    "OpenTofu, Ansible and the round agent log in with it. Let it in once: `worms trust-node`; "
+                    "OpenTofu, Ansible and the round agent log in with it. Let it in once: `worms trust node`; "
                     f"if it is in and this still fails, sshd does not listen on {port} "
                     "(ansible/group_vars/all.yml, worms_environments: operator_ssh_port)"
                 )
             self._node_ok = True
             return
         argv = ["ssh", *self.ssh_opts(), self.config.ssh, "true"]
-        # No stdin: ssh would read it, and `worms secrets set ssh-key < key` needs it.
+        # No stdin: ssh would read it, and `worms set secret ssh-key < key` needs it.
         proc = subprocess.run(argv, env=self.env(), stdin=DEVNULL, capture_output=True, text=True, timeout=30)
         if proc.returncode != 0:
             raise SessionError(
                 f"cannot log in to {self.config.ssh} with the WORMS key: {proc.stderr.strip()[:200].rstrip('.')}. "
-                "The build logs in with that key only. Let it in once, with your own login: `worms trust-node`."
+                "The build logs in with that key only. Let it in once, with your own login: `worms trust node`."
             )
         self._node_ok = True
 
@@ -391,7 +391,7 @@ class Session:
         proc = subprocess.run(["tofu", f"-chdir={stack}", "output", "-json", "infrastructure"],
                               capture_output=True, text=True)  # fmt: skip
         if proc.returncode != 0:
-            raise SessionError(f"no platform state here ({proc.stderr.strip()[:120]}): `worms build platform` first")
+            raise SessionError(f"no platform state here ({proc.stderr.strip()[:120]}): `worms apply platform` first")
         return json.loads(proc.stdout)
 
     def pve_ca(self) -> str:
@@ -410,8 +410,8 @@ class Session:
 
     def node_run(self, argv: list) -> tuple:
         """A command on the Proxmox node: (returncode, stdout, stderr), all captured. Run
-        right here on the node it logs in nowhere, so it needs no key (`worms secrets
-        issue` runs before the vault is complete)."""
+        right here on the node it logs in nowhere, so it needs no key (`worms issue
+        token` runs before the vault is complete)."""
         env = dict(os.environ)
         if self.laptop:
             self.check_node()

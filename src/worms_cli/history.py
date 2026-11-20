@@ -1,5 +1,5 @@
 """Each VM's history: when it was created, configured, snapshotted, rolled back, destroyed, by
-which code (its commit) and by what (`worms build`, a host job). `worms status` shows each VM's
+which code (its commit) and by what (`worms apply`, a host job). `worms status` shows each VM's
 creation and last update, `worms show <vm>` all of it.
 
     /var/lib/worms/vm-history.jsonl     on the node, root's only (0600), append-only

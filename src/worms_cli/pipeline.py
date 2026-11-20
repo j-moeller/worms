@@ -267,7 +267,7 @@ class Pipeline:
                     self.offline_services()
                 except BuildError as exc:
                     output.error(f"!!! DNS AND THE CACHES MAY STILL BE IN ONLINE MODE (they answer what they cannot fetch "
-                                 f"with errors): run `worms internet disable` once fixed -- {exc}")  # fmt: skip
+                                 f"with errors): run `worms close window` once fixed -- {exc}")  # fmt: skip
             else:
                 try:
                     self._devboxes_on()
@@ -368,7 +368,7 @@ class Pipeline:
 
     def offline(self):
         if self.runner.flag_exists(INTERNET_FLAG):
-            raise BuildError(f"internet access is still allowed ({INTERNET_FLAG}): run `worms internet disable`")
+            raise BuildError(f"internet access is still allowed ({INTERNET_FLAG}): run `worms close window`")
         self._ansible("SetupDNS.yml")
         self._ansible("SetupPrivateInternet.yml")
 
@@ -385,12 +385,12 @@ class Pipeline:
         try:
             self.internet_deny()
         except BuildError as exc:
-            raise BuildError("!!! INTERNET ACCESS IS STILL ALLOWED: run `worms internet disable` -- " + str(exc)) from exc
+            raise BuildError("!!! INTERNET ACCESS IS STILL ALLOWED: run `worms close window` -- " + str(exc)) from exc
         self._forget_window_stopped()
 
     def _forget_window_stopped(self) -> None:
-        """A window that `worms internet enable` opened, closed by a build: the record of the devbox
-        VMs that enable shut down would go stale, and a later `worms internet disable` could start
+        """A window that `worms open window` opened, closed by a build: the record of the devbox
+        VMs that enable shut down would go stale, and a later `worms close window` could start
         them during a round that holds them off. It is cleared; the VMs stay off and are named.
         Best effort: the window is closed either way."""
         from worms_cli import power
@@ -402,8 +402,8 @@ class Pipeline:
         except Exception:  # noqa: BLE001
             return
         if recorded:
-            output.warn(f"the devbox VM(s) `worms internet enable` shut down stay off: {', '.join(r['name'] for r in recorded)} "
-                        "(`worms power start <vm>`)")  # fmt: skip
+            output.warn(f"the devbox VM(s) `worms open window` shut down stay off: {', '.join(r['name'] for r in recorded)} "
+                        "(`worms start <vm>`)")  # fmt: skip
 
     def online(self, step):
         """Run `step` with internet access allowed, then deny it again whatever
@@ -526,7 +526,7 @@ class Pipeline:
         start = start_command(off)
         if self.runner.flag_exists(INTERNET_FLAG):
             raise BuildError(
-                f"the devbox VMs stay off while internet access is allowed: start them after `worms internet disable` ({start})"
+                f"the devbox VMs stay off while internet access is allowed: start them after `worms close window` ({start})"
             )
         failed = [vmid for vmid in off if self.runner.node_sh(f"qm start {vmid}", check=False) != 0]
         if failed:  # `qm start` also fails on a VM that runs already
@@ -560,7 +560,7 @@ class Pipeline:
         if left:
             output.warn(
                 f"no snapshot of {', '.join(left)}: up before this build without one, so team VMs may have reached "
-                "them. A reset needs one on every service VM: `worms build services --rebuild`"
+                "them. A reset needs one on every service VM: `worms rebuild services`"
             )
 
     def snapshot_services(self):
@@ -583,7 +583,7 @@ class Pipeline:
         if missing or not vms:
             raise BuildError(
                 f"nothing was reset: no snapshot on {', '.join(missing) or 'any service VM'}. "
-                "Make one with `worms build services --rebuild`"
+                "Make one with `worms rebuild services`"
             )
         oldest = min(snapshots.values(), key=lambda snapshot: snapshot["snaptime"])
         taken = datetime.fromtimestamp(oldest["snaptime"]).isoformat(sep=" ", timespec="minutes")
@@ -594,7 +594,7 @@ class Pipeline:
         self._wait_for(vms)
         self.services_rolled_back = True
 
-    # -- `worms build <component>`: some components (worms_cli/components.py) ---
+    # -- `worms apply <component>`: some components (worms_cli/components.py) ---
 
     def build_components(self, plan, packages: bool = False) -> None:
         """Build the plan's components (components.plan): their stacks, their VMs (`tofu apply
@@ -685,7 +685,7 @@ class Pipeline:
         self._refuse_vms_in(("sandbox",), "Refusing to deploy gameplans during a round: sandbox VMs exist")
 
     def _plan_gameplans(self) -> list[Step]:
-        """`worms build gameplans`: gameplans/ and src/gameplan to both copies, nothing else. The
+        """`worms apply gameplans`: gameplans/ and src/gameplan to both copies, nothing else. The
         node's first: the round agent restarts itself on new framework code once it is idle
         (scripts/round_agent/agent.py, LoadedCode), so the conductor, restarted with the
         orchestrator's copy, checks against a node that has the same files and code. No package
@@ -711,7 +711,7 @@ class Pipeline:
 
     def offline_services(self) -> None:
         """DNS and the private internet's caches back to offline mode, as a build does after its
-        window, for `worms internet disable`. A cache left online answers every request it cannot
+        window, for `worms close window`. A cache left online answers every request it cannot
         fetch with 503: apt-cacher-ng rechecks its indexes upstream, which is unreachable then."""
         from worms_cli.components import COMPONENTS
 
@@ -719,7 +719,7 @@ class Pipeline:
 
     def _offline_hosts(self, limit: str) -> None:
         if self.runner.flag_exists(INTERNET_FLAG):
-            raise BuildError(f"internet access is still allowed ({INTERNET_FLAG}): run `worms internet disable`")
+            raise BuildError(f"internet access is still allowed ({INTERNET_FLAG}): run `worms close window`")
         self._ansible("SetupDNS.yml", "--limit", limit, user_args=False)
         self._ansible("SetupPrivateInternet.yml", "--limit", limit, user_args=False)
 
@@ -821,7 +821,7 @@ def refuse_without_varfile(step: str, ansible_args) -> None:
         raise BuildError(
             f"refusing `worms step {step}` without the round agent's variable file (-e @<file>): the teams' keys "
             "would be written EMPTY, every team locked out of its devbox and the SSH gateway. The keys: "
-            "`worms keys sync`; a team's devbox: `worms reset devbox <team>`, or `worms build devbox`"
+            "`worms sync keys`; a team's devbox: `worms reset <team>`, or `worms apply devbox`"
         )
 
 

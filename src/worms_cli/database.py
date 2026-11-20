@@ -69,7 +69,7 @@ BACKUPS = "~/.worms/backups"  # 0700; each dump 0600: it holds every record, pas
 
 
 def backup(config, path: str | None = None) -> tuple[str, int]:
-    """`worms backup database`: `pg_dump -Fc` of the platform's database (ansible/group_vars/all.yml,
+    """`worms backup db`: `pg_dump -Fc` of the platform's database (ansible/group_vars/all.yml,
     postgres_db) on the database VM, streamed over its management SSH (as `worms login` gets
     there) into a new local file, readable by its owner only. (path, bytes). Nothing is written
     on the VM; a failed dump leaves no file."""
@@ -91,7 +91,7 @@ def backup(config, path: str | None = None) -> tuple[str, int]:
         raise BuildError(str(exc)) from None
     vm = catalogue.resolve("database")
     if vm.get("status") != "running":
-        raise BuildError(f"the database VM is {vm.get('status')}: `worms power start database`")
+        raise BuildError(f"the database VM is {vm.get('status')}: `worms start database`")
     if path is None:
         try:
             system = session.environment()["node"]

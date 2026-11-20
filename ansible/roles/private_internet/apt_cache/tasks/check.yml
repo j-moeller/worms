@@ -26,5 +26,5 @@
       {{ (apt_cache_offline_check.stdout_lines + apt_cache_offline_check.stderr_lines)
          | select('match', '^(Err|E|W):') | list | join(' | ') | truncate(600) }}).
       New sandbox and devbox gateways and sandbox VMs would install nothing, and a round's first
-      attempt would fail. Fill it again with the internet: `worms build apt-cache --packages`.
+      attempt would fail. Fill it again with the internet: `worms apply apt-cache --packages`.
   when: apt_cache_offline_check.rc != 0

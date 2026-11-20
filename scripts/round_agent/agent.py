@@ -261,8 +261,8 @@ def check_env(env) -> None:
     if missing:
         raise SystemExit(
             f"round agent: not set or not there: {', '.join(missing)} (/etc/worms/round-agent.env). "
-            "Run SetupRoundAgent.yml again from the controller (`worms build round-agent`), with the vault complete "
-            "(`worms secrets`)"
+            "Run SetupRoundAgent.yml again from the controller (`worms apply round-agent`), with the vault complete "
+            "(`worms show secrets`)"
         )
 
 

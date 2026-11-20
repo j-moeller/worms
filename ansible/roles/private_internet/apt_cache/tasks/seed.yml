@@ -17,7 +17,7 @@
 # by-hash copy) from an earlier window. Online, acng revalidates InRelease but
 # trusts a by-hash file by its name, so once such a pair is cached it serves the
 # mismatch to every offline client for good. Toggling the window (several
-# `worms build ... --packages` in a row) is enough to produce it.
+# `worms apply ... --packages` in a row) is enough to produce it.
 #
 # This play runs only while the internet is open (SetupPrivateInternet.yml), so move
 # the cached repository indexes aside and pull them back through acng, all of them:

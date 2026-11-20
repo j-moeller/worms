@@ -1,12 +1,12 @@
-"""`worms power start|stop <target>...`: VMs on and off with `qm` on the node, by the names `worms
+"""`worms start|stop <target>...`: VMs on and off with `qm` on the node, by the names `worms
 run` takes (worms_cli/remote.py: a VM, `<team>/<role>`, a group of platform VMs). And the devbox
 VMs that something else stopped, which are written down on the node:
 
     held        a round with "shut down every devbox" (round agent, hold_devboxes:
                 /var/lib/worms/held-devboxes.json); its release job starts them again.
-                `worms power start --held` starts them by hand, once no round is on.
-    window      `worms internet enable` shut them down (WINDOW_STOPPED); `worms internet
-                disable` starts them again once the window is closed.
+                `worms start --held` starts them by hand, once no round is on.
+    window      `worms open window` shut them down (WINDOW_STOPPED); `worms close window`
+                starts them again once the window is closed.
 
 No team VM is started while the internet window is open, and a sandbox VM is the round agent's:
 neither started nor stopped here (`worms emergency-stop` stops everything).
@@ -22,7 +22,7 @@ from worms_cli.build import BuildError
 
 # scripts/round_agent/handlers.py, held_devboxes_path (the agent's state_dir, /var/lib/worms).
 HELD_DEVBOXES = "/var/lib/worms/held-devboxes.json"
-# The devbox VMs `worms internet enable` shut down, for `worms internet disable` to start again.
+# The devbox VMs `worms open window` shut down, for `worms close window` to start again.
 WINDOW_STOPPED = "/var/lib/worms/window-stopped-devboxes.json"
 INTERNET_FLAG = "/run/worms/internet-allowed"
 SHUTDOWN = "qm shutdown {vmid} --timeout 120 --forceStop 1"  # forced after 120 s: a team's VM may ignore it
@@ -118,7 +118,7 @@ class Power:
             on_hold = [vm["name"] for vm in team if int(vm["vmid"]) in holds]
             if on_hold:
                 raise BuildError(f"{', '.join(on_hold)}: held shut down by a round with devboxes off ({HELD_DEVBOXES}): "
-                                 "its release starts them; once no round is on, `worms power start --held`")  # fmt: skip
+                                 "its release starts them; once no round is on, `worms start --held`")  # fmt: skip
         stopped = [vm for vm in vms if vm.get("status") != "running"]
         for vm in vms:
             if vm.get("status") == "running":
@@ -128,7 +128,7 @@ class Power:
             if vm["name"] not in failed:
                 print(output.status_cell("running", f"{vm['name']}: started"))
         if failed:
-            output.error(f"did not start: {', '.join(failed)} (`worms log {failed[0]}` once it is up, or the node's task log)")
+            output.error(f"did not start: {', '.join(failed)} (`worms logs {failed[0]}` once it is up, or the node's task log)")
             return 1
         return 0
 
@@ -155,4 +155,4 @@ class Power:
 
     def _refuse_while_window(self, what: str) -> None:
         if self.runner.flag_exists(INTERNET_FLAG):
-            raise BuildError(f"refusing to {what} while internet access is allowed: `worms internet disable` first")
+            raise BuildError(f"refusing to {what} while internet access is allowed: `worms close window` first")

@@ -582,7 +582,7 @@ def test_services_without_a_snapshot_are_left_as_they_are_and_reported():
     ex.clean = {111}
     result = _prepare(ex)
     assert not any("rollback" in step for step in ex.qm_steps())
-    assert "not reset" in result["services"] and "apt-cache" in result["services"] and "services --rebuild" in result["services"]
+    assert "not reset" in result["services"] and "apt-cache" in result["services"] and "rebuild services" in result["services"]
 
 
 def test_the_devboxes_come_back_when_the_build_fails():

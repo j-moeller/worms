@@ -1,6 +1,6 @@
 """The vault (src/worms_cli/secrets.py): the one place secrets are kept.
 
-The Proxmox tokens are entered once (`worms secrets set`); everything else is
+The Proxmox tokens are entered once (`worms set secret`); everything else is
 generated when missing and never rotated; values are never printed. Runs
 without ansible-vault (plaintext vault in a temporary checkout) and, where it
 is installed, with it (encrypted at rest).
@@ -144,7 +144,7 @@ ENTERED = {"vault_proxmox_api_token_value", "vault_proxmox_readonly_api_token_va
 
 
 def test_build_secrets_provides_every_vault_variable(tmp_path):
-    """`worms secrets` in a fresh checkout yields every vault_* variable
+    """`worms show secrets` in a fresh checkout yields every vault_* variable
     the Ansible side refers to (the Proxmox tokens are entered by the operator,
     so they may be absent or empty), and a second run changes nothing."""
     import re

@@ -1,4 +1,4 @@
-"""`worms validate devbox [<team>...]`: can each team work on its devbox? Every check does what the
+"""`worms check [<team>...]`: can each team work on its devbox? Every check does what the
 team or its worm does, end to end, and changes nothing there:
 
     login     the SSH gateway takes the team's registered keys (as user `team`) and forwards the team
@@ -262,7 +262,7 @@ class Validator:
             for text in names:
                 team = find(known, text)
                 if team is None:
-                    raise BuildError(f"no team {text!r} in the current competition (`worms status devboxes`)")
+                    raise BuildError(f"no team {text!r} in the current competition (`worms show devboxes`)")
                 if not team.devbox:
                     raise BuildError(f"{team.label} has no devbox")
                 chosen.append(team)
@@ -347,7 +347,7 @@ class Validator:
         print(output.heading(f"SSH gateway ({GATEWAY})"))
         if vm is None or vm.get("status") != "running":
             state = "no such VM" if vm is None else vm.get("status")
-            print(output.status_cell("error", f"{state}: no team can log in (`worms power start ssh-gateway`)"))
+            print(output.status_cell("error", f"{state}: no team can log in (`worms start ssh-gateway`)"))
             return 1
         problems = 0
         if node is not None and "gateway" not in node.reached:
@@ -435,7 +435,7 @@ class Validator:
         if tag not in gateway.reached:
             return Cell("error", "no answer", f"sshd does not answer the SSH gateway: {gateway.errors.get(tag, 'no answer')}")
         taken = gateway.accepts.get(tag, set()) & set(mine)
-        whys, sync = [], False  # sync: what `worms keys sync` puts right
+        whys, sync = [], False  # sync: what `worms sync keys` puts right
         if len(taken) < n:
             whys.append(f"takes {len(taken)} of the team's {n} key(s) as root")
             sync = True
@@ -461,7 +461,7 @@ class Validator:
         text = f"{len(taken)}/{n}"
         if len(taken) == n and not whys:
             return Cell("ok", f"✓ {text}")
-        return Cell("error", text, "; ".join(whys) + (" (`worms keys sync`)" if sync else ""))
+        return Cell("error", text, "; ".join(whys) + (" (`worms sync keys`)" if sync else ""))
 
     def _print(self, team, team_keys, cells, vms) -> int:
         """One team's table and what is wrong; the number of problems."""
@@ -484,5 +484,5 @@ class Validator:
 
 
 def devbox(config, names) -> int:
-    """`worms validate devbox [<team>...]`."""
+    """`worms check [<team>...]`."""
     return Validator(config).validate(names)

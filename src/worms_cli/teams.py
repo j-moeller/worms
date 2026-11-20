@@ -136,5 +136,5 @@ def target(teams: dict[str, Team], text: str) -> str | None:
         raise ValueError(f"{text!r}: a team's VM is <team>/{'|'.join(ROLES)}")
     team = find(teams, team_text)
     if team is None:
-        raise ValueError(f"{text!r}: no team {team_text!r} (`worms status devboxes` lists them)")
+        raise ValueError(f"{text!r}: no team {team_text!r} (`worms show devboxes` lists them)")
     return vm_name(team.slug, role)

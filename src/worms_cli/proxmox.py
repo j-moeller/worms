@@ -29,7 +29,7 @@ class Infra:
 
     def api(self):
         if self._cfg is None:
-            raise ProxmoxUnavailable(self.error or "no Proxmox API configured (worms secrets set topology-token)")
+            raise ProxmoxUnavailable(self.error or "no Proxmox API configured (worms set secret topology-token)")
         if self._api is None:
             try:
                 from proxmoxer import ProxmoxAPI

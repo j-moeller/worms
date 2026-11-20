@@ -54,7 +54,7 @@ DEVBOX_ROLES = ("a", "b", "c")
 # While it exists, internet access is allowed (ansible Internet.yml).
 INTERNET_FLAG = "/run/worms/internet-allowed"
 # The VMs a sandbox reaches, which a new round's sandbox is built on after a rollback; their
-# snapshot is `worms build`'s (src/worms_cli/pipeline.py).
+# snapshot is `worms apply`'s (src/worms_cli/pipeline.py).
 SERVICE_POOLS = ("ephemeral", "private_internet")
 # The agent's own records on the node (root only).
 STATE_DIR = "/var/lib/worms"
@@ -207,12 +207,12 @@ def _destroy_sandbox(ex, cfg):
 
 
 def _reset_services(ex, cfg):
-    """The service VMs back to the snapshot `worms build` took of them, all or none. Returns
+    """The service VMs back to the snapshot `worms apply` took of them, all or none. Returns
     what happened, for the run's record: without a snapshot on each, they stay as they are."""
     vms = [vm for pool in SERVICE_POOLS for vm in snapshots.pool_vms(ex, pool)]
     missing = sorted(vm["name"] for vm in vms if not snapshots.has_clean(ex, vm))
     if not vms or missing:
-        return f"not reset: no clean snapshot on {', '.join(missing) or 'any service VM'} (`worms build services --rebuild`)"
+        return f"not reset: no clean snapshot on {', '.join(missing) or 'any service VM'} (`worms rebuild services`)"
     snapshots.roll_back(ex, vms)
     snapshots.wait_for_ssh(ex, cfg.get("service_hosts") or [cfg["scoring_host"], cfg["logging_host"]])
     _restore_devbox_map(ex, cfg)
@@ -873,7 +873,7 @@ def _install_ca(ex, vms):
 
 
 def _write_team_keys(ex, team, vms):
-    """The team's SSH keys on its VMs, directly: the key file `worms devbox-sync-keys` writes too.
+    """The team's SSH keys on its VMs, directly: the key file `worms sync keys` writes too.
     The SSH gateway's lines do not change with a reset."""
     from worms_cli import keys
 
@@ -886,7 +886,7 @@ def devbox_rebuild(ex, cfg, params):
     """Give one team a fresh devbox and new tokens, without touching other teams. The team's
     version has already been bumped by the orchestrator (which clears the dashboard score). Its
     three VMs go back to their clean snapshot; then the CA, its keys and new tokens over SSH: no
-    Ansible, seconds. VMs without a snapshot, or all three when `fresh` (`worms build devbox
+    Ansible, seconds. VMs without a snapshot, or all three when `fresh` (`worms apply devbox
     --rebuild`), are replaced, configured and snapshotted: a full rebuild."""
     teams = params["teams"]
     team = next((t for t in teams if t["team_uuid"] == params["team_uuid"]), None)

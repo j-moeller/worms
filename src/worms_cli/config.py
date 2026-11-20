@@ -136,7 +136,7 @@ class Config:
         try:
             return for_config(self).infrastructure()["proxmox"]["node"]
         except KeyError as exc:
-            raise SessionError("the platform stack's `infrastructure` output has no proxmox.node: `worms build platform`") from exc
+            raise SessionError("the platform stack's `infrastructure` output has no proxmox.node: `worms apply platform`") from exc
 
     def proxmox(self) -> dict | None:
         """The read-only (topology) token for `worms status`: explicit

@@ -1,4 +1,4 @@
-"""What `worms build <component>` builds: one component per service, with what it needs first.
+"""What `worms apply <component>` builds: one component per service, with what it needs first.
 
 A component is one of:
 
@@ -11,7 +11,7 @@ A component is one of:
   gameplans     gameplans/ and the framework (src/gameplan), copied to the orchestrator and the
                 node, which then check them: no packages, no internet window
 
-`deps` are what a component needs to exist before it is built. `worms build` builds a missing
+`deps` are what a component needs to exist before it is built. `worms apply` builds a missing
 dependency only after showing the plan and asking (build.confirm). Whether a component exists
 (`built`) is answered from the node: a VM by its name in Proxmox, a node play by its service,
 a stack by its OpenTofu state.
@@ -218,7 +218,7 @@ class Plan:
 
 
 def plan(requested, exists, rebuild=False, pending_migrations=lambda: [], unfinished=lambda component: False) -> Plan:
-    """The plan for `worms build <requested>`. `exists(component)` says whether it is built;
+    """The plan for `worms apply <requested>`. `exists(component)` says whether it is built;
     `unfinished(component)`, whether the build that created its VM stopped before its end
     ("Install apt-cacher-ng" with no internet, say; the VM history). Configured again offline, its
     packages would be fetched with the window closed and wait on the firewall for good, so it is
@@ -229,7 +229,7 @@ def plan(requested, exists, rebuild=False, pending_migrations=lambda: [], unfini
         stacks = [name for name in requested if COMPONENTS[name].kind == "stack"]
         if stacks:
             raise ValueError(f"{', '.join(stacks)}: everything else stands on it, so it is not rebuilt alone "
-                             "(`worms destroy --all`, then `worms build`)")  # fmt: skip
+                             "(`worms destroy --all`, then `worms apply`)")  # fmt: skip
     for name in closure(requested):
         component = COMPONENTS[name]
         if name in requested:

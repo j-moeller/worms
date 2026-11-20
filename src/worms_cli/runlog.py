@@ -1,7 +1,7 @@
 """Run logs: every `worms` run that changes something (build, deploy, reset, internet, keys, step,
 restart, power, destroy) keeps its whole output, the tools' too, in a file of its own:
 
-    ~/.worms/runs/<YYYYmmdd-HHMMSS>-<verb>.log      `worms log build [N]`: the newest, or N-th
+    ~/.worms/runs/<YYYYmmdd-HHMMSS>-<verb>.log      `worms logs run [N]`: the newest, or N-th
 
 The directory is 0700 and each file 0600: Ansible's output can hold secrets. The newest KEEP files
 are kept. The terminal sees what it always did; the file gets it without colours.
@@ -51,11 +51,14 @@ def nth(n: int = 1) -> Path:
 
 
 def verb(args) -> str:
-    """What a run is called in its file's name: `build`, `reset-devbox`, `internet-disable`, `step-offline`."""
+    """What a run is called in its file's name: the verb and what it acts on first: `apply`,
+    `reset-alpha`, `open-window`, `step-offline`, `rebuild-devboxes`."""
     words = [args.command]
-    for name in ("what", "state", "name", "keys_action"):
+    for name in ("object", "what", "name"):
         value = getattr(args, name, None)
-        if isinstance(value, str) and value and args.command in ("reset", "internet", "step", "power", "keys"):
+        if isinstance(value, list):
+            value = value[0] if value else None
+        if isinstance(value, str) and value and args.command not in ("apply", "configure", "plan"):
             words.append(value)
             break
     return re.sub(r"[^a-z0-9.-]+", "-", "-".join(words).lower()).strip("-") or "run"

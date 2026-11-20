@@ -616,7 +616,7 @@ def test_every_host_gets_its_roles(host):
 
 def test_plays_still_wait_for_cloud_init():
     """WaitForVMs.yml first, for every VM; the plays that wait again per VM
-    keep doing so (a VM rebuilt later, e.g. by `worms build`, may still be
+    keep doing so (a VM rebuilt later, e.g. by `worms apply`, may still be
     in its first boot)."""
     from ansible_static import configure_playbooks
 

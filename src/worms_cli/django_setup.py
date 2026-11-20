@@ -1,6 +1,6 @@
 """Bootstrap the Django ORM so the CLI reuses the dashboard's models and
 scoring. Imported lazily by the DB-backed commands, so `worms --help` and
-`worms build` work with neither Django nor a database configured.
+`worms apply` work with neither Django nor a database configured.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ def setup(config) -> None:
     if not db_env:
         raise NotConfigured(
             "no database configured: no vault in this checkout (set WORMS_SSH=root@<node> "
-            "in ~/.worms/config, then `worms secrets`). See docs/03-manage-py.md."
+            "in ~/.worms/config, then `worms show secrets`). See docs/03-manage-py.md."
         )
 
     dashboard_src = config.repo_root / "projects" / "dashboard"

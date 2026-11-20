@@ -1,5 +1,5 @@
 """The build pipeline (src/worms_cli/pipeline.py): which OpenTofu stacks and
-Ansible playbooks each `worms build <component>` runs, in which order, and
+Ansible playbooks each `worms apply <component>` runs, in which order, and
 that the internet window always closes again.
 
 The tools are not run: the Runner is replaced by a recorder, so this checks
@@ -25,7 +25,7 @@ OFFLINE = [("ansible", "SetupDNS.yml"), ("ansible", "SetupPrivateInternet.yml")]
 INIT = [("tofu", s, "init") for s in ("platform", "firewall", "infrastructure/persistent",
                                       "infrastructure/ephemeral", "sandbox", "devbox", "private_internet")]  # fmt: skip
 
-# A step (`worms step`), the whole build (`worms build`) or a component build -> the tofu and
+# A step (`worms step`), the whole build (`worms apply`) or a component build -> the tofu and
 # ansible steps, in order.
 CONFIGURE_VMS = [step for step in CONFIGURE if step != ("ansible", "SetupRoundAgent.yml")]
 EXPECTED = {
@@ -37,18 +37,18 @@ EXPECTED = {
     "all": [*INIT, ("tofu", "platform", "apply"), ("tofu", "firewall", "apply"), ("ansible", "SetupHostNetwork.yml"),
             ALLOW, ("tofu", "private_internet", "apply"), ("tofu", "infrastructure/persistent", "apply"),
             ("tofu", "infrastructure/ephemeral", "apply"), *CONFIGURE, DENY, *OFFLINE],
-    # `worms build dashboard`: it exists, so its configuration again, without the window.
+    # `worms apply dashboard`: it exists, so its configuration again, without the window.
     "dashboard": CONFIGURE_VMS,
-    # `worms build scoring` without a scoring VM: created, in the window.
+    # `worms apply scoring` without a scoring VM: created, in the window.
     "scoring": [ALLOW, ("tofu", "infrastructure/ephemeral", "init"), ("tofu", "infrastructure/ephemeral", "apply"),
                 *CONFIGURE_VMS, DENY],
-    # `worms build platform host-network`: a stack and a node play.
+    # `worms apply platform host-network`: a stack and a node play.
     "platform host-network": [("tofu", "platform", "init"), ("tofu", "platform", "apply"), ("ansible", "SetupHostNetwork.yml")],
 }  # fmt: skip
 
 
 def build(pipe, names, rebuild=False, missing=()):
-    """`worms build <names>` on `pipe`: everything there but `missing`."""
+    """`worms apply <names>` on `pipe`: everything there but `missing`."""
     from worms_cli import components
 
     plan = components.plan(components.expand(names), lambda c: c.name not in missing, rebuild=rebuild)
@@ -268,7 +268,7 @@ def test_a_window_left_open_names_the_command_that_closes_it(monkeypatch):
     pipe.runner.flag_exists = lambda path: True
     with pytest.raises(BuildError) as still_open:
         pipe.offline()
-    assert _names_a_real_command(str(still_open.value)).state == "disable"
+    assert vars(_names_a_real_command(str(still_open.value))).get("object") == "window"
 
 
 def test_a_failed_close_names_the_command_that_closes_it(monkeypatch):
@@ -282,7 +282,7 @@ def test_a_failed_close_names_the_command_that_closes_it(monkeypatch):
     with pytest.raises(BuildError) as failed:
         pipe.online(lambda: None)
     assert "STILL ALLOWED" in str(failed.value)
-    assert _names_a_real_command(str(failed.value)).state == "disable"
+    assert vars(_names_a_real_command(str(failed.value))).get("object") == "window"
 
 
 # --- the service VMs: reset, snapshot, rebuild ---------------------------------------
@@ -363,7 +363,7 @@ def test_a_reset_touches_nothing_if_any_vm_lacks_a_snapshot(node, monkeypatch):
         node.round_reset_services()
     assert steps(node) == []
     named = _names_a_real_command(str(refused.value))
-    assert (named.components, named.rebuild) == (["services"], True)
+    assert (named.command, named.what) == ("rebuild", ["services"])
 
 
 def test_a_reset_without_any_service_vm_says_so(node, monkeypatch):
@@ -474,7 +474,7 @@ def test_a_vm_up_without_a_snapshot_gets_none_and_the_build_says_why(node, monke
     node.build_all()
     snapshotted = {c[1].split()[2] for c in steps(node) if c[0] == "node" and c[1].startswith("qm snapshot")}
     assert snapshotted == {"111"}
-    assert len(warnings) == 1 and "docker-registry" in warnings[0] and "services --rebuild" in warnings[0]
+    assert len(warnings) == 1 and "docker-registry" in warnings[0] and "worms rebuild services" in warnings[0]
 
 
 def test_a_vm_the_build_created_is_snapshotted(node, monkeypatch):

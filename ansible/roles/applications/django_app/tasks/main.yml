@@ -110,7 +110,7 @@
 
 # The gameplans (docs/05-live-environment.md): the orchestrator runs their execute() and checks them; the
 # dashboard must never hold one. Root-owned, readable by the application (it cannot change them).
-# Tag gameplans: `worms build gameplans` runs these alone (no packages, no internet).
+# Tag gameplans: `worms apply gameplans` runs these alone (no packages, no internet).
 - name: Create the gameplan directories (orchestrator only)
   when: django_variant == "orchestrator"
   tags: [gameplans]
@@ -158,10 +158,10 @@
     group: "{{ django_app_group }}"
     mode: "u=rwX,g=rX,o="
 
-# The conductor checks the gameplans when it starts, then every 10 minutes. `worms build
+# The conductor checks the gameplans when it starts, then every 10 minutes. `worms apply
 # gameplans` synced the node's copy first, so a check now finds both copies alike: a changed copy
 # here restarts it (Restart Django); an unchanged one restarts it here.
-- name: Have the conductor check the gameplans at once (worms build gameplans)
+- name: Have the conductor check the gameplans at once (worms apply gameplans)
   when:
     - django_variant == "orchestrator"
     - "'gameplans' in ansible_run_tags"

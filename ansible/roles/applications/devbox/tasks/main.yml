@@ -55,7 +55,7 @@
   ansible.builtin.debug:
     msg: >-
       Not installed, the offline apt cache lacks them: {{ devbox_packages_lacking | join(', ') }}.
-      They come with the cache's next fill (`worms build apt-cache --packages`, with the internet).
+      They come with the cache's next fill (`worms apply apt-cache --packages`, with the internet).
 
 - name: Ensure the systemd-timesyncd drop-in directory
   ansible.builtin.file:

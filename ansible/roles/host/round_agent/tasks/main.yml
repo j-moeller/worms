@@ -6,7 +6,7 @@
 # token.
 
 # The node's apt refreshes its lists only to install a package that is missing: with everything
-# there, deploying code or gameplans (`worms build gameplans`) needs no internet.
+# there, deploying code or gameplans (`worms apply gameplans`) needs no internet.
 - name: Read the node's installed packages
   ansible.builtin.package_facts:
     manager: apt

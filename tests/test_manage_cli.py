@@ -380,25 +380,30 @@ def commands_of(parser, path=()):
 
 def test_help_groups_the_verbs_by_what_they_are_for():
     sections = sections_of(run_cli("--help"))
-    assert list(sections) == ["day to day", "teams and keys", "build and machines", "set up", "stop and tear down", "develop"]
-    # What an operator does every day comes first, in this order.
+    assert list(sections) == ["look", "reach", "machines", "platform", "teams and accounts", "set up", "develop"]
+    # Looking comes first, in this order; then reaching a VM.
     cli = _cli_module()
-    daily = [usage.split()[0] for usage, _ in cli.SECTIONS[0].commands]
-    assert list(dict.fromkeys(daily)) == ["status", "show", "log", "run", "login", "deploy", "reset", "restart"]
-    assert "build [<component>...]" in sections["build and machines"] and "secrets issue <name>" in sections["set up"]
-    assert "keys add <team> <key>" in sections["teams and keys"] and "admin-create-staff <email>" in sections["teams and keys"]
-    assert "reset services" in sections["day to day"] and "destroy [--all]" in sections["stop and tear down"]
+    looks = [usage.split()[0] for usage, _ in cli.SECTIONS[0].commands]
+    assert list(dict.fromkeys(looks)) == ["status", "show", "logs", "check"]
+    assert "apply [<component>...]" in sections["platform"] and "issue token <name>" in sections["set up"]
+    assert "add key <team> <key>" in sections["teams and accounts"] and "add staff <email>" in sections["teams and accounts"]
+    assert "reset services" in sections["machines"] and "destroy [--all]" in sections["platform"]
+    # Every verb says in one line what it is for, and has its lines in the sections.
+    verbs = {usage.split()[0] for section in cli.SECTIONS for usage, _ in section.commands}
+    assert verbs == set(cli.VERBS)
     # The flat list of argparse is gone, and with it a second list to keep true.
     assert "positional arguments" not in run_cli("--help")
     # A command that moved still runs, by its old words (ALIASES), and says where it went.
     for old, new in cli.ALIASES.items():
         assert cli._aliased(["--config", "f", *old, "x"])[0] == ["--config", "f", *new, "x"]
-    assert cli._aliased(["devbox-sync-keys"])[1] == "`worms devbox-sync-keys` is now `worms keys sync`"
+    assert cli._aliased(["devbox-sync-keys"])[1] == "`worms devbox-sync-keys` is now `worms sync keys`"
+    assert cli._aliased(["keys", "add", "alpha", "k"])[0] == ["add", "key", "alpha", "k"]  # the longest old words win
+    assert cli._aliased(["reset", "devbox", "alpha", "--fresh"])[0] == ["reset", "alpha", "--fresh"]
 
 
 def test_every_command_is_in_exactly_one_section(tmp_path, monkeypatch):
     cli = _cli_module()
-    listed = [cli._command_name(usage) for section in cli.SECTIONS for usage, _ in section.commands]
+    listed = {cli._command_name(usage) for section in cli.SECTIONS for usage, _ in section.commands}
     assert sorted(listed) == sorted(name for name, _ in commands_of(cli.build_parser()))
     # Tab completion is generated from the same parsers: it offers every top-level command.
     script = run_cli("completion", "bash")
@@ -424,7 +429,7 @@ def test_every_command_is_in_exactly_one_section(tmp_path, monkeypatch):
 def test_build_help_lists_every_component_and_group_with_what_it_needs():
     from worms_cli import components
 
-    sections = sections_of(run_cli("build", "--help"))
+    sections = sections_of(run_cli("apply", "--help"))
     listed, groups = sections["components, in build order"], sections["groups"]
     for name, component in components.COMPONENTS.items():
         assert f"\n  {name} " in listed, name
@@ -442,7 +447,7 @@ def test_every_command_explains_itself():
 
 
 def test_help_fits_a_terminal():
-    for args in (["--help"], ["build", "--help"], ["status", "--help"]):
+    for args in (["--help"], ["apply", "--help"], ["show", "--help"]):
         too_long = [line for line in run_cli(*args).splitlines() if len(line) > 80]
         assert not too_long, (args, too_long)
 
@@ -450,15 +455,15 @@ def test_help_fits_a_terminal():
 def test_arguments_for_the_tools_go_after_a_double_dash():
     """What the help promises for `build` and `test`: and options before the `--` stay the command's."""
     cli = _cli_module()
-    own, passed = cli._split(["build", "dashboard", "--rebuild", "--", "--limit", "db"])
+    own, passed = cli._split(["apply", "dashboard", "--packages", "--", "--limit", "db"])
     args = cli.build_parser().parse_args(own)
-    assert (args.components, args.rebuild, passed) == (["dashboard"], True, ["--limit", "db"])
+    assert (args.components, args.packages, passed) == (["dashboard"], True, ["--limit", "db"])
     assert cli._split(["test", "--", "-k", "shipper"]) == (["test"], ["-k", "shipper"])
 
 
 def test_a_command_is_still_required():
     proc = subprocess.run([sys.executable, str(MANAGE)], capture_output=True, text=True)
-    assert proc.returncode == 2 and "usage: worms" in proc.stderr and "<command>" in proc.stderr
+    assert proc.returncode == 2 and "usage: worms" in proc.stderr and "<verb>" in proc.stderr
 
 
 def test_there_is_no_dry_run():
@@ -481,7 +486,7 @@ def run_on(tmp_path, *args, **env):
 
 
 def test_every_command_starts_with_the_internet_notice(tmp_path):
-    for args in (["status"], ["secrets"]):
+    for args in (["status"], ["show", "secrets"]):
         proc = run_on(tmp_path, *args)
         assert proc.returncode == 0, proc.stderr
         assert proc.stderr.splitlines()[0].startswith("internet access: "), args
@@ -489,7 +494,7 @@ def test_every_command_starts_with_the_internet_notice(tmp_path):
 
 def test_the_internet_notice_stays_off_stdout(tmp_path):
     """The stdout of `worms admin-reset-password` is the password, and nothing else."""
-    assert "internet access:" not in run_on(tmp_path, "secrets").stdout
+    assert "internet access:" not in run_on(tmp_path, "show", "secrets").stdout
 
 
 def test_help_is_not_a_command(tmp_path):
@@ -508,7 +513,7 @@ def test_the_internet_notice_says_what_it_found(tmp_path, monkeypatch, capsys):
     (tmp_path / "internet-allowed").touch()
     cli._internet_notice(config)
     err = capsys.readouterr().err
-    assert "ALLOWED" in err and "worms internet disable" in err
+    assert "ALLOWED" in err and "worms close window" in err
 
 
 def test_the_internet_notice_never_stops_a_command(monkeypatch, capsys):

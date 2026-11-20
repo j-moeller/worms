@@ -66,7 +66,7 @@ NODE_RUN = "/usr/local/sbin/worms-node-run"
 ONE_KEY = ["-o", "IdentityFile=none", "-o", "IdentityAgent=SSH_AUTH_SOCK"]
 # How to finish (or remove) a stack whose last apply stopped half way.
 UNFINISHED = {
-    "devbox": "the round agent applies it: `worms build devbox` (follow it: `tail -F /var/log/worms/jobs/latest.log` "
+    "devbox": "the round agent applies it: `worms apply devbox` (follow it: `tail -F /var/log/worms/jobs/latest.log` "
               "on the node). Or remove what was built, on the node: "
               "`worms-node-run opentofu/stacks/devbox 'tofu destroy -auto-approve -parallelism=1'`",
     "sandbox": "the round agent builds it again for the next round. Or remove it, on the node: "
@@ -174,7 +174,7 @@ def build_inventory(infrastructure: dict, stacks: dict, sandbox: dict, controlle
     missing += [f"proxmox.{key}" for key in ("node", "host", "api_port") if not proxmox.get(key)]
     if missing:
         raise ValueError(f"the platform stack's `infrastructure` output lacks {', '.join(missing)}: "
-                         "apply it again (`worms build platform`)")  # fmt: skip
+                         "apply it again (`worms apply platform`)")  # fmt: skip
     # Proxmox API port is numeric in HCL but arrives as int; keep it an int.
     proxmox["api_port"] = int(proxmox["api_port"])
 
@@ -404,7 +404,7 @@ def main() -> None:
     if not infrastructure.get("infrastructure_ips"):
         sys.exit(
             "error: platform stack has no 'infrastructure' output.\n"
-            "       Apply it first: worms build platform"
+            "       Apply it first: worms apply platform"
         )
 
     stacks, status = {}, {}
@@ -417,7 +417,7 @@ def main() -> None:
         elif "ansible_hosts" not in outputs:
             # Its last apply stopped before the VMs (or predates the output): an
             # inventory without them would have the playbooks after it skip them.
-            fix = UNFINISHED.get(stack, "`worms build infrastructure` applies it again and shows the error")
+            fix = UNFINISHED.get(stack, "`worms apply infrastructure` applies it again and shows the error")
             sys.exit(f"error: stack {stack} has outputs ({', '.join(sorted(outputs))}) but no ansible_hosts: "
                      f"its last apply did not finish (its VMs are missing). To go on, {fix}")  # fmt: skip
         stacks[stack] = (outputs.get("ansible_hosts") or {}).get("value", {})

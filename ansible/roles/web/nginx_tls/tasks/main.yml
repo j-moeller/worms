@@ -66,7 +66,7 @@
   notify: Reload nginx
 
 # The latest while internet access is allowed: that is when nginx.org's newer versions arrive.
-# Without it (`worms build <component>` of a VM that exists) the package is there, and nothing
+# Without it (`worms apply <component>` of a VM that exists) the package is there, and nothing
 # may wait on mirrors.
 - name: Install nginx
   ansible.builtin.apt:

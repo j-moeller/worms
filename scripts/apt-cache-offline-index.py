@@ -7,9 +7,9 @@
 
 For a cache whose index is gone or incomplete (offline it answers "503 Unable to download in
 offline mode" for InRelease or a Packages list, and a fresh VM finds no package at all) when no
-internet is at hand for `worms build apt-cache --packages`.
+internet is at hand for `worms apply apt-cache --packages`.
 
-Every fill (`worms build apt-cache --packages`, role apt_cache, tasks/seed.yml) fetches the index
+Every fill (`worms apply apt-cache --packages`, role apt_cache, tasks/seed.yml) fetches the index
 through the cache, as a client VM asks for it, and keeps it in /var/lib/apt-cache-client/lists:
 each suite's InRelease and every Packages list it names, uncompressed, signed. (The VM's own apt
 fetches from the Debian mirrors. Seeded before that change, it went through the cache, and its

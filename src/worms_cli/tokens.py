@@ -3,8 +3,8 @@ issued and checked.
 
 This is the one definition of them. Their values live in the vault
 (worms_cli/secrets.py), which is the only place they are read from and written
-to: `worms secrets issue <name>` creates or rotates a token and stores it,
-`worms secrets check` asks Proxmox whether each stored value works and has
+to: `worms issue token <name>` creates or rotates a token and stores it,
+`worms check tokens` asks Proxmox whether each stored value works and has
 exactly the rights defined here. No value is ever printed.
 
 Every token is privilege-separated and has its role on the user and on the

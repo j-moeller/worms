@@ -1,5 +1,5 @@
 """The platform's services, in one registry: where each runs, its systemd units, its log, and
-whether `worms restart` may restart it. `worms log <name>`, `worms restart <name>` and `worms show
+whether `worms restart` may restart it. `worms logs <name>`, `worms restart <name>` and `worms show
 <vm>` read it (docs/03-manage-py.md).
 
     worms restart conductor           its units, on the orchestrator
@@ -41,7 +41,7 @@ class Service:
 
     @property
     def log(self):
-        """What `worms log <name>` shows: a file glob, or the units' journal."""
+        """What `worms logs <name>` shows: a file glob, or the units' journal."""
         return self.files or list(self.units)
 
 
@@ -51,7 +51,7 @@ SERVICES: dict[str, Service] = {
     "agent": Service("node", "the round agent: each host job started, done or failed", ("worms-round-agent",)),
     "firewall": Service("node", "the host firewall, its watchdog and the traffic mirror",
                         ("worms-host-firewall", "worms-firewall-watchdog", "worms-mirror"), restartable=False,
-                        why_not="the node's firewall: `worms build host-network` applies it again",
+                        why_not="the node's firewall: `worms apply host-network` applies it again",
                         active=("worms-host-firewall", "worms-firewall-watchdog.timer", "worms-mirror")),
     "processor": Service("orchestrator", "captures and worm logs counted; dev uploads run", ("orchestrator-process-attempts",)),
     "api": Service("orchestrator", "the orchestrator's API: simulations, devbox key pushes", ("orchestrator",)),
@@ -110,7 +110,7 @@ def wait_until_idle(timeout: int, poll: float = 5.0, jobs=running_jobs, clock=ti
         if clock() >= deadline:
             raise BuildError(
                 f"the round agent is still running {names} after {timeout} s: not restarted (systemd would kill the job "
-                "at its stop timeout). Try again once it is done (`worms status jobs`, `worms log latest -f`), or wait "
+                "at its stop timeout). Try again once it is done (`worms show jobs`, `worms logs latest -f`), or wait "
                 "longer: --timeout SECONDS"
             )
         if names != said:
@@ -136,15 +136,15 @@ class Restarter:
             print(output.color(f"restarting {name} on the node: {units}", "dim"), flush=True)
             self.runner.node_sh(f"systemctl restart {units}")
             if self.runner.node_sh(f"systemctl is-active --quiet {units}", check=False, quiet=True) != 0:
-                raise BuildError(f"{name} is not active after its restart: `worms log {name}`")
+                raise BuildError(f"{name} is not active after its restart: `worms logs {name}`")
             return
         vm = self.catalogue.resolve(service.where)
         if vm.get("status") != "running":
-            raise BuildError(f"{vm['name']} is {vm.get('status')}: {name} runs there (`worms power start {vm['name']}`)")
+            raise BuildError(f"{vm['name']} is {vm.get('status')}: {name} runs there (`worms start {vm['name']}`)")
         print(output.color(f"restarting {name} on {vm['name']}: {units}", "dim"), flush=True)
         argv, env = self.catalogue.ssh_argv(vm, f"sudo -n systemctl restart {units} && sudo -n systemctl is-active --quiet {units}",
                                             interactive=False)  # fmt: skip
         proc = subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=300)
         if proc.returncode != 0:
             raise BuildError(f"{name} on {vm['name']}: restart failed or not active after it (exit {proc.returncode}: "
-                             f"{proc.stderr.strip()[-200:]}): `worms log {name}`")  # fmt: skip
+                             f"{proc.stderr.strip()[-200:]}): `worms logs {name}`")  # fmt: skip

@@ -651,7 +651,7 @@ def cmd_deploy(config, args) -> int:
                          "creates it")  # fmt: skip
             return 1
         sandboxes = sorted(vm["name"] for vm in pipe.runner.vms() if vm.get("pool") == "sandbox")
-        if sandboxes and not args.during_round:
+        if sandboxes and not args.during_round and not args.plan:  # a plan changes nothing: shown during a round too
             output.error(f"Refusing to deploy during a round ({len(sandboxes)} sandbox VM(s)): it restarts the conductor, "
                          "which costs the running team its attempt; --during-round if it must")  # fmt: skip
             return 1

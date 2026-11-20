@@ -550,43 +550,13 @@ def _print_plan(plan, packages: bool) -> None:
         print(output.color(f"note: {note}", "dim"))
 
 
-def _wait_for_jobs(jobs) -> int:
-    """--wait: until each of these host jobs has ended, saying each one's end as it comes. 1 if one
-    failed, 130 if the wait was interrupted (the jobs go on)."""
-    import time
+def _wait_for_jobs(jobs, config=None) -> int:
+    """Follow these host jobs until each has ended: why one waits while it is queued, then its log,
+    live (worms_cli/jobs.py). 1 if one failed, 130 if Ctrl-C (the jobs go on)."""
+    from worms_cli import jobs as host_jobs
+    from worms_cli.session import for_config
 
-    from core.models.rounds import HostJob
-    from core.models.team import Team
-
-    pending = {job.id for job in jobs if job is not None}
-    if not pending:
-        return 0
-    print(output.color(f"waiting for {len(pending)} host job(s): {', '.join(f'#{n}' for n in sorted(pending))} "
-                       "(Ctrl-C stops waiting, not the jobs)", "dim"), flush=True)  # fmt: skip
-    failed = []
-    try:
-        while pending:
-            for job in HostJob.objects.filter(id__in=pending).order_by("id"):
-                if job.state not in (HostJob.State.DONE, HostJob.State.FAILED):
-                    continue
-                pending.discard(job.id)
-                team = Team.objects.filter(uuid=(job.params or {}).get("team_uuid") or None).first()
-                took = (job.finished_at - (job.started_at or job.requested_at)).total_seconds() if job.finished_at else 0
-                ok = job.state == HostJob.State.DONE
-                print(output.status_cell("ok" if ok else "error", f"#{job.id} {job.kind}{f' {team.name}' if team else ''}: "
-                                         f"{job.state} after {took / 60:.0f} min") + (f": {job.error[:160]}" if job.error else ""),
-                      flush=True)  # fmt: skip
-                if not ok:
-                    failed.append(job.id)
-            if pending:
-                time.sleep(10)
-    except KeyboardInterrupt:
-        output.error(f"stopped waiting; {len(pending)} job(s) go on (`worms show jobs`, `worms logs latest -f`)")
-        return 130
-    if failed:
-        output.error(f"{len(failed)} job(s) failed: `worms logs {failed[0]}`")
-        return 1
-    return 0
+    return host_jobs.follow(for_config(config or Config.load()), jobs)
 
 
 def _open_jobs(kind: str) -> list:
@@ -610,7 +580,7 @@ def _build_devboxes(config, rebuild=False, teams=(), wait=False) -> int:
         except CommandError as exc:
             output.error(str(exc))
             return 1
-        return _wait_for_jobs(_open_jobs("devbox_provision")) if wait else 0
+        return _wait_for_jobs(_open_jobs("devbox_provision"), config) if wait else 0
     from core.models.devbox import Devbox
     from orchestrator.rounds.devbox import request_rebuild
     from worms_cli import queries
@@ -629,8 +599,8 @@ def _build_devboxes(config, rebuild=False, teams=(), wait=False) -> int:
         else:
             print(f"{team.name}: {'enqueued' if enqueued else 'already queued'} devbox_rebuild #{job.id} {job.uuid} (from nothing)")
     if wait:
-        return _wait_for_jobs(jobs)
-    print(output.color("The round agent does the work: `worms logs latest -f` (or --wait).", "dim"))
+        return _wait_for_jobs(jobs, config)
+    print(output.color("The round agent does the work: `worms show jobs`, `worms logs latest -f`.", "dim"))
     return 0
 
 
@@ -1075,7 +1045,7 @@ def cmd_reset(config, args) -> int:
                 _restore_devbox_map(config)
         if getattr(args, "wait", False):  # the map, written again by the round agent
             _with_db(config)
-            return _wait_for_jobs(_open_jobs("devbox_reconfigure"))
+            return _wait_for_jobs(_open_jobs("devbox_reconfigure"), config)
         return 0
     return _reset_devboxes(config, args)
 
@@ -1111,7 +1081,10 @@ def _reset_devboxes(config, args) -> int:
             print(f"{team.name}: no devbox (version bumped all the same)")
         else:
             print(f"{team.name}: {'enqueued' if enqueued else 'already queued'} devbox_rebuild #{job.id} {job.uuid}")
-    return _wait_for_jobs(jobs) if getattr(args, "wait", False) else 0
+    if getattr(args, "detach", False):
+        print(output.color("queued; follow them with `worms logs latest -f`", "dim"))
+        return 0
+    return _wait_for_jobs(jobs, config)
 
 
 ROUND_CRITICAL = ("agent", "processor", "conductor", "scoring", "logging")  # a round's attempt needs them running
@@ -1192,8 +1165,9 @@ def completion_slots() -> dict[str, list[str]]:
     machines = f"@targets @teams devboxes {groups}"
     return {
         "show": [f"@targets @teams {' '.join(STATUS_TOPICS)} keys secrets db", ""],
-        "logs": [f"@targets {' '.join(services.SERVICES)} run latest", ""],
+        "logs": [f"@targets @teams {' '.join(services.SERVICES)} run latest", ""],
         "check": ["@teams devboxes tokens"],
+        "trace": ["@teams upload", ""],
         "login": ["@targets", ""],
         "run": [f"@targets {groups}"],
         "rsync": ["@rsync"],
@@ -1544,6 +1518,7 @@ VERBS = {
     "show": "one thing in detail: a VM, a team, a list (teams, jobs, rounds, ...), the database",
     "logs": "a log: a service's, a VM's journal, a host job's, a run's here",
     "check": "is it set up as it should be? A team's devbox end to end, the Proxmox tokens",
+    "trace": "where a team's dev upload is, link by link, and why it waits",
     "login": "a shell on a VM",
     "run": "a command on VMs",
     "rsync": "files between here and a VM",
@@ -1586,10 +1561,15 @@ SECTIONS = (
             ("logs [<what>] [-f]", "a service's log (agent, conductor, processor, dashboard, scoring, ...), a VM's journal, "
                                    "a host job's by its number (`latest`: the newest), `run [N]`: the N-th newest run log "
                                    "of a change made here; alone: what there is"),  # fmt: skip
+            ("logs <team>", "everything about a team: its host jobs, the processor's lines about its uploads, what "
+                            "scoring and logging refused from its devbox"),  # fmt: skip
             ("check [<team>...]", "can each team work on its devbox? As the team does, changing nothing: login through the "
                                   "SSH gateway with its keys, then on A, B and C the flag, scoring, logging, apt and PyPI; "
                                   "and the gateway's sshd penalties (default: every team)"),  # fmt: skip
             ("check tokens", "do the stored Proxmox tokens work, with exactly their rights?"),
+            ("trace <team>|upload <n>", "a team's newest dev uploads on their way to its devbox: picked up, the reset "
+                                        "(its job), put on VM A (its job), its hour; what each waits for and why "
+                                        "(a round holding the devboxes, the agent, the queue)"),  # fmt: skip
         ),
     ),
     Section(
@@ -1612,10 +1592,11 @@ SECTIONS = (
             ("start <target>...", "VMs on (qm on the node); `start --held`: the devboxes a round holds, once it is over"),
             ("stop <target>...", "VMs off: shut down, forced after 120 s"),
             ("reset <team>...|devboxes", "teams' devboxes back to their snapshot, through the orchestrator, as the "
-                                         "dashboard's reset: the dev score starts over (--wait: until the jobs end)"),  # fmt: skip
+                                         "dashboard's reset: the dev score starts over; follows the jobs, their logs live (--detach: queue only)"),  # fmt: skip
             ("reset services", "the service VMs (ephemeral, private internet) back to their snapshot (--wait)"),
             ("reset db", "DANGER: wipe the database, migrate and initialise it again (asks first)"),
-            ("rebuild <team>...|devboxes", "teams' devboxes destroyed and built again from nothing, fresh disks"),
+            ("rebuild <team>...|devboxes", "teams' devboxes destroyed and built again from nothing, fresh disks; follows "
+                                           "the jobs, their logs live (--detach: queue only)"),
             ("rebuild <component>...", "platform VMs destroyed and built again (`worms apply --help` lists them)"),
             ("restart <service>...", "services in a safe order: the agent first and once no host job runs, then the "
                                      "conductor (`worms logs` lists them); refused during a round for what it needs, "
@@ -1892,6 +1873,9 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     p.add_argument("-n", "--lines", type=int, default=100, help="lines to show first (default 100)")
     p.add_argument("--since", help="journals only: from this time on (\"1 hour ago\", \"2026-11-19 18:00\")")
 
+    p = _add(sub, "trace")
+    p.add_argument("what", nargs="+", metavar="what", help="a team (its name or slug t<id>), or `upload <n>`")
+
     p = _add(sub, "check")
     p.add_argument("what", nargs="*", metavar="team", help="teams (their names or slugs t<id>; default: every team with a "
                    "devbox), `devboxes` (every team), or `tokens`")  # fmt: skip
@@ -1919,14 +1903,18 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     p = _add(sub, "reset")
     p.add_argument("what", nargs="*", metavar="what", help="teams (their names or slugs t<id>), `devboxes` (every team's), "
                    "`services`, `db`, or `password [<user>]`")  # fmt: skip
-    p.add_argument("--wait", action="store_true", help="devboxes, services: wait for the host jobs, and say how each ended")
+    p.add_argument("--detach", action="store_true", help="teams, devboxes: queue the jobs and return (default: follow them, "
+                   "their logs live)")
+    p.add_argument("--wait", action="store_true", help="services: wait for the devbox map's host job, and follow it")
     p.add_argument("--all-teams", action="store_true", help=argparse.SUPPRESS)  # the old `reset devbox --all-teams`
     p.add_argument("--fresh", action="store_true", help=argparse.SUPPRESS)  # the old `reset devbox --fresh`: rebuild
     _yes(p)
     p = _add(sub, "rebuild", epilog=_components_overview(), **raw)
     p.add_argument("what", nargs="+", metavar="what", help="teams (their names or slugs t<id>), `devboxes` (every team's), "
                    "or platform components")  # fmt: skip
-    p.add_argument("--wait", action="store_true", help="devboxes: wait for the host jobs, and say how each ended")
+    p.add_argument("--detach", action="store_true", help="teams, devboxes: queue the jobs and return (default: follow them, "
+                   "their logs live)")
+    p.add_argument("--wait", action="store_true", help=argparse.SUPPRESS)  # the old --wait: now the default
     p.add_argument("--packages", action="store_true", help="components: install packages too (the window opens anyway)")
     _yes(p)
     p = _add(sub, "restart")
@@ -1944,7 +1932,7 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
             p.add_argument("--plan", action="store_true", help="show the plan, change nothing (= worms plan)")
             p.add_argument("--rebuild", action="store_true", help=argparse.SUPPRESS)  # the old `build --rebuild`
             p.add_argument("--team", action="append", default=[], help="devbox --rebuild: only this team's (repeatable)")
-            p.add_argument("--wait", action="store_true", help="devbox: wait for its host jobs, and say how each ended")
+            p.add_argument("--wait", action="store_true", help="devbox: follow its host jobs, their logs live")
             _yes(p)
     p = _add(sub, "configure", epilog=_components_overview(), **raw)
     p.add_argument("components", nargs="*", metavar="component", help="components or groups (default: every one that exists)")
@@ -2019,6 +2007,19 @@ def verb_show(config, args) -> int:
         return cmd_keys(config, _with(args, keys_action="status"))
     if head == "secrets":
         return cmd_secrets(config, _with(args, secrets_action=None))
+    if head == "job":
+        if len(rest) != 1 or not rest[0].isdigit():
+            output.error("which job? `worms show job <n>` (`worms show jobs` lists them)")
+            return 2
+        _with_db(config)
+        from worms_cli import jobs as host_jobs
+        from worms_cli.session import for_config
+
+        try:
+            return host_jobs.show(for_config(config), int(rest[0]))
+        except build.BuildError as exc:
+            output.error(str(exc))
+            return 1
     if head == "db" or (head == "database" and rest):  # `show database` alone: the database's VM
         if not rest:
             return _show_tables(config)
@@ -2031,6 +2032,20 @@ def verb_show(config, args) -> int:
 
 def verb_logs(config, args) -> int:
     what = "build" if args.what == "run" else args.what
+    if what and not what.isdigit() and what not in ("build", "latest"):
+        from worms_cli.services import SERVICES
+        from worms_cli.vms import Catalogue
+
+        if what not in SERVICES and not Catalogue(config).knows(what):
+            _with_db(config)
+            from worms_cli import logs, queries
+
+            try:
+                queries.team(what)
+            except ValueError:
+                pass  # no team either: cmd_log says what there is
+            else:
+                return logs.team(config, what, lines=min(args.lines, 40), since=args.since or "2 days ago")
     return cmd_log(config, _with(args, what=what))
 
 
@@ -2039,6 +2054,18 @@ def verb_check(config, args) -> int:
         return cmd_secrets(config, _with(args, secrets_action="check"))
     _every, teams = _team_words(args.what)
     return cmd_validate(config, _with(args, teams=teams))
+
+
+def verb_trace(config, args) -> int:
+    _with_db(config)
+    from worms_cli import trace
+    from worms_cli.session import for_config
+
+    try:
+        return trace.trace(for_config(config), args.what)
+    except (build.BuildError, ValueError) as exc:
+        output.error(str(exc))
+        return 1
 
 
 def verb_power(config, args) -> int:
@@ -2097,7 +2124,7 @@ def verb_add(config, args) -> int:
 
 HANDLERS = {
     "status": lambda config, args: cmd_status(config, _with(args, topic=None, limit=200, hours=24, kind=None)),
-    "show": verb_show, "logs": verb_logs, "check": verb_check,
+    "show": verb_show, "logs": verb_logs, "check": verb_check, "trace": verb_trace,
     "login": cmd_login, "run": cmd_run, "rsync": cmd_rsync,
     "start": verb_power, "stop": verb_power, "reset": verb_reset, "rebuild": verb_rebuild, "restart": cmd_restart,
     "apply": verb_apply, "configure": cmd_deploy, "plan": verb_plan,

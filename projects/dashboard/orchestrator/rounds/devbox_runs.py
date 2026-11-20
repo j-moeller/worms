@@ -33,6 +33,7 @@ log = logging.getLogger("orchestrator")
 S = DevboxRun.State
 ACTIVE = [S.PENDING, S.RESETTING, S.DEPLOYING, S.ARMED, S.RUNNING]
 ENTRY_ROLE = "a"  # where the worm starts, as the start VM of a sandbox
+_WAITING: dict[int, str] = {}  # what each pending run was last said to wait for (_start_reset)
 # A round's run, from its first host job to its last.
 ROUND_BUSY = [
     RoundRun.State.PREPARING, RoundRun.State.CHECKING,
@@ -86,17 +87,34 @@ def _step(run, now, cfg):
             _set(run, S.FINISHED)
 
 
-def _start_reset(run):
+def reset_waits_for() -> str:
+    """Why a team's upload cannot have its devbox reset now ("" if it can): what it waits for, in
+    words, for the processor's log, `worms trace` and the dashboard."""
     # The agent runs one job at a time and a rebuild takes many minutes. Started now, it would
     # hold up a running round's timed jobs, so a round's team would pay for another's test. The
     # agent also takes a round's jobs first (round_agent/agent.py, claim), but it cannot stop a
     # rebuild it has begun.
-    if RoundRun.objects.filter(state__in=ROUND_BUSY).exists():
-        return
+    busy = RoundRun.objects.filter(state__in=ROUND_BUSY).select_related("round", "team").first()
+    if busy is not None:
+        return f"a round's attempt is under way (round {busy.round.name!r}, team {busy.team.name}: {busy.state})"
     # A round shuts the devboxes down for all its attempts (devboxes_off): the upload waits
     # until they are started again after its last run (conductor.py, _release_devboxes).
-    if Round.objects.filter(devbox_hold__in=("wanted", "held")).exists():
+    holding = Round.objects.filter(devbox_hold__in=("wanted", "held")).first()
+    if holding is not None:
+        return (f"round {holding.name!r} holds the devboxes shut down ({holding.devbox_hold}) until its last "
+                "attempt is over")
+    return ""
+
+
+def _start_reset(run):
+    waits = reset_waits_for()
+    if waits:
+        # Said once per reason, not every pass: the processor's log tells what an upload waits for.
+        if _WAITING.get(run.pk) != waits:
+            _WAITING[run.pk] = waits
+            log.info("devbox run of upload %s waits to reset the devbox: %s", run.upload_id, waits)
         return
+    _WAITING.pop(run.pk, None)
     with transaction.atomic():
         job, enqueued = request_rebuild(run.team)
         if job is None:

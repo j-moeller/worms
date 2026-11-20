@@ -384,7 +384,7 @@ def test_help_groups_the_verbs_by_what_they_are_for():
     # Looking comes first, in this order; then reaching a VM.
     cli = _cli_module()
     looks = [usage.split()[0] for usage, _ in cli.SECTIONS[0].commands]
-    assert list(dict.fromkeys(looks)) == ["status", "show", "logs", "check"]
+    assert list(dict.fromkeys(looks)) == ["status", "show", "logs", "check", "trace"]
     assert "apply [<component>...]" in sections["platform"] and "issue token <name>" in sections["set up"]
     assert "add key <team> <key>" in sections["teams and accounts"] and "add staff <email>" in sections["teams and accounts"]
     assert "reset services" in sections["machines"] and "destroy [--all]" in sections["platform"]

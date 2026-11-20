@@ -125,3 +125,58 @@ def overview() -> None:
     print()
     print(output.heading("host jobs: worms logs <#>, worms logs latest [-f]"))
     print(output.table(queries.job_rows(10), headers=["#", "Job", "State", "Team", "Requested", "Finished", "Error"]))
+
+
+def team(config, name: str, lines: int = 20, since: str = "2 days ago") -> int:
+    """`worms logs <team>`: everything about one team, from where it is: its host jobs (and the newest
+    one's log), the attempt processor's lines about its dev uploads, and what scoring and logging
+    refused from its devbox gateway's address (they log no accepted request: nginx access_log off)."""
+    import subprocess
+
+    from core.models.devbox import Devbox
+    from core.models.rounds import HostJob
+    from core.models.worms import Upload
+    from django.db.models import Q
+
+    from worms_cli import queries
+    from worms_cli.vms import Catalogue
+
+    found = queries.team(name)
+    box = Devbox.objects.filter(team=found).first()
+    address = box.services_source_ip if box else ""
+    catalogue = Catalogue(config)
+    print(output.heading(f"{found.name}: its devbox's address towards the services {address or '(none)'}"))
+
+    jobs = list(HostJob.objects.select_related("run__team").filter(Q(params__team_uuid=str(found.uuid)) | Q(run__team=found))
+                .order_by("-id")[:10])  # fmt: skip
+    print(output.heading("host jobs, newest first (`worms show job <n>`, `worms logs <n> [-f]`)"))
+    if jobs:
+        print(output.table([[str(j.id), j.kind, j.state, f"{j.requested_at:%m-%d %H:%M}", f"{j.finished_at:%H:%M}" if j.finished_at else "",
+                             (j.error or "").replace("\n", " ")[:90]] for j in jobs],
+                           headers=["#", "job", "state", "requested", "finished", "error"]))  # fmt: skip
+    else:
+        print(output.color("none", "dim"))
+
+    def journal(vm_name: str, unit: str, pattern: str, fixed: bool) -> str:
+        vm = next((vm for vm in catalogue.vms() if vm["name"] == vm_name), None)
+        if vm is None or vm.get("status") != "running":
+            return f"({vm_name} is not running)"
+        grep = f"grep {'-F ' if fixed else '-E '}{shlex.quote(pattern)}"
+        command = f"sudo journalctl --no-pager -u {shlex.quote(unit)} --since {shlex.quote(since)} | {grep} | tail -n {int(lines)}"
+        try:
+            argv, env = catalogue.ssh_argv(vm, command, interactive=False)
+            proc = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=60)
+        except Exception as exc:  # noqa: BLE001  (one source out of reach: the others still)
+            return f"(not read: {exc})"
+        return proc.stdout.rstrip() or "(nothing)"
+
+    uploads = list(Upload.objects.filter(team=found, devbox=True).order_by("-id").values_list("id", flat=True)[:20])
+    print()
+    print(output.heading(f"the attempt processor about its dev uploads ({since}; `worms trace {name}`)"))
+    print(journal("orchestrator", "orchestrator-process-attempts", rf"upload ({'|'.join(map(str, uploads))})\b", False)
+          if uploads else output.color("no dev upload", "dim"))  # fmt: skip
+    for service in ("scoring", "logging"):
+        print()
+        print(output.heading(f"{service}: what it refused from {address or 'its gateway'} ({since})"))
+        print(journal(service, "sandbox-api", address, True) if address else output.color("no devbox address", "dim"))
+    return 0

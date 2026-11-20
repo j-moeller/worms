@@ -45,8 +45,12 @@ from worms_cli.remote import Remote, Target, escape
 from worms_cli.teams import Team, find, vm_name
 
 ROLES = ("a", "b", "c")
-CHECKS = ("login", "flag", "scoring", "logging", "apt", "PyPI")
-VM_CHECKS = CHECKS[1:]
+COLUMNS = (*ROLES, "gw")  # A, B, C, and the team's NAT gateway
+CHECKS = ("login", "DNS", "scoring", "logging", "apt", "PyPI", "flag", "firewall", "NAT")
+VM_CHECKS = ("DNS", "scoring", "logging", "apt", "PyPI", "flag")  # by CHECK_SCRIPT on A, B and C
+GW_CHECKS = ("DNS", "scoring", "logging", "apt", "NAT")  # by GW_SCRIPT on the gateway
+# The security groups each one's firewall must have (opentofu/modules/devbox_vm: the VMs, the gateway).
+FIREWALL_GROUPS = {"vm": {"devbox", "devbox_ssh_target", "ssh"}, "gw": {"devbox_gw", "services_client", "ssh"}}
 APT_PACKAGE = "jq"  # small, and in the apt cache's list since its first fill (apt_cache_seed_packages)
 PYPI_PACKAGE = "requests"  # in devpi's since its first (devpi_seed_packages); --no-deps: one wheel
 GATEWAY_USER = "team"  # role ssh_gateway, ssh_gateway_user
@@ -94,6 +98,11 @@ why() { grep -m 1 -E '^E:' "$1" || grep -m 1 -E '^(Err|W):' "$1" || tail -n 1 "$
 d=$(mktemp -d /var/tmp/worms-validate.XXXXXX) || { say apt fail "no temporary directory in /var/tmp"; exit 0; }
 trap 'rm -rf "$d"' EXIT
 
+missing=""
+for name in scoring logging apt-cache pypi; do getent hosts "$name.worms.internal" >/dev/null 2>&1 || missing="$missing $name"; done
+if [ -z "$missing" ]; then say DNS ok ""
+else say DNS fail "no answer for$missing.worms.internal (the private DNS, via the gateway; /etc/resolv.conf: $(grep -m 1 '^nameserver' /etc/resolv.conf 2>/dev/null))"; fi
+
 if [ ! -e /etc/worms/flag ]; then say flag fail "no /etc/worms/flag"
 elif grep -qxE 'FLAG\{[0-9a-f]{32}\}' /etc/worms/flag; then say flag ok ""
 else say flag fail "/etc/worms/flag is not FLAG{<32 hex>}"; fi
@@ -130,7 +139,81 @@ else
 fi
 """
 
-CHECK_LINE = re.compile(r"@check (flag|scoring|logging|apt|PyPI) (ok|warn|fail) ?(.*)")
+# On a team's NAT gateway: it forwards (nftables loaded, forwarding on), resolves, and reaches the
+# services itself (its own address is the team's, the SNAT source the services know).
+GW_SCRIPT = r"""set -u
+say() { printf '@check %s %s %s\n' "$1" "$2" "$(printf '%s' "$3" | tr -c '[:print:]' ' ' | cut -c1-220)"; }
+if ! nft list tables 2>/dev/null | grep -q .; then say NAT fail "no nftables rules loaded: its VMs reach nothing (role untrusted_gateway)"
+elif [ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null)" != 1 ]; then say NAT fail "IP forwarding is off"
+else say NAT ok ""; fi
+if getent hosts scoring.worms.internal apt-cache.worms.internal >/dev/null 2>&1; then say DNS ok ""
+else say DNS fail "the private DNS does not answer (/etc/resolv.conf: $(grep -m 1 '^nameserver' /etc/resolv.conf 2>/dev/null))"; fi
+# -k: the gateway has no internal CA (only the team's VMs get it), and this checks the path, sending {}.
+for api in scoring logging; do
+    code=$(curl -ksS -o /dev/null -w '%{http_code}' --max-time 10 -X POST -H 'Content-Type: application/json' \
+           -d '{}' "https://$api.worms.internal/submit" 2>/tmp/worms-check-curl)
+    case "$?:$code" in
+        0:400|0:429) say "$api" ok "" ;;
+        0:403) say "$api" fail "403: the service does not know this gateway's address (its devbox map)" ;;
+        0:*) say "$api" fail "HTTP $code" ;;
+        *) say "$api" fail "$(tail -n 1 /tmp/worms-check-curl)" ;;
+    esac
+done
+rm -f /tmp/worms-check-curl
+code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+       http://apt-cache.worms.internal:3142/deb.debian.org/debian/dists/trixie/InRelease 2>&1)
+case "$code" in
+    200) say apt ok "" ;;
+    503) say apt fail "the cache answers 503 for its index: it lacks it (\`worms apply apt-cache --packages\`)" ;;
+    *) say apt fail "the cache: $code" ;;
+esac
+"""
+
+FIREWALL_SCRIPT = r"""for id in @IDS@; do
+    printf '@fw %s ' "$id"; pvesh get /nodes/@NODE@/qemu/$id/firewall/options --output-format json 2>/dev/null | tr -d '\n'; echo
+    printf '@rules %s ' "$id"; pvesh get /nodes/@NODE@/qemu/$id/firewall/rules --output-format json 2>/dev/null | tr -d '\n'; echo
+done
+"""
+
+
+def parse_firewalls(text: str) -> dict[int, tuple[dict | None, list]]:
+    """{vmid: (its firewall options, its rules)} from FIREWALL_SCRIPT's output."""
+    import json
+
+    found: dict[int, list] = {}
+    for line in text.splitlines():
+        kind, _, rest = line.partition(" ")
+        number, _, data = rest.partition(" ")
+        if kind in ("@fw", "@rules") and number.isdigit():
+            try:
+                value = json.loads(data) if data.strip() else None
+            except ValueError:
+                value = None
+            entry = found.setdefault(int(number), [None, []])
+            entry[0 if kind == "@fw" else 1] = value if kind == "@fw" else (value or [])
+    return {vmid: (options, rules) for vmid, (options, rules) in found.items()}
+
+
+def firewall_cell(options: dict | None, rules: list, kind: str) -> Cell:
+    """A team VM's (kind "vm") or gateway's ("gw") Proxmox firewall: on, dropping, filtering, its groups."""
+    if options is None:
+        return Cell("unknown", "unknown", "the Proxmox API gave no firewall options")
+    problems = []
+    if not int(options.get("enable", 0)):
+        problems.append("the firewall is off")
+    for way in ("in", "out"):
+        if options.get(f"policy_{way}", "DROP" if way == "in" else "ACCEPT") != "DROP":
+            problems.append(f"{way}going policy {options.get(f'policy_{way}', 'ACCEPT')}, not DROP")
+    if not int(options.get("ipfilter", 0)):
+        problems.append("no ipfilter (the VM could use any address)")
+    groups = {rule.get("action") for rule in rules if rule.get("type") == "group" and int(rule.get("enable", 1))}
+    missing = FIREWALL_GROUPS[kind] - groups
+    if missing:
+        problems.append(f"its security group(s) {', '.join(sorted(missing))} missing")
+    return Cell("ok", "✓") if not problems else Cell("error", "fail", "; ".join(problems) + " (`worms rebuild <team>`)")
+
+
+CHECK_LINE = re.compile(r"@check (flag|scoring|logging|apt|PyPI|DNS|NAT) (ok|warn|fail) ?(.*)")
 STATE = {"ok": "ok", "warn": "warn", "fail": "error"}
 
 
@@ -315,9 +398,17 @@ class Validator:
                 name = vm_name(team.slug, role)
                 if running(name):
                     jobs[name] = (Target(name, vms[name], True), CHECK_SCRIPT.replace("@APT@", APT_PACKAGE).replace("@PYPI@", PYPI_PACKAGE), True, 300)
+            gw = vm_name(team.slug, "gw")
+            if running(gw):
+                jobs[gw] = (Target(gw, vms[gw], True), GW_SCRIPT, True, 90)
+        checked = [vms[vm_name(t.slug, role)] for t, _, _ in chosen for role in COLUMNS if vm_name(t.slug, role) in vms]
+        if checked:
+            script = FIREWALL_SCRIPT.replace("@IDS@", " ".join(str(int(vm["vmid"])) for vm in checked)).replace(
+                "@NODE@", shlex.quote(str(checked[0].get("node", ""))))
+            jobs["@firewalls"] = (Target("node", None), script, False, 120)
 
-        print(f"validating the devboxes of {len(chosen)} team(s): {', '.join(CHECKS)} on A, B and C; the SSH gateway "
-              "(a minute or two) ...", flush=True)  # fmt: skip
+        print(f"checking the devboxes of {len(chosen)} team(s): {', '.join(CHECKS)} on A, B, C and the NAT gateway; "
+              "the SSH gateway; their jobs and uploads (a minute or two) ...", flush=True)  # fmt: skip
         with ThreadPoolExecutor(max_workers=12) as pool:
             futures = {name: pool.submit(self.run, *job) for name, job in jobs.items()}
             gateway_file = pool.submit(KeyCheck(self.config, self.catalogue).read, gateway_vm, GATEWAY_FILE)
@@ -330,9 +421,16 @@ class Validator:
         gateway = parse_probes(results["gateway"][1]) if "gateway" in results else None
         failed = self._gateway(gateway_vm, results.get("gateway"), gateway, node)
         targets = permitted(gateway_text) if gateway_text is not None else None
+        firewalls = parse_firewalls(results["@firewalls"][1]) if "@firewalls" in results else {}
         for team, team_keys, invalid in chosen:
             cells = self._team(team, team_keys, invalid, vms, fabric, numbers.get(team.slug, []), results, node, gateway, targets, gateway_problem)
+            for role in COLUMNS:
+                vm = vms.get(vm_name(team.slug, role))
+                if vm is not None:
+                    options, rules = firewalls.get(int(vm["vmid"]), (None, []))
+                    cells[("firewall", role)] = firewall_cell(options, rules, "gw" if role == "gw" else "vm")
             failed += self._print(team, team_keys, cells, vms)
+            self._activity(team)
         stopped = [n for t, _, _ in chosen for n in (vm_name(t.slug, r) for r in ROLES) if n in vms and not running(n)]
         if stopped:
             print(output.color(f"stopped, not checked: {', '.join(stopped)}", "dim"))
@@ -397,7 +495,23 @@ class Validator:
         """{(check, role): Cell} of one team."""
         cells: dict[tuple[str, str], Cell] = {}
         n = len(team_keys)
+        gw = vms.get(vm_name(team.slug, "gw"))
+        for check in CHECKS:
+            cells[(check, "gw")] = Cell("n/a", "—")
+            if check in GW_CHECKS:
+                if gw is None:
+                    cells[(check, "gw")] = Cell("error", "none", "the team has no NAT gateway: its VMs reach nothing")
+                elif gw.get("status") != "running":
+                    cells[(check, "gw")] = Cell("stopped", "off")
+        if gw is not None and gw.get("status") == "running":
+            code, out = results.get(gw["name"], (255, "not run"))
+            found = parse_checks(out)
+            why = f"could not run the checks: {escape(out.strip())[:160]}" if not found else ""
+            for check in GW_CHECKS:
+                cells[(check, "gw")] = found.get(check) or Cell("unknown", "unknown", why)
+                why = ""
         for role in ROLES:
+            cells[("NAT", role)] = Cell("n/a", "—")
             name = vm_name(team.slug, role)
             vm = vms.get(name)
             if vm is None:
@@ -406,7 +520,7 @@ class Validator:
                 continue
             if vm.get("status") != "running":
                 for check in CHECKS:
-                    cells[(check, role)] = Cell("stopped", "off")
+                    cells[(check, role)] = Cell("stopped", "off") if check != "NAT" else Cell("n/a", "—")
                 continue
             code, out = results.get(name, (255, "not run"))
             found = parse_checks(out)
@@ -466,11 +580,13 @@ class Validator:
     def _print(self, team, team_keys, cells, vms) -> int:
         """One team's table and what is wrong; the number of problems."""
         print()
-        rows = [[check] + [cells[(check, role)].render() for role in ROLES] for check in CHECKS]
-        print(output.table(rows, headers=[f"{team.label}, {len(team_keys)} key(s)", "A", "B", "C"]))
+        rows = [[check] + [cells.get((check, role), Cell("n/a", "—")).render() for role in COLUMNS] for check in CHECKS]
+        print(output.table(rows, headers=[f"{team.label}, {len(team_keys)} key(s)", "A", "B", "C", "GW"]))
         problems = 0  # the lines that say one: a cell without a line is explained by another
         for check in CHECKS:
-            for role in ROLES:
+            for role in COLUMNS:
+                if (check, role) not in cells:
+                    continue
                 cell = cells[(check, role)]
                 if cell.why:
                     problems += cell.state in ("error", "unknown")
@@ -481,6 +597,49 @@ class Validator:
             print(output.color(f"  its NAT gateway {nat['name']} is {nat.get('status')}: its VMs reach no service", "red"))
             problems += 1
         return problems
+
+    def _activity(self, team) -> None:
+        """Under a team's table: its devbox jobs now (queued: why), those failed in 24 h, and where its
+        newest dev upload is (worms_cli/trace.py)."""
+        from datetime import timedelta
+
+        from core.models.rounds import HostJob
+        from core.models.team import Team as DbTeam
+        from core.models.worms import Upload
+        from django.db.models import Q
+        from django.utils import timezone
+
+        from worms_cli import jobs as host_jobs
+        from worms_cli import trace
+
+        db_team = DbTeam.objects.filter(id=int(team.slug[1:])).first() if team.slug[1:].isdigit() else None
+        if db_team is None:
+            return
+        now = timezone.now()
+        found = HostJob.objects.filter(params__team_uuid=str(db_team.uuid)).filter(
+            Q(state__in=["queued", "running"]) | Q(state="failed", finished_at__gte=now - timedelta(hours=24))).order_by("id")
+        node = None
+        for job in found:
+            if job.state == "queued":
+                node = node or host_jobs.node_state(self.remote.session)
+                why = "; ".join(host_jobs.queue_reasons(job, node)) or "about to start"
+                print(output.color(f"  job #{job.id} {job.kind} queued for "
+                                   f"{host_jobs._ago((now - job.requested_at).total_seconds())}: {why}", "yellow"))
+            elif job.state == "running":
+                print(output.color(f"  job #{job.id} {job.kind} running for "
+                                   f"{host_jobs._ago((now - (job.started_at or job.requested_at)).total_seconds())} "
+                                   f"(`worms logs {job.id} -f`)", "dim"))
+            else:
+                print(output.color(f"  job #{job.id} {job.kind} failed {job.finished_at:%H:%M}: {(job.error or '?')[:200]} "
+                                   f"(`worms logs {job.id}`)", "yellow"))
+        upload = (Upload.objects.select_related("devbox_run__rebuild_job", "devbox_run__deploy_job")
+                  .filter(team=db_team, devbox=True).order_by("-created_at", "-id").first())  # fmt: skip
+        if upload is not None:
+            links = trace.chain(self.remote.session, upload)
+            state, link, text = next((link for link in links if link[0] != "ok"), links[-1])
+            style = {"ok": "dim", "run": "dim", "todo": "dim", "wait": "yellow", "error": "yellow"}[state]
+            print(output.color(f"  newest dev upload {upload.id} ({upload.created_at:%m-%d %H:%M}): {link}: {text} "
+                               f"(`worms trace {team.name or team.slug}`)", style))
 
 
 def devbox(config, names) -> int:

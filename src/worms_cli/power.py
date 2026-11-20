@@ -75,6 +75,12 @@ def start(runner, vms: list[dict]) -> list[str]:
     return failed
 
 
+def groups_of_vms() -> dict:
+    from worms_cli.remote import groups
+
+    return groups()
+
+
 class Power:
     def __init__(self, config, catalogue=None):
         from worms_cli.remote import Remote
@@ -82,8 +88,29 @@ class Power:
         self.remote = Remote(config, catalogue)
         self.runner = self.remote.catalogue.runner
 
+    def _expand(self, names) -> list[str]:
+        """A team stands for its devbox VMs (a, b, c, gw), `devboxes` for every team's."""
+        from worms_cli import teams
+
+        out = []
+        for name in names:
+            if name == "devboxes":
+                out += sorted(vm["name"] for vm in self.remote.catalogue.vms() if vm.get("pool") == "devbox")
+                continue
+            team = None
+            if "/" not in name and name not in groups_of_vms() and not self.remote.catalogue.knows(name):
+                team = self.remote.catalogue.find_team(name)
+            if team is None:
+                out.append(name)
+            else:
+                there = {vm["name"] for vm in self.remote.catalogue.vms()}
+                out += [teams.vm_name(team.slug, role) for role in teams.ROLES if teams.vm_name(team.slug, role) in there]
+        if not out:
+            raise BuildError("no VM: which? a VM, a group, a team or `devboxes`")
+        return out
+
     def _targets(self, names) -> list[dict]:
-        targets = self.remote.targets(names)
+        targets = self.remote.targets(self._expand(names))
         if any(t.vm is None for t in targets):
             raise BuildError("the node is not switched on or off from here")
         sandboxes = [t.name for t in targets if t.vm.get("pool") == "sandbox"]

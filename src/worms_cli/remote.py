@@ -58,6 +58,13 @@ def escape(text: str) -> str:
     return printable(text).replace("\r", "\\r")
 
 
+def command_line(words) -> str:
+    """The command line for the VM's shell: one word as it is (pipes, redirections: `worms run dns --
+    'journalctl -n 50 | grep named'`), several words each quoted, so they arrive as typed."""
+    words = list(words)
+    return (words[0] if len(words) == 1 else shlex.join(words)).strip()
+
+
 class Remote:
     def __init__(self, config, catalogue=None):
         from worms_cli.vms import UNTRUSTED_POOLS, Catalogue
@@ -99,7 +106,7 @@ class Remote:
         return self.catalogue.ssh_argv(target.vm, command, interactive=False)
 
     def run(self, names, words, root: bool = False) -> int:
-        command = " ".join(words).strip()
+        command = command_line(words)
         if not command:
             raise BuildError("which command? `worms run <target>... -- <command>`")
         targets = self.targets(names)
@@ -108,9 +115,10 @@ class Remote:
             output.warn(f"{', '.join(team)}: a team's VM, assumed rooted by the team: what it prints is escaped")
         several = len(targets) > 1
         with ThreadPoolExecutor(max_workers=min(8, len(targets))) as pool:
-            # One platform VM may read this terminal's input; a team's VM never (what is typed
-            # there could be a secret), nor several at once.
-            codes = list(pool.map(lambda t: self._one(t, command, root, several, None if not several and not t.untrusted
+            # One VM may read the input: a platform VM this terminal's, a team's VM only what is piped
+            # in (what is typed at a terminal could be a secret); several VMs never.
+            piped = not sys.stdin.isatty()
+            codes = list(pool.map(lambda t: self._one(t, command, root, several, None if not several and (piped or not t.untrusted)
                                                       else subprocess.DEVNULL), targets))  # fmt: skip
         if several:
             failed = [f"{t.name} ({code})" for t, code in zip(targets, codes) if code]

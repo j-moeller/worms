@@ -190,3 +190,494 @@ apt_cache_seed_packages:
   - upx-ucl
   - keepassxc-minimal
   - kpcli
+
+  - gcc
+  - g++
+  - gcc-14
+  - g++-14
+  - clang
+  - clangd
+  - clang-format
+  - clang-tidy
+  - clang-tools
+  - lldb
+  - lld
+  - llvm
+  - llvm-dev
+  - libclang-dev
+  - libc++-dev
+  - libc++abi-dev
+  - libc6-dev
+  - libstdc++-14-dev
+  - libfmt-dev
+  - libspdlog-dev
+  - libboost-all-dev
+  - libeigen3-dev
+  - libssl-dev
+  - zlib1g-dev
+  - libcurl4-openssl-dev
+  - libxml2-dev
+  - libsqlite3-dev
+  - libevent-dev
+  - libuv1-dev
+  - libarchive-dev
+  - libffi-dev
+  - libncurses-dev
+  - libreadline-dev
+  - liblz4-dev
+  - libzstd-dev
+  - cppcheck
+  - clang-format
+  - clang-tidy
+  - flawfinder
+  - iwyu
+  - ccache
+  - distcc
+  - gcovr
+  - lcov
+  - valgrind
+  - heaptrack
+  - catch2
+  - doctest-dev
+  - googletest
+  - ccache
+  - distcc
+  - pkgconf
+  - meson
+  - libtool-bin
+  - gfortran
+  - gcc-multilib
+  - g++-multilib
+  - crossbuild-essential-amd64
+  - qemu-user
+  - qemu-user-static
+  - valgrind
+  - heaptrack
+  - massif-visualizer
+  - gcovr
+  - lcov
+  - cppcheck
+  - flawfinder
+  - check
+  - googletest
+  - libgtest-dev
+  - libbenchmark-dev
+  - libasan8
+  - libubsan1
+  - ipython3
+  - python3-ipdb
+  - python3-debugpy
+  - python3-pudb
+  - ptpython
+  - python3-rich
+  - python3-tqdm
+  - python3-colorama
+  - python3-tabulate
+  - python3-typer
+  - python3-prompt-toolkit
+  - python3-pyproject-hooks
+  - python3-installer
+  - python3-hatchling
+  - flit
+  - python3-poetry-core
+  - python3-tomli
+  - python3-packaging
+  - python3-pkg-resources
+  - python3-pip-whl
+  - python3-virtualenvwrapper
+  - tox
+  - twine
+  - python3-pytest-xdist
+  - python3-pytest-mock
+  - python3-pytest-asyncio
+  - python3-pytest-timeout
+  - python3-pytest-benchmark
+  - python3-hypothesis
+  - python3-freezegun
+  - python3-factory-boy
+  - python3-testfixtures
+  - pylint
+  - python3-pycodestyle
+  - python3-pyflakes
+  - python3-isort
+  - black
+  - python3-bandit
+  - pre-commit
+  - pyupgrade
+  - python3-numpy
+  - python3-scipy
+  - python3-pandas
+  - python3-matplotlib
+  - python3-sympy
+  - python3-networkx
+  - python3-numba
+  - python3-statsmodels
+  - python3-seaborn
+  - python3-openpyxl
+  - python3-xlrd
+  - python3-xlsxwriter
+  - python3-jupyter-core
+  - python3-notebook
+  - python3-ipykernel
+  - python3-cffi
+  - python3-numpy
+  - python3-pybind11
+  - pybind11-dev
+  - nanobind-dev
+  - cython3
+  - python-dev-is-python3
+  - python3-pyelftools
+  - python3-capstone
+  - python3-unicorn
+  - rustc
+  - cargo
+  - rustfmt
+  - rust-clippy
+  - rust-analyzer
+  - rust-src
+  - rust-doc
+  - rust-gdb
+  - rust-lldb
+  - rust-llvm
+  - librust-anyhow-dev
+  - librust-thiserror-dev
+  - librust-serde-dev
+  - librust-serde-json-dev
+  - librust-tokio-dev
+  - librust-clap-dev
+  - librust-regex-dev
+  - librust-chrono-dev
+  - librust-reqwest-dev
+  - librust-rand-dev
+  - librust-log-dev
+  - librust-env-logger-dev
+  - librust-tracing-dev
+  - librust-tracing-subscriber-dev
+  - librust-axum-dev
+  - librust-actix-web-dev
+  - librust-rusqlite-dev
+  - librust-sqlx-dev
+  - librust-criterion-dev
+  - librust-proptest-dev
+  - librust-tempfile-dev
+  - cbindgen
+  - bindgen
+  - libclang-dev
+  - libclang-cpp-dev
+  - libclang-rt-dev
+  - libdw-dev
+  - libelf-dev
+  - binutils-dev
+  - libiberty-dev
+  # Source code navigation
+  - universal-ctags
+  - cscope
+  - global
+
+  # Binary inspection
+  - binutils
+  - elfutils
+  - pahole
+  - dwarves
+  - patchelf
+  - chrpath
+  - checksec
+  - hexyl
+
+  # Performance profiling
+  - linux-perf
+  - sysstat
+  - procps
+  - numactl
+  - hwloc
+  - stress-ng
+
+  # Testing and fuzzing
+  - afl++
+  - libfuzzer-19-dev
+  - zzuf
+
+  # Documentation
+  - doxygen
+  - graphviz
+  - plantuml
+  - python3-sphinx
+  - python3-sphinx-rtd-theme
+  - clang
+  - clangd
+  - clang-format
+  - clang-tidy
+  - lldb
+  - ccache
+  - valgrind
+  - cppcheck
+  - gcovr
+  - gfortran
+  - ipython3
+  - python3-ipdb
+  - python3-pytest-xdist
+  - python3-hypothesis
+  - python3-isort
+  - python3-bandit
+  - python3-pybind11
+  - rustc
+  - cargo
+  - rustfmt
+  - rust-clippy
+  - rust-analyzer
+  - cbindgen
+  - bindgen
+  - universal-ctags
+  - elfutils
+  - patchelf
+  - doxygen
+  - graphviz
+  - stress-ng
+  - linux-perf
+  # Cryptographic development
+  - libgcrypt20-dev
+  - libgpgme-dev
+  - nettle-dev
+  - libsodium-dev
+  - libbotan-2-dev
+  - libmbedtls-dev
+  - libwolfssl-dev
+  - libgnutls28-dev
+  - libssl-dev
+  - libksba-dev
+  - libtasn1-6-dev
+  - libp11-kit-dev
+  - libengine-pkcs11-openssl
+  - libpkcs11-helper1-dev
+  - libtss2-dev
+  - libfido2-dev
+  - libu2f-server-dev
+  # Packet capture and injection
+  - libpcap-dev
+  - libnet1-dev
+  - libdumbnet-dev
+  - libnfnetlink-dev
+  - libnetfilter-queue-dev
+  - libnetfilter-conntrack-dev
+  - libmnl-dev
+  - libnftnl-dev
+  - libbpf-dev
+  - libxdp-dev
+
+  # Network protocol libraries
+  - libcurl4-openssl-dev
+  - libssh-dev
+  - libssh2-1-dev
+  - libwebsockets-dev
+  - libnghttp2-dev
+  - libnghttp3-dev
+  - libidn2-dev
+  - libpsl-dev
+  - libc-ares-dev
+  - libunbound-dev
+  - libldns-dev
+  - libmaxminddb-dev
+  - libnet-dns-perl
+  - libtins-dev
+
+  # Network protocol development
+  - libevent-dev
+  - libuv1-dev
+  - libzmq3-dev
+  - libzmq5
+  - libnanomsg-dev
+  # Disassembly and instruction decoding
+  - libcapstone-dev
+  - libzydis-dev
+  - libdw-dev
+  - libelf-dev
+
+  # Executable and binary formats
+  - libmagic-dev
+  - libarchive-dev
+  - libfuzzy-dev
+
+  # Binary analysis and symbolic execution
+  - libunicorn-dev
+  - libz3-dev
+  - libcvc5-dev
+
+  # Debugging and instrumentation
+  - rr
+  - libdw-dev
+  - libipt-dev
+  - libpfm4-dev
+  - libbpf-dev
+  # File identification and malware signatures
+  - libmagic-dev
+  - libyara-dev
+  - libfuzzy-dev
+  - libclamav-dev
+  - libarchive-dev
+
+  # Filesystem and disk image analysis
+  - libtsk-dev
+  - libewf-dev
+  - libvmdk-dev
+  - libvhdi-dev
+  - libvshadow-dev
+  - libbfio-dev
+  - libfsapfs-dev
+
+  # Memory and system analysis
+  - libdrm-dev
+  - libproc2-dev
+  - libsystemd-dev
+  - libaudit-dev
+  - libcap-dev
+  - libcap-ng-dev
+  - libseccomp-dev
+  - libapparmor-dev
+  # Network protocol parsing
+  - python3-dpkt
+  - python3-impacket
+  - python3-construct
+  - python3-pyasn1
+  - python3-pyroute2
+  - python3-netaddr
+  - python3-netifaces
+  - python3-socketio
+  - python3-scapy
+
+  # Cryptography and authentication
+  - python3-pycryptodome
+  - python3-openssl
+  - python3-jwcrypto
+  - python3-jwt
+  - python3-ldap3
+  - python3-kerberos
+  - python3-gssapi
+  - python3-pysaml2
+  - python3-fido2
+
+  # Binary analysis and reverse engineering
+  - python3-capstone
+  - python3-unicorn
+  - python3-keystone
+  - python3-pefile
+  - python3-yara
+  - python3-magic
+  - python3-intervaltree
+  - python3-ropgadget
+
+  # Malware and forensic analysis
+  - python3-libewf
+  - python3-dfdatetime
+
+  # Web security research
+  - wafw00f
+  - python3-bs4
+  - python3-html5lib
+  - python3-lxml
+  - python3-websockets
+  - python3-aiohttp
+  - python3-requests-toolbelt
+  # eBPF development
+  - libbpf-dev
+  - libbpf-cargo
+  - libbpfcc-dev
+  - libbpf-tools
+  - bpftool
+  - bpftrace
+  - bpfcc-tools
+  - linux-headers-amd64
+
+  # Kernel interfaces and system security
+  - libcap-dev
+  - libcap-ng-dev
+  - libseccomp-dev
+  - libaudit-dev
+  - libpam0g-dev
+  - libselinux1-dev
+  - libapparmor-dev
+  - libmount-dev
+  - libkmod-dev
+  - libsystemd-dev
+
+  # Kernel instrumentation
+  - libtraceevent-dev
+  - libtracefs-dev
+  - libpfm4-dev
+  - libipt-dev
+  - liburing-dev
+  - libaio-dev
+  # Coverage-guided fuzzing
+  - afl++
+  - libfuzzer-19-dev
+
+  # Compiler instrumentation
+  - clang
+  - llvm
+  - llvm-dev
+  - libasan8
+  - libubsan1
+  - libtsan2
+
+  # Program analysis and verification
+  - libz3-dev
+  - libcvc5-dev
+  - cbmc
+
+  # Testing infrastructure
+  - libcunit1-dev
+  - libcriterion-dev
+  - libcmocka-dev
+  - python3-hypothesis
+  # USB and device communication
+  - libusb-1.0-0-dev
+  - libusb-dev
+  - libftdi1-dev
+  - libhidapi-dev
+  - libserialport-dev
+  - libudev-dev
+
+  # Smart cards and hardware authentication
+  - libpcsclite-dev
+  - libccid
+  - libfido2-dev
+
+  # Firmware and embedded systems
+  - liblzma-dev
+  - liblz4-dev
+  - libzstd-dev
+  - liblzo2-dev
+  - libubootenv-dev
+  - libmtd-dev
+  - libflashrom-dev
+  # Binary formats and reverse engineering
+  - librust-goblin-dev
+  - librust-object-dev
+  - librust-pdb-dev
+
+  # Networking
+  - librust-pcap-dev
+  - librust-nix-dev
+  - librust-socket2-dev
+  - librust-etherparse-dev
+
+  # Cryptography
+  - librust-ring-dev
+  - librust-rustls-dev
+  - librust-rsa-dev
+  - librust-aes-dev
+  - librust-sha2-dev
+  - librust-hmac-dev
+  - librust-pbkdf2-dev
+
+  # Parsing and serialization
+  - librust-nom-dev
+  - librust-winnow-dev
+  - librust-bytes-dev
+  - librust-byteorder-dev
+  - librust-hex-dev
+
+  # Systems programming
+  - librust-libc-dev
+  - librust-memmap2-dev
+  - librust-procfs-dev
+  - librust-rustix-dev

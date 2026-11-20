@@ -121,10 +121,14 @@
           what failed), and the previous ones are back in place: the cache serves what it served
           before. Nothing was seeded; run the build again once the internet is open.
 
+# On the data disk (the cache's own, apt_cache_cache_dir), not in /tmp: Debian 13 keeps /tmp in
+# RAM, half of the VM's 1 GB, and apt keeps a copy of every package it fetches here (the seed's
+# 2400 packages are some 1.6 GB). A hidden directory, which the cache serves nothing from.
 - name: Create a scratch directory
   ansible.builtin.tempfile:
     state: directory
-    prefix: apt-cache-seed.
+    path: "{{ apt_cache_cache_dir }}"
+    prefix: .seed.
   register: apt_cache_seed_dir
 
 - name: Create the download directory and an empty package status

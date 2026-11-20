@@ -23,8 +23,10 @@ DOMAIN = ".worms.internal"
 UNTRUSTED_POOLS = ("sandbox", "devbox")
 KINDS = {
     "persistent": "infrastructure (persistent)",
-    "ephemeral": "service (snapshot `clean`)",
-    "private_internet": "private internet (snapshot `clean`)",
+    # The kind only: whether a VM has its `clean` snapshot is a fact of the VM, shown by `worms show`
+    # (snapshots) and by the attention block of `worms status` when one lacks it.
+    "ephemeral": "service",
+    "private_internet": "private internet",
     "devbox": "devbox (a team's)",
     "sandbox": "sandbox (a round's)",
 }

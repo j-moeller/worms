@@ -2,8 +2,9 @@
 # Debian apt routed through apt-cacher-ng in PATH style:
 #   http://<cache>:<port>/deb.debian.org/debian
 # apt-cacher-ng does the (HTTPS) upstream fetch itself and caches over HTTP, so
-# this works offline once the cache is populated. Without an apt_cache VM:
-# the Debian mirrors directly (apt_client_mirror). Do NOT use an Acquire proxy with
+# this works offline once the cache is populated. Only sandbox and devbox VMs and
+# their gateways (group_vars/untrusted.yml); every other VM: the Debian mirrors
+# directly (apt_client_mirror). Do NOT use an Acquire proxy with
 # https:// sources -- apt-cacher-ng refuses CONNECT tunnels and nothing gets cached.
 Types: deb
 URIs: {{ apt_client_mirror }}/debian

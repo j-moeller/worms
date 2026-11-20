@@ -1,6 +1,8 @@
 ---
-# Runs before apt_client points this VM's own apt at the cache
-# (SetupPrivateInternet.yml).
+# This VM's own apt fetches from the Debian mirrors directly (apt_client, first in
+# SetupPrivateInternet.yml), as every VM's but the sandbox and devbox ones: apt-cacher-ng and its
+# updates come from there, while the internet is open. Only the seed and its check go through the
+# cache, by the clients' sources (apt_cache_client_dir, below).
 
 # The disks may have grown (OpenTofu: disk_size, data_disk_size).
 - name: Grow the partitions and file systems to their disks
@@ -84,3 +86,32 @@
     enabled: true
     state: started
     daemon_reload: true
+
+# What a sandbox or devbox VM asks the cache for (its sources: role apt_client, group_vars/
+# untrusted.yml), here through 127.0.0.1. Outside /etc/apt: this VM's own apt never reads it; the
+# seed, the check and scripts/apt-cache-offline-index.py pass it (apt_cache_client_options).
+- name: Create the clients' sources directory (and an empty sources.list.d)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ apt_cache_client_dir }}"
+    - "{{ apt_cache_client_dir }}/sources.list.d"
+    - "{{ apt_cache_client_lists }}"
+
+- name: Write the clients' sources
+  ansible.builtin.copy:
+    dest: "{{ apt_cache_client_dir }}/sources.list"
+    content: |
+      # Managed by Ansible (role apt_cache). What a sandbox or devbox VM asks this cache for, for the
+      # seed and its check. Not this VM's own apt, which fetches from the Debian mirrors directly.
+      {% for suite in apt_cache_suites %}
+      deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://127.0.0.1:{{ apt_cache_port }}/deb.debian.org/debian {{ suite }} {{ apt_cache_components }}
+      {% endfor %}
+      deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://127.0.0.1:{{ apt_cache_port }}/deb.debian.org/debian-security {{ apt_cache_security_suite }} {{ apt_cache_components }}
+    owner: root
+    group: root
+    mode: "0644"

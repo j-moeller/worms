@@ -1,5 +1,7 @@
 ---
-- name: Route apt through apt-cacher-ng (path-style; non-free enabled)
+# Sandbox and devbox VMs and their gateways: through the apt cache (group_vars/untrusted.yml).
+# Every other VM: the Debian mirrors directly (defaults/main.yml).
+- name: Set the Debian sources (non-free enabled; the cache path-style, or the mirrors)
   ansible.builtin.template:
     src: debian.sources.j2
     dest: /etc/apt/sources.list.d/debian.sources
@@ -33,6 +35,14 @@
     group: root
     mode: '0644'
   when: apt_client_use_cache | bool
+
+# A VM that went through the cache before (the private-internet VMs did) and now fetches from the
+# mirrors: their index is current, and Debian's translations are no harm.
+- name: Drop the offline cache's settings (this VM fetches from the Debian mirrors)
+  ansible.builtin.file:
+    path: /etc/apt/apt.conf.d/99worms-offline-cache
+    state: absent
+  when: not (apt_client_use_cache | bool)
 
 # The apt tasks after this use cache_valid_time, which looks only at the age of
 # the index, not at whether the sources changed. The apt-cache VM refreshed its

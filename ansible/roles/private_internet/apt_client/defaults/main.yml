@@ -1,15 +1,13 @@
 ---
-# apt-cacher-ng endpoint (the apt_cache service VM) on the private network. By
-# address here, for private-internet VMs, which cannot reach DNS; group_vars/untrusted.yml
-# sets the name for the VMs that can.
-apt_client_cache_host: "{{ private_internet_ips.apt_cache.network }}"
+# Where a VM's apt fetches from. Straight from the Debian mirrors (while the internet window is
+# open), for every VM that runs this role but the sandbox and devbox VMs and their gateways:
+# group_vars/untrusted.yml sends those, and only those, through the apt cache (the apt_cache
+# service VM, apt-cacher-ng), the one place they can get packages from.
+apt_client_use_cache: false
+apt_client_cache_host: apt-cache.worms.internal
 apt_client_cache_port: 3142
-# Where apt fetches from: through the cache, or straight from the Debian
-# mirrors (only while internet access is allowed) when no apt_cache VM exists
-# (it is commented out in opentofu/stacks/private_internet/main.tf).
-apt_client_use_cache: "{{ groups['apt_cache'] | default([]) | length > 0 }}"
-# Refresh the index from the cache after changing the sources even with the
-# internet closed: for VMs that have no index yet (group_vars/untrusted.yml).
+# Refresh the index after changing the sources even with the internet closed: for VMs that have no
+# index yet and can fill it from the cache (group_vars/untrusted.yml).
 apt_client_refresh_offline: false
 apt_client_mirror: "{{ ('http://' ~ apt_client_cache_host ~ ':' ~ apt_client_cache_port ~ '/') if apt_client_use_cache | bool else 'http://' }}deb.debian.org"
 # Debian release layout.

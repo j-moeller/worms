@@ -1,10 +1,24 @@
 ---
 apt_cache_port: 3142
 apt_cache_cache_dir: /var/cache/apt-cacher-ng
-# The suites this VM's own apt asks for (role apt_client's defaults, its sources): after a
-# refresh the seed checks each one's index arrived (tasks/seed.yml).
-apt_cache_suites: [trixie, trixie-updates, trixie-backports]
+# Only sandbox and devbox VMs (and their gateways) use the cache. This VM's own apt, like every
+# other VM's, fetches from the Debian mirrors directly (role apt_client). The seed, its offline
+# check and scripts/apt-cache-offline-index.py ask the cache the way those clients do: by sources
+# of their own (apt_cache_client_dir), with the clients' suites (group_vars/untrusted.yml,
+# apt_client_suites; no backports) and apt settings (role apt_client, 99worms-offline-cache).
+# After a refresh the seed checks each suite's index arrived (tasks/seed.yml) and keeps that
+# index in apt_cache_client_lists, which the fill resolves against and the script rebuilds from.
+apt_cache_suites: [trixie, trixie-updates]
 apt_cache_security_suite: trixie-security
+apt_cache_components: main contrib non-free non-free-firmware
+apt_cache_client_dir: /etc/apt-cache-client
+apt_cache_client_lists: /var/lib/apt-cache-client/lists
+apt_cache_client_options: >-
+  -o Dir::Etc::SourceList={{ apt_cache_client_dir }}/sources.list
+  -o Dir::Etc::SourceParts={{ apt_cache_client_dir }}/sources.list.d
+  -o Dir::Cache::pkgcache= -o Dir::Cache::srcpkgcache=
+  -o Acquire::Check-Valid-Until=false -o Acquire::Languages=none
+  -o APT::Sandbox::User=root
 apt_cache_log_dir: /var/log/apt-cacher-ng
 # Fetched into the cache whenever the internet is open (tasks/seed.yml). Untrusted
 # VMs cannot install anything else, so a team's `apt install` of a package not

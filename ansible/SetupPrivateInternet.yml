@@ -8,8 +8,21 @@
 # `make` runs it while internet is allowed to populate the caches (online
 # mode), and again after denying it to switch them to offline mode.
 
-# The cache first: it installs apt-cacher-ng from the Debian mirrors before
-# apt_client points its own apt (like every other service's) at itself.
+# First every private-internet VM's apt, the cache's own included, at the Debian mirrors: they
+# install their packages from there while the internet is open, as every VM does but the sandbox
+# and devbox ones, which alone go through the cache (group_vars/untrusted.yml). This also takes a
+# VM that went through the cache before (they all did) back to the mirrors.
+- hosts: private_internet
+  any_errors_fatal: true
+  become: true
+  pre_tasks:
+    - name: Wait for cloud-init to finish (tolerate errors; roles ensure packages)
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+      failed_when: false
+  roles:
+    - apt_client
+
 - hosts: apt_cache_hosts
   any_errors_fatal: true
   become: true
@@ -20,14 +33,6 @@
       failed_when: false
   roles:
     - apt_cache
-
-# Then point every private-internet VM's apt at the apt-cacher-ng cache (path-style),
-# so package installs work both during prep and offline.
-- hosts: private_internet
-  any_errors_fatal: true
-  become: true
-  roles:
-    - apt_client
 
 - hosts: apt_cache_hosts
   any_errors_fatal: true

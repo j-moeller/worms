@@ -78,7 +78,7 @@ Devbox traffic is not mirrored, so it is not recorded.
 | VM | Units | Notes |
 |---|---|---|
 | dns | `named` | Authoritative for `worms.internal`. Recursion only while the internet window is open. Every log is a file under `/var/log/named/` capped at 4 × 20 MB: `query.log` (queries and failed lookups), `named.log` (the rest). Nothing goes to syslog |
-| apt-cache | `apt-cacher-ng` (:3142) | `Offlinemode: 1` while offline. After each successful seed: what it fetched in `/etc/apt-cache-package-list`, the commit in `/etc/seed-version` (`-dirty`: the role had uncommitted changes) |
+| apt-cache | `apt-cacher-ng` (:3142) | For the sandbox and devbox VMs and their gateways only: every other VM, this one included, installs from the Debian mirrors while the internet window is open (role `apt_client`). `Offlinemode: 1` while offline. After each successful seed: what it fetched in `/etc/apt-cache-package-list`, the commit in `/etc/seed-version` (`-dirty`: the role had uncommitted changes), the index it fetched through the cache in `/var/lib/apt-cache-client/lists` (what [`apt-cache-offline-index.py`](../scripts/apt-cache-offline-index.py) rebuilds the cache's index from) |
 | pypi | `devpi` (:3141) | `--offline-mode` while offline; only root may upload. After each successful seed: what it fetched in `/etc/pypi-package-list`, the commit in `/etc/seed-version` |
 | docker-registry | `docker-registry` (:5000) | Read-only while offline; nothing seeds it |
 | manpages | `apache2` (:80) | man2html |

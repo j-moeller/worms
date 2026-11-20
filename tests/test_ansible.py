@@ -678,17 +678,16 @@ def test_clients_of_the_offline_cache_accept_an_index_older_than_its_valid_until
     assert names.index(conf["name"]) < names.index("Refresh the package index from the new sources")
 
 
-def test_the_apt_cache_has_a_name_and_private_internet_vms_keep_its_address():
-    """Untrusted VMs resolve the name. Private-internet VMs must not need DNS: their firewall
-    lets them reach only the cache, so a name would leave them with no packages at all."""
+def test_only_sandbox_and_devbox_vms_use_the_apt_cache():
+    """Untrusted VMs resolve the cache's name. Every other VM, the private-internet ones (the
+    cache's own) first of all, fetches from the Debian mirrors, while the internet is open."""
     records = yaml.safe_load((ANSIBLE / "group_vars" / "dns.yml").read_text())
     names = [record["name"] for key in records if isinstance(records[key], list) for record in records[key] if isinstance(record, dict) and "name" in record]
     assert "apt-cache.worms.internal" in names
     defaults = yaml.safe_load((ANSIBLE / "roles/private_internet/apt_client/defaults/main.yml").read_text())
-    assert defaults["apt_client_cache_host"] == "{{ private_internet_ips.apt_cache.network }}"
-    firewall = (REPO / "opentofu/stacks/firewall/main.tf").read_text()
-    group = firewall.split('"pi_apt_client"', 1)[1].split("\n}\n", 1)[0]
-    assert 'dport   = "3142"' in group and "53" not in group
+    assert defaults["apt_client_use_cache"] is False
+    first = yaml.safe_load((ANSIBLE / "SetupPrivateInternet.yml").read_text())[0]
+    assert first["hosts"] == "private_internet" and first["roles"] == ["apt_client"]
 
 
 def test_the_cache_is_filled_with_what_untrusted_vms_install():

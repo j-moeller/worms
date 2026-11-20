@@ -9,8 +9,11 @@ For a cache whose index is gone or incomplete (offline it answers "503 Unable to
 offline mode" for InRelease or a Packages list, and a fresh VM finds no package at all) when no
 internet is at hand for `worms build apt-cache --packages`.
 
-The apt-cache VM's own apt goes through the cache, and its lists in /var/lib/apt/lists hold a
-complete, signed index: each suite's InRelease and every Packages list it names, uncompressed.
+Every fill (`worms build apt-cache --packages`, role apt_cache, tasks/seed.yml) fetches the index
+through the cache, as a client VM asks for it, and keeps it in /var/lib/apt-cache-client/lists:
+each suite's InRelease and every Packages list it names, uncompressed, signed. (The VM's own apt
+fetches from the Debian mirrors. Seeded before that change, it went through the cache, and its
+own /var/lib/apt/lists hold that index: used when the other is not there.)
 This puts them where the cache serves them from: InRelease under its own name, each Packages list
 under its own name and under by-hash/SHA256/<its hash>, each with the header file the cache keeps
 next to it. A fresh VM then gets InRelease, asks for the compressed lists (not in the cache: 503),
@@ -33,7 +36,16 @@ import tempfile
 import time
 
 CACHE = "/var/cache/apt-cacher-ng"
-LISTS = "/var/lib/apt/lists"
+# The index the last fill fetched through the cache (role apt_cache: apt_cache_client_lists), or,
+# seeded before it was kept there, the VM's own lists, which then went through the cache.
+CLIENT_LISTS, OWN_LISTS = "/var/lib/apt-cache-client/lists", "/var/lib/apt/lists"
+LISTS = CLIENT_LISTS if os.path.isdir(CLIENT_LISTS) and os.listdir(CLIENT_LISTS) else OWN_LISTS
+# How a client VM asks the cache (role apt_cache: apt_cache_client_options), for the check at the end.
+CLIENT_OPTIONS = ["-o", "Dir::Etc::SourceList=/etc/apt-cache-client/sources.list",
+                  "-o", "Dir::Etc::SourceParts=/etc/apt-cache-client/sources.list.d",
+                  "-o", "Dir::Cache::pkgcache=", "-o", "Dir::Cache::srcpkgcache=",
+                  "-o", "Acquire::Check-Valid-Until=false", "-o", "Acquire::Languages=none",
+                  "-o", "APT::Sandbox::User=root"]
 BACKENDS = {"debian": "debrep", "debian-security": "secdeb"}  # acng's backends for the two archives
 LIST_NAME = re.compile(r"^[^_]+_deb\.debian\.org_(debian|debian-security)_dists_([A-Za-z0-9._+-]+(?:_[A-Za-z0-9._+-]+)*)$")
 NEW, OLD = "dists.offline-index-new", "dists.before-offline-index"
@@ -79,7 +91,7 @@ def main() -> int:
         elif rel.endswith("/Packages"):
             entry["lists"].append((rel, os.path.join(LISTS, name)))
     if not found:
-        sys.exit(f"no Debian lists in {LISTS}: is this the apt-cache VM, and does its apt go through the cache?")
+        sys.exit(f"no Debian lists in {LISTS}: is this the apt-cache VM, filled at least once?")
 
     for backend in set(BACKENDS.values()):
         shutil.rmtree(os.path.join(CACHE, backend, NEW), ignore_errors=True)
@@ -127,8 +139,9 @@ def main() -> int:
     lists = tempfile.mkdtemp(prefix="worms-check-lists.", dir="/var/lib/apt")
     try:
         os.mkdir(os.path.join(lists, "partial"))
-        check = subprocess.run(["apt-get", "update", "--error-on=any", "-o", f"Dir::State::Lists={lists}",
-                                "-o", "APT::Sandbox::User=root"], capture_output=True, text=True)
+        options = CLIENT_OPTIONS if os.path.exists("/etc/apt-cache-client/sources.list") else ["-o", "APT::Sandbox::User=root"]
+        check = subprocess.run(["apt-get", "update", "--error-on=any", "-o", f"Dir::State::Lists={lists}", *options],
+                               capture_output=True, text=True)
     finally:
         shutil.rmtree(lists, ignore_errors=True)
     out = check.stdout + check.stderr

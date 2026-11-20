@@ -2,17 +2,19 @@
 # With the internet closed: what a VM built now gets from the cache (a sandbox gateway at a
 # round's first attempt, a sandbox VM, a devbox gateway). It has no package lists, so it asks
 # for the whole index, and the cache answers only from what it holds. Asked from an empty lists
-# directory here, the same way; this VM's own lists stay as they are.
+# directory here, the same way, by the clients' sources and settings (apt_cache_client_options):
+# this VM's own apt fetches from the Debian mirrors, not from the cache, and its lists stay as
+# they are.
 # A cache without its whole index (a fill that kept only InRelease, or kept it under a temporary
 # name) answers "503 Unable to download in offline mode", and every such VM then fails with
 # "No package matching 'nftables'". Better here, the moment the window closes, than at a round.
 - name: Ask the cache for a fresh VM's package index, offline
   ansible.builtin.shell: |
     set -eu
-    lists=$(mktemp -d /var/lib/apt/worms-check-lists.XXXXXX)
+    lists=$(mktemp -d "$(dirname {{ apt_cache_client_lists | quote }})/check-lists.XXXXXX")
     trap 'rm -rf "$lists"' EXIT
     mkdir "$lists/partial"
-    apt-get update --error-on=any -o Dir::State::Lists="$lists" -o APT::Sandbox::User=root
+    apt-get update --error-on=any {{ apt_cache_client_options }} -o Dir::State::Lists="$lists"
   register: apt_cache_offline_check
   changed_when: false
   failed_when: false

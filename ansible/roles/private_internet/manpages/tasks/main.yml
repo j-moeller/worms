@@ -1,5 +1,5 @@
 ---
-# apt sources (path-style apt-cacher-ng, non-free enabled) are configured by the
+# apt sources (the Debian mirrors, non-free enabled) are configured by the
 # apt_client role, which runs first in SetupPrivateInternet.yml.
 - name: Install apache2, man2html and the man pages (POSIX ones are non-free)
   ansible.builtin.apt:

@@ -2,6 +2,10 @@
 # Fetch what untrusted VMs install, through the cache, while the internet is open.
 # With the internet closed the cache serves only what it already holds, and those
 # VMs can get packages nowhere else.
+#
+# This VM's own apt does not go through the cache (it fetches from the Debian mirrors, role
+# apt_client): every apt-get here asks the cache as a client does, by the clients' sources and
+# settings (apt_cache_client_options, defaults/main.yml).
 
 # Guard against a permanent "Hash Sum mismatch" from the cache. Left uncleared it
 # fails `apt update` on every VM, and with it every devbox build, reset and SSH
@@ -15,8 +19,7 @@
 # mismatch to every offline client for good. Toggling the window (several
 # `worms build ... --packages` in a row) is enough to produce it.
 #
-# This play runs only while the internet is open (SetupPrivateInternet.yml) and
-# this VM's own apt already goes through the cache (apt_client ran first), so move
+# This play runs only while the internet is open (SetupPrivateInternet.yml), so move
 # the cached repository indexes aside and pull them back through acng, all of them:
 # every window then ends with a self-consistent, complete index. Only the dists/
 # metadata moves; the package pool (the .debs under pool/) is untouched, so nothing
@@ -53,23 +56,27 @@
 
 - name: Refresh the indexes, or keep the previous ones
   block:
-    # From an empty lists directory: apt then fetches every index file a fresh VM asks for
-    # (InRelease and each Packages list), and acng keeps what it passes on. This VM's own lists,
-    # already current, would fetch only InRelease ("Hit") and leave the cache without the
-    # Packages lists: offline, a new sandbox or devbox gateway then gets 503 for them and finds
-    # no package at all ("No package matching 'nftables'"). --error-on=any: a list that did not
-    # arrive fails the refresh, where plain `apt-get update` would warn and go on.
-    # On success this VM's own lists become that same index, so the fetch below resolves the
-    # versions the clients will ask for.
-    - name: Re-prime the indexes through the cache, every list a fresh VM fetches (online)
+    # From an empty lists directory: apt then fetches every index file a fresh client VM asks for
+    # (InRelease and each Packages list), and acng keeps what it passes on. Lists already current
+    # would fetch only InRelease ("Hit") and leave the cache without the Packages lists: offline,
+    # a new sandbox or devbox gateway then gets 503 for them and finds no package at all ("No
+    # package matching 'nftables'"). --error-on=any: a list that did not arrive fails the
+    # refresh, where plain `apt-get update` would warn and go on.
+    # On success that index becomes apt_cache_client_lists, so the fetch below resolves the
+    # versions the clients will ask for (and scripts/apt-cache-offline-index.py can rebuild the
+    # cache's index from it, offline).
+    - name: Re-prime the indexes through the cache, every list a fresh client VM fetches (online)
       ansible.builtin.shell: |
         set -eu
-        lists=$(mktemp -d /var/lib/apt/worms-seed-lists.XXXXXX)
+        kept={{ apt_cache_client_lists | quote }}
+        lists=$(mktemp -d "$(dirname "$kept")/lists.new.XXXXXX")
         trap 'rm -rf "$lists"' EXIT
         mkdir "$lists/partial"
-        apt-get update --error-on=any -o Dir::State::Lists="$lists" -o APT::Sandbox::User=root
-        find /var/lib/apt/lists -maxdepth 1 -type f ! -name lock -delete
-        find "$lists" -maxdepth 1 -type f -exec cp -p {} /var/lib/apt/lists/ \;
+        apt-get update --error-on=any {{ apt_cache_client_options }} -o Dir::State::Lists="$lists"
+        rm -rf "$kept.old"
+        if [ -d "$kept" ]; then mv "$kept" "$kept.old"; fi
+        mv "$lists" "$kept"
+        rm -rf "$kept.old"
       register: apt_cache_reprime
       until: apt_cache_reprime is succeeded
       retries: 3
@@ -131,35 +138,40 @@
     prefix: .seed.
   register: apt_cache_seed_dir
 
-- name: Create the download directory and an empty package status
-  ansible.builtin.shell: |
-    mkdir "{{ apt_cache_seed_dir.path }}/archives" "{{ apt_cache_seed_dir.path }}/archives/partial"
-    : > "{{ apt_cache_seed_dir.path }}/status"
-  changed_when: false
+- name: Fill the cache; the scratch directory goes even if that fails
+  block:
+    - name: Create the download directory and an empty package status
+      ansible.builtin.shell: |
+        mkdir "{{ apt_cache_seed_dir.path }}/archives" "{{ apt_cache_seed_dir.path }}/archives/partial"
+        : > "{{ apt_cache_seed_dir.path }}/status"
+      changed_when: false
 
-# The empty status makes apt treat nothing as installed, so it fetches every
-# dependency, not only those this VM happens to lack. apt's output goes to worms_live_log as it
-# comes, which `worms` shows live under the task (ansible/callback_plugins/worms_live.py): each
-# "Get:" as it is fetched. A failure also says its last lines here.
-- name: Fetch the packages and everything they depend on
-  vars:
-    worms_live_log: /var/log/worms/apt-cache-seed.log
-  ansible.builtin.shell: |
-    log={{ worms_live_log | quote }}
-    install -d -m 755 "$(dirname "$log")"
-    {{ (['apt-get', 'install', '--download-only', '--yes', '--no-install-recommends',
-         '-o', 'Dir::State::status=' ~ apt_cache_seed_dir.path ~ '/status',
-         '-o', 'Dir::Cache::archives=' ~ apt_cache_seed_dir.path ~ '/archives/']
-        + apt_cache_seed_packages) | map('quote') | join(' ') }} > "$log" 2>&1
-    status=$?
-    [ "$status" -eq 0 ] || { echo "apt-get failed (exit $status); the last lines of $log:" >&2; tail -n 40 "$log" >&2; }
-    exit $status
-  changed_when: false
+    # Through the cache, as a client asks (the index refreshed above): acng keeps every package it
+    # passes on. The empty status makes apt treat nothing as installed, so it fetches every
+    # dependency, not only those this VM happens to lack. apt's output goes to worms_live_log as it
+    # comes, which `worms` shows live under the task (ansible/callback_plugins/worms_live.py): each
+    # "Get:" as it is fetched. A failure also says its last lines here.
+    - name: Fetch the packages and everything they depend on
+      vars:
+        worms_live_log: /var/log/worms/apt-cache-seed.log
+      ansible.builtin.shell: |
+        log={{ worms_live_log | quote }}
+        install -d -m 755 "$(dirname "$log")"
+        apt-get install --download-only --yes --no-install-recommends {{ apt_cache_client_options }} \
+          -o Dir::State::Lists={{ apt_cache_client_lists | quote }} \
+          -o Dir::State::status={{ (apt_cache_seed_dir.path ~ '/status') | quote }} \
+          -o Dir::Cache::archives={{ (apt_cache_seed_dir.path ~ '/archives/') | quote }} \
+          {{ apt_cache_seed_packages | map('quote') | join(' ') }} > "$log" 2>&1
+        status=$?
+        [ "$status" -eq 0 ] || { echo "apt-get failed (exit $status); the last lines of $log:" >&2; tail -n 40 "$log" >&2; }
+        exit $status
+      changed_when: false
 
-- name: Remove the scratch directory
-  ansible.builtin.file:
-    path: "{{ apt_cache_seed_dir.path }}"
-    state: absent
+  always:
+    - name: Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ apt_cache_seed_dir.path }}"
+        state: absent
 
 # What was seeded, and from which commit: `worms login apt-cache`, then
 # `cat /etc/apt-cache-package-list /etc/seed-version`.

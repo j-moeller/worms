@@ -26,8 +26,8 @@
     purge: true
     lock_timeout: "{{ apt_updates_lock_timeout }}"
 
-# Only while internet access is allowed. The private-internet VMs get their
-# packages through the apt cache (apt_client) and are updated by their roles.
+# Only while internet access is allowed. The private-internet VMs are updated by
+# their roles (SetupPrivateInternet.yml), after apt_client has set their sources.
 - name: Update all packages
   when:
     - internet_enabled | bool

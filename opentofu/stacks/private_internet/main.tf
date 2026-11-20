@@ -65,8 +65,9 @@ locals {
   # `private_internet` group that opened the whole services-port union. The CLIENT
   # side is unchanged (sandbox VMs / sandbox-gw keep the union).
   # net0: serve the services bridge on this service's own port (ingress), and
-  #       reach ONLY the shared apt-cache for the VM's own package installs
-  #       (pi_apt_client, by IP) -- a dead end, no other egress to the services bridge.
+  #       reach ONLY the shared apt-cache:3142 (pi_apt_client) -- a dead end, no other
+  #       egress to the services bridge. Unused since their apt fetches from the Debian
+  #       mirrors (role apt_client): to go with the next apply of this stack and the firewall's.
   # net1: SSH from the host; internet egress while internet access is allowed (Internet.yml);
   #       audit logs to the syslog VM (routed by the host).
   firewall_rules = {

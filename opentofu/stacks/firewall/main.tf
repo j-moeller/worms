@@ -350,9 +350,11 @@ resource "proxmox_virtual_environment_cluster_firewall_security_group" "services
 }
 
 # Private-internet VMs are a dead end: they SERVE the services bridge (ingress,
-# `private_internet` group) and otherwise initiate nothing -- EXCEPT their own
-# package installs, which the apt_client role routes through the shared
-# apt-cache by IP. So their only egress is to apt-cache:3142; nothing else on
+# `private_internet` group) and otherwise initiate nothing. Their own package
+# installs went through the shared apt-cache by IP; now they fetch from the
+# Debian mirrors (role apt_client), so this group is unused, to be detached in
+# opentofu/stacks/private_internet and then deleted here. Their only egress on
+# the services bridge is to apt-cache:3142; nothing else on
 # the services bridge, no scoring/logging, no other PI VM's services. This is
 # what makes "PI is a dead end, no egress" true (it previously had the broad
 # services_client, reaching the whole services subnet on every service port).

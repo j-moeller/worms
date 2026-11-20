@@ -612,7 +612,9 @@ class Pipeline:
         vms = [c for c in chosen if c.kind == "vm"]
         new = [c for c in vms if actions[c.name] in ("create", "recreate", "dependency")]
         services = [c for c in vms if c.service]
-        window = bool(new) or (packages and bool(vms))
+        # A VM whose first build stopped (components.plan, unfinished_vms) may still lack its
+        # packages: offline, its apt would wait on the closed firewall for good.
+        window = bool(new) or any(actions[c.name] == "unfinished" for c in vms) or (packages and bool(vms))
         steps = [Step("secrets", self.secrets)]
         if "gameplans" in actions:
             steps.append(Step("gameplans: not during a round", self._refuse_gameplans_during_round))
@@ -658,6 +660,26 @@ class Pipeline:
         if "gameplans" in actions:
             steps += self._plan_gameplans()
         return steps
+
+    def unfinished_vms(self) -> set[str]:
+        """The VMs whose creating build stopped before the last configure playbook that records
+        them (the VM history, worms_cli/history.py): "Install apt-cacher-ng" without internet, an
+        interrupted build. They may lack packages that only the window brings. Without a history
+        that can be read: none (said)."""
+        from worms_cli import history
+
+        last = [playbook for playbook in CONFIGURE_PLAYBOOKS if playbook in HISTORY_PLAYBOOKS][-1]
+        try:
+            code, out, err = self.runner.session.node_run(["cat", history.LEDGER])
+        except Exception as exc:  # noqa: BLE001  (the plan stands without it)
+            code, err = None, str(exc)
+        if code != 0 and "No such file" in (err or ""):
+            return set()  # no history yet: nothing was created by a build
+        if code != 0:
+            output.warn(f"the VM history could not be read ({(err or '').strip()[:120] or code}): "
+                        "a VM whose first build stopped is configured offline (--packages opens the window)")  # fmt: skip
+            return set()
+        return history.unfinished(history.parse(out), last)
 
     def _refuse_gameplans_during_round(self) -> None:
         self._refuse_vms_in(("sandbox",), "Refusing to deploy gameplans during a round: sandbox VMs exist")

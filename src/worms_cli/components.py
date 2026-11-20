@@ -157,6 +157,7 @@ class Plan:
             "create": "create (missing)",
             "recreate": "RECREATE (destroy and build again)",
             "reconfigure": "configure again",
+            "unfinished": "configure again, in the window: the build that created it stopped before its end",
             "dependency": "create: a missing dependency",
             "migrations": "configure again: the database lacks migrations",
             "provision": "build the teams' missing devboxes (round agent)",
@@ -174,8 +175,9 @@ class Plan:
         actions = dict(self.steps)
         vms = [COMPONENTS[n] for n in actions if COMPONENTS[n].kind == "vm"]
         new = [c for c in vms if actions[c.name] in ("create", "recreate", "dependency")]
+        unfinished = [c.name for c in vms if actions[c.name] == "unfinished"]
         services = [c for c in vms if c.service]
-        window = bool(new) or (packages and bool(vms))
+        window = bool(new) or bool(unfinished) or (packages and bool(vms))
         hosts = [c.group for c in vms] + (["database"] if "orchestrator" in actions and "database" not in actions else [])
         limit = ",".join([*hosts, "localhost"])
         rows = {}
@@ -197,7 +199,8 @@ class Plan:
         if vms:
             summary.append(f"Ansible: the {len(CONFIGURE_PLAYBOOKS) - 1} configure playbooks once, --limit {limit}"
                            + ("" if window else " --skip-tags packages"))  # fmt: skip
-            summary.append("internet window: " + ("OPEN for the VMs' part (" + ("new VMs" if new else "--packages") + ")" if window else "closed"))
+            why = "new VMs" if new else f"unfinished: {', '.join(unfinished)}" if unfinished else "--packages"
+            summary.append("internet window: " + (f"OPEN for the VMs' part ({why})" if window else "closed"))
             off = window or bool(services)
             summary.append("devbox VMs: " + ("shut down for the VMs' part, started again after" if off else "left running"))
             if services:
@@ -214,8 +217,12 @@ class Plan:
         return rows, summary
 
 
-def plan(requested, exists, rebuild=False, pending_migrations=lambda: []) -> Plan:
-    """The plan for `worms build <requested>`. `exists(component)` says whether it is built."""
+def plan(requested, exists, rebuild=False, pending_migrations=lambda: [], unfinished=lambda component: False) -> Plan:
+    """The plan for `worms build <requested>`. `exists(component)` says whether it is built;
+    `unfinished(component)`, whether the build that created its VM stopped before its end
+    ("Install apt-cacher-ng" with no internet, say; the VM history). Configured again offline, its
+    packages would be fetched with the window closed and wait on the firewall for good, so it is
+    configured in the window, as a new VM is."""
     result = Plan()
     requested = list(requested)
     if rebuild:
@@ -234,6 +241,8 @@ def plan(requested, exists, rebuild=False, pending_migrations=lambda: []) -> Pla
                 action = "recreate"
             else:
                 action = "reconfigure" if exists(component) else "create"
+                if action == "reconfigure" and component.kind == "vm" and unfinished(component):
+                    action = "unfinished"
             result.steps.append((name, action))
         elif not exists(component):
             result.steps.append((name, "dependency"))
@@ -241,7 +250,7 @@ def plan(requested, exists, rebuild=False, pending_migrations=lambda: []) -> Pla
         result.notes.append("the database's grants are applied again after the orchestrator's migrations")
     # Only the orchestrator migrates and the database grants: new dashboard code needs both, and
     # the database's grants need the tables the migrations make.
-    configured = set(result.names("create", "recreate", "reconfigure", "dependency"))
+    configured = set(result.names("create", "recreate", "reconfigure", "unfinished", "dependency"))
     if configured & {"dashboard", "database"} and "orchestrator" not in configured:
         pending = pending_migrations()
         if pending:

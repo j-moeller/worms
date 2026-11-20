@@ -85,6 +85,19 @@ def parse(text: str) -> list[dict]:
     return events
 
 
+def unfinished(events: list[dict], last: str) -> set[str]:
+    """The VMs whose latest creation was not followed by `last`, the last playbook that configures
+    them: the build that created them stopped before its end. A VM older than the ledger has no
+    creation in it, and is not one."""
+    pending: dict[int, str] = {}
+    for event in events:
+        if event["event"] in CREATED:
+            pending[event["vmid"]] = event["name"]
+        elif event["event"] == "destroyed" or (event["event"] in ("configured", "packages") and event.get("detail") == last):
+            pending.pop(event["vmid"], None)
+    return set(pending.values())
+
+
 def summary(events: list[dict]) -> dict[int, dict]:
     """{vmid: {"name", "created": event, "updated": event}}: the VM's latest creation, and its
     latest update since. A vmid destroyed and created again starts over."""

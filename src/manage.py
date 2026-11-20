@@ -460,6 +460,18 @@ def _exists(pipe, config):
     return exists
 
 
+def _unfinished(pipe):
+    """components.plan's other question: did the build that created this VM stop before its end?"""
+    cache = {}
+
+    def unfinished(component) -> bool:
+        if "names" not in cache:
+            cache["names"] = pipe.unfinished_vms()
+        return component.name in cache["names"]
+
+    return unfinished
+
+
 def _pending_migrations(pipe):
     def pending():
         try:
@@ -488,7 +500,7 @@ def cmd_build(config, args) -> int:
             try:
                 requested = components.expand(args.components)
                 plan = components.plan(requested, _exists(pipe, config), rebuild=args.rebuild,
-                                       pending_migrations=_pending_migrations(pipe))  # fmt: skip
+                                       pending_migrations=_pending_migrations(pipe), unfinished=_unfinished(pipe))  # fmt: skip
             except KeyError as exc:
                 output.error(f"no component {exc.args[0]!r}: `worms build --help` lists them")
                 return 1

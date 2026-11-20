@@ -380,7 +380,7 @@ def commands_of(parser, path=()):
 
 def test_help_groups_the_verbs_by_what_they_are_for():
     sections = sections_of(run_cli("--help"))
-    assert list(sections) == ["look", "reach", "machines", "platform", "teams and accounts", "set up", "develop"]
+    assert list(sections) == ["look", "reach", "machines", "operate", "platform", "teams and accounts", "set up", "develop"]
     # Looking comes first, in this order; then reaching a VM.
     cli = _cli_module()
     looks = [usage.split()[0] for usage, _ in cli.SECTIONS[0].commands]

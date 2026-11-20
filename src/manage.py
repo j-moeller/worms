@@ -1171,7 +1171,7 @@ def completion_slots() -> dict[str, list[str]]:
         "login": ["@targets", ""],
         "run": [f"@targets {groups}"],
         "rsync": ["@rsync"],
-        "start": [machines],
+        "start": [machines + " round"],
         "stop": [machines],
         "reset": ["@teams devboxes services db password"],
         "rebuild": [f"@teams devboxes {built}"],
@@ -1182,6 +1182,7 @@ def completion_slots() -> dict[str, list[str]]:
         "add key": ["@teams", ""],
         "remove key": ["@teams", ""],
         "delete team": ["@teams", ""],
+        "cancel jobs": ["", ""],
         "step": [" ".join([*pipeline.STEPS, "debug"]), ""],
     }
 
@@ -1527,6 +1528,9 @@ VERBS = {
     "reset": "back to the clean state: teams' devboxes, the service VMs, the database, a password",
     "rebuild": "destroyed and built again from nothing: teams' devboxes, platform VMs",
     "restart": "services, in a safe order",
+    "pause": "hold the round agent's jobs, or a round",
+    "resume": "let the round agent's jobs, or a round, go on",
+    "cancel": "cancel queued jobs, or a round's attempts still to come",
     "apply": "build what is missing, configure what exists",
     "configure": "configure what exists, never OpenTofu",
     "plan": "what `apply` would do, changing nothing",
@@ -1601,6 +1605,23 @@ SECTIONS = (
             ("restart <service>...", "services in a safe order: the agent first and once no host job runs, then the "
                                      "conductor (`worms logs` lists them); refused during a round for what it needs, "
                                      "unless --during-round"),  # fmt: skip
+        ),
+    ),
+    Section(
+        "operate",
+        "The round agent's queue and the rounds' schedule (`worms show jobs`, `worms show rounds`: their numbers).",
+        (
+            ("pause jobs", "the round agent finishes the job under way and takes no other (--reason TEXT); a queued "
+                           "job then says so (`worms show job <n>`)"),  # fmt: skip
+            ("resume jobs", "the round agent takes jobs again"),
+            ("cancel job <n>...", "queued jobs, never run: failed, \"cancelled by the operator\" (a cancelled reset fails "
+                                  "its upload, saying so)"),  # fmt: skip
+            ("cancel jobs --team <t>", "every queued job of a team"),
+            ("pause round <r>", "no attempt of the round starts (one under way ends as usual); the devboxes it holds are "
+                                "started again meanwhile"),  # fmt: skip
+            ("resume round <r>", "the round goes on (holding the devboxes again if it wants them off)"),
+            ("start round <r>", "a round still to come begins now: its start (the upload deadline) moves to now"),
+            ("cancel round <r>", "its attempts still to come are skipped; one under way ends as usual"),
         ),
     ),
     Section(
@@ -1750,7 +1771,8 @@ VM is not started."""
 
 
 # Verbs whose objects are fixed words, each a command of its own (`worms add key`, `worms issue token`).
-OBJECT_VERBS = ("open", "close", "backup", "add", "remove", "sync", "delete", "issue", "set", "trust", "completion")
+OBJECT_VERBS = ("open", "close", "backup", "add", "remove", "sync", "delete", "issue", "set", "trust", "completion",
+                "pause", "resume", "cancel")
 
 
 def _command_name(usage: str) -> str:
@@ -1908,6 +1930,7 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     p.add_argument("--wait", action="store_true", help="services: wait for the devbox map's host job, and follow it")
     p.add_argument("--all-teams", action="store_true", help=argparse.SUPPRESS)  # the old `reset devbox --all-teams`
     p.add_argument("--fresh", action="store_true", help=argparse.SUPPRESS)  # the old `reset devbox --fresh`: rebuild
+    p.add_argument("--username", default=None, help=argparse.SUPPRESS)  # the old `admin-reset-password --username`
     _yes(p)
     p = _add(sub, "rebuild", epilog=_components_overview(), **raw)
     p.add_argument("what", nargs="+", metavar="what", help="teams (their names or slugs t<id>), `devboxes` (every team's), "
@@ -1922,6 +1945,18 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
                    "logging, monitor")  # fmt: skip
     p.add_argument("--timeout", type=int, default=900, help="agent: how long to wait for its running host job (s, default 900)")
     p.add_argument("--during-round", action="store_true", help="restart what a round needs even while one is on")
+
+    # -- operate
+    paused = _objects(sub, "pause", {"jobs": None, "round": None})
+    paused["jobs"].add_argument("--reason", default="", help="said to whoever looks (`worms show job <n>`)")
+    paused["round"].add_argument("round", help="its id (`worms show rounds`) or its name")
+    resumed = _objects(sub, "resume", {"jobs": None, "round": None})
+    resumed["round"].add_argument("round", help="its id (`worms show rounds`) or its name")
+    cancelled = _objects(sub, "cancel", {"job": None, "jobs": None, "round": None})
+    cancelled["job"].add_argument("numbers", nargs="+", type=int, metavar="n", help="the jobs' numbers (`worms show jobs`)")
+    cancelled["jobs"].add_argument("--team", required=True, help="a team (its name or slug t<id>): every queued job of it")
+    cancelled["round"].add_argument("round", help="its id (`worms show rounds`) or its name")
+    _yes(cancelled["round"])
 
     # -- platform
     for verb in ("apply", "plan"):
@@ -2069,7 +2104,58 @@ def verb_trace(config, args) -> int:
 
 
 def verb_power(config, args) -> int:
+    if args.command == "start" and args.targets[:1] == ["round"]:
+        if len(args.targets) != 2:
+            output.error("which round? `worms start round <r>` (`worms show rounds`: their ids)")
+            return 2
+        return _control(config, lambda control: control.start_round_now(control.find_round(args.targets[1])))
     return cmd_power(config, _with(args, state=args.command, held=getattr(args, "held", False)))
+
+
+def _control(config, act) -> int:
+    """`act(control)` with the database (worms_cli/control.py); a BuildError said, 1."""
+    _with_db(config)
+    from worms_cli import control
+
+    try:
+        return act(control)
+    except (build.BuildError, ValueError) as exc:
+        output.error(str(exc))
+        return 1
+
+
+def verb_pause(config, args) -> int:
+    if args.object == "jobs":
+        from worms_cli import control
+        from worms_cli.session import for_config
+
+        return control.pause_jobs(for_config(config), args.reason)
+    return _control(config, lambda control: control.pause_round(control.find_round(args.round)))
+
+
+def verb_resume(config, args) -> int:
+    if args.object == "jobs":
+        from worms_cli import control
+        from worms_cli.session import for_config
+
+        return control.resume_jobs(for_config(config))
+    return _control(config, lambda control: control.resume_round(control.find_round(args.round)))
+
+
+def verb_cancel(config, args) -> int:
+    if args.object == "round":
+        def act(control):
+            round_ = control.find_round(args.round)
+            if not build.confirm(f"Skip every attempt of round {round_.name!r} still to come?", args.yes):
+                return 1
+            return control.cancel_round(round_)
+
+        return _control(config, act)
+    if args.object == "jobs":
+        from worms_cli import queries
+
+        return _control(config, lambda control: control.cancel_jobs(team=queries.team(args.team)))
+    return _control(config, lambda control: control.cancel_jobs(numbers=args.numbers))
 
 
 def verb_reset(config, args) -> int:
@@ -2086,7 +2172,7 @@ def verb_reset(config, args) -> int:
         if len(words) > 2:
             output.error("`worms reset password` takes one user")
             return 2
-        return cmd_admin_reset_password(config, _with(args, username=words[1] if len(words) > 1 else "admin"))
+        return cmd_admin_reset_password(config, _with(args, username=words[1] if len(words) > 1 else args.username or "admin"))
     every, teams = _team_words(words)
     return _reset_devboxes(config, _with(args, teams=teams, all_teams=every or args.all_teams, fresh=args.fresh))
 
@@ -2127,6 +2213,7 @@ HANDLERS = {
     "show": verb_show, "logs": verb_logs, "check": verb_check, "trace": verb_trace,
     "login": cmd_login, "run": cmd_run, "rsync": cmd_rsync,
     "start": verb_power, "stop": verb_power, "reset": verb_reset, "rebuild": verb_rebuild, "restart": cmd_restart,
+    "pause": verb_pause, "resume": verb_resume, "cancel": verb_cancel,
     "apply": verb_apply, "configure": cmd_deploy, "plan": verb_plan,
     "open": verb_window, "close": verb_window, "backup": cmd_backup,
     "destroy": cmd_destroy, "emergency-stop": cmd_emergency_stop,
@@ -2180,7 +2267,7 @@ def main(argv=None) -> int:
 # Never one whose output is a secret (`add staff`, `reset password`: a one-time password) or a VM's
 # (run, login).
 LOGGED = ("apply", "configure", "rebuild", "reset", "start", "stop", "restart", "open", "close", "sync", "add",
-          "remove", "delete", "destroy", "emergency-stop", "step")
+          "remove", "delete", "destroy", "emergency-stop", "step", "pause", "resume", "cancel")
 
 
 def _run_log(config, args):

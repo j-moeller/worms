@@ -1014,6 +1014,12 @@ def _configure_devbox(ex, teams, step="devbox-configure", limit=None, overrides=
 HELD_DEVBOXES = "held-devboxes.json"
 
 
+def paused_path(cfg):
+    """The operator's pause (`worms pause jobs`): while it exists the agent claims no job (agent.py,
+    claim); the one under way ends first. Its text says who paused it, and when."""
+    return Path(cfg.get("state_dir", STATE_DIR)) / "agent-paused"
+
+
 def held_devboxes_path(cfg):
     """The node's record of the devbox VMs shut down for rounds with devboxes_off: while it
     exists the agent takes no devbox job (agent.py, claim), which would start one (a reset) or

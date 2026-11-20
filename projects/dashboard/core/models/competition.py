@@ -115,6 +115,10 @@ class Round(models.Model):
     # "no" (devboxes_off was not set), "wanted" (set: shut them down before the next attempt),
     # "held" (shut down) and "released" (started again after the round's last run).
     devbox_hold = models.TextField(blank=True, default="", db_default="")
+    # The operator's (`worms pause round`, `worms resume round`): while set, the conductor starts no
+    # attempt of this round (one under way ends as usual), and the devboxes a round holds are
+    # started again meanwhile (conductor.py, _next and _release_devboxes).
+    on_hold = models.BooleanField(default=False, db_default=False)
 
     class Meta:
         db_table = "rounds"

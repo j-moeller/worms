@@ -87,6 +87,7 @@ class Agent:
         )
         self._conn = connection
         self.running = True
+        self._paused_said = False  # it has said it is paused (claim)
 
     def conn(self):
         if self._conn is None or self._conn.closed:
@@ -101,6 +102,16 @@ class Agent:
         a team's test must not hold them up. While a round holds the devboxes shut down
         (handlers.hold_devboxes), no devbox job: it would start one (a reset) or need it running;
         it waits, queued, for the release. Returns (id, uuid, kind, params) or None."""
+        paused = handlers.paused_path(self.cfg)
+        if paused.exists():
+            # `worms pause jobs`: the operator's; the job under way (if any) has ended already.
+            if not self._paused_said:
+                log.warning("paused (%s): no job is taken until `worms resume jobs`", paused)
+                self._paused_said = True
+            return None
+        if self._paused_said:
+            log.info("resumed: taking jobs again")
+            self._paused_said = False
         held = handlers.held_devboxes_path(self.cfg).exists()
         conn = self.conn()
         with conn.cursor() as cur:

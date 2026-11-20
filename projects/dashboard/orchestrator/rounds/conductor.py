@@ -38,7 +38,7 @@ from core.models.rounds import HostJob, RoundRun, RunEvent
 from core.models.vm import VirtualMachine
 from django.conf import settings
 from django.db import connection, transaction
-from django.db.models import Case, Value, When
+from django.db.models import Case, Q, Value, When
 from django.utils import timezone
 
 from orchestrator.rounds import gameplans
@@ -244,6 +244,7 @@ class Conductor:
         self.jobs = jobs or HostJobs(self)
         self.stopping = False
         self._checked_at, self._valid, self._waiting = None, {}, {}
+        self._held_said: set = set()  # the rounds on hold it has said so of (_say_held)
         self._next_look = {}  # round pk -> when a waiting round is looked at again
         self._release_after = None  # after a failed release of the devboxes: when to try again
         gameplans.framework()  # the framework's modules, for what follows
@@ -410,16 +411,25 @@ class Conductor:
         at a time. Otherwise the rounds with attempts to come, earliest start first: one whose
         teams all lack an upload needs no gameplan (each run is skipped); any other begins once
         _pin lets it, and until then the next round is tried."""
-        pending = RoundRun.objects.filter(state=S.PENDING).select_related("round", "team", "upload__artifact")
+        # A round on hold (`worms pause round`) starts no attempt, under way or not.
+        self._say_held()
+        pending = RoundRun.objects.filter(state=S.PENDING, round__on_hold=False).select_related("round", "team", "upload__artifact")
         under_way = pending.exclude(gameplan_sha256="").order_by("round__round_start", "round_id", "position", "attempt").first()
         if under_way is not None:
             return under_way
-        for round_ in Round.objects.filter(runs__state=S.PENDING).distinct().order_by("round_start", "id"):
+        for round_ in Round.objects.filter(runs__state=S.PENDING, on_hold=False).distinct().order_by("round_start", "id"):
             runs = pending.filter(round=round_).order_by("position", "attempt")
             if runs.filter(upload__isnull=False).exists() and not self._pin(round_):
                 continue
             return runs.first()
         return None
+
+    def _say_held(self):
+        """Once per round put on hold: that it is."""
+        held = set(Round.objects.filter(on_hold=True, runs__state=S.PENDING).distinct().values_list("pk", "name"))
+        for pk, name in held - self._held_said:
+            log.warning("round %s is on hold (`worms resume round %s`): no attempt of it starts", name, pk)
+        self._held_said = held
 
     # -- the tick -------------------------------------------------------------
 
@@ -487,7 +497,8 @@ class Conductor:
         holding = Round.objects.filter(devbox_hold__in=self.HOLDING)
         if not holding.exists():
             return False
-        busy = RoundRun.objects.filter(state__in=[S.PENDING, *ACTIVE]).values("round_id")
+        # A round on hold waits for the operator, its devboxes needn't: only an attempt running holds them.
+        busy = RoundRun.objects.filter(Q(state__in=ACTIVE) | Q(state=S.PENDING, round__on_hold=False)).values("round_id")
         if holding.filter(pk__in=busy).exists():
             return False
         now = self.now()

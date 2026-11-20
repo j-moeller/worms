@@ -105,6 +105,7 @@ devpi_seed_packages:
   - pwntools
   - scapy
   - impacket
+  - mitmproxy          # not in qiling's batch (tasks/seed.yml): pip backtracks into old Pillow, which does not build
   - pyshark
   - python-nmap
   - netifaces
@@ -301,4 +302,3 @@ devpi_seed_packages:
   - r2pipe
   - qiling
   - volatility3
-  - mitmproxy

@@ -247,6 +247,17 @@ Every one is shown by `worms log` ([See](#see)).
 | Dashboard | `journalctl -u dashboard`, nginx logs | `worms log dashboard` |
 | Audit logs of the infrastructure VMs | The syslog VM: `/var/log/remote/<ip>/audit.log` | `worms log audit` |
 | Security events | The database | `worms status audit` |
+| A long Ansible task's own output (the caches' fills, package installs) | On its VM: the file it names (`worms_live_log`: `/var/log/worms/devpi-seed.log`, `/var/log/worms/apt-cache-seed.log`), or apt's `/var/log/apt/term.log` | shown live during the run (below); `worms run <vm> --root -- tail -n 50 <file>` |
+
+**Live output.** Ansible shows a task's output only once the task is over. So during a `worms` run
+that writes a run log, a task that runs longer than 3 s and writes its output to a file on its VM
+gets a window under it: the file's last 10 lines, how long the task has run, and how long ago its
+last line came. A "last line 4 min ago" means it waits on something; pip's "Retrying …
+ConnectTimeoutError" means no internet. The window goes when the task ends, and the run log never
+gets it. Without a terminal, a line every 30 s instead, which the run log does get. A task names its
+file with `vars: worms_live_log: <path>` and writes its output there itself; package installs with
+the apt module follow apt's log without being told ([`live.py`](../src/worms_cli/live.py),
+[`worms_live.py`](../ansible/callback_plugins/worms_live.py)).
 
 ## VM history
 

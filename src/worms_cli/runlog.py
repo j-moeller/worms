@@ -10,6 +10,10 @@ It works on the file descriptors, not on Python's streams: OpenTofu, Ansible and
 stdout and stderr themselves. Each of the two goes through a pipe to a thread that writes it to
 where it went before and to the file. Not in the round agent's workspace (/opt/worms): the agent
 keeps a log of every job itself (/var/log/worms/jobs).
+
+With the CLI's configuration it also shows a long Ansible task's live output under it (live.py):
+WORMS_LIVE=1 asks Ansible's callback for it; its lines are taken out of the output, and the window
+is drawn on the terminal only, never into the file.
 """
 
 from __future__ import annotations
@@ -60,12 +64,14 @@ def verb(args) -> str:
 class Tee:
     """stdout and stderr, from now until stop(), also into a run log."""
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, config=None):
         self.path = directory() / f"{datetime.now():%Y%m%d-%H%M%S}-{name}.log"
         self._threads = []
         self._saved = {}
         self._lock = threading.Lock()
         self._file = None
+        self._config = config
+        self._live = None
 
     def start(self) -> "Tee":
         folder = directory()
@@ -88,7 +94,7 @@ class Tee:
                 read, write = os.pipe()
                 os.dup2(write, fd)
                 os.close(write)
-                thread = threading.Thread(target=self._pump, args=(read, self._saved[fd]), daemon=True)
+                thread = threading.Thread(target=self._pump, args=(read, self._saved[fd], fd == 1), daemon=True)
                 thread.start()
                 self._threads.append(thread)
         except OSError:  # out of descriptors, say: back as it was, and no log
@@ -96,16 +102,49 @@ class Tee:
             raise
         if os.isatty(self._saved[1]) and "ANSIBLE_FORCE_COLOR" not in os.environ:
             os.environ["ANSIBLE_FORCE_COLOR"] = "1"  # Ansible sees a pipe now; the terminal still gets colours
+        if self._config is not None:
+            try:
+                from worms_cli.live import Live
+
+                self._live = Live(self._config, self._saved[1], self._emit)
+                os.environ["WORMS_LIVE"] = "1"  # ansible/callback_plugins/worms_live.py
+            except Exception:  # noqa: BLE001  (no live output is no reason to stop)
+                self._live = None
         return self
 
-    def _pump(self, read: int, terminal: int) -> None:
+    def _emit(self, data: bytes) -> None:
+        """A line of our own (live.py's heartbeat) to the terminal and the file."""
+        try:
+            _write_all(self._saved[1], data)
+        except (OSError, KeyError):
+            pass
+        with self._lock:
+            if self._file is not None:
+                try:
+                    _write_all(self._file, ANSI.sub(b"", data))
+                except OSError:
+                    pass
+
+    def _pump(self, read: int, terminal: int, stdout: bool) -> None:
         """The terminal first and always; the file while it can be written. A log that fails (a
-        full disk) is closed, said once, and the command goes on: the pipe never fills up."""
+        full disk) is closed, said once, and the command goes on: the pipe never fills up. With a
+        live window (live.py) the terminal gets the output around it, and stdout loses the
+        callback's lines."""
         while chunk := os.read(read, 65536):
+            live = self._live
             try:
-                _write_all(terminal, chunk)
+                if live is not None:
+                    chunk = live.output(terminal, chunk, stdout)
+                else:
+                    _write_all(terminal, chunk)
             except OSError:  # the terminal is gone: the file still gets it
                 pass
+            except Exception:  # noqa: BLE001  (a broken window: the output goes on without it)
+                self._live = None
+                try:
+                    _write_all(terminal, chunk)
+                except OSError:
+                    pass
             with self._lock:
                 if self._file is None:
                     continue
@@ -123,6 +162,12 @@ class Tee:
 
     def stop(self) -> None:
         """Back to the terminal alone, once what is in the pipes is written."""
+        if self._live is not None:
+            try:
+                self._live.close()  # its window away, its SSH ended; it still takes markers out
+            except Exception:  # noqa: BLE001
+                pass
+            os.environ.pop("WORMS_LIVE", None)
         try:
             sys.stdout.flush()
             sys.stderr.flush()

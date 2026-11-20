@@ -1964,7 +1964,7 @@ def _run_log(config, args):
     if args.command == "keys" and getattr(args, "keys_action", None) in (None, "status"):
         return None  # reads only
     try:
-        tee = runlog.Tee(runlog.verb(args)).start()
+        tee = runlog.Tee(runlog.verb(args), config=config).start()
     except OSError as exc:
         output.warn(f"no run log for this run ({exc})")
         return None

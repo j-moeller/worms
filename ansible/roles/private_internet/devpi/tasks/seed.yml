@@ -20,16 +20,31 @@
     # the connection mid-download. A batch is one bounded resolution; already-cached
     # files are served from the mirror, so later batches that share dependencies are
     # quick. The long timeout: the first request makes devpi fetch PyPI's project list.
+    #
+    # pip's whole output goes to worms_live_log as it comes (each batch under a line of its own),
+    # which `worms` shows live under the task (worms_live_log; ansible/callback_plugins/worms_live.py):
+    # what it fetches, and a "Retrying ... ConnectTimeoutError" when there is no internet. A batch
+    # that fails also says its last lines here.
     - name: Fetch the packages and everything they depend on (in batches)
+      vars:
+        worms_live_log: /var/log/worms/devpi-seed.log
+        devpi_seed_batches: "{{ devpi_seed_packages | batch(devpi_seed_batch_size) | list }}"
       ansible.builtin.shell: |
-        {{ devpi_venv }}/bin/pip download --quiet --no-cache-dir --timeout 300 --retries 5 \
+        log={{ worms_live_log | quote }}
+        install -d -m 755 "$(dirname "$log")"
+        {% if devpi_seed_batch == 0 %}: > "$log"{% endif %}
+
+        echo "== batch {{ devpi_seed_batch + 1 }} of {{ devpi_seed_batches | length }}:" {{ (item | join(' ')) | quote }} >> "$log"
+        {{ devpi_venv }}/bin/pip download --progress-bar off --no-cache-dir --timeout 300 --retries 5 \
           --dest {{ (devpi_seed_dir.path ~ '/batch') | quote }} --trusted-host 127.0.0.1 \
-          --index-url http://127.0.0.1:{{ devpi_port }}/root/pypi/+simple/ {{ item | map('quote') | join(' ') }}
+          --index-url http://127.0.0.1:{{ devpi_port }}/root/pypi/+simple/ {{ item | map('quote') | join(' ') }} >> "$log" 2>&1
         status=$?
         rm -rf {{ (devpi_seed_dir.path ~ '/batch') | quote }}
+        [ "$status" -eq 0 ] || { echo "pip download failed (exit $status); the last lines of $log:" >&2; tail -n 40 "$log" >&2; }
         exit $status
       loop: "{{ devpi_seed_packages | batch(devpi_seed_batch_size) | list }}"
       loop_control:
+        index_var: devpi_seed_batch
         label: "{{ item | join(', ') | truncate(60) }}"
       changed_when: false
 

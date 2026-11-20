@@ -134,14 +134,22 @@
   changed_when: false
 
 # The empty status makes apt treat nothing as installed, so it fetches every
-# dependency, not only those this VM happens to lack.
+# dependency, not only those this VM happens to lack. apt's output goes to worms_live_log as it
+# comes, which `worms` shows live under the task (ansible/callback_plugins/worms_live.py): each
+# "Get:" as it is fetched. A failure also says its last lines here.
 - name: Fetch the packages and everything they depend on
-  ansible.builtin.command:
-    argv: >-
-      {{ ['apt-get', 'install', '--download-only', '--yes', '--no-install-recommends',
-          '-o', 'Dir::State::status=' ~ apt_cache_seed_dir.path ~ '/status',
-          '-o', 'Dir::Cache::archives=' ~ apt_cache_seed_dir.path ~ '/archives/']
-         + apt_cache_seed_packages }}
+  vars:
+    worms_live_log: /var/log/worms/apt-cache-seed.log
+  ansible.builtin.shell: |
+    log={{ worms_live_log | quote }}
+    install -d -m 755 "$(dirname "$log")"
+    {{ (['apt-get', 'install', '--download-only', '--yes', '--no-install-recommends',
+         '-o', 'Dir::State::status=' ~ apt_cache_seed_dir.path ~ '/status',
+         '-o', 'Dir::Cache::archives=' ~ apt_cache_seed_dir.path ~ '/archives/']
+        + apt_cache_seed_packages) | map('quote') | join(' ') }} > "$log" 2>&1
+    status=$?
+    [ "$status" -eq 0 ] || { echo "apt-get failed (exit $status); the last lines of $log:" >&2; tail -n 40 "$log" >&2; }
+    exit $status
   changed_when: false
 
 - name: Remove the scratch directory

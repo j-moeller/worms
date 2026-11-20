@@ -292,10 +292,11 @@ def describe(record: dict) -> list[list[str]]:
     ]
 
 
-def rollback_code(config, record: dict) -> None:
-    """The checkout back to the commit most VMs ran before the release, then that commit's own CLI
-    configures the release's components (this process is replaced: its code and that commit's
-    never mix). Refused when the checkout has uncommitted changes, or the commit was dirty."""
+def rollback_code(config, record: dict) -> list[str]:
+    """The checkout back to the commit most VMs ran before the release; returns the command that
+    commit's own CLI configures the release's components with. The caller replaces this process
+    with it (src/manage.py, main: after the run log and the lock are let go), so this code and that
+    commit's never mix. Refused when the checkout has uncommitted changes, or the commit was dirty."""
     repo = str(config.repo_root)
     target = record["from"]
     if not target or target.endswith("-dirty"):
@@ -310,5 +311,5 @@ def rollback_code(config, record: dict) -> None:
     print(output.status_cell("warn", f"the checkout is at {target} now (detached; `git -C {repo} checkout main` to come back)"),
           flush=True)  # fmt: skip
     argv = [sys.executable, os.path.join(repo, "src", "manage.py"), "configure", *record["components"]]
-    print(output.color(f"$ {' '.join(argv[1:])}  [that commit's own CLI]", "dim"), flush=True)
-    os.execv(sys.executable, argv)
+    print(output.color(f"$ worms configure {' '.join(record['components'])}  [that commit's own CLI, next]", "dim"), flush=True)
+    return argv

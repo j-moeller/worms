@@ -2358,11 +2358,17 @@ def verb_rollback(config, args) -> int:
                              "with it?", args.yes):  # fmt: skip
             return 1
         try:
-            release.rollback_code(config, record)  # replaces this process
+            global THEN_EXEC
+            THEN_EXEC = release.rollback_code(config, record)  # main() hands over to it, once it has let go
         except build.BuildError as exc:
             output.error(str(exc))
             return 1
     return 0
+
+
+# A command to replace this process with once main() has let go of the run log and the lock
+# (`worms rollback --code`: the older commit's own CLI).
+THEN_EXEC: list[str] | None = None
 
 
 def verb_restore(config, args) -> int:
@@ -2485,6 +2491,10 @@ def main(argv=None) -> int:
             sys.stdout.flush()
             sys.stdout = terminal
             print(json.dumps(output.capture_result("worms " + " ".join(own), code), indent=2, ensure_ascii=False))
+    if THEN_EXEC and code == 0:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.execv(sys.executable, THEN_EXEC)
     if tee is not None and code:
         print(output.color(f"this run's whole output: {tee.path} (`worms logs run`)", "dim"), file=sys.stderr)
     return code

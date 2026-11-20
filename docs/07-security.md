@@ -44,8 +44,8 @@ PostgreSQL accepts TLS only (`hostssl`, `scram-sha-256`), and each role connects
 |---|---|---|
 | `admin` (superuser) | the node | everything: the `worms` CLI |
 | `django_migrator` | orchestrator | owns the tables, runs migrations, `init` |
-| `django_orchestrator` | orchestrator | Read: every table except the event tables. Write: runs, VMs, topology, devbox tables, `gameplans`, `gameplan_simulations`, captures, logs, `run_events`; INSERT `host_jobs`; INSERT only, named columns, into `gameplan_versions` and `gameplan_changes`; named columns of `rounds`/`teams` |
-| `django_dashboard` | dashboard | Read: every table except the event tables, and every column of `gameplan_versions` except `content`. Insert: uploads, tokens, SSH keys, memberships, users, teams, rounds, password resets. Update: named columns only. A trigger refuses staff or superuser rows. Never `username`, `is_staff`, `is_superuser` |
+| `django_orchestrator` | orchestrator | Read: the 25 tables its API, conductor, attempt processor and topology collector use (rounds, teams, uploads, runs, VMs, jobs, attempts, captures, logs, devbox tables, gameplans, topology). Never accounts, sessions, tokens, memberships, notifications, the monitor's tables, nor a gameplan version's `content`. Write: runs, VMs, topology, devbox tables, `gameplans`, `gameplan_simulations`, captures, logs, `run_events`; INSERT `host_jobs`; INSERT only, named columns, into `gameplan_versions` and `gameplan_changes`; named columns of `rounds`/`teams` |
+| `django_dashboard` | dashboard | Read: the 31 tables its pages use, every column of `gameplan_versions` but `content`, and only the `id` of `password_resets` (what an INSERT returns). Not `network_events`, `gameplan_simulations`, Django's auth/admin tables (no `/admin/`). Insert: uploads, tokens, SSH keys, memberships, users, teams, rounds, password resets. Update: named columns only. A trigger refuses staff or superuser rows. Never `username`, `is_staff`, `is_superuser` |
 | `dbuser_scoring`, `dbuser_logging` | scoring, logging | INSERT into their attempt table only (3–4 columns) |
 | `dbuser_network_monitor` | monitor | INSERT into `network_flows`, `network_events` |
 | `round_agent` | node | SELECT `host_jobs`; UPDATE its state, timestamps, result, error |
@@ -105,7 +105,7 @@ Account rules ([`core/accounts.py`](../projects/dashboard/core/accounts.py), [`m
 |---|---|
 | Every VM | The WORMS public key (cloud-init). No private key, token or password is placed on a team VM |
 | Node | `/etc/worms/ssh/worms` (the WORMS key) and `/etc/worms/round-agent.env` (agent DB role, provisioning token), both 0600 |
-| Orchestrator | `/etc/orchestrator/django.env` (0600): its own and the migrator's DB passwords, the power and read-only tokens, the API token, Proxmox's CA |
+| Orchestrator | `/etc/orchestrator/django.env` (0600): its own DB password (never the migrator's, the tables' owner: Ansible passes that to migrate, init and create_users only), the power and read-only tokens, the API token, Proxmox's CA |
 | Dashboard | `/etc/dashboard/django.env` (0600): its DB passwords and the orchestrator API token |
 | Scoring, logging, monitor | Their INSERT-only DB password, in 0600 env files |
 | Controller | The internal CA (`ansible/pki/worms/`, RSA 4096, key encrypted with the vault passphrase) |
@@ -131,6 +131,25 @@ Account rules ([`core/accounts.py`](../projects/dashboard/core/accounts.py), [`m
 | Node nftables | Zone firewall: forwards only the flows below. Bridge filters on services, sandbox and devbox bridges: allowed addresses and ports only; on the services bridge every packet has a sandbox or devbox gateway at one end (gateway↔gateway and service VM↔service VM dropped). Management bridges (vmbr2, vmbr4, vmbr5, vmbr6): VM↔VM dropped, a VM reaches the node only. Per-VM rates (services SYN 20/s; any SYN 500/s; UDP 5000 pps) | [`worms.nft.j2`](../ansible/roles/host/host_network/templates/worms.nft.j2) |
 | Gateways | sandbox-gw and devbox-gw forward only team networks → service ports and → LLM:443, SNATed to their own address. No default route. **No forwarding between sandbox networks or between a devbox's two links** | [`sandbox-gw.tftpl`](../opentofu/stacks/sandbox/templates/sandbox-gw.tftpl), [`devbox-gw.tftpl`](../opentofu/stacks/devbox/templates/devbox-gw.tftpl) |
 | Gameplan rules | Per sandbox VM; peers limited to sandbox CIDRs | [`stacks/sandbox`](../opentofu/stacks/sandbox/main.tf), [5](05-live-environment.md#writing-a-gameplan) |
+
+### Target architecture
+
+| VM | Ingress | Egress |
+|---|---|---|
+| Dashboard | 443 (public, host DNAT) | database:5432, orchestrator:443 |
+| Orchestrator | 443 from the dashboard | database:5432; **exception:** the Proxmox API (node:8006: sandbox power, topology; two narrow tokens) |
+| Scoring, logging | 443 from the sandbox and devbox gateways | database:5432 |
+| Monitor | the mirror bridge (a copy of all sandbox traffic) | database:5432 |
+| Database | 5432 from the dashboard, orchestrator, scoring, logging, monitor; **exception:** the node (round agent, `worms`) | none |
+| Sandbox VMs | – | scoring, logging, their sandbox networks (the gameplan's rules), the private internet; **exception:** the LLM endpoint |
+| Devbox VMs | 22 from the SSH gateway | scoring, logging, their team's A–B–C links, the private internet; **exception:** the LLM endpoint |
+| Private internet (DNS included) | its own service port, from the sandbox and devbox gateways | none |
+| SSH gateway | 22 (public, host DNAT) | devbox VMs:22 |
+| Every VM | SSH from the node, on its own management NIC (management bridges: VM↔VM dropped) | – |
+| Every VM but sandbox and devbox | – | the internet (80, 443, 53) while the window is open |
+| Every infrastructure VM | – | **exception:** its audit log to the syslog VM (TCP 514, rate-limited) |
+
+The exceptions are deliberate (2026-11-20): the audit trail, the conductor's sandbox power, the round agent's job queue and the teams' LLM access. Database roles: least privilege ([Database](#database)); scoring, logging and the monitor are INSERT-only on their own tables.
 
 ### Trust zones
 
@@ -227,7 +246,6 @@ IDs are cited in code comments. S = team VMs, D = dashboard, C = cross-cutting. 
 | D5 | Open | Changing one's password does not ask for the current one |
 | D8 | Open | No Content-Security-Policy (no XSS sink found) |
 | D10 | Design | Staff pages are on the public dashboard. The DB role cannot mint staff, but a stolen staff session can create rounds and accounts |
-| D12 | Medium | `/admin/login/` signs staff in without nginx's rate limit and without `login_events` |
 | D13 | Low | Team API tokens never expire and survive their creator leaving the team |
 | C1 | Accepted | The Proxmox provider uses `insecure = true` |
 | C2 | Open | VM host keys are not checked (`StrictHostKeyChecking no`) |
@@ -244,6 +262,7 @@ IDs are cited in code comments. S = team VMs, D = dashboard, C = cross-cutting. 
   - S7: a run could start before the last teardown.
   - S8: unbounded DNS query log. Reopened and fixed again on 2026-11-18: only the `queries` category was bounded. The failed lookups (`query-errors`) and the rest of named's log still went to syslog, which rotates weekly with no size limit. The devboxes' NTP pool lookups, about 30 000 failures an hour, filled the DNS VM's 4.8 GB disk in a week. Every BIND category now goes to a bounded file under `/var/log/named/`.
   - S15: a replaced VM lost its firewall.
+  - D12 (2026-11-20): `/admin/login/` signed staff in without nginx's rate limit and without `login_events`. Django's admin is no longer served.
   - S16: a team login got a shell on the SSH gateway.
   - F14/G8: gateways without nftables.
   - G5: Zeek stopped at log rotation.

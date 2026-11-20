@@ -373,6 +373,13 @@ resource "proxmox_virtual_environment_firewall_rules" "ssh_gateway" {
     iface          = "net1"
     comment        = "SSH from the Proxmox host (Ansible) on the management NIC"
   }
+  # The internet window (Internet.yml), as every VM but the sandbox and devbox ones: its
+  # management NIC has the node as gateway, on mgmt-exposed (an internet zone).
+  rule {
+    security_group = local.sg.provisioning
+    iface          = "net1"
+    comment        = "Internet while allowed (Internet.yml): package updates"
+  }
 }
 
 resource "proxmox_pool_membership" "ssh_gateway" {

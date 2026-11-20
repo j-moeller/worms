@@ -8,19 +8,23 @@ from config.settings.base import DEBUG, LOG_LEVEL, LOGGING, ROUND_TIMING, env, p
 INSTALLED_APPS += ["orchestrator"]
 ROOT_URLCONF = "orchestrator.urls"
 
-# Database: least-privilege orchestrator role for normal operation, migrator
-# role only for migrations. Credentials come from the environment.
+# Database: least-privilege orchestrator role for normal operation. The migrator role (the
+# tables' owner) only where its credentials are given: Ansible passes them to migrate, init and
+# create_users alone (role django_app). The services' environment file never holds them, so
+# nothing the orchestrator runs (the API, the conductor with the gameplans' code, the attempt
+# processor parsing what sandboxes sent) can act as the owner (docs/07-security.md).
 if not DEBUG:
     DATABASES = {
         "default": postgres_database(
             env("DB_USER", required=True),
             env("DB_PASSWORD", required=True),
         ),
-        "migrator": postgres_database(
+    }
+    if env("DB_MIGRATOR_USER"):
+        DATABASES["migrator"] = postgres_database(
             env("DB_MIGRATOR_USER", required=True),
             env("DB_MIGRATOR_PASSWORD", required=True),
-        ),
-    }
+        )
 
 # Proxmox API access (proxmoxer). Host, port and token are injected from the
 # environment; the API token value is a secret delivered via the vault. The

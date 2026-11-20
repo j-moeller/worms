@@ -5,7 +5,7 @@ from conftest import as_role
 
 @pytest.mark.parametrize("kind", ["processor", "conductor"])
 def test_daemon_recovers_a_closed_database_connection(db_clean, app_roles, monkeypatch, kind):
-    from core.models.user import User
+    from core.models.rounds import HostJob
     from django.db import OperationalError, connection
     from orchestrator.management.commands import conduct_rounds, process_attempts
 
@@ -16,7 +16,7 @@ def test_daemon_recovers_a_closed_database_connection(db_clean, app_roles, monke
 
     def pass_once(*args):
         attempts.append(True)
-        User.objects.count()  # establishes/uses the real application-role connection
+        HostJob.objects.count()  # establishes/uses the real application-role connection (a table it reads)
         if len(attempts) == 1:
             connection.connection.close()  # as after the server drops a session
             raise OperationalError("database session was interrupted")

@@ -109,9 +109,10 @@ class GameplanVersion(models.Model):
       - no role may UPDATE or DELETE a row, and a trigger refuses both to the owner too;
       - `first_seen_at` and `recorded_by` (the inserting account) are the database's;
       - `worms reset database` keeps the table.
-    `content` is readable by the orchestrator and the admin only: the dashboard may read every
-    other column (setup_db_permissions, postgresql_restricted_columns). Use `GameplanVersion.objects`,
-    which leaves `content` out unless asked for it (`.content_of(sha256)`)."""
+    `content` is readable by the admin only: the dashboard and the orchestrator (which writes it)
+    may read every other column (setup_db_permissions, postgresql_restricted_columns). Use
+    `GameplanVersion.objects`, which leaves `content` out unless asked for it (`.content_of(sha256)`,
+    the admin's: `worms` on the node)."""
 
     sha256 = models.CharField(max_length=64, primary_key=True)
     filename = models.TextField()  # the name it was first seen under
@@ -136,7 +137,7 @@ class GameplanVersion(models.Model):
 
     @classmethod
     def content_of(cls, sha256) -> bytes | None:
-        """The version's bytes (the orchestrator and the admin only), None if it is not recorded."""
+        """The version's bytes (the admin only), None if it is not recorded."""
         row = cls.objects.filter(sha256=sha256).values_list("content", flat=True).first()
         return None if row is None else bytes(row)
 

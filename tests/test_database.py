@@ -241,8 +241,12 @@ def test_sandbox_apis_cannot(database, role, sql):
 
 @pytest.mark.parametrize("role", ["django_dashboard", "django_orchestrator"])
 def test_django_reads_monitoring(database, role):
-    run(database, role, "SELECT count(*) FROM network_flows")
-    run(database, role, "SELECT count(*) FROM network_events")
+    # Only the dashboard reads the flows (the timelines); nobody the events.
+    if role == "django_dashboard":
+        run(database, role, "SELECT count(*) FROM network_flows")
+    else:
+        denied(database, role, "SELECT count(*) FROM network_flows")
+    denied(database, role, "SELECT count(*) FROM network_events")
     denied(database, role, "DELETE FROM network_flows")
     denied(database, role, "INSERT INTO network_events (log, ts, data) VALUES ('x', now(), '{}')")
 

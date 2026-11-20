@@ -295,11 +295,12 @@ def test_every_write_is_refused_except_the_three_allowed(people):
 
 @pytest.mark.parametrize("path", ["/admin/logout/", "/admin/login/", "/admin/password_change/"])
 def test_djangos_own_admin_pages_are_refused_too(people, path):
-    """Django's /admin/logout/ has the same short name as our /logout/: it must not count."""
+    """Django's admin is not served (no /admin/: D12, and least privilege on the auth tables). Its
+    /admin/logout/ had the same short name as our /logout/; none of its pages may end a view-as."""
     admin = _client(people["admin"])
     _start(admin, people["student"])
     response = _post(admin, path)
-    assert response.status_code == 403 and b"read only" in response.content
+    assert response.status_code == 404
     assert _viewing(admin)
 
 

@@ -19,9 +19,11 @@ pytest.importorskip("django")
 
 
 def _rows():
+    """The records, read as the admin: the dashboard writes them and gets back only their id."""
     from core.models.user import PasswordReset
 
-    return list(PasswordReset.objects.order_by("id"))
+    with as_role("postgres"):
+        return list(PasswordReset.objects.order_by("id"))
 
 
 def _reset(client, target, data=None, page="/profile/"):

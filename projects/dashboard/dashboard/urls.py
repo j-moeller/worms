@@ -22,7 +22,6 @@ from dashboard.views import notifications
 from dashboard.views import staff, staff_gameplans, staff_notifications, staff_rounds, staff_simulations, staff_teams, staff_users
 from dashboard.views.topology import topology, topology_data, topology_runs
 from django.conf import settings
-from django.contrib import admin
 from django.urls import path
 from django.views.generic import RedirectView
 
@@ -33,8 +32,6 @@ urlpatterns = [
     path("devbox/reset/", devbox_reset, name="devbox_reset"),
     path("devbox/ssh-keys/add/", devbox_add_ssh_key, name="devbox_add_ssh_key"),
     path("devbox/ssh-keys/<uuid:key_uuid>/delete/", devbox_delete_ssh_key, name="devbox_delete_ssh_key"),
-    #
-    path("admin/", admin.site.urls),
     #
     # The round the header's timer counts down to: its times and its gameplan's description.
     path("round/", round_info, name="round_info"),

@@ -6,13 +6,25 @@
 # privileges). Connecting (CONNECT, schema USAGE) is set up by setup_db_base.
 #
 # privs: a privilege list, optionally per column, e.g. "UPDATE (last_login)".
-# tables: table names, or ALL for every table in the schema.
+# tables: table names, or ALL for every table in the schema (no role has ALL now: each reads the
+# tables its code reads, named, so a new table is readable by nobody until granted here).
 # Sequences of tables with INSERT are granted automatically (USAGE).
 postgresql_table_privileges:
   # Public facing: read-only, except what a logged-in user does.
   django_dashboard:
+    # What its pages read (the dashboard's views, API, middleware and the sessions/auth they use).
+    # Not network_events, gameplan_simulations (the staff page asks the orchestrator's API for a
+    # simulation), django_migrations, nor Django's auth/admin tables: no /admin/, no permissions.
     - privs: SELECT
-      tables: ALL
+      tables: [users, django_session, competitions, application_setting, rounds, teams,
+               team_memberships, access_tokens, devbox_ssh_keys, uploads, malware_artifacts,
+               notifications, notifications_teams, flag_captures, flag_capture_attempts,
+               virtual_machines, round_runs, logging, logging_attempts, network_flows, run_events,
+               host_jobs, topology_snapshots, gameplans, gameplan_versions, gameplan_changes,
+               devboxes, devbox_vms, devbox_captures, devbox_runs, devbox_logs]
+    # A staff reset's record is written, never read: only its id, which the INSERT returns.
+    - privs: SELECT (id)
+      tables: [password_resets]
     # Upload a worm (dashboard/views/uploads.py).
     - privs: INSERT
       tables: [uploads, malware_artifacts]
@@ -57,11 +69,11 @@ postgresql_table_privileges:
       tables: [users]
     - privs: INSERT, DELETE
       tables: [teams]
-    - privs: UPDATE (name, max_members, development_competition_id)
+    - privs: UPDATE (name, max_members)
       tables: [teams]
-    - privs: INSERT
-      tables: [competitions]
-    - privs: UPDATE (name, registration_starts_at, registration_ends_at, development_competition_id)
+    # The competition exists (manage.py init, as the migrator); staff set its name and
+    # registration window only.
+    - privs: UPDATE (name, registration_starts_at, registration_ends_at)
       tables: [competitions]
     - privs: INSERT, DELETE
       tables: [rounds]
@@ -80,8 +92,15 @@ postgresql_table_privileges:
 
   # Reads competition/round/team/upload/VM state; writes only its own results.
   django_orchestrator:
+    # What the API, the conductor, the attempt processor and collect_topology read. Never the
+    # accounts, sessions, tokens, memberships, notifications or the network monitor's tables:
+    # a session key there would let it take over any dashboard session.
     - privs: SELECT
-      tables: ALL
+      tables: [competitions, application_setting, rounds, teams, uploads, malware_artifacts,
+               round_runs, virtual_machines, host_jobs, run_events, flag_capture_attempts,
+               logging_attempts, flag_captures, logging, devboxes, devbox_vms, devbox_ssh_keys,
+               devbox_captures, devbox_logs, devbox_runs, gameplans, gameplan_versions,
+               gameplan_changes, gameplan_simulations, topology_snapshots]
     # manage.py collect_topology (update_or_create).
     - privs: INSERT, UPDATE
       tables: [topology_snapshots]
@@ -195,8 +214,8 @@ postgresql_table_privileges:
     - privs: INSERT (kind, actor, detail)
       tables: [platform_events]
 
-# Append only for every service: whatever `tables: ALL` gave, no role reads,
-# changes or removes a row of these (the event tables).
+# Append only for every service: whatever a grant gave, no role reads, changes or
+# removes a row of these (the event tables).
 postgresql_append_only_tables:
   - login_events
   - password_events
@@ -208,14 +227,14 @@ postgresql_append_only_tables:
   - ssh_gateway_logins
   - platform_events
 
-# Columns only their readers may read: whatever `tables: ALL` gave another role, it keeps
-# SELECT on the table's other columns only. A gameplan version's bytes are code that runs as
-# root on the node: the orchestrator (which has the files anyway) and the admin read them,
-# never the dashboard (docs/07-security.md, T3).
+# Columns only their readers may read: whatever a grant gave another role, it keeps SELECT on
+# the table's other columns only. A gameplan version's bytes are code that runs as root on the
+# node: only the admin reads them. Not the dashboard (docs/07-security.md, T3), and not the
+# orchestrator either, which writes them and has the files anyway, but never reads them back.
 postgresql_restricted_columns:
   gameplan_versions:
     columns: [content]
-    readers: [django_orchestrator]
+    readers: []
 
 # Roles whose INSERT into users is refused when the row is staff or superuser
 # (a trigger, privileges.sql.j2): the public dashboard creates student

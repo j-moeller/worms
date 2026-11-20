@@ -227,8 +227,8 @@
   no_log: "{{ hide_secrets }}"
   register: django_collectstatic
   changed_when: django_collectstatic.stdout is not search('^0 static files copied', multiline=True)
-  # The orchestrator's settings also require the migrator role (only it has one).
-  environment: "{{ django_static_env | combine(django_extra_env) | combine(django_migrator_env if django_run_migrations | bool else {}) }}"
+  # No migrator: only migrate and the commands after it get the tables' owner.
+  environment: "{{ django_static_env | combine(django_extra_env) }}"
   vars:
     django_static_env:
       PRODUCTION: "1"
@@ -241,9 +241,6 @@
       DB_HOST: "{{ django_db_host }}"
       DB_USER: "{{ django_db_user }}"
       DB_PASSWORD: "{{ django_db_password }}"
-    django_migrator_env:
-      DB_MIGRATOR_USER: "{{ postgres_migrator_name }}"
-      DB_MIGRATOR_PASSWORD: "{{ postgres_migrator_password }}"
 
 # Stop this host's long-running Django services before migrating. They hold
 # open database transactions (the orchestrator's conduct_rounds /

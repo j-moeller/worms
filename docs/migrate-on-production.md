@@ -24,22 +24,22 @@ Each step says what you should see. If you don't see it, stop there.
 |---|---|
 | **The CLI** | One verb per task. Day to day: `status`, `show`, `log`, `run`, `login`, `deploy`, `reset`, `restart`. A team VM can be named as `<team>/a\|b\|c\|gw` (`alpha/gw`, `t2/a`). Every command used so far still works, as an alias. Table below. |
 | **`worms status`** | Starts with an *attention* block: internet window open, devboxes held or stopped, missing `clean` snapshots, pending migrations, failed jobs, node services down. A team column; *created* and *updated* columns from the per-VM history. |
-| **`worms deploy`** | Configures what exists, never OpenTofu, no internet window unless `--packages`. Then it syncs the gameplans and restarts the agent (once no job runs), then the conductor: no more manual restarts. Refused during a round. `--plan` shows what each line touches. |
+| **`worms configure`** | Configures what exists, never OpenTofu, no internet window unless `--packages`. Then it syncs the gameplans and restarts the agent (once no job runs), then the conductor: no more manual restarts. Refused during a round. `--plan` shows what each line touches. |
 | **`worms run`** | `worms run <vm>... [--root] -- <command>` runs a command on VMs without a login; `worms login <vm> -- <command>` too. Groups (`services`, `private-internet`, `infrastructure`) never include team VMs; a team VM's output is escaped. |
-| **Logs** | Every changing command keeps its whole output in `~/.worms/runs/` (`worms log build`); `worms log latest -f` follows the newest host job. |
-| **The apt cache** | The fill keeps the old index until the new one is complete, fetches every list a fresh VM needs, and checks offline that the cache serves a fresh VM. `scripts/apt-cache-offline-index.py` rebuilds the index offline from the apt-cache VM's own lists. `worms internet disable` switches DNS and the caches back to offline mode. 13 more apt packages, 2 more PyPI packages (step 1 of the window). |
+| **Logs** | Every changing command keeps its whole output in `~/.worms/runs/` (`worms logs run`); `worms logs latest -f` follows the newest host job. |
+| **The apt cache** | The fill keeps the old index until the new one is complete, fetches every list a fresh VM needs, and checks offline that the cache serves a fresh VM. `scripts/apt-cache-offline-index.py` rebuilds the index offline from the apt-cache VM's own lists. `worms close window` switches DNS and the caches back to offline mode. 13 more apt packages, 2 more PyPI packages (step 1 of the window). |
 | **Safety** | `worms step devbox-configure`/`devbox-keys` by hand are refused (they erased every team's keys). A build that fails inside the window switches DNS and the caches offline. Tab completion offers only plain names. |
 | **Per-VM history** | `/var/lib/worms/vm-history.jsonl` on the node: when each VM was created, configured, snapshotted or rolled back, by which commit and command. `worms show <vm>` lists it. |
 | **Database** | Migration `0020` (the round's "shut down every devbox" switch), if production lacks it. |
 
 | Old command | Now |
 |---|---|
-| `worms build <existing component>` | still works; `worms deploy <component>` is the configure-only form |
-| `worms status keys`, `worms devbox-sync-keys`, `worms devbox-add-key`, `worms devbox-remove-key` | `worms keys status`, `worms keys sync`, `worms keys add`, `worms keys remove` |
-| `worms build devbox --rebuild --team X` | `worms reset devbox X --fresh` |
+| `worms build <existing component>` | `worms apply <component>` (it was renamed since); `worms configure <component>` is the configure-only form |
+| `worms status keys`, `worms devbox-sync-keys`, `worms devbox-add-key`, `worms devbox-remove-key` | `worms show keys`, `worms sync keys`, `worms add key`, `worms remove key` |
+| `worms build devbox --rebuild --team X` | `worms rebuild X` |
 | `worms login X`, then a command | `worms run X -- <command>` |
 | `systemctl restart worms-round-agent`, then the conductor on the orchestrator | `worms restart agent conductor` (waits for the agent's running job) |
-| `pg_dump` on the database VM | `worms backup database` |
+| `pg_dump` on the database VM | `worms backup db` |
 
 ## Tonight, offline
 
@@ -51,15 +51,15 @@ once; the node's round agent runs the new code only after step 4.
 ```sh
 git log --oneline -1           # this document's commit, or later
 git status --short             # nothing modified: the node's workspace is synced from the working tree
-worms status jobs              # a job `running` for a long time, others `queued` behind it?
+worms show jobs              # a job `running` for a long time, others `queued` behind it?
 ```
 
 If one job is stuck, end it, so the queue moves again:
 
 ```sh
-worms log <its number>                 # the last lines: where it hangs
+worms logs <its number>                 # the last lines: where it hangs
 systemctl restart worms-round-agent    # up to ~90 s: systemd ends the hung job
-worms status jobs                      # the queued jobs run again, one at a time
+worms show jobs                      # the queued jobs run again, one at a time
 ```
 
 Use plain `systemctl` here. `worms restart agent` waits for the running job to finish, up to 15
@@ -75,22 +75,22 @@ worms status                             # read the attention block; internet ac
 ### 3. Back up the database
 
 ```sh
-worms backup database          # ● <size>: ~/.worms/backups/<node>-mydb-<time>.dump, readable by you only
+worms backup db          # ● <size>: ~/.worms/backups/<node>-mydb-<time>.dump, readable by you only
 ```
 
 ### 4. Deploy the code (offline)
 
 ```sh
-worms deploy --plan dashboard orchestrator round-agent   # database comes along if migration 0020 is pending
-worms deploy dashboard orchestrator round-agent          # 12 min on dev
+worms configure --plan dashboard orchestrator round-agent   # database comes along if migration 0020 is pending
+worms configure dashboard orchestrator round-agent          # 12 min on dev
 ```
 
 It ends with `● agent: restarted, active`, `● conductor: restarted, active` and
-`● deployed: …`. Name the components: a bare `worms deploy` configures everything, the node's host
+`● deployed: …`. Name the components: a bare `worms configure` configures everything, the node's host
 network included, and rolls every service VM back to its snapshot.
 
 ```sh
-worms status gameplans         # round_one: valid on the orchestrator and the node
+worms show gameplans         # round_one: valid on the orchestrator and the node
 ```
 
 ### 5. Repair the apt cache (offline), and snapshot it
@@ -126,8 +126,8 @@ worms run <team>/gw --root -- apt-get update     # Get:/Hit: lines from apt-cach
 ### 6. Reset every team's devboxes (offline)
 
 ```sh
-worms reset devbox --all-teams --wait     # about 1–3 min per team, one after another
-worms keys status                         # every cell ✓
+worms reset devboxes --wait     # about 1–3 min per team, one after another
+worms show keys                         # every cell ✓
 ```
 
 Each team's VMs go back to their snapshot. One that never got its one-time setup gets it now,
@@ -138,7 +138,7 @@ keys, the CA and `/etc/worms/flag`. The teams lose what's on their devboxes. Pac
 Then check every team's devbox as the team uses it:
 
 ```sh
-worms validate devbox          # or: worms validate devbox <team>...
+worms check          # or: worms check <team>...
 ```
 
 For each team, A, B and C, it checks:
@@ -174,7 +174,7 @@ trixie's index:
 Give the node egress, then:
 
 ```sh
-worms build --yes apt-cache devpi --packages
+worms apply --yes apt-cache devpi --packages
 ```
 
 Take egress away again afterwards. The build opens and closes the worms window itself. apt-cache
@@ -187,9 +187,9 @@ took 7 min on dev; devpi takes longer (its list holds large packages).
 - the service VMs snapshotted again: the round rolls back to the refilled cache
 
 **If it fails:** `Say the indexes were not refreshed` means the egress wasn't there; the previous
-index is back. `Say the cache cannot serve a fresh VM` (here, or on `worms internet disable`,
+index is back. `Say the cache cannot serve a fresh VM` (here, or on `worms close window`,
 `worms step offline`) means the cache has no index to give offline: repair it as in tonight's
-step 5, retake its snapshot, then run `worms step offline` so it checks again. Whatever failed, run `worms internet disable` before you stop: it closes the window
+step 5, retake its snapshot, then run `worms step offline` so it checks again. Whatever failed, run `worms close window` before you stop: it closes the window
 and switches DNS and the caches back to offline mode.
 
 ### 2. Check from a team gateway
@@ -206,9 +206,9 @@ nothing: it names a candidate for every package in trixie's index, cached or not
 ### 3. Rebuild the devboxes with their packages
 
 ```sh
-worms reset devbox --all-teams --fresh --wait   # 12–14 min per team, one after another
-worms keys status
-worms validate devbox                           # every cell ✓, apt and PyPI too
+worms reset devboxes --fresh --wait   # 12–14 min per team, one after another
+worms show keys
+worms check                           # every cell ✓, apt and PyPI too
 ```
 
 A team's A, B and C are replaced (fresh disks), configured with their packages from the refilled
@@ -235,16 +235,16 @@ On the dashboard, **Staff → Rounds**:
 
 ```sh
 worms status                 # attention: devboxes held by the round, any failed job
-worms status rounds
-worms log latest -f          # the newest host job: the first prepare builds the sandbox (about 1 h)
-worms log conductor -f
+worms show rounds
+worms logs latest -f          # the newest host job: the first prepare builds the sandbox (about 1 h)
+worms logs conductor -f
 worms emergency-stop         # hard-stop every VM, destroy nothing: the only hard stop
 ```
 
 ## Rollback
 
 - **The code:** check out `9d1382a` (the last commit before the CLI merge), then
-  `worms build --yes dashboard round-agent` and restart the agent, then the conductor. The migrations
+  `worms apply --yes dashboard round-agent` and restart the agent, then the conductor. The migrations
   stay; nothing of the old code depends on their absence.
 - **The database:** step 3's dump, restored on the database VM with `pg_restore`. It loses
   everything since the dump.
@@ -254,11 +254,11 @@ worms emergency-stop         # hard-stop every VM, destroy nothing: the only har
 ## Don'ts
 
 - **No deploy during a round.** It restarts the conductor, and that costs the running team its
-  attempt. `worms deploy` refuses unless `--during-round`.
-- **No bare `worms deploy` tonight.** It reconfigures the host network and rolls every service VM
+  attempt. `worms configure` refuses unless `--during-round`.
+- **No bare `worms configure` tonight.** It reconfigures the host network and rolls every service VM
   back. Name the components.
 - **No `worms destroy`.** It takes the database VM and its records too.
-- **No `worms build apt-cache --packages` without egress.** It puts the old index back and achieves
+- **No `worms apply apt-cache --packages` without egress.** It puts the old index back and achieves
   nothing.
 - **If dpkg asks about `/etc/nftables.conf` on a gateway, answer `N`.** The gateway's rules are in
   that file.

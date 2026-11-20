@@ -103,5 +103,5 @@ Devbox traffic is not mirrored, so it is not recorded.
 | What | State |
 |---|---|
 | vzdump of the persistent VMs (`worms-stateful`, 02:30 daily, keep 7 daily / 4 weekly) | Created only if `backup_storage` is set ([`backup.tf`](../opentofu/stacks/infrastructure/persistent/backup.tf)); off by default |
-| Database dumps | None scheduled. By hand: `worms backup database` (a `pg_dump -Fc` streamed to the controller, 0600, [3](03-manage-py.md#operate)) |
+| Database dumps | None scheduled. By hand: `worms backup db` (a `pg_dump -Fc` streamed to the controller, 0600, [3](03-manage-py.md#operate)) |
 | Controller state: vault, `.vault_pass`, `ansible/pki/worms/`, `terraform.tfstate` | By hand, off the node ([2](02-installation.md#4-build)) |

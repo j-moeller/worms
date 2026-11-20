@@ -58,6 +58,20 @@ RUN_STATUS = {
 }
 
 
+def _status(run, waits: str) -> str:
+    """What a team sees of its dev upload's state, and what it waits for, if it waits: the round that
+    holds things up (round names are public), or work queued on the platform."""
+    from core.models.rounds import HostJob
+
+    state = run.state if run else DevboxRun.State.PENDING
+    if state == DevboxRun.State.PENDING and waits:
+        return f"Waiting: {waits}"
+    job = run.rebuild_job if run and state == DevboxRun.State.RESETTING else run.deploy_job if run and state == DevboxRun.State.DEPLOYING else None
+    if job is not None and job.state == HostJob.State.QUEUED:
+        return f"{RUN_STATUS[state]}: queued behind other work on the platform"
+    return RUN_STATUS[state]
+
+
 def _environment(request: HttpRequest) -> str:
     return "dev" if request.is_dev_environment else "live"
 
@@ -76,12 +90,19 @@ def _history(request: HttpRequest, team: Team):
     environment = _environment(request)
     uploads = (
         Upload.objects.filter(team=team, devbox=environment == "dev")
-        .select_related("user", "artifact", "devbox_run")
+        .select_related("user", "artifact", "devbox_run__rebuild_job", "devbox_run__deploy_job")
         .prefetch_related("runs__round")
         .order_by("-created_at")
     )
     # The dev upload under way: a new one cancels it (the page says so before it is sent).
     running = active_upload(team) if environment == "dev" else None
+    # What an upload waiting for its reset waits for (orchestrator/rounds/devbox_runs.py): asked once.
+    waits = ""
+    if running is not None and getattr(running, "devbox_run", None) is None or (
+            running is not None and running.devbox_run.state == DevboxRun.State.PENDING):
+        from orchestrator.rounds.devbox_runs import reset_waits_for
+
+        waits = reset_waits_for()
     rows = []
     for upload in uploads:
         # The rounds this upload was run in (newest first).
@@ -99,7 +120,7 @@ def _history(request: HttpRequest, team: Team):
                 "username": upload.user.username,
                 "rounds": [round.name for round in rounds],
                 "referenced": bool(rounds),
-                "status": RUN_STATUS[run.state] if run else RUN_STATUS[DevboxRun.State.PENDING],
+                "status": _status(run, waits if running is not None and upload.pk == running.pk else ""),
                 "ends_at": run.ends_at if run and run.state == DevboxRun.State.RUNNING else None,
                 "running": running is not None and upload.pk == running.pk,
             }

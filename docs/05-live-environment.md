@@ -54,7 +54,7 @@ A gameplan version is its bytes, named by their SHA-256. Once recorded, a versio
   - A CHECK computes each version's SHA-256 from its bytes, and its size.
   - No role may UPDATE or DELETE a row of either table, and a trigger refuses both to the owner too.
   - The time and the recording account are filled by the database; the orchestrator may insert only the other columns.
-  - `worms reset database` keeps both tables.
+  - `worms reset db` keeps both tables.
 - **Pinned.** When a round's first attempt starts, every run of the round gets the version its file has then: `round_runs.gameplan_sha256`, and `gameplan_version` pointing at the record (a constraint keeps the two equal). Retries keep it. Before that, the round shows its file's current version.
 - **Run from the files.** The node and the orchestrator run the file in their copy, after checking it is exactly the pinned SHA-256. Neither ever runs code from the database: whoever could write to the database could otherwise put code on the node, where it runs as root. The record is for the audit.
 - **Edits.** A file edited after a round pinned it is a new version. The record keeps the old one. The round's attempts fail until both copies hold the pinned version again, so edit a gameplan only when no round has pinned the old version and still has attempts to run.
@@ -62,7 +62,7 @@ A gameplan version is its bytes, named by their SHA-256. Once recorded, a versio
 - **Where to look.**
   - **Staff → Gameplans:** the files now, every version (newest first) with the rounds and attempts that ran it, the history, and the hashes known only as hashes.
   - **A round's staff page:** its version, pinned or current.
-  - **`worms status gameplans`:** each file's current version.
+  - **`worms show gameplans`:** each file's current version.
   - **The bytes:** for the admin only, on the database VM (`worms login database`):
 
     ```sh
@@ -170,7 +170,7 @@ Flags released late are credited for submissions up to 900 s earlier. The round 
 
 ## Writing a gameplan
 
-One file in `gameplans/`, named `[a-z][a-z0-9_]*.py`, holding exactly one `Gameplan` subclass. Commit it like any other file and deploy it with `worms build gameplans` ([Running a round](#running-a-round)).
+One file in `gameplans/`, named `[a-z][a-z0-9_]*.py`, holding exactly one `Gameplan` subclass. Commit it like any other file and deploy it with `worms apply gameplans` ([Running a round](#running-a-round)).
 
 - **Who runs it.** The code runs as root on the node and as the orchestrator's service user, so gameplan authors are trusted.
 - **Teams never see it.**
@@ -216,7 +216,7 @@ class RoundOne(Gameplan):                       # gameplans/round_one.py
   - `PostgreVM`: PostgreSQL on :5432, password logins from the sandbox networks.
   - Subclass `BasicVM` for your own.
 - **The build, in order** ([`sandbox_vm`](../ansible/roles/applications/sandbox_vm/tasks/main.yml)): packages, users, files, setup commands, removals, services. The snapshot every run starts from is taken after that.
-- **Packages.** Every package must be in `apt_cache_seed_packages` ([`apt_cache/defaults`](../ansible/roles/private_internet/apt_cache/defaults/main.yml)): VMs install from the offline apt cache. After adding one, refill the cache: `worms build apt-cache --packages`, outside a round.
+- **Packages.** Every package must be in `apt_cache_seed_packages` ([`apt_cache/defaults`](../ansible/roles/private_internet/apt_cache/defaults/main.yml)): VMs install from the offline apt cache. After adding one, refill the cache: `worms apply apt-cache --packages`, outside a round.
 - **Removing packages.** `vm.uninstall(*packages, purge=False)`, or the class's `remove` and `purge`.
   - Removed after the setup commands, so a setup step can still use what goes: `install("gcc", "libc6-dev")`, compile in `add_setup`, `uninstall("gcc", "libc6-dev", purge=True)`. `purge` also removes the configuration files.
   - Nothing a VM needs can go: `openssh-server`, `sudo`, `python3`, `systemd`, `ca-certificates` and the rest of `PROTECTED_PACKAGES` ([`definition.py`](../src/gameplan/definition.py)), nor what one of the gameplan's logins needs (`vsftpd` for an FTP login, ...). Validation refuses those names.
@@ -373,7 +373,7 @@ PYTHONPATH=src python3 -c "from gameplan import loader, runtime; print(runtime.v
 ## Running a round
 
 1. **Create the round** on **Staff → Rounds**: its window (the start is the upload deadline; teams' latest Live uploads before it are used) and its duration per team. The gameplan is optional here. Tick **Shut down every devbox while its attempts run** when the node needs the memory ([Devboxes during a round](#devboxes-during-a-round)).
-2. **Commit and deploy** the gameplan: `worms build gameplans`, outside a round. It copies `gameplans/` and the framework (`src/gameplan`) to the node, then to the orchestrator, and restarts the conductor, which checks them at once. Nothing else is configured and no package installed, so it needs no internet and takes seconds. The round agent reads gameplan files fresh for every job, and restarts itself, between jobs, when the framework or its own code changed on disk ([`agent.py`](../scripts/round_agent/agent.py), `LoadedCode`).
+2. **Commit and deploy** the gameplan: `worms apply gameplans`, outside a round. It copies `gameplans/` and the framework (`src/gameplan`) to the node, then to the orchestrator, and restarts the conductor, which checks them at once. Nothing else is configured and no package installed, so it needs no internet and takes seconds. The round agent reads gameplan files fresh for every job, and restarts itself, between jobs, when the framework or its own code changed on disk ([`agent.py`](../scripts/round_agent/agent.py), `LoadedCode`).
 3. **Check it is valid, and the version.** **Staff → Rounds** marks it valid. The gameplan choice, the rounds list, the round's page and **Staff → Simulations** name each gameplan's version by the first 12 hex digits of its SHA-256: compare them with `sha256sum gameplans/<file> | cut -c1-12` in your checkout. A file missing from the choice is not valid. If not, read `journalctl -u orchestrator-conduct-rounds` on the orchestrator and the `gameplans` job log on the node. **Staff → Simulations** (or **Simulate** on the round's page) replays its attempt at the round's duration per team ([Simulation](#simulation)).
 4. **Choose it** on the round's page. That works until the round's first attempt starts: a round without a valid gameplan waits alone, and the conductor looks again every minute ([`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py), `_pin`). Then the gameplan's version is pinned for every attempt.
 5. **Watch it** (next section). `worms status` shows the active run. On the node, `tail -F /var/log/worms/jobs/latest.log`.

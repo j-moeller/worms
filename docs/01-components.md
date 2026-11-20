@@ -89,11 +89,11 @@ Every stack keeps its state locally, in `terraform.tfstate` next to it, and runs
 
 | Stack | Owns | Applied by |
 |---|---|---|
-| `platform` | OS images, cloud-init snippets, bridges, pools (`ephemeral`, `persistent`, `sandbox`, `devbox`, `private_internet`), the hookscript | `worms build` on the controller |
-| `firewall` | cluster and node firewall options, every security group | `worms build` |
-| `infrastructure/persistent` | database, dashboard, orchestrator, syslog. No snapshot; an optional vzdump job | `worms build` |
-| `infrastructure/ephemeral` | dns, scoring, logging, monitor. Snapshot `clean` | `worms build` |
-| `private_internet` | the 7 private-internet VMs. Snapshot `clean` | `worms build` |
+| `platform` | OS images, cloud-init snippets, bridges, pools (`ephemeral`, `persistent`, `sandbox`, `devbox`, `private_internet`), the hookscript | `worms apply` on the controller |
+| `firewall` | cluster and node firewall options, every security group | `worms apply` |
+| `infrastructure/persistent` | database, dashboard, orchestrator, syslog. No snapshot; an optional vzdump job | `worms apply` |
+| `infrastructure/ephemeral` | dns, scoring, logging, monitor. Snapshot `clean` | `worms apply` |
+| `private_internet` | the 7 private-internet VMs. Snapshot `clean` | `worms apply` |
 | `devbox` | per-team bridges, VMs, gateways; the SSH gateway | the round agent, in `/opt/worms` on the node |
 | `sandbox` | one round's networks and VMs, generated from the gameplan | the round agent, in `/opt/worms` on the node |
 
@@ -104,7 +104,7 @@ Sources: [`src/worms_cli/pipeline.py`](../src/worms_cli/pipeline.py), [`src/worm
 ## Ansible
 
 - **Inventory.** [`inventory.yml`](../ansible/inventory.yml) defines the groups. [`inventory.generated.yml`](../scripts/generate_inventory.py) holds the hosts, written from the stacks' `ansible_hosts` outputs.
-- **Configure order.** `worms build` runs 15 playbooks:
+- **Configure order.** `worms apply` runs 15 playbooks:
   1. `WaitForVMs`
   2. `SetupDNS`
   3. `UpdateVMs`

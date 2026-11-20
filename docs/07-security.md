@@ -22,7 +22,7 @@ The attackers know the whole architecture and none of the secrets.
 
 ### Proxmox
 
-Tokens are defined in [`tokens.py`](../src/worms_cli/tokens.py). Each is privilege-separated, and `worms secrets check` verifies its rights.
+Tokens are defined in [`tokens.py`](../src/worms_cli/tokens.py). Each is privilege-separated, and `worms check tokens` verifies its rights.
 
 | Token | Role, path | Privileges | Used by |
 |---|---|---|---|
@@ -71,8 +71,8 @@ The 9 event tables are append-only for every role.
 
 | Account | Privilege | Created by |
 |---|---|---|
-| `admin` | dashboard superuser and staff | `manage.py init` (no usable password); `worms admin-reset-password` issues a one-time password |
-| staff | the staff pages; manage students | `worms admin-create-staff EMAIL`. The dashboard cannot create staff (DB trigger) |
+| `admin` | dashboard superuser and staff | `manage.py init` (no usable password); `worms reset password` issues a one-time password |
+| staff | the staff pages; manage students | `worms add staff EMAIL`. The dashboard cannot create staff (DB trigger) |
 | students | their own team | **Staff → Users**, one at a time or by CSV. One-time password, changed at first sign-in |
 | team access tokens | read their team's results via the API | team members on the profile, after registration closes |
 
@@ -83,7 +83,7 @@ Account rules ([`core/accounts.py`](../projects/dashboard/core/accounts.py), [`m
   - Django's validators apply (minimum 8 characters, not common, not numeric).
   - A change ends the user's other sessions.
 - **Resets.** Staff reset students; only the superuser resets staff. Every reset writes `password_resets` and a password event.
-- **Removal.** Accounts are deactivated, never deleted. Teams are deleted only when empty, or with `worms delete-team`.
+- **Removal.** Accounts are deactivated, never deleted. Teams are deleted only when empty, or with `worms delete team`.
 - **View as.**
   - The superuser only, by POST.
   - Session-bound and checked on every request; read-only.
@@ -95,9 +95,9 @@ Account rules ([`core/accounts.py`](../projects/dashboard/core/accounts.py), [`m
 
 | Entered | Generated when missing, never rotated |
 |---|---|
-| the three Proxmox tokens (`worms secrets issue` rotates them) | 10 PostgreSQL passwords; the CA passphrase; 2 Django `SECRET_KEY`s; the orchestrator API token; devpi's root password; the WORMS SSH key (ed25519; not regenerated while VMs exist) |
+| the three Proxmox tokens (`worms issue token` rotates them) | 10 PostgreSQL passwords; the CA passphrase; 2 Django `SECRET_KEY`s; the orchestrator API token; devpi's root password; the WORMS SSH key (ed25519; not regenerated while VMs exist) |
 
-`worms secrets` shows states, never values. One-time passwords are printed once and stored only as hashes.
+`worms show secrets` shows states, never values. One-time passwords are printed once and stored only as hashes.
 
 **Where secrets end up**
 
@@ -213,7 +213,7 @@ The database is the one place where the trusted zone meets the rest. Nothing on 
 
 | Record | Written by | Read with |
 |---|---|---|
-| Event tables (append-only): `login_events`, `password_events`, `impersonation_events`, `account_events`, `team_events`, `credential_events`, `competition_events`, `ssh_gateway_logins`, `platform_events` | INSERT-only roles of the dashboard and the node; `written_by` and `created_at` set by the database | `worms status audit` |
+| Event tables (append-only): `login_events`, `password_events`, `impersonation_events`, `account_events`, `team_events`, `credential_events`, `competition_events`, `ssh_gateway_logins`, `platform_events` | INSERT-only roles of the dashboard and the node; `written_by` and `created_at` set by the database | `worms show audit` |
 | `password_resets` | dashboard, in the reset's transaction | SQL |
 | auditd on every infrastructure VM | forwarded to the syslog VM | `/var/log/remote/<ip>/audit.log` |
 | Sandbox network traffic | Zeek → `network_flows`, `network_events` | progression pages, SQL |

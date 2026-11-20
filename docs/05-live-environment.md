@@ -409,6 +409,15 @@ A round can run with every devbox shut down, for the node's memory: the switch *
 
 Every staff page lists the rounds not over whose gameplan is missing or not valid. A scheduled round gets a warning; one that already waits gets an error, with the time of the conductor's last look.
 
+### Telling the teams
+
+**Staff → Notifications** sends the teams a message under the bell in their header, next to
+Upload and Progression ([`staff_notifications.py`](../projects/dashboard/dashboard/views/staff_notifications.py)):
+a severity (info, warning, urgent, error), the text, every team or the teams chosen, and whether it
+is shown now. Staff edit, hide and delete them there; each change is recorded in
+`competition_events` (`notification_*`). The bell counts a team's active notifications, in the
+colour of the most severe.
+
 ## Known gaps
 
 As of 2026-11-08. The gameplan rework is uncommitted and not yet deployed.

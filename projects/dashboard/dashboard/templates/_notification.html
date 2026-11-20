@@ -1,0 +1,11 @@
+{% comment %}One notification as a card (notifications.html; staff/notification.html shows it as the teams
+see it). `for_team`: the viewer's team, to say "your team" for one that names it.{% endcomment %}
+<article class="notice notice--{{ n.tone }}">
+    <header class="notice__head">
+        <span class="badge badge--{{ n.tone }}">{{ n.get_severity_display }}</span>
+        <time datetime="{{ n.created_at|date:'c' }}">{{ n.created_at|date:"Y-m-d H:i" }}</time>
+        {% if n.edited %}<span>· edited {{ n.updated_at|date:"Y-m-d H:i" }}</span>{% endif %}
+        <span>· {% if n.audience == "all" %}every team{% elif for_team %}your team{% else %}{% for t in n.teams.all %}{{ t.name }}{% if not forloop.last %}, {% endif %}{% empty %}no team{% endfor %}{% endif %}</span>
+    </header>
+    <p class="notice__body">{{ n.message|urlize|linebreaksbr }}</p>
+</article>

@@ -70,6 +70,13 @@ postgresql_table_privileges:
     # attempts run with the devboxes shut down (devboxes_off), until its start.
     - privs: UPDATE (name, seed, round_start, round_end, gameplan, team_duration, gameplan_status, devboxes_off)
       tables: [rounds]
+    # Notifications to the teams (dashboard/views/staff_notifications.py): staff write, edit,
+    # switch on and off and delete them, and choose the teams one is for (notifications_teams;
+    # a team deleted on the staff pages loses its rows there first).
+    - privs: INSERT, DELETE
+      tables: [notifications, notifications_teams]
+    - privs: UPDATE (severity, message, audience, active, updated_at)
+      tables: [notifications]
 
   # Reads competition/round/team/upload/VM state; writes only its own results.
   django_orchestrator:

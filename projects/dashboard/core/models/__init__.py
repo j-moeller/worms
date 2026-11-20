@@ -15,3 +15,4 @@ from .rounds import GameplanFile, HostJob, RoundRun, RunEvent
 from .devbox import Devbox, DevboxVM, DevboxSSHKey, DevboxCapture, DevboxLog, DevboxRun
 from .events import (AccountEvent, CompetitionEvent, CredentialEvent, ImpersonationEvent, LoginEvent,
                      PasswordEvent, PlatformEvent, SSHGatewayLogin, TeamEvent)
+from .notification import Notification

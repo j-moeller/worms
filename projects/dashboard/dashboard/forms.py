@@ -12,6 +12,7 @@ import random
 
 from core import accounts, clock, schedule
 from core.models.competition import Round
+from core.models.notification import Notification
 from core.models.team import Team
 from django import forms
 from django.core.exceptions import ValidationError
@@ -272,3 +273,39 @@ def overlapping_round(competition, start, end, exclude=None):
     if exclude is not None:
         rounds = rounds.exclude(pk=exclude.pk)
     return rounds.order_by("round_start").first()
+
+
+# -- notifications -------------------------------------------------------------
+
+
+class NotificationForm(StyledForm):
+    """A notification to the teams (core/models/notification.py): for every team, or for the
+    teams of the current competition that it names."""
+
+    severity = forms.ChoiceField(choices=Notification.Severity.choices, initial=Notification.Severity.INFO)
+    message = forms.CharField(max_length=2000, widget=forms.Textarea(attrs={"rows": 5}),
+                              help_text="Plain text; line breaks and links are kept.")  # fmt: skip
+    audience = forms.ChoiceField(label="For", choices=Notification.Audience.choices, initial=Notification.Audience.ALL,
+                                 widget=forms.RadioSelect)  # fmt: skip
+    teams = forms.ModelMultipleChoiceField(queryset=Team.objects.none(), required=False, widget=forms.CheckboxSelectMultiple)
+    active = forms.BooleanField(required=False, initial=True, help_text="Shown to the teams now. Off: kept, but hidden.")
+
+    def __init__(self, *args, competition=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["teams"].queryset = Team.objects.filter(competition=competition).order_by("name")
+        for name in ("audience", "teams"):  # lists of choices, not text inputs
+            self.fields[name].widget.attrs.pop("class", None)
+
+    def clean_message(self):
+        message = self.cleaned_data["message"].strip()
+        if not message:
+            raise ValidationError("Write the message.")
+        return message
+
+    def clean(self):
+        data = super().clean()
+        if data.get("audience") == Notification.Audience.TEAMS and not data.get("teams"):
+            self.add_error("teams", "Choose at least one team, or send it to every team.")
+        if data.get("audience") == Notification.Audience.ALL:
+            data["teams"] = []
+        return data

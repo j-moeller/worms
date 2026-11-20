@@ -1,0 +1,22 @@
+{% comment %}The notification form's fields (staff/notifications.html: a new one; staff/notification.html:
+edit). The two lists of choices are fieldsets of their own; without JavaScript both show, and the
+teams only count with "Selected teams" (forms.py, NotificationForm).{% endcomment %}
+{% csrf_token %}
+{% include "staff/_errors.html" %}
+{% include "staff/_field.html" with field=form.severity %}
+{% include "staff/_field.html" with field=form.message %}
+<fieldset class="fieldset field{% if form.audience.errors %} field--invalid{% endif %}">
+    <legend>{{ form.audience.label }}</legend>
+    <div class="choices">
+        {% for choice in form.audience %}<label class="choice">{{ choice.tag }} {{ choice.choice_label }}</label>{% endfor %}
+    </div>
+    {% for error in form.audience.errors %}<p class="field__error">{{ error }}</p>{% endfor %}
+</fieldset>
+<fieldset class="fieldset field{% if form.teams.errors %} field--invalid{% endif %}">
+    <legend>Teams <span class="field__opt">(with “Selected teams”: one or more)</span></legend>
+    <div class="choices choices--scroll">
+        {% for choice in form.teams %}<label class="choice">{{ choice.tag }} {{ choice.choice_label }}</label>{% empty %}<p class="field__help">No teams in {{ request.competition.name|default:"the current competition" }}.</p>{% endfor %}
+    </div>
+    {% for error in form.teams.errors %}<p class="field__error">{{ error }}</p>{% endfor %}
+</fieldset>
+{% include "staff/_field.html" with field=form.active %}

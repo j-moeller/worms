@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Notification{% endblock %}
+{% block content %}
+<header class="page-head">
+    <p class="page-head__kicker"><a href="{% url 'staff_notifications' %}">Notifications</a></p>
+    <h1 class="page-head__title">Notification</h1>
+    <p class="page-head__lead">Created {{ notification.created_at|date:"Y-m-d H:i" }}{% if notification.created_by %} by {{ notification.created_by.username }}{% endif %}{% if notification.edited %}, last changed {{ notification.updated_at|date:"Y-m-d H:i" }}{% endif %}. {% if notification.active %}Shown now.{% else %}Not shown.{% endif %}</p>
+</header>
+{% include "staff/_tabs.html" with section="notifications" %}
+
+{% if elsewhere %}
+<p class="alert alert--warn">It also names {% for t in elsewhere %}{{ t.name }}{% if not forloop.last %}, {% endif %}{% endfor %}, of another competition. Saving it here keeps only the teams chosen below.</p>
+{% endif %}
+
+<div class="grid grid--2">
+    <section class="panel" aria-labelledby="edit-title">
+        <header class="panel__head"><h2 class="panel__title" id="edit-title">Edit</h2></header>
+        <form method="post" class="panel__body form">
+            {% include "staff/_notification_form.html" %}
+            <div class="form__actions"><button type="submit" class="btn btn--primary">Save</button> <a class="btn btn--ghost" href="{% url 'staff_notifications' %}">Back</a></div>
+        </form>
+    </section>
+
+    <div class="stack">
+        <section class="panel" aria-labelledby="preview-title">
+            <header class="panel__head"><h2 class="panel__title" id="preview-title">As the teams see it</h2></header>
+            <div class="panel__body">{% include "_notification.html" with n=notification for_team=None %}</div>
+        </section>
+
+        <section class="panel" aria-labelledby="delete-title">
+            <header class="panel__head"><h2 class="panel__title" id="delete-title">Delete</h2></header>
+            <div class="panel__body">
+                <p>To take it down but keep it, switch it off instead.</p>
+                <form method="post" action="{% url 'staff_notification_delete' notification.uuid %}">{% csrf_token %}<button type="submit" class="btn btn--primary btn--danger btn--sm">Delete this notification</button></form>
+            </div>
+        </section>
+    </div>
+</div>
+{% endblock %}

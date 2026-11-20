@@ -38,6 +38,17 @@
                     {% if request.active_competition.is_registration_period %}
                     <li><a href="{% url 'team_registration' %}"{% if page == 'team_registration' %} aria-current="page"{% endif %}>Teams</a></li>
                     {% endif %}
+                    {% comment %}The notifications from staff (views/notifications.py): how many the user
+                    sees, in the colour of the most severe.{% endcomment %}
+                    {% with bell=request.notification_bell %}
+                    <li><a class="site-nav__bell{% if bell.count %} site-nav__bell--{{ bell.severity }}{% endif %}" href="{% url 'notifications' %}"{% if page == 'notifications' %} aria-current="page"{% endif %}
+                           title="Notifications" aria-label="Notifications{% if bell.count %}: {{ bell.count }}, the most severe {{ bell.severity }}{% else %}: none{% endif %}">
+                        <svg class="site-nav__bell-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
+                            <path d="M8 1.5a4.25 4.25 0 0 0-4.25 4.25v2.7L2.3 10.9a.6.6 0 0 0 .52.9h10.36a.6.6 0 0 0 .52-.9l-1.45-2.45v-2.7A4.25 4.25 0 0 0 8 1.5Z"></path>
+                            <path d="M6.2 12.8h3.6a1.8 1.8 0 0 1-3.6 0Z"></path>
+                        </svg>{% if bell.count %}<span class="site-nav__count">{{ bell.count }}</span>{% endif %}
+                    </a></li>
+                    {% endwith %}
                 </ul>
             </nav>
             {% endif %}
@@ -103,6 +114,7 @@
                         <a href="{% url 'staff_users' %}"{% if page == 'staff_users' or page == 'staff_user' %} aria-current="page"{% endif %}>Users</a>
                         <a href="{% url 'staff_teams' %}"{% if page == 'staff_teams' or page == 'staff_team' %} aria-current="page"{% endif %}>Teams</a>
                         <a href="{% url 'staff_rounds' %}"{% if page == 'staff_rounds' or page == 'staff_round' %} aria-current="page"{% endif %}>Rounds</a>
+                        <a href="{% url 'staff_notifications' %}"{% if page == 'staff_notifications' or page == 'staff_notification' %} aria-current="page"{% endif %}>Notifications</a>
                         <a href="{% url 'topology' %}"{% if page == 'topology' %} aria-current="page"{% endif %}>Topology</a>
                         <a href="{% url 'todos' %}"{% if page == 'todos' %} aria-current="page"{% endif %}>Todos</a>
                     </div>

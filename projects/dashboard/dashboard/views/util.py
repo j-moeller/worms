@@ -228,6 +228,11 @@ def render_with_base_info(
             request.state_presentation.target - request.time_now
         )
 
+    # The header's bell: the user's active notifications from staff (views/notifications.py).
+    from dashboard.views.notifications import bell
+
+    request.notification_bell = bell(request)
+
     # Every staff page warns of a round whose gameplan is missing or not valid (staff/_tabs.html).
     if isinstance(template, str) and template.startswith("staff/") and request.user.is_staff and getattr(request, "competition", None):
         from dashboard.views.round_progress import warnings

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Notifications{% endblock %}
+{% block content %}
+<header class="page-head">
+    <p class="page-head__kicker">From the organisers</p>
+    <h1 class="page-head__title">Notifications</h1>
+    <p class="page-head__lead">What the organisers want every team, or your team, to know now. The most severe come first.</p>
+</header>
+
+<section class="notices" aria-label="Notifications">
+    {% for n in notifications %}
+    {% include "_notification.html" with n=n for_team=request.team %}
+    {% empty %}
+    <p class="empty">No notifications right now.</p>
+    {% endfor %}
+</section>
+
+{% if request.user.is_staff %}
+<p class="form__note">Staff: write, edit and switch them off on <a href="{% url 'staff_notifications' %}">Staff → Notifications</a>, where the hidden ones are too.</p>
+{% endif %}
+{% endblock %}

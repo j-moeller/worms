@@ -8,6 +8,7 @@ staff page, the rounds whose gameplan is missing or not valid (views/util.py, re
     <a class="round-tabs__tab" href="{% url 'staff_rounds' %}"{% if section == 'rounds' %} aria-current="page"{% endif %}>Rounds</a>
     <a class="round-tabs__tab" href="{% url 'staff_simulations' %}"{% if section == 'simulations' %} aria-current="page"{% endif %}>Simulations</a>
     <a class="round-tabs__tab" href="{% url 'staff_gameplans' %}"{% if section == 'gameplans' %} aria-current="page"{% endif %}>Gameplans</a>
+    <a class="round-tabs__tab" href="{% url 'staff_notifications' %}"{% if section == 'notifications' %} aria-current="page"{% endif %}>Notifications</a>
 </nav>
 {% if gameplan_notices %}
 <div class="staff-notices" role="status">

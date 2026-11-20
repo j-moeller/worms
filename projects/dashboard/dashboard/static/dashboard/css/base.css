@@ -39,6 +39,7 @@
     --warn-ink: #1b1406;
     --bad: #ef5a5a;
     --hot: #ff7a45;
+    --info: #60a5fa;
     --focus: var(--accent);
     /* The Dev environment recolours the whole site to this accent (theme.css
        overrides it). Live keeps the theme's own --accent. */
@@ -629,3 +630,31 @@ p + .code-label, .code + .code-label { margin-top: 14px; }
 @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; animation: none !important; }
 }
+
+/* Notifications from staff (views/notifications.py). Severity colours, least to most severe:
+   info, warning (--warn), urgent (--hot), error (--bad); core/models/notification.py, TONE. */
+.badge--info { color: var(--info); border-color: color-mix(in srgb, var(--info) 50%, var(--border)); }
+/* The bell next to Upload and Progression: muted without notifications, else the most severe's colour. */
+.site-nav a.site-nav__bell { display: inline-flex; align-items: center; gap: 5px; }
+.site-nav__bell-icon { display: block; fill: currentColor; }
+.site-nav__count { min-width: 18px; padding: 0 5px; border-radius: 100px; font-size: .68rem; font-weight: 700; line-height: 18px; text-align: center; color: var(--bg); background: var(--tone, var(--muted)); }
+/* After .site-nav a, :hover and [aria-current]: the same specificity, so these win. */
+.site-nav a.site-nav__bell--info { --tone: var(--info); color: var(--info); }
+.site-nav a.site-nav__bell--warning { --tone: var(--warn); color: var(--warn); }
+.site-nav a.site-nav__bell--urgent { --tone: var(--hot); color: var(--hot); }
+.site-nav a.site-nav__bell--error { --tone: var(--bad); color: var(--bad); }
+/* One notification: a card with its severity's colour down the left edge. */
+.notices { max-width: 80ch; }
+.notice { margin: 0 0 12px; padding: 12px 16px; border: var(--border-w) solid var(--border); border-left: 4px solid var(--tone, var(--border-strong)); border-radius: var(--radius-sm); background: var(--surface); }
+.notice--info { --tone: var(--info); }
+.notice--warn { --tone: var(--warn); }
+.notice--hot { --tone: var(--hot); }
+.notice--bad { --tone: var(--bad); }
+.notice__head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; color: var(--faint); font-size: .78rem; }
+.notice__body { margin: 0; overflow-wrap: anywhere; }
+/* Lists of choices in a form (radio buttons, checkboxes), and panels stacked in a grid cell. */
+.choices { display: flex; flex-direction: column; gap: 4px; }
+.choices--scroll { max-height: 220px; overflow-y: auto; }
+.choice { display: flex; align-items: center; gap: 8px; font-size: .9rem; cursor: pointer; }
+.choice input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+.stack { display: grid; gap: var(--gap); align-content: start; }

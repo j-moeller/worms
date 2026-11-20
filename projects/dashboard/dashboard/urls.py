@@ -18,7 +18,8 @@ from dashboard.views.todos import todos
 from dashboard import api
 from dashboard.views import progression
 from dashboard.views.round_info import round_info
-from dashboard.views import staff, staff_gameplans, staff_rounds, staff_simulations, staff_teams, staff_users
+from dashboard.views import notifications
+from dashboard.views import staff, staff_gameplans, staff_notifications, staff_rounds, staff_simulations, staff_teams, staff_users
 from dashboard.views.topology import topology, topology_data, topology_runs
 from django.conf import settings
 from django.contrib import admin
@@ -65,6 +66,8 @@ urlpatterns = [
     path("leave_team/<uuid:uuid>", leave_team, name="leave_team"),
     #
     path("profile/", profile, name="profile"),
+    # The notifications from staff, under the header's bell (dashboard/views/notifications.py).
+    path("notifications/", notifications.notifications, name="notifications"),
     #
     path("todos/", todos, name="todos"),
     #
@@ -118,6 +121,11 @@ urlpatterns = [
     path("staff/simulations/", staff_simulations.simulations, name="staff_simulations"),
     path("staff/simulations/gameplans/", staff_simulations.simulation_gameplans, name="staff_simulation_gameplans"),
     path("staff/simulations/<str:filename>/", staff_simulations.simulation_document, name="staff_simulation"),
+    # The notifications to the teams (dashboard/views/staff_notifications.py).
+    path("staff/notifications/", staff_notifications.notifications, name="staff_notifications"),
+    path("staff/notifications/<uuid:uuid>/", staff_notifications.notification_detail, name="staff_notification"),
+    path("staff/notifications/<uuid:uuid>/active/", staff_notifications.notification_active, name="staff_notification_active"),
+    path("staff/notifications/<uuid:uuid>/delete/", staff_notifications.notification_delete, name="staff_notification_delete"),
     #
     path("topology/", topology, name="topology"),
     path("topology/data/", topology_data, name="topology_data"),

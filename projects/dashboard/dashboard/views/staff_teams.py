@@ -14,6 +14,7 @@ from core import events
 from core.membership import membership_change
 from core.models.competition import Competition
 from core.models.devbox import Devbox, DevboxSSHKey
+from core.models.notification import Notification
 from core.models.rounds import RoundRun
 from core.models.team import AccessTokens, Team, TeamMembership
 from core.models.user import User
@@ -180,6 +181,8 @@ def team_delete(request: HttpRequest, uuid):
         with transaction.atomic():
             TeamMembership.objects.filter(team=team).delete()
             DevboxSSHKey.objects.filter(team=team).delete()
+            # A notification naming it no longer does (core/models/notification.py).
+            Notification.teams.through.objects.filter(team=team).delete()
             if not delete_unreferenced(Team, team.pk):
                 transaction.set_rollback(True)
                 reasons = ["records that refer to it"]

@@ -187,7 +187,9 @@ took 7 min on dev; devpi takes longer (its list holds large packages).
 - the service VMs snapshotted again: the round rolls back to the refilled cache
 
 **If it fails:** `Say the indexes were not refreshed` means the egress wasn't there; the previous
-index is back. Whatever failed, run `worms internet disable` before you stop: it closes the window
+index is back. `Say the cache cannot serve a fresh VM` (here, or on `worms internet disable`,
+`worms step offline`) means the cache has no index to give offline: repair it as in tonight's
+step 5, retake its snapshot, then run `worms step offline` so it checks again. Whatever failed, run `worms internet disable` before you stop: it closes the window
 and switches DNS and the caches back to offline mode.
 
 ### 2. Check from a team gateway

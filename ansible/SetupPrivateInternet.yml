@@ -39,12 +39,6 @@
         tasks_from: seed
       when: internet_enabled | bool
 
-    - name: Check the cache serves a fresh VM while the internet is closed
-      ansible.builtin.include_role:
-        name: apt_cache
-        tasks_from: check
-      when: not (internet_enabled | bool)
-
 - hosts: devpi_hosts
   any_errors_fatal: true
   become: true
@@ -110,3 +104,17 @@
       failed_when: false
   roles:
     - wikipedia
+
+# Last, once every service above has its mode: offline, the apt cache must give a fresh VM its
+# whole package index. A failure fails the run, and no longer before devpi and the others were
+# switched to offline mode too (`worms internet disable` left them online while the check sat in
+# the apt cache's play above).
+- hosts: apt_cache_hosts
+  any_errors_fatal: true
+  become: true
+  tasks:
+    - name: Check the cache serves a fresh VM while the internet is closed
+      ansible.builtin.include_role:
+        name: apt_cache
+        tasks_from: check
+      when: not (internet_enabled | bool)

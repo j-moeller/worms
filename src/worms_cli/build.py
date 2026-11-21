@@ -117,7 +117,7 @@ class Runner:
             if args and args[0] == "init":
                 # Initialised on the node whenever the workspace is synced
                 # (tasks/workspace.yml), which needs the inventory and the CA:
-                # not there yet when a first `worms apply` starts with init.
+                # not there yet when a first `worms apply --all` starts with init.
                 print(output.color(f"$ (opentofu/stacks/{stack}) {command}  [done on the node by agent-sync]", "dim"))
                 return 0
             return self._node_workspace(f"opentofu/stacks/{stack}", command, check=check)
@@ -150,7 +150,7 @@ class Runner:
     def secrets(self) -> None:
         """Generate the missing generated secrets (never a new WORMS key while VMs exist
         that authorize the old one), and stop on a missing token the platform needs:
-        `worms issue token <name>`."""
+        `worms secret issue <name>`."""
         from worms_cli.secrets import EXTERNAL, vms_deployed
 
         vault = self.session.vault
@@ -163,10 +163,10 @@ class Runner:
             raise BuildError(f"vault: {exc}") from exc
         print(f"secrets: generated {', '.join(added)}" if added else "secrets: nothing to generate")
         for name in optional:
-            output.warn(f"{name}: {EXTERNAL[name][2]} -- `worms issue token {name}`")
+            output.warn(f"{name}: {EXTERNAL[name][2]} -- `worms secret issue {name}`")
         if required:
             raise BuildError("; ".join(f"{name}: {EXTERNAL[name][2]}" for name in required)
-                             + " -- `worms issue token " + "` and `worms issue token ".join(required) + "`")  # fmt: skip
+                             + " -- `worms secret issue " + "` and `worms secret issue ".join(required) + "`")  # fmt: skip
 
     def python(self, script: str, *args: str) -> int:
         extra = (" " + " ".join(shlex.quote(a) for a in args)) if args else ""

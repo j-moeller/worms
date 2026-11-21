@@ -55,7 +55,7 @@ def documented_commands(text):
 
 
 def arguments(command):
-    """What the CLI would get, or None for a pattern such as `worms build <component>`."""
+    """What the CLI would get, or None for a pattern such as `worms apply <component>`."""
     words = shlex.split(command, comments=True)[1:]
     end = next((i for i, word in enumerate(words) if word in SHELL_OPERATORS), len(words))
     words = words[:end]
@@ -67,7 +67,7 @@ def arguments(command):
 def refusal(argv, build=parser(), split=cli()._split, aliased=cli()._aliased):
     """Why the CLI refuses these arguments (what follows `--` is the tools', and a command that
     moved is its new one (ALIASES), as main() has it). A missing argument is fine: prose names
-    `worms secrets issue` without saying which token."""
+    `worms secret issue` without saying which token."""
     err = io.StringIO()
     try:
         with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
@@ -94,10 +94,10 @@ def test_the_check_would_catch_the_mistakes_it_is_for():
     for command in ("worms simulate -- -e x=1", "worms internet-deny", "worms test -k shipper", "worms --dry-run status",
                     "worms devbox provision"):  # fmt: skip
         assert refusal(arguments(command)), command
-    for command in ("worms test --live -- -e x=1", "worms test -- -k shipper", 'worms delete-team "Neural Net"  # x',
-                    "worms secrets set ssh-key < key", "worms secrets issue"):  # fmt: skip
+    for command in ("worms test --live -- -e x=1", "worms test -- -k shipper", 'worms team delete "Neural Net"  # x',
+                    "worms secret set ssh-key < key", "worms secret issue"):  # fmt: skip
         assert refusal(arguments(command)) is None, command
-    assert arguments("worms build <component>") is None
+    assert arguments("worms apply <component>") is None
 
 
 def test_nothing_names_a_make_target_that_is_gone():

@@ -54,7 +54,7 @@ A gameplan version is its bytes, named by their SHA-256. Once recorded, a versio
   - A CHECK computes each version's SHA-256 from its bytes, and its size.
   - No role may UPDATE or DELETE a row of either table, and a trigger refuses both to the owner too.
   - The time and the recording account are filled by the database; the orchestrator may insert only the other columns.
-  - `worms reset db` keeps both tables.
+  - `worms db reset` keeps both tables.
 - **Pinned.** When a round's first attempt starts, every run of the round gets the version its file has then: `round_runs.gameplan_sha256`, and `gameplan_version` pointing at the record (a constraint keeps the two equal). Retries keep it. Before that, the round shows its file's current version.
 - **Run from the files.** The node and the orchestrator run the file in their copy, after checking it is exactly the pinned SHA-256. Neither ever runs code from the database: whoever could write to the database could otherwise put code on the node, where it runs as root. The record is for the audit.
 - **Edits.** A file edited after a round pinned it is a new version. The record keeps the old one. The round's attempts fail until both copies hold the pinned version again, so edit a gameplan only when no round has pinned the old version and still has attempts to run.

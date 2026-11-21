@@ -91,7 +91,7 @@ def test_makefile_is_a_thin_wrapper_over_the_cli():
     assert targets == {"all", "destroy", "destroy_all"}, targets
     # Each target calls the CLI (python3 src/manage.py), nothing else builds.
     assert "src/manage.py" in makefile
-    assert "$(WORMS) build" in makefile
+    assert "$(WORMS) apply --all" in makefile
     assert "$(WORMS) destroy" in makefile
     assert "$(WORMS) destroy --all" in makefile
     assert "tofu" not in makefile and "ansible" not in makefile

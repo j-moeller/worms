@@ -1,5 +1,5 @@
 """A team's devbox SSH keys: what is accepted, for the dashboard (dashboard/views/devbox.py) and
-the console (`worms add key`). A key is stored in the database; the orchestrator then has
+the console (`worms key add`). A key is stored in the database; the orchestrator then has
 the round agent push every team's keys to the devboxes and the SSH gateway
 (orchestrator/rounds/devbox.py, request_reconfigure).
 

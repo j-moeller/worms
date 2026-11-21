@@ -16,7 +16,7 @@
     fail_msg: >-
       Not set: {{ round_agent_unset | join(', ') }}. Run this through `worms` (`worms apply round-agent`, which adds
       the vault; by hand: ansible-playbook -e @group_vars/vault.yml SetupRoundAgent.yml), with the vault complete
-      (`worms show secrets`) and the Proxmox token issued (`worms issue token proxmox-token`).
+      (`worms secret`) and the Proxmox token issued (`worms secret issue proxmox-token`).
     quiet: true
   vars:
     round_agent_required:

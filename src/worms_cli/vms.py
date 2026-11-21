@@ -1,4 +1,4 @@
-"""The VMs `worms status`, `worms login`, `worms show`, `worms logs` and `worms rsync` know: every
+"""The VMs `worms status`, `worms login`, `worms show`, `worms log` and `worms rsync` know: every
 VM on the node by its name, with where it belongs, which team's it is, and how to reach it.
 
 A VM is named by its own name, an alias (below), or `<team>/<role>` (`alpha/gw`, `t2/a`: the team
@@ -289,10 +289,10 @@ class Catalogue:
         running = services.on(vm["name"])
         if running:
             rows.append(["services", ", ".join(f"{name} ({' '.join(services.SERVICES[name].units) or 'a log'})" for name in running)
-                         + f": `worms logs {running[0]}`"
-                         + (f", `worms restart {running[0]}`" if services.SERVICES[running[0]].restartable else "")])  # fmt: skip
+                         + f": `worms log {running[0]}`"
+                         + (f", `worms service restart {running[0]}`" if services.SERVICES[running[0]].restartable else "")])  # fmt: skip
         if component:
-            rows.append(["build", f"worms apply {component.name}, worms rebuild {component.name}; needs {', '.join(component.deps) or 'nothing'}"])
+            rows.append(["build", f"worms apply {component.name}, worms vm rebuild {component.name}; needs {', '.join(component.deps) or 'nothing'}"])
         if vm.get("status") == "running":
             rows.append(["reachable", self.reachable(vm)])
         return rows

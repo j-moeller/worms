@@ -104,10 +104,10 @@ def test_teams_listing_and_delete(initialised):
     cluster = initialised
     add_team(cluster, "Alpha")
     add_team(cluster, "Beta")
-    listing = worms(cluster, "status", "teams")
+    listing = worms(cluster, "team")
     assert "Alpha" in listing.stdout and "Beta" in listing.stdout
 
-    worms(cluster, "delete-team", "Beta", "--yes")
+    worms(cluster, "team", "delete", "Beta", "--yes")
     assert sql(cluster, "SELECT count(*) FROM teams WHERE name = 'Beta'")[0][0] == 0
 
 
@@ -119,7 +119,7 @@ def test_teams_are_created_on_the_dashboard_not_here(initialised):
 
 def cli(cluster, call):
     """One of the CLI's functions (src/manage.py) in a process of its own, against the test
-    cluster as `worms` sees it: for what `worms build devbox` does after it has asked the node
+    cluster as `worms` sees it: for what `worms apply devbox` does after it has asked the node
     about the devboxes' dependencies (there is no node here)."""
     code = (f"import sys; sys.path.insert(0, {str(MANAGE.parent)!r}); import manage; "
             f"from worms_cli.config import Config; config = Config.load(); sys.exit(manage.{call})")  # fmt: skip
@@ -154,7 +154,7 @@ def test_delete_team_keeps_users(initialised):
     sql(cluster, "INSERT INTO team_memberships (user_id, team_id, created_at) SELECT u.id, t.id, now() "
         "FROM users u, teams t WHERE u.username = 'stud@x' AND t.name = 'WithMembers'", role=MIGRATOR)
 
-    worms(cluster, "delete-team", "WithMembers", "--yes")
+    worms(cluster, "team", "delete", "WithMembers", "--yes")
     assert sql(cluster, "SELECT count(*) FROM teams WHERE name = 'WithMembers'")[0][0] == 0
     # The user survives.
     assert sql(cluster, "SELECT count(*) FROM users WHERE username = 'stud@x'")[0][0] == 1
@@ -169,7 +169,7 @@ def test_status_and_leaderboard_with_db(initialised):
     assert "competition" in status.stdout
     assert "teams" in status.stdout
 
-    board = worms(cluster, "status", "leaderboard")
+    board = worms(cluster, "show", "leaderboard")
     assert "leaderboard" in board.stdout
     assert "Solo" in board.stdout
 
@@ -180,7 +180,7 @@ def test_users_listing(initialised):
         "date_joined, first_name, last_name, email, must_change_password, created_at) VALUES "
         "(gen_random_uuid(), 'x', false, 'newbie@x', false, true, now(), '', '', 'newbie@x', true, now())",
         role=MIGRATOR)
-    out = worms(cluster, "status", "users").stdout
+    out = worms(cluster, "user").stdout
     assert "newbie@x" in out and "never" in out
 
 
@@ -188,7 +188,7 @@ def test_reset_database(initialised):
     cluster = initialised
     add_team(cluster, "Doomed")
     assert sql(cluster, "SELECT count(*) FROM teams")[0][0] >= 1
-    worms(cluster, "reset", "database", "--yes")
+    worms(cluster, "db", "reset", "--yes")
     # Teams wiped; init recreated the admin + default competition.
     assert sql(cluster, "SELECT count(*) FROM teams")[0][0] == 0
     assert sql(cluster, "SELECT count(*) FROM users WHERE username = 'admin'")[0][0] == 1
@@ -305,7 +305,7 @@ def test_init_leaves_the_admin_without_a_password(initialised):
 
 
 def test_admin_reset_password_prints_a_one_time_password_once(initialised):
-    proc = worms(initialised, "admin-reset-password")
+    proc = worms(initialised, "user", "password")
     password = proc.stdout.strip()
     assert len(password) == 20 and "\n" not in password
     assert "shown once" in proc.stderr and password not in proc.stderr
@@ -315,15 +315,15 @@ def test_admin_reset_password_prints_a_one_time_password_once(initialised):
 
     # A changed (real) password is only replaced after confirmation.
     sql(initialised, "UPDATE users SET must_change_password = false WHERE username = 'admin'", role=MIGRATOR)
-    refused = worms(initialised, "admin-reset-password", check=False)
+    refused = worms(initialised, "user", "password", check=False)
     assert refused.returncode != 0 and admin_row(initialised)[0][0] == encoded
-    again = worms(initialised, "admin-reset-password", "--yes").stdout.strip()
+    again = worms(initialised, "user", "password", "--yes").stdout.strip()
     assert again != password and check_password(again, admin_row(initialised)[0][0])
 
 
 def test_admin_reset_password_creates_a_missing_admin(initialised):
     sql(initialised, "DELETE FROM users WHERE username = 'admin'", role=MIGRATOR)
-    assert worms(initialised, "admin-reset-password").stdout.strip()
+    assert worms(initialised, "user", "password").stdout.strip()
     assert admin_row(initialised)[0][1:] == (True, True, True)
 
 
@@ -332,7 +332,7 @@ def test_admin_reset_password_never_promotes_a_student(initialised):
         "date_joined, first_name, last_name, email, must_change_password, created_at) VALUES "
         "(gen_random_uuid(), 'x', false, 'stud@x', false, true, now(), '', '', 'stud@x', false, now())",
         role=MIGRATOR)  # fmt: skip
-    proc = worms(initialised, "admin-reset-password", "--username", "stud@x", "--yes", check=False)
+    proc = worms(initialised, "user", "password", "stud@x", "--yes", check=False)
     assert proc.returncode != 0 and "not an admin account" in proc.stderr
     assert sql(initialised, "SELECT is_superuser, password FROM users WHERE username = 'stud@x'") == [(False, "x")]
 
@@ -341,13 +341,13 @@ def test_admin_create_staff_prints_a_one_time_password(initialised):
     """Staff (tutor) accounts are made on the console: the dashboard's role
     cannot create one (setup_db_permissions)."""
     cluster = initialised
-    proc = worms(cluster, "admin-create-staff", "tutor@uni.example", "--first-name", "Tu")
+    proc = worms(cluster, "user", "add", "tutor@uni.example", "--first-name", "Tu")
     password = proc.stdout.strip()
     assert len(password) >= 10 and "\n" not in password
     row = sql(cluster, "SELECT is_staff, is_superuser, must_change_password, first_name FROM users "
               "WHERE username = 'tutor@uni.example'")
     assert row == [(True, False, True, "Tu")]
-    again = worms(cluster, "admin-create-staff", "tutor@uni.example", check=False)
+    again = worms(cluster, "user", "add", "tutor@uni.example", check=False)
     assert again.returncode != 0 and "already exists" in again.stderr
 
 
@@ -378,32 +378,33 @@ def commands_of(parser, path=()):
             yield from commands_of(child, (*path, name))
 
 
-def test_help_groups_the_verbs_by_what_they_are_for():
+def test_help_groups_the_commands_by_what_they_are_for():
     sections = sections_of(run_cli("--help"))
-    assert list(sections) == ["look", "reach", "machines", "operate", "platform", "teams and accounts", "set up", "develop"]
+    assert list(sections) == ["look", "reach", "deploy", "machines", "operate", "data and accounts", "set up"]
     # Looking comes first, in this order; then reaching a VM.
     cli = _cli_module()
     looks = [usage.split()[0] for usage, _ in cli.SECTIONS[0].commands]
-    assert list(dict.fromkeys(looks)) == ["status", "show", "logs", "check", "trace"]
-    assert "apply [<component>...]" in sections["platform"] and "issue token <name>" in sections["set up"]
-    assert "add key <team> <key>" in sections["teams and accounts"] and "add staff <email>" in sections["teams and accounts"]
-    assert "reset services" in sections["machines"] and "destroy [--all]" in sections["platform"]
-    # Every verb says in one line what it is for, and has its lines in the sections.
-    verbs = {usage.split()[0] for section in cli.SECTIONS for usage, _ in section.commands}
-    assert verbs == set(cli.VERBS)
-    # The flat list of argparse is gone, and with it a second list to keep true.
+    assert list(dict.fromkeys(looks)) == ["status", "show", "log", "check", "trace"]
+    assert "apply <component>..." in sections["deploy"] and "secret issue <name>" in sections["set up"]
+    assert "key add <team> <key>" in sections["data and accounts"] and "user add <email>" in sections["data and accounts"]
+    assert "vm reset services" in sections["machines"] and "jobs pause" in sections["operate"]
+    # A noun's verbs are its own commands; alone, a noun lists (`worms jobs`).
+    assert cli._command_name("vm reset <team>...|devboxes") == "vm reset" and cli._command_name("show job <n>") == "show"
+    assert {usage.split()[0] for section in cli.SECTIONS for usage, _ in section.commands} >= set(cli.NOUNS)
+    # One line a command, and no flat list of argparse beside it.
     assert "positional arguments" not in run_cli("--help")
-    # A command that moved still runs, by its old words (ALIASES), and says where it went.
+    assert not [line for line in run_cli("--help").splitlines() if line.startswith("  ") and len(line) > 79]
+    # A command of the CLI before still runs, by its old words (ALIASES), and says where it went.
     for old, new in cli.ALIASES.items():
         assert cli._aliased(["--config", "f", *old, "x"])[0] == ["--config", "f", *new, "x"]
-    assert cli._aliased(["devbox-sync-keys"])[1] == "`worms devbox-sync-keys` is now `worms sync keys`"
-    assert cli._aliased(["keys", "add", "alpha", "k"])[0] == ["add", "key", "alpha", "k"]  # the longest old words win
-    assert cli._aliased(["reset", "devbox", "alpha", "--fresh"])[0] == ["reset", "alpha", "--fresh"]
+    assert cli._aliased(["close", "window"])[1] == "`worms close window` is now `worms internet off`"
+    assert cli._aliased(["reset", "db", "--yes"])[0] == ["db", "reset", "--yes"]  # the longest old words win
+    assert cli._aliased(["reset", "alpha"])[0] == ["vm", "reset", "alpha"]
 
 
 def test_every_command_is_in_exactly_one_section(tmp_path, monkeypatch):
     cli = _cli_module()
-    listed = {cli._command_name(usage) for section in cli.SECTIONS for usage, _ in section.commands}
+    listed = {cli._command_name(usage) for section in cli.SECTIONS for usage, _ in section.commands} | set(cli.HIDDEN)
     assert sorted(listed) == sorted(name for name, _ in commands_of(cli.build_parser()))
     # Tab completion is generated from the same parsers: it offers every top-level command.
     script = run_cli("completion", "bash")
@@ -463,7 +464,7 @@ def test_arguments_for_the_tools_go_after_a_double_dash():
 
 def test_a_command_is_still_required():
     proc = subprocess.run([sys.executable, str(MANAGE)], capture_output=True, text=True)
-    assert proc.returncode == 2 and "usage: worms" in proc.stderr and "<verb>" in proc.stderr
+    assert proc.returncode == 2 and "usage: worms" in proc.stderr and "<command>" in proc.stderr
 
 
 def test_there_is_no_dry_run():
@@ -486,15 +487,15 @@ def run_on(tmp_path, *args, **env):
 
 
 def test_every_command_starts_with_the_internet_notice(tmp_path):
-    for args in (["status"], ["show", "secrets"]):
+    for args in (["status"], ["secret"]):
         proc = run_on(tmp_path, *args)
         assert proc.returncode == 0, proc.stderr
         assert proc.stderr.splitlines()[0].startswith("internet access: "), args
 
 
 def test_the_internet_notice_stays_off_stdout(tmp_path):
-    """The stdout of `worms admin-reset-password` is the password, and nothing else."""
-    assert "internet access:" not in run_on(tmp_path, "show", "secrets").stdout
+    """The stdout of `worms user password` is the password, and nothing else."""
+    assert "internet access:" not in run_on(tmp_path, "secret").stdout
 
 
 def test_help_is_not_a_command(tmp_path):
@@ -513,7 +514,7 @@ def test_the_internet_notice_says_what_it_found(tmp_path, monkeypatch, capsys):
     (tmp_path / "internet-allowed").touch()
     cli._internet_notice(config)
     err = capsys.readouterr().err
-    assert "ALLOWED" in err and "worms close window" in err
+    assert "ALLOWED" in err and "worms internet off" in err
 
 
 def test_the_internet_notice_never_stops_a_command(monkeypatch, capsys):
@@ -538,10 +539,10 @@ def _fake_pipeline(run, rolled_back, devboxes=True):
 
 
 def _run(cli, command, config):
-    """`worms build` (everything) or `worms reset services`, confirmed."""
+    """`worms apply --all` (everything) or `worms vm reset services`, confirmed."""
     if command == "build":
-        args = argparse.Namespace(components=[], rebuild=False, packages=False, plan=False, team=[], yes=True, ansible_args=[])
-        return cli.cmd_build(config, args)
+        args = argparse.Namespace(components=[], all=True, packages=False, plan=False, yes=True, ansible_args=[])
+        return cli._apply_all(config, args)
     return cli.cmd_reset(config, argparse.Namespace(what="services", yes=True))
 
 
@@ -598,7 +599,7 @@ def test_an_unreachable_database_after_a_reset_says_what_is_left_to_do(monkeypat
     monkeypatch.setattr(cli, "_request_devbox_reconfigure", fails)
     assert cli._restore_devbox_map(None) == 1
     err = capsys.readouterr().err
-    assert "the services are reset" in err and "worms reset services" in err
+    assert "the services are reset" in err and "worms vm reset services" in err
 
 
 def test_devbox_reconfigure_enqueues_a_job_the_agent_accepts(initialised):

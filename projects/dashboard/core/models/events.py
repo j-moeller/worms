@@ -21,7 +21,7 @@ How they are protected (setup_db_permissions):
 from django.db import models
 from django.db.models.functions import Now
 
-# Every event table, for `worms reset db` (which keeps them) and the grants.
+# Every event table, for `worms db reset` (which keeps them) and the grants.
 EVENT_TABLES = (
     "login_events", "password_events", "impersonation_events", "account_events", "team_events",
     "credential_events", "competition_events", "ssh_gateway_logins", "platform_events",

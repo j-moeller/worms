@@ -39,9 +39,9 @@ def _job_link(session, job, node) -> tuple[str, str]:
             "; ".join(reasons) or "about to start")
     if job.state == "running":
         since = job.started_at or job.requested_at
-        return "run", f"job #{job.id} running for {host_jobs._ago((timezone.now() - since).total_seconds())} (`worms logs {job.id} -f`)"
+        return "run", f"job #{job.id} running for {host_jobs._ago((timezone.now() - since).total_seconds())} (`worms log {job.id} -f`)"
     if job.state == "failed":
-        return "error", f"job #{job.id} failed: {(job.error or '?')[:300]} (`worms logs {job.id}`)"
+        return "error", f"job #{job.id} failed: {(job.error or '?')[:300]} (`worms log {job.id}`)"
     return "ok", f"job #{job.id} done {_when(job.finished_at)}"
 
 
@@ -55,7 +55,7 @@ def chain(session, upload) -> list[tuple[str, str, str]]:
     links = []
     if run is None:
         links.append(("wait", "picked up by the orchestrator", "not yet: the attempt processor picks uploads up every few "
-                                                               "seconds (`worms logs processor`)"))  # fmt: skip
+                                                               "seconds (`worms log processor`)"))  # fmt: skip
         return links + [("todo", "reset of the devbox", "—"), ("todo", "put on VM A", "—"), ("todo", "runs", "—")]
     links.append(("ok", "picked up by the orchestrator", f"{_when(run.created_at)}: devbox run {run.id} ({run.state})"))
     S = run.State
@@ -116,7 +116,7 @@ def uploads_of(words) -> list:
     team = queries.team(words[0])
     found = list(base.filter(team=team, devbox=True).order_by("-created_at", "-id")[:3])
     if not found:
-        raise BuildError(f"{team.name} has no dev upload (only those go to its devbox; round uploads: `worms show rounds`)")
+        raise BuildError(f"{team.name} has no dev upload (only those go to its devbox; round uploads: `worms round`)")
     return found
 
 

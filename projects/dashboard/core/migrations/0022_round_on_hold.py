@@ -1,4 +1,4 @@
-"""Round.on_hold: the operator's pause of a round (`worms pause round`), which the conductor honours."""
+"""Round.on_hold: the operator's pause of a round (`worms round pause`), which the conductor honours."""
 
 from django.db import migrations, models
 

@@ -1,9 +1,9 @@
-"""`worms logs`: every log of the platform from one place (docs/03-manage-py.md).
+"""`worms log`: every log of the platform from one place (docs/03-manage-py.md).
 
-    worms logs                 the sources, and the newest host jobs
-    worms logs 1782            a host job's log, by its number (`worms show jobs`)
-    worms logs conductor       a service's log, on whichever VM it runs (services.SERVICES)
-    worms logs orchestrator    ... and any platform VM by its name: its whole journal
+    worms log                  the sources, and the newest host jobs
+    worms log 1782             a host job's log, by its number (`worms jobs`)
+    worms log conductor        a service's log, on whichever VM it runs (services.SERVICES)
+    worms log orchestrator     ... and any platform VM by its name: its whole journal
     -f follow · -n lines · --since (journals: "1 hour ago", "2026-11-19 18:00")
 
 It reads them where they are, as `worms login` gets there: the node (here, or over SSH from a
@@ -68,7 +68,7 @@ class Logs:
 
         job = HostJob.objects.filter(pk=number).select_related("run__team").first()
         if job is None:
-            raise BuildError(f"no host job #{number}: `worms show jobs` lists them")
+            raise BuildError(f"no host job #{number}: `worms jobs` lists them")
         who = job.run.team.name if job.run else (job.params or {}).get("team_uuid", "")[:8]
         print(output.color(f"#{job.pk} {job.kind} {job.state} {who} · {JOB_LOGS}/{job.uuid}.log", "dim"), flush=True)
         if job.state == HostJob.State.QUEUED and not follow:
@@ -78,7 +78,7 @@ class Logs:
         return self._on_node(command)
 
     def latest(self, lines: int, follow: bool) -> int:
-        """`worms logs latest`: the newest host job's log, without looking up its number (the agent
+        """`worms log latest`: the newest host job's log, without looking up its number (the agent
         points latest.log at each job it begins: -f moves on to the next one)."""
         print(output.color(f"the newest host job · {JOB_LOGS}/latest.log", "dim"), flush=True)
         return self._on_node(f"tail -n {int(lines)}{' -F' if follow else ''} {JOB_LOGS}/latest.log")
@@ -96,7 +96,7 @@ class Logs:
 
 
 def run_log(nth: int, lines: int, follow: bool) -> int:
-    """`worms logs run [N]`: the N-th newest run log of this machine (worms_cli/runlog.py)."""
+    """`worms log run [N]`: the N-th newest run log of this machine (worms_cli/runlog.py)."""
     from worms_cli import runlog
 
     try:
@@ -114,21 +114,21 @@ def overview() -> None:
 
     newest = runlog.logs()[:5]
     if newest:
-        print(output.heading("run logs here: worms logs run [N]"))
+        print(output.heading("run logs here: worms log run [N]"))
         print(output.table([[str(n), path.name] for n, path in enumerate(newest, 1)], headers=["N", "file"]))
-        print(output.color(f"in {runlog.directory()}: every build, deploy, reset, internet, keys, step, restart, power run", "dim"))
+        print(output.color(f"in {runlog.directory()}: every run of a command that changes something", "dim"))
         print()
-    print(output.heading("logs: worms logs <name>"))
+    print(output.heading("logs: worms log <name>"))
     print(output.table([[name, s.where, s.about] for name, s in SERVICES.items()], headers=["name", "on", "what"]))
-    print(output.color("Any platform VM by its name (`worms logs orchestrator`, `worms logs apt-cache`, `worms logs node`; a name above comes first): "
+    print(output.color("Any platform VM by its name (`worms log orchestrator`, `worms log apt-cache`, `worms log node`; a name above comes first): "
                        "its whole journal. -f follows, -n lines, --since a time.", "dim"))  # fmt: skip
     print()
-    print(output.heading("host jobs: worms logs <#>, worms logs latest [-f]"))
+    print(output.heading("host jobs: worms log <#>, worms log latest [-f]"))
     print(output.table(queries.job_rows(10), headers=["#", "Job", "State", "Team", "Requested", "Finished", "Error"]))
 
 
 def team(config, name: str, lines: int = 20, since: str = "2 days ago") -> int:
-    """`worms logs <team>`: everything about one team, from where it is: its host jobs (and the newest
+    """`worms log <team>`: everything about one team, from where it is: its host jobs (and the newest
     one's log), the attempt processor's lines about its dev uploads, and what scoring and logging
     refused from its devbox gateway's address (they log no accepted request: nginx access_log off)."""
     import subprocess
@@ -149,7 +149,7 @@ def team(config, name: str, lines: int = 20, since: str = "2 days ago") -> int:
 
     jobs = list(HostJob.objects.select_related("run__team").filter(Q(params__team_uuid=str(found.uuid)) | Q(run__team=found))
                 .order_by("-id")[:10])  # fmt: skip
-    print(output.heading("host jobs, newest first (`worms show job <n>`, `worms logs <n> [-f]`)"))
+    print(output.heading("host jobs, newest first (`worms show job <n>`, `worms log <n> [-f]`)"))
     if jobs:
         print(output.table([[str(j.id), j.kind, j.state, f"{j.requested_at:%m-%d %H:%M}", f"{j.finished_at:%H:%M}" if j.finished_at else "",
                              (j.error or "").replace("\n", " ")[:90]] for j in jobs],

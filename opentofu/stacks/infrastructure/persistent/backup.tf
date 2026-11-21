@@ -2,7 +2,7 @@
 # off by default: it is created only when backup_storage names a Proxmox storage
 # with the `backup` content type, e.g. `local` (/var/lib/vz/dump):
 #
-#   TF_VAR_backup_storage=local worms build infrastructure
+#   TF_VAR_backup_storage=local worms apply infrastructure
 #
 # vzdump runs on the node as root at the scheduled time. Without a guest agent,
 # a snapshot backup of a running VM is crash-consistent: PostgreSQL recovers

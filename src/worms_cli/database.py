@@ -1,6 +1,7 @@
-"""`worms show database [<table>]`: the platform's database, as the CLI's admin role sees it
-(worms_cli/django_setup.py). Read only. A table's name is checked against the tables there are
-before it reaches SQL; values are shown shortened, one row per line."""
+"""`worms db`: the platform's database. Its tables (`worms db`) and a table's newest rows (`worms show
+table <name>`), as the CLI's admin role sees them (worms_cli/django_setup.py): a table's name is
+checked against the tables there are before it reaches SQL; values are shown shortened, one row per
+line. `worms db backup`: a pg_dump of it, here; `worms db restore <dump>`: the database back to one."""
 
 from __future__ import annotations
 
@@ -28,7 +29,7 @@ def tables() -> list[list[str]]:
 def _known(table: str) -> str:
     names = [row[0] for row in tables()]
     if table not in names:
-        raise KeyError(f"no table {table!r}: `worms show database` lists them")
+        raise KeyError(f"no table {table!r}: `worms db` lists them")
     return table
 
 
@@ -69,7 +70,7 @@ BACKUPS = "~/.worms/backups"  # 0700; each dump 0600: it holds every record, pas
 
 
 def backup(config, path: str | None = None) -> tuple[str, int]:
-    """`worms backup db`: `pg_dump -Fc` of the platform's database (ansible/group_vars/all.yml,
+    """`worms db backup`: `pg_dump -Fc` of the platform's database (ansible/group_vars/all.yml,
     postgres_db) on the database VM, streamed over its management SSH (as `worms login` gets
     there) into a new local file, readable by its owner only. (path, bytes). Nothing is written
     on the VM; a failed dump leaves no file."""
@@ -91,7 +92,7 @@ def backup(config, path: str | None = None) -> tuple[str, int]:
         raise BuildError(str(exc)) from None
     vm = catalogue.resolve("database")
     if vm.get("status") != "running":
-        raise BuildError(f"the database VM is {vm.get('status')}: `worms start database`")
+        raise BuildError(f"the database VM is {vm.get('status')}: `worms vm start database`")
     if path is None:
         try:
             system = session.environment()["node"]
@@ -125,3 +126,59 @@ def _cell(value) -> str:
         value = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     text = str(value).replace("\n", "⏎")
     return text if len(text) <= CELL else text[: CELL - 1] + "…"
+
+
+def restore(config, path: str) -> int:
+    """`worms db restore <dump>`: the database back to the dump at `path`. The dashboard, the
+    orchestrator's services and the round agent are stopped meanwhile (they hold connections), then
+    started again. Everything written since the dump is lost."""
+    import shlex
+    import subprocess
+
+    from worms_cli import output
+    from worms_cli.build import BuildError
+    from worms_cli.services import SERVICES
+    from worms_cli.session import SessionError, group_var
+    from worms_cli.vms import Catalogue
+
+    with open(path, "rb") as dump:
+        if dump.read(5) != b"PGDMP":
+            raise BuildError(f"{path} is no pg_dump archive (`worms db backup` makes one)")
+    catalogue = Catalogue(config)
+    session = catalogue.runner.session
+    if any(vm.get("pool") == "sandbox" for vm in catalogue.vms()):
+        raise BuildError("refusing during a round: sandbox VMs exist")
+    try:
+        name = group_var(config.repo_root, "postgres_db")
+    except SessionError as exc:
+        raise BuildError(str(exc)) from None
+    holders = ["agent", "processor", "conductor", "api", "dashboard"]
+
+    def units(action: str, names) -> None:
+        for service_name in names:
+            service = SERVICES[service_name]
+            command = f"systemctl {action} {' '.join(service.units)}"
+            if service.where == "node":
+                code, _out, err = session.node_run(["sh", "-c", command])
+            else:
+                vm = catalogue.resolve(service.where)
+                argv, env = catalogue.ssh_argv(vm, f"sudo -n {command}", interactive=False)
+                proc = subprocess.run(argv, env=env, capture_output=True, text=True)
+                code, err = proc.returncode, proc.stderr
+            print(output.status_cell("ok" if code == 0 else "error", f"{service_name}: {action}" + (f" ({err.strip()[:120]})" if code else "")),
+                  flush=True)  # fmt: skip
+
+    vm = catalogue.resolve("database")
+    units("stop", holders)
+    try:
+        argv, env = catalogue.ssh_argv(vm, f"cd / && sudo -n -u postgres pg_restore --clean --if-exists --single-transaction "
+                                           f"-d {shlex.quote(name)}", interactive=False)  # fmt: skip
+        with open(path, "rb") as dump:
+            proc = subprocess.run(argv, env=env, stdin=dump, capture_output=True)
+        if proc.returncode != 0:
+            raise BuildError(f"pg_restore failed (nothing changed: one transaction): {proc.stderr.decode(errors='replace').strip()[-400:]}")
+        print(output.status_cell("ok", f"{name}: restored from {path}"))
+    finally:
+        units("start", list(reversed(holders)))
+    print(output.color("The grants are the dump's; this checkout's: `worms apply database`.", "dim"))
+    return 0

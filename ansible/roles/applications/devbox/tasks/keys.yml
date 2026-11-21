@@ -3,7 +3,7 @@
 # SetupDevbox.yml runs this in a play of its own, first, so that nothing else (the CA, apt and
 # its packages, the gateways) can stop a key change from arriving: with these tasks at the end of
 # the role, a package the offline apt cache lacked failed every key push on every devbox VM while
-# the gateway had the keys (`worms show keys`).
+# the gateway had the keys (`worms key`).
 
 - name: Ensure the login user's .ssh directory
   ansible.builtin.file:

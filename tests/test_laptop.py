@@ -130,7 +130,7 @@ def test_preflight_logs_in_like_the_provider_and_says_what_to_do(checkout, monke
     assert calls == [["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "IdentityFile=none",
                       "-o", "IdentityAgent=SSH_AUTH_SOCK", NODE, "true"]]  # fmt: skip
     message = str(error.value)
-    assert "Permission denied (publickey)" in message and "WORMS key" in message and "worms trust node" in message
+    assert "Permission denied (publickey)" in message and "WORMS key" in message and "worms init" in message
 
 
 def probing_with(monkeypatch, checkout, returncode):
@@ -165,7 +165,7 @@ def test_a_failed_ssh_does_not_read_as_internet_denied(checkout, monkeypatch):
 
 def test_the_internet_probe_leaves_stdin_alone(checkout, monkeypatch):
     """Every command probes first, and ssh reads its stdin: it would swallow the
-    key of `worms set secret ssh-key < key`, which would store nothing."""
+    key of `worms secret set ssh-key < key`, which would store nothing."""
     session, seen = probing_with(monkeypatch, checkout, 1)
     session.internet_allowed()
     assert seen[0]["stdin"] == subprocess.DEVNULL
@@ -213,7 +213,7 @@ def test_laptop_runs_the_nodes_stacks_on_the_node(checkout, recorded):
 
 
 def test_init_of_the_nodes_stacks_happens_on_the_node(checkout, recorded):
-    """A first `worms apply` starts with `tofu init` of every stack, before
+    """A first `worms apply --all` starts with `tofu init` of every stack, before
     there is an inventory or a CA to sync with; the workspace sync initialises
     the sandbox and devbox stacks on the node instead."""
     assert runner(checkout).tofu("sandbox", "init", "-input=false") == 0
@@ -259,7 +259,7 @@ def test_without_the_token_tofu_does_not_start(tmp_path, recorded, monkeypatch):
     monkeypatch.setattr("worms_cli.secrets.shutil.which",
                         lambda name, real=shutil.which: None if name == "ansible-vault" else real(name))  # fmt: skip
     Vault(tmp_path).ensure()  # complete, but no token entered
-    with pytest.raises(build.BuildError, match="worms issue token proxmox-token"):
+    with pytest.raises(build.BuildError, match="worms secret issue proxmox-token"):
         runner(tmp_path).tofu("platform", "apply")
     assert not recorded.calls
 

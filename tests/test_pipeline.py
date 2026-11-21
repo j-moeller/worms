@@ -25,7 +25,7 @@ OFFLINE = [("ansible", "SetupDNS.yml"), ("ansible", "SetupPrivateInternet.yml")]
 INIT = [("tofu", s, "init") for s in ("platform", "firewall", "infrastructure/persistent",
                                       "infrastructure/ephemeral", "sandbox", "devbox", "private_internet")]  # fmt: skip
 
-# A step (`worms step`), the whole build (`worms apply`) or a component build -> the tofu and
+# A step (`worms step`), the whole build (`worms apply --all`) or a component build -> the tofu and
 # ansible steps, in order.
 CONFIGURE_VMS = [step for step in CONFIGURE if step != ("ansible", "SetupRoundAgent.yml")]
 EXPECTED = {
@@ -268,7 +268,7 @@ def test_a_window_left_open_names_the_command_that_closes_it(monkeypatch):
     pipe.runner.flag_exists = lambda path: True
     with pytest.raises(BuildError) as still_open:
         pipe.offline()
-    assert vars(_names_a_real_command(str(still_open.value))).get("object") == "window"
+    assert vars(_names_a_real_command(str(still_open.value)))["state"] == "off"
 
 
 def test_a_failed_close_names_the_command_that_closes_it(monkeypatch):
@@ -282,7 +282,7 @@ def test_a_failed_close_names_the_command_that_closes_it(monkeypatch):
     with pytest.raises(BuildError) as failed:
         pipe.online(lambda: None)
     assert "STILL ALLOWED" in str(failed.value)
-    assert vars(_names_a_real_command(str(failed.value))).get("object") == "window"
+    assert vars(_names_a_real_command(str(failed.value)))["state"] == "off"
 
 
 # --- the service VMs: reset, snapshot, rebuild ---------------------------------------
@@ -363,7 +363,7 @@ def test_a_reset_touches_nothing_if_any_vm_lacks_a_snapshot(node, monkeypatch):
         node.round_reset_services()
     assert steps(node) == []
     named = _names_a_real_command(str(refused.value))
-    assert (named.command, named.what) == ("rebuild", ["services"])
+    assert (named.command, named.action, named.targets) == ("vm", "rebuild", ["services"])
 
 
 def test_a_reset_without_any_service_vm_says_so(node, monkeypatch):
@@ -474,7 +474,7 @@ def test_a_vm_up_without_a_snapshot_gets_none_and_the_build_says_why(node, monke
     node.build_all()
     snapshotted = {c[1].split()[2] for c in steps(node) if c[0] == "node" and c[1].startswith("qm snapshot")}
     assert snapshotted == {"111"}
-    assert len(warnings) == 1 and "docker-registry" in warnings[0] and "worms rebuild services" in warnings[0]
+    assert len(warnings) == 1 and "docker-registry" in warnings[0] and "worms vm rebuild services" in warnings[0]
 
 
 def test_a_vm_the_build_created_is_snapshotted(node, monkeypatch):

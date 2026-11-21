@@ -1,13 +1,13 @@
 """The round agent's host jobs, from the console: what one is, why it waits, its log as it is written.
 
-    worms show jobs                 the newest jobs (worms_cli/queries.py, job_rows)
-    worms show job 812              one job: kind, team, state, times, error, why it waits, its log's end
-    worms reset alpha               ... queues jobs and follows them (follow): why each one waits while it
-                                    is queued, then its log, live, until it ends; Ctrl-C stops following,
-                                    not the jobs (--detach: queue only)
+    worms jobs                 the newest jobs (worms_cli/queries.py, job_rows)
+    worms show job 812         one job: kind, team, state, times, error, why it waits, its log's end
+    worms vm reset alpha       ... queues jobs and follows them (follow): why each one waits while it
+                               is queued, then its log, live, until it ends; Ctrl-C stops following,
+                               not the jobs (--detach: queue only)
 
-A queued job can wait for reasons nothing else shows (queue_reasons): the agent paused (`worms pause
-jobs`), the agent not running, a round holding the devboxes (the agent takes no devbox job then:
+A queued job can wait for reasons nothing else shows (queue_reasons): the agent paused (`worms jobs
+pause`), the agent not running, a round holding the devboxes (the agent takes no devbox job then:
 scripts/round_agent/agent.py, claim), a job running ahead, jobs queued ahead (a round's first).
 
 Job logs are on the node: /var/log/worms/jobs/<uuid>.log (scripts/round_agent/executor.py, JobLog).
@@ -71,12 +71,12 @@ def queue_reasons(job, node: dict) -> list[str]:
 
     reasons = []
     if node.get("paused"):
-        reasons.append(f"the round agent is paused: it takes no job until `worms resume jobs` ({node['paused']})")
+        reasons.append(f"the round agent is paused: it takes no job until `worms jobs resume` ({node['paused']})")
     if node.get("agent") != "active":
-        reasons.append(f"the round agent is not running (`worms logs agent`, `worms restart agent`)")
+        reasons.append(f"the round agent is not running (`worms log agent`, `worms service restart agent`)")
     if node.get("held") and job.kind.startswith("devbox"):
         reasons.append("a round holds the devboxes shut down: the agent takes no devbox job until its release "
-                       "(`worms show rounds`)")  # fmt: skip
+                       "(`worms round`)")  # fmt: skip
     now = timezone.now()
     for running in HostJob.objects.filter(state=HostJob.State.RUNNING).order_by("id"):
         since = running.started_at or running.requested_at
@@ -159,10 +159,10 @@ def follow(session, jobs) -> int:
     except KeyboardInterrupt:
         if tail is not None:
             tail.proc.terminate()
-        output.error(f"stopped following; the job(s) go on: `worms show job {current}`, `worms logs {current} -f`")
+        output.error(f"stopped following; the job(s) go on: `worms show job {current}`, `worms log {current} -f`")
         return 130
     if failed:
-        output.error(f"{len(failed)} job(s) failed: `worms logs {failed[0]}` for the whole log")
+        output.error(f"{len(failed)} job(s) failed: `worms log {failed[0]}` for the whole log")
         return 1
     return 0
 
@@ -174,7 +174,7 @@ def show(session, number: int, lines: int = 30) -> int:
 
     job = HostJob.objects.select_related("run__team").filter(id=number).first()
     if job is None:
-        raise BuildError(f"no host job #{number}: `worms show jobs` lists them")
+        raise BuildError(f"no host job #{number}: `worms jobs` lists them")
     now = timezone.now()
     rows = [
         ["job", f"#{job.id} {job.kind} · {job.uuid}"],
@@ -196,6 +196,6 @@ def show(session, number: int, lines: int = 30) -> int:
     command = f"tail -n {int(lines)} {shlex.quote(f'{JOB_LOGS}/{job.uuid}.log')} 2>/dev/null || echo '(no log yet)'"
     code, out, _err = session.node_run(["sh", "-c", command])
     print()
-    print(output.heading(f"its log, the last {lines} lines (`worms logs {job.id} -f` follows it)"))
+    print(output.heading(f"its log, the last {lines} lines (`worms log {job.id} -f` follows it)"))
     print(out.rstrip() or "(empty)")
     return 0

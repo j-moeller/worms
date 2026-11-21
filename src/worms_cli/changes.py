@@ -1,9 +1,10 @@
-"""What changed between what runs on the platform and this checkout, per component: `worms plan
---changed`, `worms apply --changed`, and `worms release` without components.
+"""What changed between what runs on the platform and this checkout, per component: `worms apply`
+alone (and `--plan`); `worms apply <component>... --plan`'s view of what each VM runs and of
+OpenTofu's own plan.
 
     what runs       per component, the commit it was last brought up to: the node's record
-                    (/var/lib/worms/deployed.json, written after every successful apply, configure,
-                    rebuild or release of it), else for a VM the VM history (its last configuration),
+                    (/var/lib/worms/deployed.json, written after every successful apply or
+                    rebuild of it), else for a VM the VM history (its last configuration),
                     else unknown. A commit with "-dirty" had uncommitted changes nobody can see now.
     what changed    `git diff` from that commit to this checkout's working tree (what a deploy takes).
     what it touches the files each component is made from, read from the repository itself (the
@@ -28,12 +29,15 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
+
+from worms_cli import output
 
 DEPLOYED = "/var/lib/worms/deployed.json"
 NOT_DEPLOYED = ("src/manage.py", "src/worms_cli/", "docs/", "tests/", "README.md", "Makefile", ".gitignore", "pytest.ini",
@@ -214,7 +218,7 @@ def deployed(session) -> dict[str, tuple[str, str]]:
 
 
 def record_deployed(session, names, commit: str) -> None:
-    """After a successful apply/configure/rebuild/release: these components run `commit` now."""
+    """After a successful apply or rebuild: these components run `commit` now."""
     code, out, _err = session.node_run(["cat", DEPLOYED])
     try:
         current = json.loads(out) if code == 0 and out.strip() else {}
@@ -325,7 +329,7 @@ def analyse(config, session) -> tuple[list[Change], dict, list[str]]:
         every_prefix += prefixes
         if name == "round-agent":
             prefixes += list(WORKSPACE)  # its workspace: a copy of these, synced whenever it is configured
-        devbox_note = "the devboxes take it when they are reset (`worms reset devboxes`): never by itself, it is the teams' work"
+        devbox_note = "the devboxes take it when they are reset (`worms vm reset devboxes`): never by itself, it is the teams' work"
         clean_base = base.removesuffix("-dirty")
         files = changed_files(repo, clean_base, since) if clean_base else None
         if files is None:
@@ -423,3 +427,74 @@ def stacks_to_plan() -> list[str]:
         if component.stack and component.stack not in NODE_STACKS and component.stack not in seen:
             seen.append(component.stack)
     return seen
+
+
+# -- `worms apply <component>... --plan`: what each VM runs, OpenTofu's own plan ------------------
+
+
+def deployed_commits(pipe, names) -> list[list[str]]:
+    """Per VM of the plan: the commit its last configuration came from (the VM history), this
+    checkout's, and how far apart they are in git."""
+    from worms_cli import history
+
+    here = pipe.runner.commit()
+    code, out, _err = pipe.runner.session.node_run(["cat", history.LEDGER])
+    events = history.parse(out) if code == 0 else []
+    last = {}
+    for event in events:
+        if event["event"] in ("configured", "packages", *history.CREATED):
+            last[event["name"]] = event["commit"]
+    rows = []
+    for name in names:
+        commit = last.get(name, "")
+        if not commit:
+            rows.append([name, "unknown (no history)", here, ""])
+            continue
+        base = commit.removesuffix("-dirty")
+        behind = subprocess.run(["git", "-C", str(pipe.runner.repo_root), "rev-list", "--count", f"{base}..HEAD"],
+                                capture_output=True, text=True)  # fmt: skip
+        gap = f"{behind.stdout.strip()} commit(s) behind" if behind.returncode == 0 else "not in this checkout's history"
+        rows.append([name, commit, here, "the same" if commit == here else gap])
+    return rows
+
+
+def tofu_plans(pipe, plan) -> None:
+    """OpenTofu's own plan, per stack the plan concerns (a VM component: -target its module),
+    summed up: what it would add, change, destroy; nothing is applied."""
+    from worms_cli import components
+
+    targets: dict[str, list[str]] = {}
+    for name, _action in plan.steps:
+        component = components.COMPONENTS[name]
+        if component.kind == "stack":
+            targets.setdefault(component.stack, [])
+        elif component.kind == "vm":
+            targets.setdefault(component.stack, []).append(f"-target={component.module}")
+    from worms_cli.session import NODE_STACKS
+
+    for stack, args in targets.items():
+        if stack in NODE_STACKS:
+            print(output.color(f"OpenTofu: {stack} is the round agent's (planned and applied on the node, per team)", "dim"))
+            continue
+        label = stack + (f" ({len(args)} VM(s))" if len(args) > 2 else f" ({', '.join(a.split('=', 1)[1] for a in args)})" if args else "")
+        print(output.color(f"OpenTofu plan of {label} ...", "dim"), flush=True)
+        command = shlex.join(["tofu", "plan", "-input=false", "-no-color", "-lock=false", *args])
+        try:
+            env = pipe.runner.session.tofu_env()
+        except Exception as exc:  # noqa: BLE001  (no token: the plan of the steps stands)
+            print(output.status_cell("warn", f"{stack}: not planned ({exc})"))
+            continue
+        proc = subprocess.run(["sh", "-c", command], cwd=f"{pipe.runner.repo_root}/opentofu/stacks/{stack}", env=env,
+                              capture_output=True, text=True)  # fmt: skip
+        lines = proc.stdout.splitlines()
+        changes = [line.strip() for line in lines if line.strip().startswith("# ") and (" will be " in line or " must be " in line)]
+        summary = next((line for line in lines if line.startswith(("Plan:", "No changes."))), "")
+        if proc.returncode != 0:
+            last = (proc.stderr or proc.stdout).strip().splitlines()[-1:] or ["?"]
+            print(output.status_cell("error", f"{stack}: tofu plan failed: {last[0][:200]}"))
+            continue
+        print(output.status_cell("ok" if summary.startswith("No changes") else "warn", f"{stack}: {summary or 'no plan line'}"))
+        for change in changes[:25]:
+            print(output.color(f"    {change}", "dim"))
+        if len(changes) > 25:
+            print(output.color(f"    ... and {len(changes) - 25} more", "dim"))

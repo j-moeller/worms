@@ -210,7 +210,7 @@ def firewall_cell(options: dict | None, rules: list, kind: str) -> Cell:
     missing = FIREWALL_GROUPS[kind] - groups
     if missing:
         problems.append(f"its security group(s) {', '.join(sorted(missing))} missing")
-    return Cell("ok", "✓") if not problems else Cell("error", "fail", "; ".join(problems) + " (`worms rebuild <team>`)")
+    return Cell("ok", "✓") if not problems else Cell("error", "fail", "; ".join(problems) + " (`worms vm rebuild <team>`)")
 
 
 CHECK_LINE = re.compile(r"@check (flag|scoring|logging|apt|PyPI|DNS|NAT) (ok|warn|fail) ?(.*)")
@@ -345,7 +345,7 @@ class Validator:
             for text in names:
                 team = find(known, text)
                 if team is None:
-                    raise BuildError(f"no team {text!r} in the current competition (`worms show devboxes`)")
+                    raise BuildError(f"no team {text!r} in the current competition (`worms team`)")
                 if not team.devbox:
                     raise BuildError(f"{team.label} has no devbox")
                 chosen.append(team)
@@ -445,7 +445,7 @@ class Validator:
         print(output.heading(f"SSH gateway ({GATEWAY})"))
         if vm is None or vm.get("status") != "running":
             state = "no such VM" if vm is None else vm.get("status")
-            print(output.status_cell("error", f"{state}: no team can log in (`worms start ssh-gateway`)"))
+            print(output.status_cell("error", f"{state}: no team can log in (`worms vm start ssh-gateway`)"))
             return 1
         problems = 0
         if node is not None and "gateway" not in node.reached:
@@ -549,7 +549,7 @@ class Validator:
         if tag not in gateway.reached:
             return Cell("error", "no answer", f"sshd does not answer the SSH gateway: {gateway.errors.get(tag, 'no answer')}")
         taken = gateway.accepts.get(tag, set()) & set(mine)
-        whys, sync = [], False  # sync: what `worms sync keys` puts right
+        whys, sync = [], False  # sync: what `worms key sync` puts right
         if len(taken) < n:
             whys.append(f"takes {len(taken)} of the team's {n} key(s) as root")
             sync = True
@@ -575,7 +575,7 @@ class Validator:
         text = f"{len(taken)}/{n}"
         if len(taken) == n and not whys:
             return Cell("ok", f"✓ {text}")
-        return Cell("error", text, "; ".join(whys) + (" (`worms sync keys`)" if sync else ""))
+        return Cell("error", text, "; ".join(whys) + (" (`worms key sync`)" if sync else ""))
 
     def _print(self, team, team_keys, cells, vms) -> int:
         """One team's table and what is wrong; the number of problems."""
@@ -628,10 +628,10 @@ class Validator:
             elif job.state == "running":
                 print(output.color(f"  job #{job.id} {job.kind} running for "
                                    f"{host_jobs._ago((now - (job.started_at or job.requested_at)).total_seconds())} "
-                                   f"(`worms logs {job.id} -f`)", "dim"))
+                                   f"(`worms log {job.id} -f`)", "dim"))
             else:
                 print(output.color(f"  job #{job.id} {job.kind} failed {job.finished_at:%H:%M}: {(job.error or '?')[:200]} "
-                                   f"(`worms logs {job.id}`)", "yellow"))
+                                   f"(`worms log {job.id}`)", "yellow"))
         upload = (Upload.objects.select_related("devbox_run__rebuild_job", "devbox_run__deploy_job")
                   .filter(team=db_team, devbox=True).order_by("-created_at", "-id").first())  # fmt: skip
         if upload is not None:

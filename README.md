@@ -28,16 +28,16 @@ On the node (details: [2 Installation](docs/02-installation.md)):
 
 ```sh
 worms() { /root/app/.venv-test/bin/python /root/app/src/manage.py "$@"; }
-worms issue token proxmox-token          # OpenTofu and the round agent
-worms issue token orchestrator-token     # sandbox VM power, for rounds
-worms issue token topology-token         # the topology page and `worms status`
-worms show secrets                              # generates everything else
-worms trust node                           # root on the node accepts the WORMS key
-worms apply                                # = make: everything, idempotent
-worms reset password                 # one-time password for `admin`
+worms secret issue proxmox-token          # OpenTofu and the round agent
+worms secret issue orchestrator-token     # sandbox VM power, for rounds
+worms secret issue topology-token         # the topology page and `worms status`
+worms secret                              # generates everything else
+worms init                           # root on the node accepts the WORMS key
+worms apply --all                          # = make: everything, idempotent
+worms user password                 # one-time password for `admin`
 ```
 
-`worms --help` lists the verbs by purpose, and `worms apply --help` the components and what each needs.
+`worms --help` lists the commands by purpose, and `worms apply --help` the components and what each needs.
 
 ## Tests
 

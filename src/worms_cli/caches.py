@@ -1,9 +1,8 @@
-"""The private internet's package lists: checked before a fill, added to and removed from.
+"""The private internet's package lists, checked before a fill:
 
-    worms check apt|pypi|caches         do the listed packages exist, and install together?
-    worms add package apt|pypi <name>... checked first, then appended to the list (in this checkout)
-    worms remove package apt|pypi <name>...
-    worms refill apt|pypi|caches         the lists checked, then the cache filled in the internet window
+    worms check packages                     do the listed packages exist, and install together?
+    worms apply apt-cache devpi --packages   the fill: the lists are checked first, then the caches
+                                             filled in the internet window
 
 A fill fetches the whole list, and one name that does not exist (or conflicts with another) fails
 it, after the window has opened and the devboxes have been shut down. The check runs first:
@@ -41,7 +40,8 @@ LISTS = {
 APT_NAME = re.compile(r"[a-z0-9][a-z0-9+.-]+")
 PYPI_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9_,.-]+\])?")
 
-# On the apt-cache VM: the client view (a fill's) if it is there, else the VM's own lists.
+# On the apt-cache VM, against the client view a fill keeps (the index the cache serves). Without one
+# there is nothing to check against offline: the VM's own apt goes to Debian, not through the cache.
 APT_SIMULATION = r"""set -u
 d=$(mktemp -d /var/tmp/worms-check.XXXXXX); trap 'rm -rf "$d"' EXIT; : > "$d/status"
 if [ -f /etc/apt-cache-client/sources.list ] && ls /var/lib/apt-cache-client/lists 2>/dev/null | grep -q InRelease; then
@@ -49,8 +49,7 @@ if [ -f /etc/apt-cache-client/sources.list ] && ls /var/lib/apt-cache-client/lis
            -o Dir::State::Lists=/var/lib/apt-cache-client/lists
     echo "@index the cache's (its last fill: $(stat -c %y /var/lib/apt-cache-client/lists | cut -c1-16))"
 else
-    set --
-    echo "@index this VM's own lists ($(stat -c %y /var/lib/apt/lists | cut -c1-16)): no fill has kept the cache's yet"
+    echo "@index none"; echo "@exit 0"; exit 0
 fi
 apt-get install -s --no-install-recommends -o Dir::State::status="$d/status" -o Dir::Cache::pkgcache= \
     -o Dir::Cache::srcpkgcache= -o Debug::NoLocking=1 "$@" @PACKAGES@ > "$d/out" 2>&1
@@ -71,7 +70,7 @@ def _apt_vm(config):
     remote = Remote(config)
     vm = next((vm for vm in remote.catalogue.vms() if vm["name"] == "apt-cache"), None)
     if vm is None or vm.get("status") != "running":
-        raise BuildError("the apt-cache VM is not running: the apt list is checked against its index (`worms start apt-cache`)")
+        raise BuildError("the apt-cache VM is not running: the apt list is checked against its index (`worms vm start apt-cache`)")
     return remote, Target("apt-cache", vm)
 
 
@@ -88,6 +87,9 @@ def check_apt(config, names: list[str]) -> tuple[list[str], str]:
     facts = dict(line[1:].split(" ", 1) for line in out.splitlines() if line.startswith("@") and " " in line)
     if "exit" not in facts:
         raise BuildError(f"the check did not run on apt-cache: {proc.stderr.decode(errors='replace').strip()[-200:]}")
+    if facts.get("index") == "none":
+        return [], (f"{len(names)} name(s) not checked: the cache keeps no index of a fill yet (the next "
+                    "`worms apply apt-cache --packages` keeps one)")  # fmt: skip
     problems = [line.strip() for line in out.splitlines() if line and not line.startswith("@")]
     problems = [p for p in problems if not p.startswith("E: The following information from --solver")]
     if facts["exit"] != "0" and not problems:
@@ -128,7 +130,7 @@ def check_pypi(names: list[str]) -> tuple[list[str], str]:
 
 
 def check(config, kind: str, names: list[str] | None = None) -> int:
-    """`worms check apt|pypi`: the list (or `names`), said; 1 if a problem."""
+    """`worms check packages`: the list (or `names`), said; 1 if a problem."""
     names = names if names is not None else listed(config.repo_root, kind)
     problems, line = check_apt(config, names) if kind == "apt" else check_pypi(names)
     if problems:
@@ -138,62 +140,3 @@ def check(config, kind: str, names: list[str] | None = None) -> int:
         return 1
     print(output.status_cell("ok", f"{kind}: {line}"))
     return 0
-
-
-def _list_span(lines: list[str], key: str) -> tuple[int, int]:
-    """(the index of `key:`'s line, the index after its last `  - ` entry)."""
-    start = next(i for i, line in enumerate(lines) if line.startswith(f"{key}:"))
-    end = start + 1
-    for i in range(start + 1, len(lines)):
-        if lines[i].startswith("  - "):
-            end = i + 1
-        elif lines[i].strip() and not lines[i].startswith((" ", "#")):
-            break
-    return start, end
-
-
-def _entry(line: str) -> str:
-    return line.strip()[2:].split("#", 1)[0].strip() if line.strip().startswith("- ") else ""
-
-
-def add(config, kind: str, names: list[str]) -> int:
-    path, key, component = LISTS[kind]
-    have = set(listed(config.repo_root, kind))
-    new = [name for name in dict.fromkeys(names) if name not in have]
-    for name in sorted(set(names) - set(new)):
-        print(output.color(f"{name}: listed already", "dim"))
-    if not new:
-        return 0
-    if check(config, kind, new):
-        output.error("nothing added: the list has to stay fillable")
-        return 1
-    file = Path(config.repo_root) / path
-    lines = file.read_text().splitlines()
-    _start, end = _list_span(lines, key)
-    lines[end:end] = [f"  - {name}" for name in new]
-    file.write_text("\n".join(lines) + "\n")
-    print(output.status_cell("ok", f"added to {path}: {', '.join(new)}"))
-    print(output.color(f"a change of this checkout: commit it; the cache gets them with `worms refill {kind}`", "dim"))
-    return 0
-
-
-def remove(config, kind: str, names: list[str]) -> int:
-    path, key, _component = LISTS[kind]
-    file = Path(config.repo_root) / path
-    lines = file.read_text().splitlines()
-    start, end = _list_span(lines, key)
-    gone = [i for i in range(start + 1, end) if _entry(lines[i]) in names]
-    missing = sorted(set(names) - {_entry(lines[i]) for i in gone})
-    if missing:
-        output.error(f"not listed: {', '.join(missing)}")
-        return 1
-    for i in reversed(gone):
-        del lines[i]
-    file.write_text("\n".join(lines) + "\n")
-    print(output.status_cell("ok", f"removed from {path}: {', '.join(names)}"))
-    print(output.color("a change of this checkout: commit it. The cache keeps what it holds until it is rebuilt", "dim"))
-    return 0
-
-
-def components(kind: str) -> list[str]:
-    return [LISTS[k][2] for k in (("apt", "pypi") if kind == "caches" else (kind,))]

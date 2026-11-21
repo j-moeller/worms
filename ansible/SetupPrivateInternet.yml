@@ -112,7 +112,7 @@
 
 # Last, once every service above has its mode: offline, the apt cache must give a fresh VM its
 # whole package index. A failure fails the run, and no longer before devpi and the others were
-# switched to offline mode too (`worms close window` left them online while the check sat in
+# switched to offline mode too (`worms internet off` left them online while the check sat in
 # the apt cache's play above).
 - hosts: apt_cache_hosts
   any_errors_fatal: true

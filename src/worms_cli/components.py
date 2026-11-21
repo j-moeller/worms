@@ -229,7 +229,7 @@ def plan(requested, exists, rebuild=False, pending_migrations=lambda: [], unfini
         stacks = [name for name in requested if COMPONENTS[name].kind == "stack"]
         if stacks:
             raise ValueError(f"{', '.join(stacks)}: everything else stands on it, so it is not rebuilt alone "
-                             "(`worms destroy --all`, then `worms apply`)")  # fmt: skip
+                             "(`worms destroy --all`, then `worms apply --all`)")  # fmt: skip
     for name in closure(requested):
         component = COMPONENTS[name]
         if name in requested:

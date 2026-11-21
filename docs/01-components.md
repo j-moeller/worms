@@ -104,7 +104,7 @@ Sources: [`src/worms_cli/pipeline.py`](../src/worms_cli/pipeline.py), [`src/worm
 ## Ansible
 
 - **Inventory.** [`inventory.yml`](../ansible/inventory.yml) defines the groups. [`inventory.generated.yml`](../scripts/generate_inventory.py) holds the hosts, written from the stacks' `ansible_hosts` outputs.
-- **Configure order.** `worms apply` runs 15 playbooks:
+- **Configure order.** `worms apply --all` runs 15 playbooks:
   1. `WaitForVMs`
   2. `SetupDNS`
   3. `UpdateVMs`

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""worms -- one CLI for the WORMS platform: `worms <verb> [<what>...]`.
+"""worms -- the WORMS platform's CLI: `worms <command> [<args>]`.
 
-Builds and operates the platform: OpenTofu and Ansible run on this machine
-(your laptop with WORMS_SSH=root@<node>, or the Proxmox node), the node's own
-part over SSH. Status comes from the database VM and the Proxmox API.
+Look with status, show, log, check, trace; reach a VM with login, run, rsync;
+change things with apply and a noun's verbs (`worms vm reset alpha`). A noun
+alone lists its things: `worms vm`, `worms jobs`, `worms round`. OpenTofu and
+Ansible run here: on the Proxmox node, or a laptop with WORMS_SSH=root@<node>.
 """
 
 from __future__ import annotations
@@ -48,7 +49,7 @@ def _list_vms(config) -> tuple[list | None, str]:
 
     infra = Infra(config)
     if not infra.configured:
-        return None, output.status_cell("n/a", infra.error or "no Proxmox API configured (worms issue token topology-token)")
+        return None, output.status_cell("n/a", infra.error or "no Proxmox API configured (worms secret issue topology-token)")
     try:
         return infra.vms(), ""
     except Exception as exc:  # noqa: BLE001
@@ -148,7 +149,7 @@ def _internet_notice(config) -> None:
 
 def _internet_cell(state, stderr) -> list[str]:
     if state == "allowed":
-        return ["internet access", output.status_cell("warn", "ALLOWED (close it with `worms close window`)")]
+        return ["internet access", output.status_cell("warn", "ALLOWED (close it with `worms internet off`)")]
     if state == "denied":
         return ["internet access", output.status_cell("ok", "denied")]
     return ["internet access", output.status_cell("unknown", stderr.strip()[:60] or "could not probe")]
@@ -257,14 +258,14 @@ def _attention(config, listing, internet, probe) -> list[list[str]]:
 
     rows, unchecked = [], []
     if "ALLOWED" in internet[1]:
-        rows.append(["internet window", output.status_cell("warn", "OPEN: no team VM may run; `worms close window`")])
+        rows.append(["internet window", output.status_cell("warn", "OPEN: no team VM may run; `worms internet off`")])
     vms, _ = listing
     held, window, clean, active = (probe.get(key, "") for key in ("held", "window", "clean", "active"))
     if probe.get("error"):
         unchecked.append(f"the node ({probe['error']})")
     else:
-        for text, what, hint in ((held, "held by a round", "its release starts them (`worms start --held` once it is over)"),
-                                 (window, "stopped by the internet window", "`worms close window` starts them")):  # fmt: skip
+        for text, what, hint in ((held, "held by a round", "its release starts them (`worms vm start --held` once it is over)"),
+                                 (window, "stopped by the internet window", "`worms internet off` starts them")):  # fmt: skip
             try:
                 listed = (json.loads(text) if text.strip() else {}).get("vms", [])
             except (ValueError, AttributeError):
@@ -277,11 +278,11 @@ def _attention(config, listing, internet, probe) -> list[list[str]]:
             lacking = sorted(vm["name"] for vm in vms if vm.get("pool") in SERVICE_POOLS and int(vm["vmid"]) not in with_clean)
             if lacking:
                 rows.append(["snapshots", output.status_cell("warn", f"no `clean` snapshot on {', '.join(lacking)}: a reset "
-                                                             "leaves them as they are (`worms rebuild services`)")])  # fmt: skip
+                                                             "leaves them as they are (`worms vm rebuild services`)")])  # fmt: skip
         down = [line.split()[0] for line in active.splitlines() if line.split() and line.split()[-1] != "active"]
         if down:
-            rows.append(["node services", output.status_cell("error", f"not active: {', '.join(down)} (`worms logs agent`, "
-                                                             "`worms logs firewall`)")])  # fmt: skip
+            rows.append(["node services", output.status_cell("error", f"not active: {', '.join(down)} (`worms log agent`, "
+                                                             "`worms log firewall`)")])  # fmt: skip
     try:
         from worms_cli import django_setup
 
@@ -296,11 +297,11 @@ def _attention(config, listing, internet, probe) -> list[list[str]]:
         if failed:
             rows.append(["host jobs", output.status_cell("error", f"{len(failed)} failed in 24 h: "
                                                          + ", ".join(f"#{n} {kind}" for n, kind in failed[:5])
-                                                         + f" (`worms logs {failed[0][0]}`)")])  # fmt: skip
+                                                         + f" (`worms log {failed[0][0]}`)")])  # fmt: skip
         pending = build.Runner(config).pending_migrations()
         if pending:
             rows.append(["migrations", output.status_cell("warn", f"the database lacks {len(pending)} of this checkout's "
-                                                          "(`worms configure orchestrator`)")])  # fmt: skip
+                                                          "(`worms apply orchestrator`)")])  # fmt: skip
     except Exception as exc:  # noqa: BLE001  (not configured, not reachable: said, not fatal)
         unchecked.append(f"the database ({str(exc).splitlines()[0][:60] if str(exc) else type(exc).__name__})")
     if not rows:
@@ -311,57 +312,108 @@ def _attention(config, listing, internet, probe) -> list[list[str]]:
 
 
 def cmd_status(config, args) -> int:
-    topic = args.topic
-    if topic is None:
-        listing, internet, probe = _list_vms(config), _internet_status(config), _node_probe(config)
-        print(output.heading("attention"))
-        print(output.table(_attention(config, listing, internet, probe)))
-        print()
-        print(output.heading("platform"))
-        print(output.table(_platform_rows(config, internet)))
-        print()
-        print(output.heading("VMs"))
-        print(output.table(_vm_rows(config, listing, probe), headers=VM_HEADERS))
-        print()
-        print(output.heading("competition (database)"))
-        print(output.table(_competition_status(config)))
-        return 0
+    """`worms status`: what needs attention, the platform, every VM, the competition."""
+    listing, internet, probe = _list_vms(config), _internet_status(config), _node_probe(config)
+    print(output.heading("attention"))
+    print(output.table(_attention(config, listing, internet, probe)))
+    print()
+    print(output.heading("platform"))
+    print(output.table(_platform_rows(config, internet)))
+    print()
+    print(output.heading("VMs"))
+    print(output.table(_vm_rows(config, listing, probe), headers=VM_HEADERS))
+    print()
+    print(output.heading("competition (database)"))
+    print(output.table(_competition_status(config)))
+    return 0
+
+
+# -- the lists: a noun alone (`worms jobs`), or `worms show <list>` ---------------------------------
+
+
+def _listing(config, show) -> int:
+    """A list from the database: `show(queries)` (worms_cli/queries.py)."""
     _with_db(config)
     from worms_cli import queries
 
     try:
-        if topic == "teams":
-            return _status_teams(queries)
-        if topic == "users":
-            return _status_users(queries)
-        if topic == "leaderboard":
-            return _status_leaderboard(queries)
-        if topic == "audit":
-            rows = queries.event_rows(hours=args.hours, kind=args.kind, limit=args.limit)
-            if not rows:
-                print(f"No audit events in the last {args.hours} hour(s).")
-                return 0
-            print(output.table(rows, headers=["Time (UTC)", "Event", "Written by", "Actor", "Target", "Team", "Client", "Details"]))
-            return 0
-        if topic == "rounds":
-            print(output.table(queries.round_rows(), headers=["Round", "Start (UTC)", "End", "Gameplan", "Check", "Per team", "Attempts"]))
-            return 0
-        if topic == "jobs":
-            print(output.table(queries.job_rows(args.limit if args.limit != 200 else 30),
-                               headers=["#", "Job", "State", "Team", "Requested", "Finished", "Error"]))  # fmt: skip
-            return 0
-        if topic == "devboxes":
-            print(output.table(queries.devbox_rows(), headers=["Team", "Devbox", "SSH keys (name, fingerprint)"]))
-            return 0
-        if topic == "gameplans":
-            print(output.table(queries.gameplan_rows(config.repo_root), headers=["Gameplan", "Orchestrator + node", "This checkout"]))
-            print(output.color("Why the deployed copy is invalid: `worms logs conductor` (the orchestrator's check), "
-                               "and the newest gameplans job's log (`worms show jobs`, then `worms logs <#>`).", "dim"))  # fmt: skip
-            return 0
+        return show(queries) or 0
     except ValueError as exc:
         output.error(str(exc))
         return 1
-    raise AssertionError(topic)
+
+
+def list_vms(config, args) -> int:
+    """`worms vm`: every VM, as `worms status` lists them."""
+    print(output.table(_vm_rows(config, _list_vms(config), _node_probe(config)), headers=VM_HEADERS))
+    return 0
+
+
+def list_teams(config, args) -> int:
+    """`worms team`: the teams and their members; every team's devbox and SSH keys."""
+    def show(queries):
+        _status_teams(queries)
+        print()
+        print(output.heading("devboxes"))
+        print(output.table(queries.devbox_rows(), headers=["Team", "Devbox", "SSH keys (name, fingerprint)"]))
+
+    return _listing(config, show)
+
+
+def list_users(config, args) -> int:
+    return _listing(config, _status_users)
+
+
+def list_rounds(config, args) -> int:
+    return _listing(config, lambda queries: print(output.table(
+        queries.round_rows(), headers=["Round", "Start (UTC)", "End", "Gameplan", "Check", "Per team", "Attempts"])))
+
+
+def list_jobs(config, args) -> int:
+    return _listing(config, lambda queries: print(output.table(
+        queries.job_rows(getattr(args, "limit", None) or 30), headers=["#", "Job", "State", "Team", "Requested", "Finished", "Error"])))
+
+
+def list_services(config, args) -> int:
+    """`worms service`: each service, where it runs, whether `worms service restart` restarts it."""
+    from worms_cli import services
+
+    rows = [[name, service.where, service.about, "yes" if service.restartable else "no"] for name, service in services.SERVICES.items()]
+    print(output.table(rows, headers=["service", "runs on", "what its log says", "restart"]))
+    print(output.color("its log: `worms log <service>`", "dim"))
+    return 0
+
+
+def list_keys(config, args) -> int:
+    """`worms key`: every team's SSH keys, read on the SSH gateway and its devbox VMs (worms_cli/keys.py)."""
+    _with_db(config)
+    from worms_cli import keys
+
+    try:
+        return keys.status(config)
+    except ValueError as exc:
+        output.error(str(exc))
+        return 1
+
+
+def show_audit(config, args) -> int:
+    def show(queries):
+        rows = queries.event_rows(hours=args.hours, kind=args.kind, limit=args.limit or 200)
+        if not rows:
+            print(f"No audit events in the last {args.hours} hour(s).")
+            return
+        print(output.table(rows, headers=["Time (UTC)", "Event", "Written by", "Actor", "Target", "Team", "Client", "Details"]))
+
+    return _listing(config, show)
+
+
+def show_gameplans(config, args) -> int:
+    def show(queries):
+        print(output.table(queries.gameplan_rows(config.repo_root), headers=["Gameplan", "Orchestrator + node", "This checkout"]))
+        print(output.color("Why the deployed copy is invalid: `worms log conductor` (the orchestrator's check), "
+                           "and the newest gameplans job's log (`worms jobs`, then `worms log <#>`).", "dim"))  # fmt: skip
+
+    return _listing(config, show)
 
 
 def _status_teams(queries) -> int:
@@ -433,7 +485,7 @@ def _console() -> str:
 
 
 # ---------------------------------------------------------------------------
-# worms apply [<component>...], worms rebuild <component>...
+# worms apply [<component>...], worms vm rebuild <component>...
 # ---------------------------------------------------------------------------
 
 
@@ -482,59 +534,36 @@ def _pending_migrations(pipe):
     return pending
 
 
-def cmd_build(config, args) -> int:
-    """`worms apply [<component>...]`, `worms rebuild <component>...`. The first step that fails ends it, and nothing
-    after it runs but closing the internet window and starting the devbox VMs again."""
+def cmd_apply(config, args) -> int:
+    """`worms apply`: the platform up to this checkout. Alone: what changed since what runs
+    (_apply_changed); with components: those (_apply_components), built if missing; --all: the
+    whole build, in order, with packages (a new node). --plan: what it would do, changing nothing."""
+    if args.all:
+        if args.components:
+            output.error("--all is every component: name none")
+            return 2
+        return _apply_all(config, args)
+    if not args.components:
+        return _apply_changed(config, args)
+    return _apply_components(config, args, args.components)
+
+
+def _apply_all(config, args) -> int:
+    """`worms apply --all`: the full pipeline (pipeline.build_all). The first step that fails ends
+    it, and nothing after it runs but closing the internet window and starting the devboxes again."""
     from worms_cli import components
     from worms_cli.session import SessionError
 
+    if args.plan:
+        return _apply_components(config, args, [n for n, c in components.COMPONENTS.items() if c.kind != "devbox"])
+    if not build.confirm("Build and configure every component, packages too: the internet window opens and the devbox VMs "
+                         "are off meanwhile?", args.yes):  # fmt: skip
+        return 1
     pipe = pipeline.Pipeline(config, ansible_args=" ".join(args.ansible_args))
     code = 0
     try:
-        if not args.components and args.plan:
-            # The plan of everything: every component (never the build itself, which --plan forgot).
-            from worms_cli import components
-
-            args = _with(args, components=[name for name in components.COMPONENTS if components.COMPONENTS[name].kind != "devbox"])
-        if not args.components:
-            if args.rebuild:
-                output.error("--rebuild needs components: everything at once is `worms destroy`, then `worms apply`")
-                return 1
-            pipe.build_all()
-        else:
-            try:
-                requested = components.expand(args.components)
-                plan = components.plan(requested, _exists(pipe, config), rebuild=args.rebuild,
-                                       pending_migrations=_pending_migrations(pipe), unfinished=_unfinished(pipe))  # fmt: skip
-            except KeyError as exc:
-                output.error(f"no component {exc.args[0]!r}: `worms apply --help` lists them")
-                return 1
-            except ValueError as exc:
-                output.error(str(exc))
-                return 1
-            _print_plan(plan, args.packages)
-            configured = [name for name, action in plan.steps
-                          if action == "reconfigure" and components.COMPONENTS[name].kind in ("vm", "node")]  # fmt: skip
-            if configured:
-                print(output.color(f"note: {', '.join(configured)} exist(s): `worms configure {' '.join(configured)}` configures "
-                                   "them too, never runs OpenTofu, and restarts the agent and the conductor after", "dim"))  # fmt: skip
-            if args.plan:
-                return 0
-            asks = []
-            if plan.added:
-                asks.append(f"build {len(plan.added)} more component(s) it needs ({', '.join(plan.added)})")
-            if plan.names("recreate"):
-                asks.append(f"DESTROY and build again {', '.join(plan.names('recreate'))}"
-                            + (": every record in the database is LOST" if "database" in plan.names("recreate") else ""))  # fmt: skip
-            if asks and not build.confirm("This will " + "; ".join(asks) + ". Proceed?", args.yes):
-                return 1
-            infrastructure = components.Plan([step for step in plan.steps if components.COMPONENTS[step[0]].kind != "devbox"],
-                                             plan.notes)  # fmt: skip
-            if infrastructure.steps:
-                pipe.build_components(infrastructure, packages=args.packages)
-                _record_deployed(pipe, infrastructure.names())
-            if "devbox" in dict(plan.steps):
-                code = _build_devboxes(config, rebuild=args.rebuild, teams=args.team, wait=getattr(args, "wait", False))
+        pipe.build_all()
+        _record_deployed(pipe, [n for n, c in components.COMPONENTS.items() if c.kind in ("vm", "node")])
     except (build.BuildError, SessionError, KeyboardInterrupt) as exc:
         output.error(f"build stopped: {exc}" if str(exc) else "build stopped: interrupted")
         code = 130 if isinstance(exc, KeyboardInterrupt) else 1
@@ -544,8 +573,312 @@ def cmd_build(config, args) -> int:
     return code
 
 
+def _prepared(pipe, config, names, rebuild=False):
+    """(the plan of these components, whether the agent and the conductor restart after it, the
+    sandbox VMs there are). The orchestrator and the round agent bring the gameplans along (the
+    node's copy and the orchestrator's, checked), unless a round is on; pending migrations bring
+    the orchestrator (components.plan). KeyError, ValueError: no such component, no plan."""
+    from worms_cli import components
+
+    exists = _exists(pipe, config)
+    names = components.expand(names)
+    sandboxes = sorted(vm["name"] for vm in pipe.runner.vms() if vm.get("pool") == "sandbox")
+
+    def plan_of(names):
+        return components.plan(names, exists, rebuild=rebuild, pending_migrations=_pending_migrations(pipe),
+                               unfinished=_unfinished(pipe))  # fmt: skip
+
+    plan = plan_of(names)
+    if {"orchestrator", "round-agent"} & set(plan.names()) and "gameplans" not in plan.names() and not sandboxes:
+        plan = plan_of([*names, "gameplans"])
+    return plan, bool({"orchestrator", "round-agent", "gameplans"} & set(plan.names())), sandboxes
+
+
+def _refused_during_round(plan, sandboxes, args) -> bool:
+    from worms_cli import components
+
+    machines = [n for n in plan.names() if components.COMPONENTS[n].kind in ("vm", "node")]
+    if sandboxes and machines and not args.during_round:
+        output.error(f"refusing during a round ({len(sandboxes)} sandbox VM(s)): it restarts the conductor, which costs the "
+                     "running team its attempt; --during-round if it must")  # fmt: skip
+        return True
+    return False
+
+
+def _lists_checked(config, names, packages) -> bool:
+    """Before a fill of the caches: their package lists checked (worms_cli/caches.py), so that a bad
+    name fails before the window opens and the devboxes stop."""
+    from worms_cli import caches
+
+    kinds = [kind for kind, component in (("apt", "apt-cache"), ("pypi", "devpi")) if component in names]
+    if not packages or not kinds:
+        return True
+    print(output.heading("the caches' package lists"), flush=True)
+    try:
+        failed = max(caches.check(config, kind) for kind in kinds)
+    except build.BuildError as exc:
+        output.error(str(exc))
+        return False
+    if failed:
+        output.error(f"not filled: fix the list first ({', '.join(caches.LISTS[k][0] for k in kinds)}); nothing was opened")
+        return False
+    return True
+
+
+def _restore_point(config, pipe, names) -> tuple[bool, str]:
+    """(go on?, the dump): a dump of the database first, when the orchestrator (it migrates) or
+    the database is among what changes and the database VM is there."""
+    from worms_cli import components, database
+
+    if not {"orchestrator", "database"} & set(names) or not _exists(pipe, config)(components.COMPONENTS["database"]):
+        return True, ""
+    print(output.heading("restore point: a dump of the database"), flush=True)
+    try:
+        path, size = database.backup(config)
+    except (build.BuildError, OSError) as exc:
+        output.error(f"no dump: {exc}")
+        return build.confirm("Go on without one?", False), ""
+    print(output.status_cell("ok", f"{size / 1e6:.1f} MB: {path}"), flush=True)
+    return True, path
+
+
+def _configure(config, args, pipe, plan, follow_up) -> int:
+    """The plan carried out: its components (pipeline.build_components), the agent (once no host job
+    runs) and the conductor restarted when `follow_up`, the devboxes (the round agent's jobs,
+    followed); what runs recorded (worms_cli/changes.py)."""
+    from worms_cli import components, services
+
+    infrastructure = components.Plan([step for step in plan.steps if components.COMPONENTS[step[0]].kind != "devbox"],
+                                     plan.notes)  # fmt: skip
+    if infrastructure.steps:
+        pipe.build_components(infrastructure, packages=args.packages)
+        _record_deployed(pipe, infrastructure.names())
+    if follow_up:
+        _with_db(config)
+        restarter = services.Restarter(config)
+        for name in ("agent", "conductor"):
+            if name == "agent":
+                services.wait_until_idle(getattr(args, "timeout", 900))
+            restarter.restart(name)
+            print(output.status_cell("ok", f"{name}: restarted, active"))
+    if infrastructure.steps:
+        print(output.status_cell("ok", f"applied: {', '.join(infrastructure.names())}"))
+    if "devbox" in dict(plan.steps):
+        return _build_devboxes(config, wait=True)
+    return 0
+
+
+def _way_back(before: dict, dump: str) -> None:
+    """The last lines of an apply: the commit the components ran before, and the dump."""
+    commits = sorted(set(before.values()))
+    if len(commits) == 1:
+        back = f"`git checkout {commits[0]}`, then `worms apply`"
+    elif commits:
+        back = "check out what they ran (" + ", ".join(f"{name} {commit}" for name, commit in sorted(before.items())) + "), then `worms apply`"
+    else:
+        back = "what they ran before is not recorded"
+    print(output.color(f"the way back: {back}" + (f"; the database as it was: `worms db restore {dump}`" if dump else ""), "dim"))
+
+
+def _ran_before(pipe, names) -> dict:
+    from worms_cli import changes
+
+    try:
+        recorded = changes.deployed(pipe.runner.session)
+    except Exception:  # noqa: BLE001  (the record is a convenience)
+        return {}
+    return {name: recorded[name][0] for name in names if name in recorded}
+
+
+def _apply_components(config, args, names, rebuild=False) -> int:
+    """`worms apply <component>...` and `worms vm rebuild <component>...`: the plan, what it touches;
+    created what is missing (after asking), configured what exists; a restore point first when the
+    database may change."""
+    from worms_cli import changes, components
+    from worms_cli.session import SessionError
+
+    pipe = pipeline.Pipeline(config, ansible_args=" ".join(args.ansible_args))
+    code = 0
+    try:
+        try:
+            plan, follow_up, sandboxes = _prepared(pipe, config, names, rebuild=rebuild)
+        except KeyError as exc:
+            output.error(f"no component {exc.args[0]!r}: `worms apply --help` lists them")
+            return 1
+        except ValueError as exc:
+            output.error(str(exc))
+            return 1
+        _print_plan(plan, args.packages)
+        if follow_up:
+            print(output.color("  then: the round agent restarted once no host job runs, then the conductor", "dim"))
+        if args.plan:
+            vms = [name for name, _ in plan.steps if components.COMPONENTS[name].kind == "vm"]
+            if vms:
+                print()
+                print(output.heading("what each VM runs now (its last configuration's commit) and this checkout"))
+                print(output.table(changes.deployed_commits(pipe, vms), headers=["VM", "configured from", "this checkout", ""]))
+            print()
+            print(output.heading("OpenTofu's own plan (nothing is applied)"))
+            changes.tofu_plans(pipe, plan)
+            return 0
+        if _refused_during_round(plan, sandboxes, args) or not _lists_checked(config, plan.names(), args.packages):
+            return 1
+        if not _asked(plan, args.yes):
+            return 1
+        before = _ran_before(pipe, plan.names())
+        go_on, dump = _restore_point(config, pipe, plan.names())
+        if not go_on:
+            return 1
+        code = _configure(config, args, pipe, plan, follow_up)
+        _way_back(before, dump)
+    except (build.BuildError, SessionError, KeyboardInterrupt) as exc:
+        output.error(f"stopped: {exc}" if str(exc) else "stopped: interrupted")
+        code = 130 if isinstance(exc, KeyboardInterrupt) else 1
+    # Also after a failure: a rollback that happened is not undone by one.
+    if pipe.services_rolled_back and pipe.devboxes_exist():
+        code = _restore_devbox_map(config) or code
+    return code
+
+
+def _asked(plan, yes) -> bool:
+    """Agreed to what the plan builds besides what it configures (or nothing to ask)."""
+    asks = []
+    if plan.added:
+        asks.append(f"build {len(plan.added)} more component(s) it needs ({', '.join(plan.added)})")
+    if plan.names("recreate"):
+        asks.append(f"DESTROY and build again {', '.join(plan.names('recreate'))}"
+                    + (": every record in the database is LOST" if "database" in plan.names("recreate") else ""))  # fmt: skip
+    return not asks or build.confirm("This will " + "; ".join(asks) + ". Proceed?", yes)
+
+
+def _changed_report(config, pipe):
+    """What changed since what runs (worms_cli/changes.py), said; (changes, stack plans, the
+    directory of the saved plans)."""
+    import tempfile
+
+    from worms_cli import changes, components
+
+    found, _bases, unclaimed = changes.analyse(config, pipe.runner.session)
+    exists = _exists(pipe, config)
+    print(output.heading(f"what changed since what runs, up to this checkout ({pipe.runner.commit()})"))
+    rows = []
+    for change in found:
+        component = components.COMPONENTS[change.component]
+        files = [w for w in change.why if "/" in w]
+        reasons = [w for w in change.why if "/" not in w]
+        text = "; ".join([*reasons, *(files[:3]), *([f"+{len(files) - 3} more"] if len(files) > 3 else [])])
+        missing = component.kind in ("vm", "node") and not exists(component)
+        rows.append([change.component, change.base or "?", text[:150], ", ".join(change.packages)[:60] or "—",
+                     "not built: `worms apply " + change.component + "`" if missing else change.note])  # fmt: skip
+    if rows:
+        print(output.table(rows, headers=["component", "runs", "why", "packages", "note"]))
+    else:
+        print(output.status_cell("ok", "every component runs this checkout"))
+    if unclaimed:
+        print(output.color(f"changed, but no component is made from it (checked by nothing here): {', '.join(unclaimed[:8])}"
+                           + (f" (+{len(unclaimed) - 8})" if len(unclaimed) > 8 else ""), "yellow"))  # fmt: skip
+    print()
+    print(output.heading("OpenTofu's own plan of each stack (saved: what is applied is what is shown)"))
+    directory = tempfile.mkdtemp(prefix="worms-plans-")
+    plans = []
+    for stack in changes.stacks_to_plan():
+        plan = changes.plan_stack(pipe, stack, directory)
+        plans.append(plan)
+        if plan.error:
+            print(output.status_cell("error", f"{stack}: not planned: {plan.error}"))
+        elif plan.empty:
+            print(output.status_cell("ok", f"{stack}: no changes"))
+        else:
+            counts = f"{len(plan.updates)} in place, {len(plan.creates)} new, {len(plan.replaces)} REPLACED, {len(plan.deletes)} DESTROYED"
+            print(output.status_cell("warn" if plan.safe else "error", f"{stack}: {counts}"
+                                     + ("" if plan.safe else ": not applied here (a VM made anew, replaced or destroyed)")))  # fmt: skip
+            for address in [*plan.replaces, *plan.deletes, *plan.creates, *plan.updates][:12]:
+                print(output.color(f"    {address}", "dim"))
+    return found, plans, directory
+
+
+def _apply_changed(config, args) -> int:
+    """`worms apply` alone: what changed since what runs. OpenTofu's in-place changes first,
+    applied from the plans shown, then the components that changed are configured; packages only
+    with --packages. A VM replaced or destroyed is never done here: `worms vm rebuild` does it."""
+    import shutil
+
+    from worms_cli import components
+    from worms_cli.session import SessionError
+
+    pipe = pipeline.Pipeline(config, ansible_args=" ".join(args.ansible_args))
+    try:
+        found, plans, directory = _changed_report(config, pipe)
+    except build.BuildError as exc:
+        output.error(str(exc))
+        return 1
+    code = 0
+    try:
+        exists = _exists(pipe, config)
+        names = [c.component for c in found if components.COMPONENTS[c.component].kind in ("vm", "node", "gameplans")
+                 and (components.COMPONENTS[c.component].kind == "gameplans" or exists(components.COMPONENTS[c.component]))]
+        stacks = [plan for plan in plans if not plan.empty and plan.safe]
+        left = [plan for plan in plans if not plan.empty and not plan.safe]
+        print()
+        if not names and not stacks:
+            print(output.status_cell("ok", "nothing to apply: the platform runs this checkout"
+                                     + (" (but see OpenTofu's changes above)" if left else "")))  # fmt: skip
+            return 1 if left else 0
+        print(output.heading("what `worms apply` does"))
+        for plan in stacks:
+            print(f"  OpenTofu: apply {plan.stack}'s saved plan ({len(plan.updates)} in place, {len(plan.creates)} new)")
+        if names:
+            print(f"  configure: {', '.join(names)}" + (" --packages (the internet window opens)" if args.packages else ""))
+        for plan in left:
+            print(output.color(f"  not here: {plan.stack} ({len(plan.replaces)} replaced, {len(plan.deletes)} destroyed): "
+                               "`worms vm rebuild <vm>` or `worms apply <stack>` does it, by name", "yellow"))  # fmt: skip
+        for change in found:
+            if change.note:
+                print(output.color(f"  {change.component}: {change.note}", "dim"))
+        packaged = [c.component for c in found if c.packages and c.component in names]
+        if packaged and not args.packages:
+            output.error(f"the packages of {', '.join(packaged)} changed: with --packages (it opens the internet window; on "
+                         "production the node needs egress), or they would be missing")  # fmt: skip
+            return 1
+        plan, follow_up, sandboxes = _prepared(pipe, config, names) if names else (None, False, [])
+        if plan is not None:
+            print()
+            _print_plan(plan, args.packages)
+        if args.plan:
+            return 0
+        if plan is not None and (_refused_during_round(plan, sandboxes, args)
+                                 or not _lists_checked(config, plan.names(), args.packages)):  # fmt: skip
+            return 1
+        if not build.confirm("Apply these changes?", args.yes) or (plan is not None and not _asked(plan, args.yes)):
+            return 1
+        before = _ran_before(pipe, plan.names() if plan else [])
+        go_on, dump = _restore_point(config, pipe, plan.names() if plan else [])
+        if not go_on:
+            return 1
+        for stack in stacks:
+            print(output.heading(f"OpenTofu: {stack.stack}"), flush=True)
+            try:
+                pipe.runner.tofu(stack.stack, "apply", "-input=false", stack.file)
+            except build.BuildError as exc:
+                output.error(f"{stack.stack}: {exc}; nothing after it was applied")
+                return 1
+        if plan is not None:
+            print(output.heading("configure"), flush=True)
+            code = _configure(config, args, pipe, plan, follow_up)
+        _way_back(before, dump)
+        code = code or (1 if left else 0)
+    except (build.BuildError, SessionError, KeyboardInterrupt) as exc:
+        output.error(f"stopped: {exc}" if str(exc) else "stopped: interrupted")
+        code = 130 if isinstance(exc, KeyboardInterrupt) else 1
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
+    if pipe.services_rolled_back and pipe.devboxes_exist():
+        code = _restore_devbox_map(config) or code
+    return code
+
+
 def _print_plan(plan, packages: bool) -> None:
-    """The plan of `worms apply <component>` or `worms configure`: each component, what happens to
+    """The plan of `worms apply <component>` or `worms apply`: each component, what happens to
     it and what that touches; then what the whole run touches (components.Plan.touches)."""
     rows, summary = plan.touches(packages)
     print(output.heading("plan"))
@@ -606,81 +939,12 @@ def _build_devboxes(config, rebuild=False, teams=(), wait=False) -> int:
             print(f"{team.name}: {'enqueued' if enqueued else 'already queued'} devbox_rebuild #{job.id} {job.uuid} (from nothing)")
     if wait:
         return _wait_for_jobs(jobs, config)
-    print(output.color("The round agent does the work: `worms show jobs`, `worms logs latest -f`.", "dim"))
+    print(output.color("The round agent does the work: `worms jobs`, `worms log latest -f`.", "dim"))
     return 0
 
 
-def cmd_deploy(config, args) -> int:
-    """`worms configure [<component>...]`: configure what exists, as the operators did by hand: the
-    configuration (never OpenTofu; no internet window unless --packages), then, when the
-    orchestrator or the round agent was deployed, the gameplans, the round agent (once no host
-    job runs) and the conductor, in that order. Alone: every component that exists, offline."""
-    from worms_cli import components, services
-    from worms_cli.session import SessionError
-
-    pipe = pipeline.Pipeline(config, ansible_args=" ".join(args.ansible_args))
-    code = 0
-    try:
-        exists = _exists(pipe, config)
-        try:
-            names = components.expand(args.components) if args.components else \
-                [n for n, c in components.COMPONENTS.items() if c.kind in ("vm", "node") and exists(c)]  # fmt: skip
-        except KeyError as exc:
-            output.error(f"no component {exc.args[0]!r}: `worms apply --help` lists them")
-            return 1
-        not_here = [n for n in names if components.COMPONENTS[n].kind in ("stack", "devbox")]
-        if not_here:
-            output.error(f"{', '.join(not_here)}: not deployed: an OpenTofu stack, or the round agent's devboxes "
-                         f"(`worms apply {' '.join(not_here)}`, `worms reset <team>`)")  # fmt: skip
-            return 1
-        missing = [n for n in names if components.COMPONENTS[n].kind in ("vm", "node") and not exists(components.COMPONENTS[n])]
-        if missing:
-            output.error(f"{', '.join(missing)} not there: a deploy only configures what exists. `worms apply {' '.join(missing)}` "
-                         "creates it")  # fmt: skip
-            return 1
-        sandboxes = sorted(vm["name"] for vm in pipe.runner.vms() if vm.get("pool") == "sandbox")
-        if sandboxes and not args.during_round and not args.plan:  # a plan changes nothing: shown during a round too
-            output.error(f"Refusing to deploy during a round ({len(sandboxes)} sandbox VM(s)): it restarts the conductor, "
-                         "which costs the running team its attempt; --during-round if it must")  # fmt: skip
-            return 1
-        follow_up = bool({"orchestrator", "round-agent", "gameplans"} & set(names))
-        if follow_up and "gameplans" not in names and not sandboxes:
-            names.append("gameplans")  # the node's copy and the orchestrator's, checked: as `worms apply gameplans`
-        plan = components.plan(names, exists, pending_migrations=_pending_migrations(pipe))
-        if "orchestrator" in plan.names() and "gameplans" not in plan.names() and not sandboxes:
-            # Pending migrations brought the orchestrator in: the gameplans follow it, as above.
-            plan = components.plan([*names, "gameplans"], exists, pending_migrations=_pending_migrations(pipe))
-        new = plan.names("create", "recreate", "dependency")
-        if new:
-            output.error(f"{', '.join(new)} would be created (missing): a deploy never runs OpenTofu. `worms apply {' '.join(new)}`")
-            return 1
-        follow_up = follow_up or "orchestrator" in plan.names()
-        _print_plan(plan, args.packages)
-        if follow_up:
-            print(output.color("  then: the round agent restarted once no host job runs, then the conductor", "dim"))
-        if args.plan:
-            return 0
-        pipe.build_components(plan, packages=args.packages)
-        if follow_up:
-            _with_db(config)
-            restarter = services.Restarter(config)
-            for name in ("agent", "conductor"):
-                if name == "agent":
-                    services.wait_until_idle(args.timeout)
-                restarter.restart(name)
-                print(output.status_cell("ok", f"{name}: restarted, active"))
-        print(output.status_cell("ok", f"deployed: {', '.join(plan.names())}"))
-        _record_deployed(pipe, plan.names())
-    except (build.BuildError, SessionError, KeyboardInterrupt) as exc:
-        output.error(f"deploy stopped: {exc}" if str(exc) else "deploy stopped: interrupted")
-        code = 130 if isinstance(exc, KeyboardInterrupt) else 1
-    if pipe.services_rolled_back and pipe.devboxes_exist():
-        code = _restore_devbox_map(config) or code
-    return code
-
-
 def _record_deployed(pipe, names) -> None:
-    """These components run this checkout now (worms_cli/changes.py: what `apply --changed` starts
+    """These components run this checkout now (worms_cli/changes.py: what `worms apply` alone starts
     from). Best effort: a build never fails for its record."""
     from worms_cli import changes, components
 
@@ -710,22 +974,6 @@ def _request_devbox_reconfigure(config) -> int:
     return 0
 
 
-def cmd_keys(config, args) -> int:
-    """`worms show keys`, `sync keys`, `add key`, `remove key`: the teams' devbox SSH keys (worms_cli/keys.py). The
-    old `worms show keys`, `devbox-sync-keys`, `devbox-add-key`, `devbox-remove-key` (ALIASES)."""
-    action = args.keys_action or "status"
-    if action == "status":
-        _with_db(config)
-        from worms_cli import keys
-
-        try:
-            return keys.status(config)
-        except ValueError as exc:
-            output.error(str(exc))
-            return 1
-    return {"sync": cmd_devbox_sync_keys, "add": cmd_devbox_add_key, "remove": cmd_devbox_remove_key}[action](config, args)
-
-
 def cmd_validate(config, args) -> int:
     """`worms check [<team>...]`: can each team work on its devbox, as it does: login
     through the SSH gateway, the flag, scoring, logging, apt, PyPI (worms_cli/validate.py)."""
@@ -740,7 +988,7 @@ def cmd_validate(config, args) -> int:
 
 
 def cmd_devbox_sync_keys(config, args) -> int:
-    """`worms sync keys`: every team's SSH keys, from the database, copied over SSH to the SSH
+    """`worms key sync`: every team's SSH keys, from the database, copied over SSH to the SSH
     gateway and its devbox VMs; then where they are (worms_cli/keys.py)."""
     _with_db(config)
     from worms_cli import keys
@@ -757,7 +1005,7 @@ def _restore_devbox_map(config) -> int:
     except (SystemExit, Exception) as exc:  # noqa: BLE001
         output.error(
             f"the services are reset, but the devbox map on scoring and logging is empty ({exc}): "
-            "devbox submissions stay unattributed until the round agent writes it again: run `worms reset services` "
+            "devbox submissions stay unattributed until the round agent writes it again: run `worms vm reset services` "
             "again once the database answers"
         )
         return 1
@@ -830,7 +1078,7 @@ def _run_on(config, targets, words, root) -> int:
 
 
 def cmd_log(config, args) -> int:
-    """`worms logs [<job>|<name>|<vm>]`: one place for every log (worms_cli/logs.py)."""
+    """`worms log [<job>|<name>|<vm>]`: one place for every log (worms_cli/logs.py)."""
     from worms_cli import logs
 
     what = args.what
@@ -866,19 +1114,18 @@ def cmd_rsync(config, args) -> int:
         return 1
 
 
-def cmd_show(config, args) -> int:
+def _show_vm(config, name: str) -> int:
+    """`worms show <vm>|<team>`: a VM in detail, with its history; a team's devbox."""
     from worms_cli.vms import Catalogue
 
-    if args.vm == "database" and args.table:
-        return _show_table(config, args)
     catalogue = Catalogue(config)
     try:
-        team = catalogue.find_team(args.vm) if "/" not in args.vm and not catalogue.knows(args.vm) else None
+        team = catalogue.find_team(name) if "/" not in name and not catalogue.knows(name) else None
         if team is not None:
             return _show_team(config, catalogue, team)
-        print(output.heading(args.vm))
-        print(output.table(catalogue.details(args.vm)))
-        rows, note = catalogue.history_rows(args.vm)
+        print(output.heading(name))
+        print(output.table(catalogue.details(name)))
+        rows, note = catalogue.history_rows(name)
         print()
         print(output.heading("history, newest first"))
         if rows:
@@ -887,13 +1134,6 @@ def cmd_show(config, args) -> int:
     except build.BuildError as exc:
         output.error(str(exc))
         return 1
-    if args.vm == "database":
-        _with_db(config)
-        from worms_cli import database
-
-        print()
-        print(output.heading("tables (`worms show db <table>`)"))
-        print(output.table(database.tables(), headers=["table", "rows (estimate)", "size"]))
     return 0
 
 
@@ -905,22 +1145,23 @@ def _show_team(config, catalogue, team) -> int:
     cells = keys.team_cells(config, team.slug, catalogue) if team.devbox else {}
     print(output.table(catalogue.team_rows(team, cells), headers=["target", "VM", "vmid", "address", "state", "team keys"]))
     if cells.get("keys"):
-        print(output.color(f"{cells['keys']} key(s) in the database; `worms show keys`: every team's", "dim"))
-    print(output.color(f"worms login {team.handle}/a · worms show {team.handle}/gw · worms reset {team.handle}", "dim"))
+        print(output.color(f"{cells['keys']} key(s) in the database; `worms key`: every team's", "dim"))
+    print(output.color(f"worms login {team.handle}/a · worms show {team.handle}/gw · worms vm reset {team.handle}", "dim"))
     return 0
 
 
-def _show_tables(config) -> int:
-    """`worms show db`: every table of the platform's database, with its rows."""
+def list_tables(config, args=None) -> int:
+    """`worms db`: every table of the platform's database, with its rows."""
     _with_db(config)
     from worms_cli import database
 
     print(output.table(database.tables(), headers=["table", "rows (estimate)", "size"]))
-    print(output.color("a table's newest rows: `worms show db <table>` (--limit N, --schema)", "dim"))
+    print(output.color("a table's newest rows: `worms show table <table>` (--limit N, --schema)", "dim"))
     return 0
 
 
 def _show_table(config, args) -> int:
+    """`worms show table <name>`: its newest rows, or its columns (--schema)."""
     _with_db(config)
     from worms_cli import database
 
@@ -946,13 +1187,17 @@ def _show_table(config, args) -> int:
 
 
 def cmd_internet(config, args) -> int:
-    """`worms open window` is refused during a round (a sandbox VM exists). Running devbox
-    VMs are stopped first, after asking: no team VM runs while the window is open; they are
-    written down on the node (power.WINDOW_STOPPED). `disable` closes it, switches DNS and the
-    caches back to offline mode (`worms step offline`) and starts those devboxes again."""
+    """`worms internet`: whether the window is open. `worms internet on` is refused during a round
+    (a sandbox VM exists). Running devbox VMs are stopped first, after asking: no team VM runs
+    while the window is open; they are written down on the node (power.WINDOW_STOPPED). `off`
+    closes it, switches DNS and the caches back to offline mode (`worms step offline`) and starts
+    those devboxes again."""
+    if args.state is None:
+        print(": ".join(_internet_status(config)))
+        return 0
     pipe = pipeline.Pipeline(config)
     try:
-        if args.state == "enable":
+        if args.state == "on":
             pipe.refuse_during_round()
             running = pipe.running_devboxes()
             if running:
@@ -965,7 +1210,7 @@ def cmd_internet(config, args) -> int:
                 try:
                     # Listed again: one started while the question was open goes too. Forced after
                     # 120 s: a team's VM may ignore the shutdown request. Each is written down on the
-                    # node first, for `worms close window` to start again.
+                    # node first, for `worms internet off` to start again.
                     for vm in pipe.running_devboxes():
                         recorded = [r for r in recorded if r["vmid"] != int(vm["vmid"])] + [{"vmid": int(vm["vmid"]), "name": vm["name"]}]
                         power.write_record(pipe.runner, power.WINDOW_STOPPED, recorded)
@@ -974,7 +1219,7 @@ def cmd_internet(config, args) -> int:
                 finally:
                     if stopped:  # also when a later one failed: these are off now
                         print(output.color(f"stopped {len(stopped)} devbox VM(s): {', '.join(vm['name'] for vm in stopped)}. "
-                                           "`worms close window` starts them again once the window is closed "
+                                           "`worms internet off` starts them again once the window is closed "
                                            f"(on the node: {pipeline.start_command(vm['vmid'] for vm in stopped)})", "dim"))  # fmt: skip
             pipe.internet_allow()
         else:
@@ -995,7 +1240,7 @@ def cmd_internet(config, args) -> int:
 
 
 def _start_window_stopped(runner) -> int:
-    """After the window closed: the devbox VMs `worms open window` shut down, started again
+    """After the window closed: the devbox VMs `worms internet on` shut down, started again
     (those still there and stopped). Not while a round is on (a sandbox VM exists) or holds the
     devboxes (its record): the record may be stale, and a round with devboxes off must not get
     them back; it stays, and says so. The window is closed by then: a record that cannot be
@@ -1007,13 +1252,13 @@ def _start_window_stopped(runner) -> int:
         held = power.read_record(runner, power.HELD_DEVBOXES)
         sandboxes = sorted(vm["name"] for vm in runner.vms() if vm.get("pool") == "sandbox")
     except build.BuildError as exc:
-        output.warn(f"the devboxes the window stopped are not started again: {exc}. Start them with `worms start`")
+        output.warn(f"the devboxes the window stopped are not started again: {exc}. Start them with `worms vm start`")
         return 0
     names = ", ".join(r["name"] for r in recorded)
     if held or sandboxes:
         why = f"a round holds the devboxes ({power.HELD_DEVBOXES})" if held else f"a round is on ({len(sandboxes)} sandbox VM(s))"
         output.warn(f"{why}: the devbox VM(s) the window stopped stay off and written down ({names}); "
-                    "`worms close window` again once it is over, or `worms start <vm>`")  # fmt: skip
+                    "`worms internet off` again once it is over, or `worms vm start <vm>`")  # fmt: skip
         return 0
     vms = power.still_there(runner, recorded)
     failed = power.start(runner, vms)
@@ -1022,7 +1267,7 @@ def _start_window_stopped(runner) -> int:
     if started:
         print(output.status_cell("running", f"started again the devbox VM(s) the window stopped: {', '.join(started)}"))
     if failed:
-        output.error(f"did not start again: {', '.join(failed)} (`worms start {failed[0]}`)")
+        output.error(f"did not start again: {', '.join(failed)} (`worms vm start {failed[0]}`)")
         return 1
     return 0
 
@@ -1081,7 +1326,7 @@ def _reset_devboxes(config, args) -> int:
     from worms_cli import queries
 
     if not args.teams and not args.all_teams:
-        output.error("which team's devbox? `worms reset <team>...` or `worms reset devboxes`")
+        output.error("which team's devbox? `worms vm reset <team>...` or `worms vm reset devboxes`")
         return 2
     try:
         teams = [box.team for box in Devbox.objects.select_related("team")] if args.all_teams else [queries.team(n) for n in args.teams]
@@ -1095,7 +1340,7 @@ def _reset_devboxes(config, args) -> int:
         return 1
     jobs = []
     for team in teams:
-        job, enqueued = request_rebuild(team, fresh=fresh)  # fresh: as `worms rebuild devboxes`
+        job, enqueued = request_rebuild(team, fresh=fresh)  # fresh: as `worms vm rebuild devboxes`
         events.team("devbox_reset", actor=_console(), team=team)
         jobs.append(job)
         if job is None:
@@ -1103,7 +1348,7 @@ def _reset_devboxes(config, args) -> int:
         else:
             print(f"{team.name}: {'enqueued' if enqueued else 'already queued'} devbox_rebuild #{job.id} {job.uuid}")
     if getattr(args, "detach", False):
-        print(output.color("queued; follow them with `worms logs latest -f`", "dim"))
+        print(output.color("queued; follow them with `worms log latest -f`", "dim"))
         return 0
     return _wait_for_jobs(jobs, config)
 
@@ -1112,7 +1357,7 @@ ROUND_CRITICAL = ("agent", "processor", "conductor", "scoring", "logging")  # a 
 
 
 def cmd_restart(config, args) -> int:
-    """`worms restart <service>...`: in a safe order (services.SERVICES); the agent once no host
+    """`worms service restart <service>...`: in a safe order (services.SERVICES); the agent once no host
     job runs. Refused for what a round needs while one is on, unless --during-round."""
     from worms_cli import services
 
@@ -1147,7 +1392,7 @@ def cmd_restart(config, args) -> int:
 
 
 def cmd_backup(config, args) -> int:
-    """`worms backup db`: a pg_dump of the platform's database, here (database.backup)."""
+    """`worms db backup`: a pg_dump of the platform's database, here (database.backup)."""
     from worms_cli import database
 
     try:
@@ -1156,21 +1401,22 @@ def cmd_backup(config, args) -> int:
         output.error(str(exc))
         return 1
     print(output.status_cell("ok", f"{size / 1e6:.1f} MB: {path}"))
-    print(output.color(f"readable by you only (0600). Restore it: `worms restore db {path}`", "dim"))
+    print(output.color(f"readable by you only (0600). Restore it: `worms db restore {path}`", "dim"))
     return 0
 
 
 def cmd_power(config, args) -> int:
-    """`worms start|stop <target>...` (worms_cli/power.py)."""
-    if args.held and args.state != "start":
-        output.error("--held is for `worms start --held`")
-        return 2
-    if not args.targets and not args.held:
-        output.error(f"which VMs? `worms power {args.state} <target>...`" + (" or --held" if args.state == "start" else ""))
+    """`worms vm start|stop|restart <target>...` (worms_cli/power.py): a restart is a stop, then a start."""
+    held = getattr(args, "held", False)
+    if not args.targets and not held:
+        output.error(f"which VMs? `worms vm {args.action} <target>...`" + (" or --held" if args.action == "start" else ""))
         return 2
     try:
         machines = power.Power(config)
-        return machines.start(args.targets, held=args.held) if args.state == "start" else machines.stop(args.targets)
+        if args.action == "start":
+            return machines.start(args.targets, held=held)
+        code = machines.stop(args.targets)
+        return machines.start(args.targets) if args.action == "restart" and code == 0 else code
     except build.BuildError as exc:
         output.error(str(exc))
         return 1
@@ -1184,27 +1430,25 @@ def completion_slots() -> dict[str, list[str]]:
     built = " ".join([*components.COMPONENTS, *components.GROUPS])
     groups = " ".join(remote.groups())
     machines = f"@targets @teams devboxes {groups}"
+    vms = " ".join(n for n, c in components.COMPONENTS.items() if c.kind == "vm")
     return {
-        "show": [f"@targets @teams {' '.join(STATUS_TOPICS)} keys secrets db", ""],
-        "logs": [f"@targets @teams {' '.join(services.SERVICES)} run latest", ""],
-        "check": ["@teams devboxes tokens apt pypi caches"],
+        "show": [f"@targets @teams {' '.join(SHOW_TOPICS)} job table", ""],
+        "log": [f"@targets @teams {' '.join(services.SERVICES)} run latest", ""],
+        "check": ["@teams packages tokens"],
         "trace": ["@teams upload", ""],
         "login": ["@targets", ""],
         "run": [f"@targets {groups}"],
         "rsync": ["@rsync"],
-        "start": [machines + " round"],
-        "stop": [machines],
-        "reset": ["@teams devboxes services db password"],
-        "rebuild": [f"@teams devboxes {built}"],
-        "restart": [" ".join(n for n, s in services.SERVICES.items() if s.restartable)],
         "apply": [built],
-        "plan": [built],
-        "configure": [built],
-        "release": [built],
-        "add key": ["@teams", ""],
-        "remove key": ["@teams", ""],
-        "delete team": ["@teams", ""],
-        "cancel jobs": ["", ""],
+        "vm start": [machines],
+        "vm stop": [machines],
+        "vm restart": [machines],
+        "vm reset": ["@teams devboxes services"],
+        "vm rebuild": [f"@teams devboxes {vms} {' '.join(components.GROUPS)}"],
+        "service restart": [" ".join(n for n, s in services.SERVICES.items() if s.restartable)],
+        "team delete": ["@teams", ""],
+        "key add": ["@teams", ""],
+        "key remove": ["@teams", ""],
         "step": [" ".join([*pipeline.STEPS, "debug"]), ""],
     }
 
@@ -1386,7 +1630,7 @@ def cmd_devbox_remove_key(config, args) -> int:
     matches = [k for k in keys if args.key in (k.name, k.key_fingerprint) or (len(args.key) >= 8 and k.key_fingerprint.startswith(args.key))]
     if len(matches) != 1:
         output.error(f"{len(matches)} of {team.name}'s keys match {args.key!r}: give its name or fingerprint "
-                     "(`worms show devboxes`)")  # fmt: skip
+                     "(`worms team`)")  # fmt: skip
         return 1
     key = matches[0]
     if not build.confirm(f"Remove {team.name}'s key {key.name or key.key_fingerprint[:16]!r} from its devbox?", args.yes):
@@ -1407,8 +1651,8 @@ def cmd_devbox_remove_key(config, args) -> int:
 
 
 def cmd_secrets(config, args) -> int:
-    """`worms show secrets`: what the vault holds (never a value); `worms set secret <name>`:
-    enter one, prompted without echo or read from stdin; `worms issue token <name>`: create or
+    """`worms secret`: what the vault holds (never a value); `worms secret set <name>`:
+    enter one, prompted without echo or read from stdin; `worms secret issue <name>`: create or
     rotate a Proxmox token and store it; `worms check tokens`: ask Proxmox whether the stored
     tokens are right."""
     import getpass
@@ -1438,7 +1682,7 @@ def cmd_secrets(config, args) -> int:
         if args.secrets_action == "set":
             if sys.stdin.isatty():
                 if args.name == "ssh-key":
-                    output.error("pipe the private key in: worms set secret ssh-key < key")
+                    output.error("pipe the private key in: worms secret set ssh-key < key")
                     return 2
                 value = getpass.getpass(f"{args.name} ({EXTERNAL[args.name][1]}): ")
             else:
@@ -1453,7 +1697,7 @@ def cmd_secrets(config, args) -> int:
         output.error(str(exc))
         return 1
     print(output.table(rows, headers=["secret", "what", "state"]))
-    print(output.color(f"vault: {vault.file} (key {vault.key_file}); set one with `worms set secret <name>`", "dim"))
+    print(output.color(f"vault: {vault.file} (key {vault.key_file}); set one with `worms secret set <name>`", "dim"))
     return 0
 
 
@@ -1511,259 +1755,133 @@ done
 
 
 # ---------------------------------------------------------------------------
-# the verbs: `worms <verb> [<what>...]`, under what they are for
+# the commands, git's way: a few verbs to look and to reach a VM, and a noun for each kind of
+# thing that changes (`worms vm reset alpha`, `worms jobs pause`); a noun alone lists its things
 # ---------------------------------------------------------------------------
 
 
 class Section(NamedTuple):
-    """One part of `worms --help`: (as typed, what it does) per line. A line's first word is its verb
-    (VERBS); a verb may have several lines, one per thing it acts on."""
+    """One part of `worms --help`: (as typed, what it does) per line."""
 
     title: str
     about: str
     commands: tuple[tuple[str, str], ...]
 
 
-STATUS_TOPICS = {
-    "teams": "teams, their members, who has signed in",
-    "users": "every user: team, login status, one-time password",
-    "leaderboard": "the leaderboard, as the dashboard shows it",
-    "audit": "the event tables: sign-ins, passwords, view-as, keys, SSH gateway logins (newest first)",
-    "rounds": "the rounds: window, gameplan and its check, attempts by state",
-    "gameplans": "the gameplans: valid on the orchestrator and the node? why not, by this checkout's check",
-    "jobs": "the round agent's latest host jobs, and why one failed",
-    "devboxes": "every team's devbox (t<id> and its VMs) and SSH keys",
-}
+# `worms <noun> <verb> ...`; `worms <noun>` alone lists (`worms jobs`: the queue).
+NOUNS = ("vm", "jobs", "round", "service", "db", "team", "key", "user", "secret")
 
-# Each verb in one line: `worms <verb> --help`'s first line, and the verb list of tab completion.
-VERBS = {
-    "status": "what needs attention, and the whole platform at a glance",
-    "show": "one thing in detail: a VM, a team, a list (teams, jobs, rounds, ...), the database",
-    "logs": "a log: a service's, a VM's journal, a host job's, a run's here",
-    "check": "is it set up as it should be? A team's devbox end to end, the Proxmox tokens",
-    "trace": "where a team's dev upload is, link by link, and why it waits",
-    "login": "a shell on a VM",
-    "run": "a command on VMs",
-    "rsync": "files between here and a VM",
-    "start": "VMs on",
-    "stop": "VMs off",
-    "reset": "back to the clean state: teams' devboxes, the service VMs, the database, a password",
-    "rebuild": "destroyed and built again from nothing: teams' devboxes, platform VMs",
-    "restart": "services, in a safe order",
-    "pause": "hold the round agent's jobs, or a round",
-    "resume": "let the round agent's jobs, or a round, go on",
-    "cancel": "cancel queued jobs, or a round's attempts still to come",
-    "apply": "build what is missing, configure what exists",
-    "configure": "configure what exists, never OpenTofu",
-    "plan": "what `apply` would do, changing nothing",
-    "release": "this checkout onto the platform, with a restore point and a check",
-    "rollback": "back to before the newest release: the database, the code",
-    "open": "open the internet window",
-    "close": "close the internet window",
-    "backup": "a dump of the database, here",
-    "restore": "the database back to a dump",
-    "destroy": "destroy the VM stacks",
-    "emergency-stop": "hard-stop every VM",
-    "add": "add a team's SSH key, a staff account, packages to a cache's list",
-    "remove": "remove a team's SSH key, packages from a cache's list",
-    "refill": "fill the private internet's caches again, their lists checked first",
-    "sync": "copy every team's SSH keys to its VMs",
-    "delete": "delete a team",
-    "issue": "create or rotate a Proxmox token",
-    "set": "store a secret by hand",
-    "trust": "let the WORMS key in on the node",
-    "completion": "tab completion for bash",
-    "test": "the test suites",
-    "step": "one pipeline step (the round agent's)",
+# `worms show <topic>`: what has no noun of its own.
+SHOW_TOPICS = {
+    "leaderboard": "the leaderboard, as the dashboard shows it",
+    "gameplans": "the gameplans: valid on the orchestrator and the node? why not",
+    "audit": "the audit events: sign-ins, passwords, view-as, keys, SSH gateway logins",
 }
+# `worms show <list>` is the noun alone too.
+LISTS = {"vms": "vm", "jobs": "jobs", "rounds": "round", "services": "service", "tables": "db", "teams": "team",
+         "devboxes": "team", "keys": "key", "users": "user", "secrets": "secret"}  # fmt: skip
 
 SECTIONS = (
-    Section(
-        "look",
-        "Change nothing. A VM is its name or <team>/a|b|c|gw (alpha/gw, t2/a); a team its name or slug (t2).",
-        (
-            ("status", "what needs attention, the internet window, every VM (team, state), the competition"),
-            ("show <vm>|<team>", "a VM: state, resources, networks, snapshots, team, services, login; a team: its devbox "
-                                 "VMs, their states and its keys on each"),  # fmt: skip
-            ("show <list>", "one of: " + ", ".join(STATUS_TOPICS) + ", keys (read on the VMs), secrets (what the vault "
-                            "holds, never a value)"),  # fmt: skip
-            ("show db [<table>]", "the database's tables, or a table's newest rows (--limit N, --schema)"),
-            ("logs [<what>] [-f]", "a service's log (agent, conductor, processor, dashboard, scoring, ...), a VM's journal, "
-                                   "a host job's by its number (`latest`: the newest), `run [N]`: the N-th newest run log "
-                                   "of a change made here; alone: what there is"),  # fmt: skip
-            ("logs <team>", "everything about a team: its host jobs, the processor's lines about its uploads, what "
-                            "scoring and logging refused from its devbox"),  # fmt: skip
-            ("check [<team>...]", "can each team work on its devbox? As the team does, changing nothing: login through the "
-                                  "SSH gateway with its keys, then on A, B and C the flag, scoring, logging, apt and PyPI; "
-                                  "and the gateway's sshd penalties (default: every team)"),  # fmt: skip
-            ("check tokens", "do the stored Proxmox tokens work, with exactly their rights?"),
-            ("check apt|pypi|caches", "do the caches' listed packages exist and install together? apt: offline, against "
-                                      "the index the cache holds; pypi: on PyPI, with internet here"),  # fmt: skip
-            ("trace <team>|upload <n>", "a team's newest dev uploads on their way to its devbox: picked up, the reset "
-                                        "(its job), put on VM A (its job), its hour; what each waits for and why "
-                                        "(a round holding the devboxes, the agent, the queue)"),  # fmt: skip
-        ),
-    ),
-    Section(
-        "reach",
-        "On a VM, over its management SSH. What a team's VM prints is escaped: it is assumed rooted.",
-        (
-            ("login <vm>", "a shell there (`worms login --help` lists the VMs); `login <vm> -- <command>`: that command there"),
-            ("run <target>... -- <command>", "a command on VMs without a login: a VM, <team>/<role>, node, or a group "
-                                             "(infrastructure, services, private-internet: never a team's VM); one "
-                                             "prefix per VM; --root: with sudo"),  # fmt: skip
-            ("rsync <source>... <target>", "rsync -avz between here and a VM, in rsync's syntax: `worms rsync dir/ alpha/a:` "
-                                           "up, `worms rsync alpha/a: dir/` down (`worms rsync --help`)"),  # fmt: skip
-        ),
-    ),
-    Section(
-        "machines",
-        "A target is a VM, a group (infrastructure, services, private-internet) or, for the teams' devboxes, a team "
-        "or `devboxes` (every team's).",
-        (
-            ("start <target>...", "VMs on (qm on the node); `start --held`: the devboxes a round holds, once it is over"),
-            ("stop <target>...", "VMs off: shut down, forced after 120 s"),
-            ("reset <team>...|devboxes", "teams' devboxes back to their snapshot, through the orchestrator, as the "
-                                         "dashboard's reset: the dev score starts over; follows the jobs, their logs live (--detach: queue only)"),  # fmt: skip
-            ("reset services", "the service VMs (ephemeral, private internet) back to their snapshot (--wait)"),
-            ("reset db", "DANGER: wipe the database, migrate and initialise it again (asks first)"),
-            ("rebuild <team>...|devboxes", "teams' devboxes destroyed and built again from nothing, fresh disks; follows "
-                                           "the jobs, their logs live (--detach: queue only)"),
-            ("rebuild <component>...", "platform VMs destroyed and built again (`worms apply --help` lists them)"),
-            ("restart <service>...", "services in a safe order: the agent first and once no host job runs, then the "
-                                     "conductor (`worms logs` lists them); refused during a round for what it needs, "
-                                     "unless --during-round"),  # fmt: skip
-        ),
-    ),
-    Section(
-        "operate",
-        "The round agent's queue and the rounds' schedule (`worms show jobs`, `worms show rounds`: their numbers).",
-        (
-            ("pause jobs", "the round agent finishes the job under way and takes no other (--reason TEXT); a queued "
-                           "job then says so (`worms show job <n>`)"),  # fmt: skip
-            ("resume jobs", "the round agent takes jobs again"),
-            ("cancel job <n>...", "queued jobs, never run: failed, \"cancelled by the operator\" (a cancelled reset fails "
-                                  "its upload, saying so)"),  # fmt: skip
-            ("cancel jobs --team <t>", "every queued job of a team"),
-            ("pause round <r>", "no attempt of the round starts (one under way ends as usual); the devboxes it holds are "
-                                "started again meanwhile"),  # fmt: skip
-            ("resume round <r>", "the round goes on (holding the devboxes again if it wants them off)"),
-            ("start round <r>", "a round still to come begins now: its start (the upload deadline) moves to now"),
-            ("cancel round <r>", "its attempts still to come are skipped; one under way ends as usual"),
-        ),
-    ),
-    Section(
-        "platform",
-        "`worms apply` builds everything; `worms apply <component>` one part, and what it needs first: it shows the "
-        "plan, what it touches, and asks. Packages need the internet window: devbox VMs are shut down while it is "
-        "open, and it is refused during a round.",
-        (
-            ("apply [<component>...]", "build what is missing, configure what exists (`worms apply --help` lists the "
-                                       "components); --packages: with the window; after `--`: arguments for "
-                                       "ansible-playbook"),  # fmt: skip
-            ("configure [<component>...]", "configure what exists, never OpenTofu, no window unless --packages; then the "
-                                           "gameplans, the agent (once idle) and the conductor; alone: every component "
-                                           "offline; refused during a round"),  # fmt: skip
-            ("plan [<component>...]", "what `worms apply` would do and touch, changing nothing: its steps, what each VM "
-                                      "runs now against this checkout, and OpenTofu's own plan; on production before a "
-                                      "release, after dev: the two should match"),  # fmt: skip
-            ("apply --changed", "only what changed since what runs: per component, the files of it this checkout changed "
-                                "since its last apply (git), and its packages; OpenTofu's in-place changes from its saved "
-                                "plans; then `worms configure` of those. `plan --changed` shows it"),  # fmt: skip
-            ("release [<component>...]", "this checkout onto the platform, one step after the other: what changed (as "
-                                         "`apply --changed`; or the components named, as `worms plan`), then, once you "
-                                         "agree, a restore point (a database dump, and what each VM ran), the change, "
-                                         "`worms check` of every team's devbox; recorded in ~/.worms/releases/"),  # fmt: skip
-            ("rollback [--db] [--code]", "back to before the newest release: --db the database from its dump (what was "
-                                         "written since is lost), --code the checkout at the commit the VMs ran before "
-                                         "and that commit's own `worms configure`; alone: what it would do"),  # fmt: skip
-            ("refill apt|pypi|caches", "the caches' lists checked (as `worms check`), then filled in the internet "
-                                       "window (`worms apply apt-cache|devpi --packages`): a bad name fails before "
-                                       "anything is opened"),  # fmt: skip
-            ("add package apt|pypi <name>...", "packages added to a cache's list (in this checkout: commit it), each "
-                                               "checked first; the cache gets them with `worms refill`"),  # fmt: skip
-            ("remove package apt|pypi <name>...", "packages taken off a cache's list (in this checkout)"),
-            ("open window", "open the internet window by hand (refused during a round; stops running devboxes, after "
-                            "asking)"),  # fmt: skip
-            ("close window", "close it: starts the devboxes it stopped again, and switches DNS and the caches back to "
-                             "offline mode"),  # fmt: skip
-            ("backup db", "a pg_dump -Fc of the platform's database, streamed to a file here (0600)"),
-            ("restore db <dump>", "DANGER: the database back to a dump (`worms backup db`): what was written since is lost; "
-                                  "the dashboard, the orchestrator and the round agent stop meanwhile (asks first)"),  # fmt: skip
-            ("destroy [--all]", "destroy the VM stacks (keeps firewall and platform); --all: everything (asks first)"),
-            ("emergency-stop", "freeze: hard-stop ALL VMs (destroys nothing); the only hard stop of a round (asks first)"),
-        ),
-    ),
-    Section(
-        "teams and accounts",
-        "Teams, students and rounds are managed on the dashboard (/staff/). These are the console's part.",
-        (
-            ("add key <team> <key>", "add an SSH key to a team's devbox, as on the dashboard, then copy the keys"),
-            ("remove key <team> <key>", "remove one, by its name or fingerprint, then copy the keys"),
-            ("sync keys", "copy every team's SSH keys from the database to the SSH gateway and its devbox VMs, then "
-                          "show them"),  # fmt: skip
-            ("add staff <email>", "a staff (tutor) account; its one-time password printed once"),
-            ("reset password [<user>]", "a one-time password for the dashboard admin (or <user>), printed once (the "
-                                        "admin is created if missing)"),  # fmt: skip
-            ("delete team <name>", "delete a team with everything it owns (its users stay)"),
-        ),
-    ),
-    Section(
-        "set up",
-        "Once per controller: the vault, the tokens, the key the build logs in with.",
-        (
-            ("issue token <name>", "create or rotate a Proxmox token and store it in the vault"),
-            ("set secret <name>", "store a secret by hand (prompted, or from stdin)"),
-            ("trust node", "let the WORMS key in, for root on the node and on VMs that predate it"),
-            ("completion bash", "tab completion for bash: eval \"$(worms completion bash)\" in ~/.bashrc"),
-        ),
-    ),
-    Section(
-        "develop",
-        "For working on the code.",
-        (
-            ("test [--live]", "the offline test suite; --live: the simulation on the deployed platform; after `--`: "
-                              "arguments for pytest (or ansible-playbook)"),  # fmt: skip
-            ("step <name>", "one pipeline step (the round agent's, and for troubleshooting): "
-                            + ", ".join([*pipeline.STEPS, "debug"])),  # fmt: skip
-        ),
-    ),
-)
+    Section("look", "Change nothing. A VM: its name or <team>/a|b|c|gw; a team: its name or t<id>.", (
+        ("status", "the platform at a glance, attention first"),
+        ("show <vm>|<team>", "a VM in detail; a team's devbox and keys"),
+        ("show job <n>", "a host job: why it waits, its log's end"),
+        ("show table <name>", "a table's newest rows (--schema: columns)"),
+        ("show leaderboard|gameplans|audit", "the scores; the gameplans' check; the events"),
+        ("log [<what>] [-f]", "a service's, VM's, job's or team's log"),
+        ("check [<team>...]", "is each team's devbox set up and working?"),
+        ("check packages|tokens", "the caches' package lists; the API tokens"),
+        ("trace <team>|upload <n>", "where a team's upload is, why it waits"),
+    )),
+    Section("reach", "Over the management SSH; what a team's VM prints is escaped.", (
+        ("login <vm> [-- <command>]", "a shell on a VM, or a command there"),
+        ("run <target>... -- <command>", "a command on several VMs, or a group"),
+        ("rsync <source>... <target>", "files between here and a VM"),
+    )),
+    Section("deploy", "Each shows its plan and asks first; packages open the internet window.", (
+        ("apply", "only what changed, up to this checkout"),
+        ("apply <component>...", "these components, built if missing"),
+        ("apply --all", "everything in build order: a new node"),
+        ("destroy [--all]", "the VM stacks; --all: everything"),
+        ("internet [on|off]", "the internet window, for packages"),
+    )),
+    Section("machines", "A target: a VM, a group, a team (its devbox) or `devboxes` (every team's).", (
+        ("vm", "every VM and its state"),
+        ("vm start <target>...", "start VMs (--held: those a round held off)"),
+        ("vm stop <target>...", "shut VMs down, forced after 120 s"),
+        ("vm restart <target>...", "shut down, then start again"),
+        ("vm reset <team>...|devboxes", "a team's devbox back to its snapshot"),
+        ("vm reset services", "the service VMs back to their snapshot"),
+        ("vm rebuild <team>...|devboxes", "a team's devbox built again from nothing"),
+        ("vm rebuild <vm>...", "platform VMs built again from nothing"),
+        ("vm kill", "hard-stop every VM now: the emergency stop"),
+    )),
+    Section("operate", "The round agent's queue, the rounds, the services.", (
+        ("jobs", "the round agent's host jobs"),
+        ("jobs pause", "the agent takes no more jobs (its own ends)"),
+        ("jobs resume", "the agent takes jobs again"),
+        ("jobs cancel <n>...|--team <t>", "queued jobs, never run"),
+        ("round", "the rounds and their attempts"),
+        ("round pause <r>", "no attempt of the round starts"),
+        ("round resume <r>", "its attempts start again"),
+        ("round start <r>", "a round still to come begins now"),
+        ("round cancel <r>", "its attempts still to come are skipped"),
+        ("service", "the services and where they run"),
+        ("service restart <name>...", "in a safe order (the agent once idle)"),
+    )),
+    Section("data and accounts", "The console's part: teams and rounds are managed on the dashboard.", (
+        ("db", "the database's tables"),
+        ("db backup", "a dump of the database, here"),
+        ("db restore <dump>", "DANGER: the database back to a dump"),
+        ("db reset", "DANGER: an empty database, initialised"),
+        ("team", "the teams, their members and devboxes"),
+        ("team delete <name>", "a team and what it owns (its users stay)"),
+        ("key", "every team's SSH keys, as its VMs have them"),
+        ("key add <team> <key>", "a team's SSH key, then onto its VMs"),
+        ("key remove <team> <key>", "one of its keys, then off its VMs"),
+        ("key sync", "every team's keys copied to its VMs"),
+        ("user", "every user: team, signed in, password"),
+        ("user add <email>", "a staff account; its password, shown once"),
+        ("user password [<user>]", "a one-time password for admin (or <user>)"),
+    )),
+    Section("set up", "Once per controller.", (
+        ("init", "the vault; the WORMS key on the node"),
+        ("secret", "what the vault holds (never a value)"),
+        ("secret set <name>", "store a secret by hand"),
+        ("secret issue <name>", "create or rotate a Proxmox token"),
+        ("completion bash", "tab completion for bash"),
+        ("test [--live]", "the tests; --live: the simulation"),
+    )),
+)  # fmt: skip
 
-# Commands that moved: the old words, as typed, -> the new ones. main() rewrites argv with it (and
-# says so on stderr); tests/test_docs.py checks the docs' commands through it too. Longest first.
+# Not in the help: the round agent's (and for troubleshooting, docs/03-manage-py.md).
+HIDDEN = {"step": "one pipeline step (the round agent's): " + ", ".join([*pipeline.STEPS, "debug"])}
+
+# The commands of the CLI before this one, as typed -> what they are now. main() rewrites argv with
+# it, and says so on stderr. Longest first.
 ALIASES = {
-    ("status", "keys"): ("show", "keys"),
-    **{("status", topic): ("show", topic) for topic in STATUS_TOPICS},
-    ("keys", "status"): ("show", "keys"),
-    ("keys", "sync"): ("sync", "keys"),
-    ("keys", "add"): ("add", "key"),
-    ("keys", "remove"): ("remove", "key"),
-    ("validate", "devbox"): ("check",),
-    ("internet", "enable"): ("open", "window"),
-    ("internet", "disable"): ("close", "window"),
-    ("power", "start"): ("start",),
-    ("power", "stop"): ("stop",),
-    ("reset", "devbox"): ("reset",),
-    ("reset", "database"): ("reset", "db"),
-    ("backup", "database"): ("backup", "db"),
-    ("secrets", "issue"): ("issue", "token"),
-    ("secrets", "set"): ("set", "secret"),
-    ("secrets", "check"): ("check", "tokens"),
-    ("keys",): ("show", "keys"),
-    ("secrets",): ("show", "secrets"),
-    ("devbox-sync-keys",): ("sync", "keys"),
-    ("devbox-add-key",): ("add", "key"),
-    ("devbox-remove-key",): ("remove", "key"),
-    ("admin-reset-password",): ("reset", "password"),
-    ("admin-create-staff",): ("add", "staff"),
-    ("delete-team",): ("delete", "team"),
-    ("trust-node",): ("trust", "node"),
-    ("build",): ("apply",),
-    ("deploy",): ("configure",),
-    ("power",): ("start",),  # `power` alone named no state: start was its first
-    ("log",): ("logs",),
-}
+    ("logs",): ("log",),
+    ("start", "round"): ("round", "start"), ("start",): ("vm", "start"), ("stop",): ("vm", "stop"),
+    ("reset", "db"): ("db", "reset"), ("reset", "database"): ("db", "reset"), ("reset", "password"): ("user", "password"),
+    ("reset",): ("vm", "reset"), ("rebuild",): ("vm", "rebuild"), ("restart",): ("service", "restart"),
+    ("emergency-stop",): ("vm", "kill"),
+    ("pause", "jobs"): ("jobs", "pause"), ("resume", "jobs"): ("jobs", "resume"), ("cancel", "job"): ("jobs", "cancel"),
+    ("cancel", "jobs"): ("jobs", "cancel"), ("pause", "round"): ("round", "pause"), ("resume", "round"): ("round", "resume"),
+    ("cancel", "round"): ("round", "cancel"),
+    ("apply", "--changed"): ("apply",), ("plan", "--changed"): ("apply", "--plan"), ("plan",): ("apply", "--plan"),
+    ("configure",): ("apply",), ("release",): ("apply",), ("build",): ("apply",), ("deploy",): ("apply",),
+    ("refill", "apt"): ("apply", "apt-cache", "--packages"), ("refill", "pypi"): ("apply", "devpi", "--packages"),
+    ("refill", "caches"): ("apply", "apt-cache", "devpi", "--packages"),
+    ("open", "window"): ("internet", "on"), ("close", "window"): ("internet", "off"),
+    ("internet", "enable"): ("internet", "on"), ("internet", "disable"): ("internet", "off"),
+    ("backup", "db"): ("db", "backup"), ("restore", "db"): ("db", "restore"),
+    ("show", "db"): ("show", "table"), ("check", "apt"): ("check", "packages"), ("check", "pypi"): ("check", "packages"),
+    ("check", "caches"): ("check", "packages"),
+    ("add", "key"): ("key", "add"), ("remove", "key"): ("key", "remove"), ("sync", "keys"): ("key", "sync"),
+    ("add", "staff"): ("user", "add"), ("delete", "team"): ("team", "delete"), ("delete-team",): ("team", "delete"),
+    ("admin-reset-password",): ("user", "password"), ("admin-create-staff",): ("user", "add"),
+    ("issue", "token"): ("secret", "issue"), ("set", "secret"): ("secret", "set"), ("trust", "node"): ("init",),
+}  # fmt: skip
 
 
 def _aliased(argv: list[str]) -> tuple[list[str], str]:
@@ -1817,52 +1935,59 @@ command line for the VM's shell (pipes, redirections). Never interactive
 sandbox VM prints is escaped. The exit code is the worst of the VMs'; a stopped
 VM is not started."""
 
-
-# Verbs whose objects are fixed words, each a command of its own (`worms add key`, `worms issue token`).
-OBJECT_VERBS = ("open", "close", "backup", "restore", "add", "remove", "sync", "delete", "issue", "set", "trust", "completion",
-                "pause", "resume", "cancel")
-CACHE_KINDS = ("apt", "pypi", "caches")
+LOG_HELP = """\
+  worms log                 the names there are
+  worms log conductor -f    a service's log (`worms service` lists them), followed
+  worms log dns             a VM's journal (--since "1 hour ago")
+  worms log 2003            a host job's log, by its number (`worms jobs`)
+  worms log latest -f       the newest host job's, followed
+  worms log alpha           everything about a team: its jobs, its uploads, what
+                            scoring and logging refused from its devbox
+  worms log run [N]         the N-th newest run of a changing command here"""
 
 
 def _command_name(usage: str) -> str:
-    """`issue token <name>` -> `issue token`, `reset <team>...|devboxes` -> `reset`: the verb, and for
-    a verb with fixed objects (OBJECT_VERBS) the object too."""
+    """`vm reset <team>...` -> `vm reset`, `show job <n>` -> `show`: a noun and its verb, else the
+    command's first word."""
     words = usage.split(" ")
-    return " ".join(words[:2]) if words[0] in OBJECT_VERBS else words[0]
+    return " ".join(words[:2]) if words[0] in NOUNS and len(words) > 1 and words[1].isalpha() else words[0]
+
+
+def _rows_of(command: str) -> list[tuple[str, str]]:
+    return [(usage, text) for section in SECTIONS for usage, text in section.commands if _command_name(usage) == command]
 
 
 def _command_help(command: str) -> str:
-    """What `worms <command>` does: its lines in SECTIONS, joined (a verb's own line when it has
-    several, VERBS)."""
-    texts = [text for section in SECTIONS for usage, text in section.commands if _command_name(usage) == command]
+    """What `worms <command>` does: its lines in SECTIONS, joined (HIDDEN: its own)."""
+    if command in HIDDEN:
+        return HIDDEN[command]
+    texts = [text for _usage, text in _rows_of(command)]
     if not texts:
         raise KeyError(f"`worms {command}` is under no section of SECTIONS")
-    return texts[0] if len(texts) == 1 else f"{VERBS[command]}: " + "; ".join(texts)
-
-
-def _add(subparsers, command: str, **kwargs) -> argparse.ArgumentParser:
-    """Add `worms <command>`, with its lines in SECTIONS as its help (wrapped here when the parser
-    keeps its own layout, for its epilog)."""
-    text = _command_help(command)
-    description = textwrap.fill(text, HELP_WIDTH, break_on_hyphens=False) if kwargs.get("formatter_class") is argparse.RawDescriptionHelpFormatter else text
-    return subparsers.add_parser(command.split()[-1], help=text, description=description, **kwargs)
+    return "; ".join(texts)
 
 
 def _format_rows(rows: list[tuple[str, str]], column: int) -> list[str]:
-    return [
-        textwrap.fill(text, HELP_WIDTH, initial_indent=f"  {usage:<{column}}  ", subsequent_indent=" " * (column + 4),
-                      break_long_words=False, break_on_hyphens=False)  # fmt: skip
-        for usage, text in rows
-    ]
+    """`  usage  text` lines; a usage longer than the column puts its text on the next line."""
+    lines = []
+    for usage, text in rows:
+        if len(usage) > column:
+            lines.append(f"  {usage}")
+            usage = ""
+        lines.append(textwrap.fill(text, HELP_WIDTH, initial_indent=f"  {usage:<{column}}  ", subsequent_indent=" " * (column + 4),
+                                   break_long_words=False, break_on_hyphens=False))  # fmt: skip
+    return lines
+
+
+COLUMN = 29
 
 
 def _commands_overview() -> str:
     """The sections of `worms --help`."""
-    column = max(len(usage) for section in SECTIONS for usage, _ in section.commands)
     parts = []
     for section in SECTIONS:
         about = textwrap.fill(section.about, HELP_WIDTH, initial_indent="  ", subsequent_indent="  ")
-        parts.append("\n".join([output.heading(section.title), about, *_format_rows(list(section.commands), column)]))
+        parts.append("\n".join([output.heading(section.title), about, *_format_rows(list(section.commands), COLUMN)]))
     return "\n\n".join(parts)
 
 
@@ -1880,12 +2005,13 @@ def _components_overview() -> str:
         output.heading("groups"),
         *_format_rows(groups, column),
         "",
-        textwrap.fill("A component that exists is configured again (no internet window: packages are skipped, unless "
-                      "--packages); one that is missing is created, and so is a missing dependency, after the plan is "
-                      "shown and you agree. `worms rebuild <component>` destroys its VM and builds it again. Service VMs "
-                      "are configured from their snapshot and snapshotted again, with the devboxes off meanwhile. While "
-                      "the database lacks a migration of this checkout, the dashboard and the database bring the "
-                      "orchestrator (which migrates) along, and the database (grants).", HELP_WIDTH),  # fmt: skip
+        textwrap.fill("Alone, `worms apply` finds what changed: per component, the files of it this checkout changed since "
+                      "its last apply (git) and its packages, and OpenTofu's in-place changes (a VM replaced or destroyed "
+                      "is left to `worms vm rebuild`). A component that exists is configured again, offline unless "
+                      "--packages; one that is missing is created, and so is a missing dependency, once you agree. When "
+                      "the orchestrator (it migrates) or the database changes, a dump of the database comes first. The "
+                      "orchestrator and the round agent bring the gameplans along, and restart the agent (once no host "
+                      "job runs) and the conductor after.", HELP_WIDTH),  # fmt: skip
     ])  # fmt: skip
 
 
@@ -1894,8 +2020,9 @@ def _components_overview() -> str:
 # ---------------------------------------------------------------------------
 
 
-def _yes(parser) -> None:
+def _yes(parser) -> argparse.ArgumentParser:
     parser.add_argument("--yes", action="store_true", help="do not ask first")
+    return parser
 
 
 def _json(parser) -> argparse.ArgumentParser:
@@ -1904,193 +2031,168 @@ def _json(parser) -> argparse.ArgumentParser:
     return parser
 
 
-def _objects(sub, verb: str, objects: dict, **kwargs) -> dict[str, argparse.ArgumentParser]:
-    """`worms <verb> <object> ...` for a verb whose objects are fixed (add key, issue token, ...):
-    one parser each, with its line of SECTIONS."""
-    parser = sub.add_parser(verb, help=VERBS[verb], description=VERBS[verb] + ".")
-    objs = parser.add_subparsers(dest="object", required=True, metavar="|".join(objects), prog=f"worms {verb}")
-    return {name: _add(objs, f"{verb} {name}", **kwargs) for name in objects}
+def _add(subparsers, command: str, **kwargs) -> argparse.ArgumentParser:
+    """`worms <command>` (`vm reset`: under `vm`), with its lines in SECTIONS as its help (wrapped
+    here when the parser keeps its own layout, for its epilog)."""
+    text = _command_help(command)
+    raw = kwargs.get("formatter_class") is argparse.RawDescriptionHelpFormatter
+    description = textwrap.fill(text, HELP_WIDTH, break_on_hyphens=False) if raw else text
+    return subparsers.add_parser(command.split()[-1], help=argparse.SUPPRESS, description=description, **kwargs)
+
+
+RAW = {"formatter_class": argparse.RawDescriptionHelpFormatter}
+
+
+def _noun(sub, noun: str):
+    """`worms <noun>`: alone, its list; its verbs as subcommands (dest `action`), listed in its help."""
+    verbs = [(usage, text) for section in SECTIONS for usage, text in section.commands
+             if usage.split(" ")[0] == noun and usage != noun]  # fmt: skip
+    parser = _add(sub, noun, usage=f"worms {noun} [-h] [<verb> ...]",
+                  epilog="\n".join([output.heading(f"worms {noun} <verb>"), *_format_rows(verbs, COLUMN)]), **RAW)
+    return parser, parser.add_subparsers(dest="action", metavar="<verb>", prog=f"worms {noun}", help=argparse.SUPPRESS)
+
+
+def _targets(parser, nargs="+") -> None:
+    parser.add_argument("targets", nargs=nargs, metavar="target", help="a VM (its name, an alias, <team>/<role>), a group, "
+                        "a team (its devbox VMs) or `devboxes`")  # fmt: skip
 
 
 def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
-    """`vm_list`: the VMs there are now, for `login`, `show` and `rsync --help` (main asks the node
-    only when one of them is asked for)."""
+    """`vm_list`: the VMs there are now, for `login`, `show`, `run` and `rsync --help` (main asks
+    the node only when one of them is asked for)."""
     parser = argparse.ArgumentParser(
         prog="worms",
-        usage="worms [-h] [--config FILE] <verb> ...",
+        usage="worms [-h] [--config FILE] <command> ...",
         description=f"{__doc__}\n{_commands_overview()}",
-        epilog="Configuration (env or ~/.worms/config, no secrets): src/worms_cli/config.py;\n"
-        "secrets: src/worms_cli/secrets.py, docs/07-security.md#secrets.\n"
-        "Run `worms <verb> --help` for details; docs/03-manage-py.md for the whole.",
+        epilog="Configuration: env or ~/.worms/config, no secrets (src/worms_cli/config.py).\n"
+        "`worms <command> --help`: its details; docs/03-manage-py.md: the whole.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--config", metavar="FILE", help="path to a KEY=value config file (default ~/.worms/config)")
-    sub = parser.add_subparsers(dest="command", required=True, prog="worms", metavar="<verb>", help=argparse.SUPPRESS)
-    raw = {"formatter_class": argparse.RawDescriptionHelpFormatter}
-    topics = "lists:\n" + "\n".join(_format_rows([*STATUS_TOPICS.items(), ("keys", "every team's SSH keys, read on the "
-                                    "SSH gateway and its devbox VMs"), ("secrets", "the vault: what is set, never a value "
-                                    "(creates it and the missing generated secrets)"), ("db [<table>]", "the database's "
-                                    "tables, or a table's newest rows")], 12))  # fmt: skip
+    sub = parser.add_subparsers(dest="command", required=True, prog="worms", metavar="<command>", help=argparse.SUPPRESS)
+    vms = f"\n\n{vm_list}" if vm_list else ""
 
     # -- look
-    p = _json(_add(sub, "status"))
-    p = _json(_add(sub, "show", epilog=topics + (f"\n\n{vm_list}" if vm_list else ""), **raw))
-    p.add_argument("what", nargs="+", metavar="what", help="a VM (its name, an alias or <team>/a|b|c|gw), a team (its name "
-                   "or slug t<id>), a list, or `db [<table>]`")  # fmt: skip
-    p.add_argument("--schema", action="store_true", help="db <table>: its columns, indexes and constraints instead")
-    p.add_argument("--limit", type=int, default=None, help="rows to show (db: 20, audit: 200, jobs: 200)")
+    _json(_add(sub, "status"))
+    topics = "\n".join(_format_rows([*SHOW_TOPICS.items(), ("<list>", "a list's name (jobs, rounds, teams, keys, ...): as "
+                                     "the noun alone (`worms jobs`)")], 12))  # fmt: skip
+    p = _json(_add(sub, "show", epilog=topics + vms, **RAW))
+    p.add_argument("what", nargs="+", metavar="what", help="a VM (its name, an alias or <team>/a|b|c|gw), a team (its "
+                   "name or slug t<id>), `job <n>`, `table <name>`, or a topic (below)")  # fmt: skip
+    p.add_argument("--schema", action="store_true", help="table: its columns, indexes and constraints instead")
+    p.add_argument("--limit", type=int, default=None, help="rows to show (table: 20, audit: 200, jobs: 30)")
     p.add_argument("--hours", type=int, default=24, help="audit: how far back (default 24)")
     p.add_argument("--kind", default=None, help="audit: only events starting with this: login, password, team.joined, ...")
-
-    p = _add(sub, "logs")
-    p.add_argument("what", nargs="?", help="a host job's number, a log's name (`worms logs` lists them), a VM's name; "
-                   "`run [N]`: the newest (N-th newest) run log here; `latest`: the newest host job's")  # fmt: skip
+    p = _add(sub, "log", epilog=LOG_HELP, **RAW)
+    p.add_argument("what", nargs="?", help="a service, a VM, a job's number, `latest`, a team, or `run [N]`")
     p.add_argument("nth", nargs="?", type=int, default=1, metavar="N", help="run: the N-th newest run log (default 1)")
     p.add_argument("-f", "--follow", action="store_true", help="keep showing new lines (Ctrl-C ends it)")
     p.add_argument("-n", "--lines", type=int, default=100, help="lines to show first (default 100)")
     p.add_argument("--since", help="journals only: from this time on (\"1 hour ago\", \"2026-11-19 18:00\")")
-
+    p = _json(_add(sub, "check"))
+    p.add_argument("what", nargs="*", metavar="team", help="teams (their names or slugs t<id>; default: every team with a "
+                   "devbox), `packages` or `tokens`")  # fmt: skip
     p = _json(_add(sub, "trace"))
     p.add_argument("what", nargs="+", metavar="what", help="a team (its name or slug t<id>), or `upload <n>`")
 
-    p = _json(_add(sub, "check"))
-    p.add_argument("what", nargs="*", metavar="team", help="teams (their names or slugs t<id>; default: every team with a "
-                   "devbox), `devboxes` (every team), or `tokens`")  # fmt: skip
-
     # -- reach
-    p = _add(sub, "login", epilog=vm_list, **raw)
+    p = _add(sub, "login", epilog=vm_list, **RAW)
     p.add_argument("vm", help="its name, an alias, or <team>/a|b|c|gw (alpha/gw, t2/a)")
-    p = _add(sub, "run", epilog=RUN_HELP + (f"\n\n{vm_list}" if vm_list else ""),
-             usage="worms run [-h] [--root] <target>... -- <command>", **raw)  # fmt: skip
+    p = _add(sub, "run", epilog=RUN_HELP + vms, usage="worms run [-h] [--root] <target>... -- <command>", **RAW)
     p.add_argument("targets", nargs="+", metavar="target", help="node, a VM (its name, an alias, <team>/<role>), a group")
     p.add_argument("--root", action="store_true", help="run the command as root (sudo -n sh -c); the node's login is root")
-    p = _add(sub, "rsync", epilog=RSYNC_HELP + (f"\n\n{vm_list}" if vm_list else ""), **raw)
+    p = _add(sub, "rsync", epilog=RSYNC_HELP + vms, **RAW)
     p.add_argument("paths", nargs="+", metavar="path", help="sources, then the target: a local path or [<user>@]<vm>:[<path>]")
     p.add_argument("-n", "--dry-run", action="store_true", help="rsync's: list what would be sent, send nothing")
     p.add_argument("--delete", action="store_true", help="rsync's: delete what the source does not have on the target")
     p.add_argument("--preview", action="store_true", help="count what would be sent (files, sizes, bytes), send nothing")
 
+    # -- deploy
+    p = _yes(_add(sub, "apply", epilog=_components_overview(), **RAW))
+    p.add_argument("components", nargs="*", metavar="component", help="components or groups (default: what changed)")
+    p.add_argument("--all", action="store_true", help="every component, in build order, packages too")
+    p.add_argument("--plan", action="store_true", help="what it would do and touch, changing nothing: the steps, what each "
+                   "VM runs now, OpenTofu's own plan")  # fmt: skip
+    p.add_argument("--packages", action="store_true", help="install packages too (opens the internet window)")
+    p.add_argument("--during-round", action="store_true", help="even while a round is on (costs its attempt)")
+    p.add_argument("--timeout", type=int, default=900, help="how long to wait for the agent's running host job (s)")
+    p = _yes(_add(sub, "destroy"))
+    p.add_argument("--all", action="store_true", help="also every VM outside the stacks, the firewall and the platform")
+    p = _yes(_add(sub, "internet"))
+    p.add_argument("state", nargs="?", choices=("on", "off"), metavar="on|off", help="on: open it (running devbox VMs are "
+                   "shut down first); off: close it (they start again); neither: whether it is open")  # fmt: skip
+
     # -- machines
-    for verb in ("start", "stop"):
-        p = _add(sub, verb)
-        p.add_argument("targets", nargs="*", metavar="target", help="a VM (its name, an alias, <team>/<role>), a group, a "
-                       "team (its devbox VMs) or `devboxes`")  # fmt: skip
+    p, verbs = _noun(sub, "vm")
+    for verb in ("start", "stop", "restart"):
+        _targets(v := _add(verbs, f"vm {verb}"), nargs="*" if verb == "start" else "+")
         if verb == "start":
-            p.add_argument("--held", action="store_true", help="the devbox VMs a round holds shut down")
-    p = _add(sub, "reset")
-    p.add_argument("what", nargs="*", metavar="what", help="teams (their names or slugs t<id>), `devboxes` (every team's), "
-                   "`services`, `db`, or `password [<user>]`")  # fmt: skip
-    p.add_argument("--detach", action="store_true", help="teams, devboxes: queue the jobs and return (default: follow them, "
-                   "their logs live)")
-    p.add_argument("--wait", action="store_true", help="services: wait for the devbox map's host job, and follow it")
-    p.add_argument("--all-teams", action="store_true", help=argparse.SUPPRESS)  # the old `reset devbox --all-teams`
-    p.add_argument("--fresh", action="store_true", help=argparse.SUPPRESS)  # the old `reset devbox --fresh`: rebuild
-    p.add_argument("--username", default=None, help=argparse.SUPPRESS)  # the old `admin-reset-password --username`
-    _yes(p)
-    p = _add(sub, "rebuild", epilog=_components_overview(), **raw)
-    p.add_argument("what", nargs="+", metavar="what", help="teams (their names or slugs t<id>), `devboxes` (every team's), "
-                   "or platform components")  # fmt: skip
-    p.add_argument("--detach", action="store_true", help="teams, devboxes: queue the jobs and return (default: follow them, "
-                   "their logs live)")
-    p.add_argument("--wait", action="store_true", help=argparse.SUPPRESS)  # the old --wait: now the default
-    p.add_argument("--packages", action="store_true", help="components: install packages too (the window opens anyway)")
-    _yes(p)
-    p = _add(sub, "restart")
-    p.add_argument("services", nargs="+", metavar="service", help="agent, processor, api, conductor, dashboard, scoring, "
-                   "logging, monitor")  # fmt: skip
-    p.add_argument("--timeout", type=int, default=900, help="agent: how long to wait for its running host job (s, default 900)")
-    p.add_argument("--during-round", action="store_true", help="restart what a round needs even while one is on")
+            v.add_argument("--held", action="store_true", help="the devbox VMs a round holds shut down")
+    for verb in ("reset", "rebuild"):
+        v = _yes(_add(verbs, f"vm {verb}", epilog=_components_overview() if verb == "rebuild" else None, **RAW))
+        v.add_argument("targets", nargs="+", metavar="target", help="teams (their names or slugs t<id>), `devboxes` (every "
+                       "team's)" + (", or platform VMs and groups" if verb == "rebuild" else ", or `services`"))  # fmt: skip
+        v.add_argument("--detach", action="store_true", help="queue the round agent's jobs and return (default: follow them, "
+                       "their logs live)")  # fmt: skip
+        if verb == "rebuild":
+            v.add_argument("--packages", action="store_true", help="platform VMs: install packages too (the window opens anyway)")
+            v.add_argument("--during-round", action="store_true", help=argparse.SUPPRESS)
+    _yes(_add(verbs, "vm kill"))
 
     # -- operate
-    paused = _objects(sub, "pause", {"jobs": None, "round": None})
-    paused["jobs"].add_argument("--reason", default="", help="said to whoever looks (`worms show job <n>`)")
-    paused["round"].add_argument("round", help="its id (`worms show rounds`) or its name")
-    resumed = _objects(sub, "resume", {"jobs": None, "round": None})
-    resumed["round"].add_argument("round", help="its id (`worms show rounds`) or its name")
-    cancelled = _objects(sub, "cancel", {"job": None, "jobs": None, "round": None})
-    cancelled["job"].add_argument("numbers", nargs="+", type=int, metavar="n", help="the jobs' numbers (`worms show jobs`)")
-    cancelled["jobs"].add_argument("--team", required=True, help="a team (its name or slug t<id>): every queued job of it")
-    cancelled["round"].add_argument("round", help="its id (`worms show rounds`) or its name")
-    _yes(cancelled["round"])
+    p, verbs = _noun(sub, "jobs")
+    p.add_argument("--limit", type=int, default=None, help="how many (default 30)")
+    _add(verbs, "jobs pause").add_argument("--reason", default="", help="said to whoever looks (`worms show job <n>`)")
+    _add(verbs, "jobs resume")
+    v = _add(verbs, "jobs cancel")
+    v.add_argument("numbers", nargs="*", type=int, metavar="n", help="the jobs' numbers (`worms jobs`)")
+    v.add_argument("--team", help="every queued job of this team (its name or slug t<id>)")
+    p, verbs = _noun(sub, "round")
+    for verb in ("pause", "resume", "start", "cancel"):
+        v = _add(verbs, f"round {verb}")
+        v.add_argument("round", help="its id (`worms round`) or its name")
+        if verb == "cancel":
+            _yes(v)
+    p, verbs = _noun(sub, "service")
+    v = _add(verbs, "service restart")
+    v.add_argument("services", nargs="+", metavar="name", help="agent, processor, api, conductor, dashboard, scoring, "
+                   "logging, monitor")  # fmt: skip
+    v.add_argument("--timeout", type=int, default=900, help="agent: how long to wait for its running host job (s, default 900)")
+    v.add_argument("--during-round", action="store_true", help="restart what a round needs even while one is on")
 
-    # -- platform
-    for verb in ("apply", "plan"):
-        p = _add(sub, verb, epilog=_components_overview(), **raw)
-        p.add_argument("--changed", action="store_true", help="only what changed since what runs: the components this "
-                       "checkout changes (git, since each one's last apply), and OpenTofu's in-place changes")
-        if verb == "plan":
-            _json(p)
-        p.add_argument("components", nargs="*", metavar="component", help="components or groups (default: everything)")
-        p.add_argument("--packages", action="store_true", help="install packages too (opens the internet window)")
-        if verb == "apply":
-            p.add_argument("--plan", action="store_true", help="show the plan, change nothing (= worms plan)")
-            p.add_argument("--rebuild", action="store_true", help=argparse.SUPPRESS)  # the old `build --rebuild`
-            p.add_argument("--team", action="append", default=[], help="devbox --rebuild: only this team's (repeatable)")
-            p.add_argument("--wait", action="store_true", help="devbox: follow its host jobs, their logs live")
-            _yes(p)
-    p = _add(sub, "configure", epilog=_components_overview(), **raw)
-    p.add_argument("components", nargs="*", metavar="component", help="components or groups (default: every one that exists)")
-    p.add_argument("--packages", action="store_true", help="install packages too (opens the internet window)")
-    p.add_argument("--plan", action="store_true", help="show the plan, configure nothing")
-    p.add_argument("--during-round", action="store_true", help="configure even while a round is on (costs its attempt)")
-    p.add_argument("--timeout", type=int, default=900, help="how long to wait for the agent's running host job (s, default 900)")
-    for verb in ("open", "close"):
-        _yes(_objects(sub, verb, {"window": None})["window"])
-    p = _add(sub, "release", epilog=_components_overview(), **raw)
-    p.add_argument("components", nargs="*", metavar="component", help="components or groups (default: every one that exists)")
-    p.add_argument("--packages", action="store_true", help="install packages too (opens the internet window)")
-    _yes(p)
-    p = _add(sub, "rollback")
-    p.add_argument("--db", action="store_true", help="the database back to the release's dump")
-    p.add_argument("--code", action="store_true", help="the checkout back to the commit before, and its own configure")
-    _yes(p)
-    p = _add(sub, "refill")
-    p.add_argument("kind", choices=CACHE_KINDS, metavar="apt|pypi|caches")
-    p.add_argument("--plan", action="store_true", help="the check and the plan, change nothing")
-    _yes(p)
-    p = _objects(sub, "restore", {"db": None})["db"]
-    p.add_argument("file", metavar="dump", help="a dump `worms backup db` wrote (~/.worms/backups/)")
-    _yes(p)
-    p = _objects(sub, "backup", {"db": None})["db"]
-    p.add_argument("-o", "--output", metavar="FILE", help="the dump's file (default ~/.worms/backups/<system>-<db>-<time>.dump)")
-    p = _add(sub, "destroy")
-    p.add_argument("--all", action="store_true", help="also every VM outside the stacks, the firewall and the platform")
-    _yes(p)
-    _yes(_add(sub, "emergency-stop"))
-
-    # -- teams and accounts
-    added = _objects(sub, "add", {"key": None, "staff": None, "package": None})
-    added["package"].add_argument("kind", choices=("apt", "pypi"), metavar="apt|pypi")
-    added["package"].add_argument("names", nargs="+", metavar="name")
-    added["key"].add_argument("team", help="its name or slug t<id>")
-    added["key"].add_argument("key", help="the public key (quoted), a .pub file, or - for stdin")
-    added["key"].add_argument("--name", default="", help="a name for it (default: the key's comment)")
-    added["staff"].add_argument("email")
-    added["staff"].add_argument("--first-name", default="")
-    added["staff"].add_argument("--last-name", default="")
-    removed = _objects(sub, "remove", {"key": None, "package": None})
-    removed["package"].add_argument("kind", choices=("apt", "pypi"), metavar="apt|pypi")
-    removed["package"].add_argument("names", nargs="+", metavar="name")
-    p = removed["key"]
-    p.add_argument("team", help="its name or slug t<id>")
-    p.add_argument("key", help="the key's name, or its fingerprint (at least 8 characters of it)")
-    _yes(p)
-    _objects(sub, "sync", {"keys": None})
-    p = _objects(sub, "delete", {"team": None})["team"]
-    p.add_argument("name")
-    _yes(p)
+    # -- data and accounts
+    p, verbs = _noun(sub, "db")
+    _add(verbs, "db backup").add_argument("-o", "--output", metavar="FILE", help="the dump's file (default "
+                                          "~/.worms/backups/<system>-<db>-<time>.dump)")  # fmt: skip
+    _yes(_add(verbs, "db restore")).add_argument("file", metavar="dump", help="a dump `worms db backup` wrote (~/.worms/backups/)")
+    _yes(_add(verbs, "db reset"))
+    p, verbs = _noun(sub, "team")
+    _yes(_add(verbs, "team delete")).add_argument("name")
+    p, verbs = _noun(sub, "key")
+    v = _add(verbs, "key add")
+    v.add_argument("team", help="its name or slug t<id>")
+    v.add_argument("key", help="the public key (quoted), a .pub file, or - for stdin")
+    v.add_argument("--name", default="", help="a name for it (default: the key's comment)")
+    v = _yes(_add(verbs, "key remove"))
+    v.add_argument("team", help="its name or slug t<id>")
+    v.add_argument("key", help="the key's name, or its fingerprint (at least 8 characters of it)")
+    _add(verbs, "key sync")
+    p, verbs = _noun(sub, "user")
+    v = _add(verbs, "user add")
+    v.add_argument("email")
+    v.add_argument("--first-name", default="")
+    v.add_argument("--last-name", default="")
+    v = _yes(_add(verbs, "user password"))
+    v.add_argument("user", nargs="?", default=None, help="its username (default: admin)")
+    v.add_argument("--username", default=None, help=argparse.SUPPRESS)  # the old `admin-reset-password --username`
 
     # -- set up
-    p = _objects(sub, "issue", {"token": None})["token"]
-    p.add_argument("name", choices=["proxmox-token", "orchestrator-token", "topology-token"])
-    p = _objects(sub, "set", {"secret": None})["secret"]
-    p.add_argument("name", choices=["proxmox-token", "orchestrator-token", "topology-token", "ssh-key"])
-    _objects(sub, "trust", {"node": None})
-    _objects(sub, "completion", {"bash": None})
-
-    # -- develop
-    p = _add(sub, "test")
-    p.add_argument("--live", action="store_true", help="the end-to-end simulation on the deployed platform")
+    _add(sub, "init")
+    p, verbs = _noun(sub, "secret")
+    _add(verbs, "secret set").add_argument("name", choices=["proxmox-token", "orchestrator-token", "topology-token", "ssh-key"])
+    _add(verbs, "secret issue").add_argument("name", choices=["proxmox-token", "orchestrator-token", "topology-token"])
+    _add(sub, "completion").add_argument("shell", choices=("bash",))
+    _add(sub, "test").add_argument("--live", action="store_true", help="the end-to-end simulation on the deployed platform")
     p = _add(sub, "step")
     p.add_argument("name", choices=[*pipeline.STEPS, "debug"], metavar="name")
     p.add_argument("host", nargs="?", help="debug: an inventory host or group")
@@ -2098,12 +2200,12 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
 
 
 # ---------------------------------------------------------------------------
-# the verbs' handlers: what each does with its words, on the implementations above
+# the commands' handlers: what each does with its words, on the implementations above
 # ---------------------------------------------------------------------------
 
 
 def _with(args, **values):
-    """`args` with these values set (an old handler's own names)."""
+    """`args` with these values set (an implementation's own names)."""
     return argparse.Namespace(**{**vars(args), **values})
 
 
@@ -2113,38 +2215,45 @@ def _team_words(words) -> tuple[bool, list[str]]:
     return every, [word for word in words if word != "devboxes"]
 
 
+def _said(act) -> int:
+    """`act()`, a BuildError or ValueError said: 1."""
+    try:
+        return act()
+    except (build.BuildError, ValueError) as exc:
+        output.error(str(exc))
+        return 1
+
+
 def verb_show(config, args) -> int:
     head, rest = args.what[0], args.what[1:]
-    if head in STATUS_TOPICS:
-        return cmd_status(config, _with(args, topic=head, limit=args.limit or 200))
-    if head == "keys":
-        return cmd_keys(config, _with(args, keys_action="status"))
-    if head == "secrets":
-        return cmd_secrets(config, _with(args, secrets_action=None))
+    if head in LISTS and not rest:
+        return HANDLERS[LISTS[head]](config, args)
+    if head == "leaderboard":
+        return _listing(config, _status_leaderboard)
+    if head == "audit":
+        return show_audit(config, args)
+    if head == "gameplans":
+        return show_gameplans(config, args)
     if head == "job":
         if len(rest) != 1 or not rest[0].isdigit():
-            output.error("which job? `worms show job <n>` (`worms show jobs` lists them)")
+            output.error("which job? `worms show job <n>` (`worms jobs` lists them)")
             return 2
         _with_db(config)
         from worms_cli import jobs as host_jobs
         from worms_cli.session import for_config
 
-        try:
-            return host_jobs.show(for_config(config), int(rest[0]))
-        except build.BuildError as exc:
-            output.error(str(exc))
-            return 1
-    if head == "db" or (head == "database" and rest):  # `show database` alone: the database's VM
+        return _said(lambda: host_jobs.show(for_config(config), int(rest[0])))
+    if head == "table":
         if not rest:
-            return _show_tables(config)
+            return list_tables(config)
         return _show_table(config, _with(args, table=rest[0], limit=args.limit or 20))
     if rest:
         output.error(f"`worms show {head}` takes nothing after it")
         return 2
-    return cmd_show(config, _with(args, vm=head, table=None, limit=args.limit or 20))
+    return _show_vm(config, head)
 
 
-def verb_logs(config, args) -> int:
+def verb_log(config, args) -> int:
     what = "build" if args.what == "run" else args.what
     if what and not what.isdigit() and what not in ("build", "latest"):
         from worms_cli.services import SERVICES
@@ -2166,15 +2275,10 @@ def verb_logs(config, args) -> int:
 def verb_check(config, args) -> int:
     if args.what == ["tokens"]:
         return cmd_secrets(config, _with(args, secrets_action="check"))
-    if args.what and set(args.what) <= set(CACHE_KINDS):
+    if args.what == ["packages"]:
         from worms_cli import caches
 
-        kinds = ["apt", "pypi"] if "caches" in args.what else list(dict.fromkeys(args.what))
-        try:
-            return max(caches.check(config, kind) for kind in kinds)
-        except build.BuildError as exc:
-            output.error(str(exc))
-            return 1
+        return _said(lambda: max(caches.check(config, kind) for kind in ("apt", "pypi")))
     _every, teams = _team_words(args.what)
     return cmd_validate(config, _with(args, teams=teams))
 
@@ -2184,451 +2288,127 @@ def verb_trace(config, args) -> int:
     from worms_cli import trace
     from worms_cli.session import for_config
 
-    try:
-        return trace.trace(for_config(config), args.what)
-    except (build.BuildError, ValueError) as exc:
-        output.error(str(exc))
-        return 1
-
-
-def verb_power(config, args) -> int:
-    if args.command == "start" and args.targets[:1] == ["round"]:
-        if len(args.targets) != 2:
-            output.error("which round? `worms start round <r>` (`worms show rounds`: their ids)")
-            return 2
-        return _control(config, lambda control: control.start_round_now(control.find_round(args.targets[1])))
-    return cmd_power(config, _with(args, state=args.command, held=getattr(args, "held", False)))
+    return _said(lambda: trace.trace(for_config(config), args.what))
 
 
 def _control(config, act) -> int:
-    """`act(control)` with the database (worms_cli/control.py); a BuildError said, 1."""
+    """`act(control)` with the database (worms_cli/control.py)."""
     _with_db(config)
     from worms_cli import control
 
-    try:
-        return act(control)
-    except (build.BuildError, ValueError) as exc:
-        output.error(str(exc))
-        return 1
+    return _said(lambda: act(control))
 
 
-def verb_pause(config, args) -> int:
-    if args.object == "jobs":
-        from worms_cli import control
-        from worms_cli.session import for_config
+def jobs_pause(config, args) -> int:
+    from worms_cli import control
+    from worms_cli.session import for_config
 
-        return control.pause_jobs(for_config(config), args.reason)
-    return _control(config, lambda control: control.pause_round(control.find_round(args.round)))
+    return control.pause_jobs(for_config(config), args.reason)
 
 
-def verb_resume(config, args) -> int:
-    if args.object == "jobs":
-        from worms_cli import control
-        from worms_cli.session import for_config
+def jobs_resume(config, args) -> int:
+    from worms_cli import control
+    from worms_cli.session import for_config
 
-        return control.resume_jobs(for_config(config))
-    return _control(config, lambda control: control.resume_round(control.find_round(args.round)))
+    return control.resume_jobs(for_config(config))
 
 
-def verb_cancel(config, args) -> int:
-    if args.object == "round":
-        def act(control):
-            round_ = control.find_round(args.round)
-            if not build.confirm(f"Skip every attempt of round {round_.name!r} still to come?", args.yes):
-                return 1
-            return control.cancel_round(round_)
-
-        return _control(config, act)
-    if args.object == "jobs":
+def jobs_cancel(config, args) -> int:
+    if bool(args.numbers) == bool(args.team):
+        output.error("which jobs? their numbers (`worms jobs cancel 2003 2004`), or --team <t>")
+        return 2
+    if args.team:
         from worms_cli import queries
 
         return _control(config, lambda control: control.cancel_jobs(team=queries.team(args.team)))
     return _control(config, lambda control: control.cancel_jobs(numbers=args.numbers))
 
 
-def verb_reset(config, args) -> int:
-    words = list(args.what)
-    if not words and not args.all_teams:
-        output.error("reset what? teams (`worms reset alpha`), `devboxes`, `services`, `db`, or `password [<user>]`")
+def round_verb(config, args) -> int:
+    """`worms round pause|resume|start|cancel <r>` (worms_cli/control.py)."""
+    def act(control):
+        round_ = control.find_round(args.round)
+        if args.action == "cancel" and not build.confirm(f"Skip every attempt of round {round_.name!r} still to come?",
+                                                        getattr(args, "yes", False)):
+            return 1
+        return {"pause": control.pause_round, "resume": control.resume_round, "start": control.start_round_now,
+                "cancel": control.cancel_round}[args.action](round_)  # fmt: skip
+
+    return _control(config, act)
+
+
+def vm_reset(config, args) -> int:
+    if args.targets == ["services"]:
+        code = cmd_reset(config, _with(args, what="services", wait=not args.detach))
+        return code
+    if "services" in args.targets:
+        output.error("`worms vm reset services` resets the service VMs, all at once: name no team with it")
         return 2
-    head = words[0] if words else ""
-    if head in ("db", "database"):
-        return cmd_reset(config, _with(args, what="database"))
-    if head == "services":
-        return cmd_reset(config, _with(args, what="services"))
-    if head == "password":
-        if len(words) > 2:
-            output.error("`worms reset password` takes one user")
-            return 2
-        return cmd_admin_reset_password(config, _with(args, username=words[1] if len(words) > 1 else args.username or "admin"))
-    every, teams = _team_words(words)
-    return _reset_devboxes(config, _with(args, teams=teams, all_teams=every or args.all_teams, fresh=args.fresh))
+    every, teams = _team_words(args.targets)
+    return _reset_devboxes(config, _with(args, teams=teams, all_teams=every, fresh=False))
 
 
-def verb_rebuild(config, args) -> int:
+def vm_rebuild(config, args) -> int:
     from worms_cli import components
 
-    every, teams = _team_words(args.what)
+    every, teams = _team_words(args.targets)
     known = set(components.COMPONENTS) | set(components.GROUPS)
     if not every and all(word in known for word in teams):
-        return cmd_build(config, _with(args, components=teams, rebuild=True, plan=False, team=[]))
+        return _apply_components(config, _with(args, plan=False, during_round=getattr(args, "during_round", False)), teams,
+                                 rebuild=True)  # fmt: skip
     if any(word in known for word in teams):
-        output.error("rebuild either teams' devboxes or platform components, not both at once")
+        output.error("rebuild either teams' devboxes or platform VMs, not both at once")
         return 2
     return _reset_devboxes(config, _with(args, teams=teams, all_teams=every, fresh=True))
 
 
-def verb_apply(config, args) -> int:
-    if args.changed:
-        if args.components:
-            output.error("--changed finds the components itself: name none")
-            return 2
-        return apply_changed(config, args, plan_only=args.plan)
-    return cmd_build(config, args)
+def verb_init(config, args) -> int:
+    """`worms init`: the vault (its generated secrets made when missing), then the WORMS key let
+    in on the node; what is still to do is said (the Proxmox tokens)."""
+    code = cmd_secrets(config, _with(args, secrets_action=None))
+    return code or cmd_trust_node(config, args)
 
 
-def _changed_report(config, pipe):
-    """What changed since what runs (worms_cli/changes.py), said; (changes, stack plans, the
-    directory of the saved plans, files nobody claims)."""
-    import tempfile
-
-    from worms_cli import changes, components
-
-    found, bases, unclaimed = changes.analyse(config, pipe.runner.session)
-    exists = _exists(pipe, config)
-    print(output.heading(f"what changed since what runs, up to this checkout ({pipe.runner.commit()})"))
-    rows = []
-    for change in found:
-        component = components.COMPONENTS[change.component]
-        files = [w for w in change.why if "/" in w]
-        reasons = [w for w in change.why if "/" not in w]
-        text = "; ".join([*reasons, *(files[:3]), *([f"+{len(files) - 3} more"] if len(files) > 3 else [])])
-        missing = component.kind in ("vm", "node") and not exists(component)
-        rows.append([change.component, change.base or "?", text[:150], ", ".join(change.packages)[:60] or "—",
-                     "not built: `worms apply " + change.component + "`" if missing else change.note])  # fmt: skip
-    if rows:
-        print(output.table(rows, headers=["component", "runs", "why", "packages", "note"]))
-    else:
-        print(output.status_cell("ok", "every component runs this checkout"))
-    if unclaimed:
-        print(output.color(f"changed, but no component is made from it (checked by nothing here): {', '.join(unclaimed[:8])}"
-                           + (f" (+{len(unclaimed) - 8})" if len(unclaimed) > 8 else ""), "yellow"))  # fmt: skip
-    print()
-    print(output.heading("OpenTofu's own plan of each stack (saved: what is applied is what is shown)"))
-    directory = tempfile.mkdtemp(prefix="worms-plans-")
-    plans = []
-    for stack in changes.stacks_to_plan():
-        plan = changes.plan_stack(pipe, stack, directory)
-        plans.append(plan)
-        if plan.error:
-            print(output.status_cell("error", f"{stack}: not planned: {plan.error}"))
-        elif plan.empty:
-            print(output.status_cell("ok", f"{stack}: no changes"))
-        else:
-            counts = f"{len(plan.updates)} in place, {len(plan.creates)} new, {len(plan.replaces)} REPLACED, {len(plan.deletes)} DESTROYED"
-            print(output.status_cell("warn" if plan.safe else "error", f"{stack}: {counts}"
-                                     + ("" if plan.safe else ": not applied here (a VM made anew, replaced or destroyed)")))  # fmt: skip
-            for address in [*plan.replaces, *plan.deletes, *plan.creates, *plan.updates][:12]:
-                print(output.color(f"    {address}", "dim"))
-    return found, plans, directory, unclaimed
-
-
-def apply_changed(config, args, plan_only=False, release=None) -> int:
-    """`worms apply --changed` (and `worms release` without components): OpenTofu's in-place changes
-    first, applied from the plans shown, then `worms configure` of what changed; packages only
-    with --packages. `release`: (before, after) callbacks around the change, for the restore point
-    and the check."""
-    import shutil
-
-    from worms_cli import components
-
-    pipe = pipeline.Pipeline(config)
-    try:
-        found, plans, directory, _unclaimed = _changed_report(config, pipe)
-    except build.BuildError as exc:
-        output.error(str(exc))
-        return 1
-    try:
-        exists = _exists(pipe, config)
-        names = [c.component for c in found if components.COMPONENTS[c.component].kind in ("vm", "node", "gameplans")
-                 and (components.COMPONENTS[c.component].kind == "gameplans" or exists(components.COMPONENTS[c.component]))]
-        stacks = [plan for plan in plans if not plan.empty and plan.safe]
-        left = [plan for plan in plans if not plan.empty and not plan.safe]
-        notes = [c for c in found if c.note]
-        if not names and not stacks:
-            print()
-            print(output.status_cell("ok", "nothing to apply: the platform runs this checkout"
-                                     + (" (but see the OpenTofu changes above)" if left else "")))  # fmt: skip
-            return 1 if left else 0
-        packaged = [c.component for c in found if c.packages and c.component in names]
-        print()
-        print(output.heading("what `apply --changed` does"))
-        for plan in stacks:
-            print(f"  OpenTofu: apply {plan.stack}'s saved plan ({len(plan.updates)} in place, {len(plan.creates)} new)")
-        if names:
-            print(f"  configure: {', '.join(names)}" + (" --packages (the internet window opens)" if args.packages else ""))
-        for plan in left:
-            print(output.color(f"  not here: {plan.stack} ({len(plan.replaces)} replaced, {len(plan.deletes)} destroyed): "
-                               "`worms plan` shows it; `worms rebuild <component>` or `worms apply <stack>` does it, by name",
-                               "yellow"))  # fmt: skip
-        for change in notes:
-            print(output.color(f"  {change.component}: {change.note}", "dim"))
-        if packaged and not args.packages:
-            output.error(f"the packages of {', '.join(packaged)} changed: with --packages (it opens the internet window; on "
-                         "production the node needs egress), or they would be missing")  # fmt: skip
-            return 1
-        if plan_only:
-            return 0
-        if not build.confirm("Apply these changes?", args.yes):
-            return 1
-        if release is not None and release[0](names) != 0:
-            return 1
-        for plan in stacks:
-            print(output.heading(f"OpenTofu: {plan.stack}"), flush=True)
-            try:
-                pipe.runner.tofu(plan.stack, "apply", "-input=false", plan.file)
-            except build.BuildError as exc:
-                output.error(f"{plan.stack}: {exc}; nothing after it was applied")
-                return release[1](1) if release else 1
-        code = 0
-        if names:
-            print(output.heading("configure"), flush=True)
-            code = cmd_deploy(config, _with(args, components=names, plan=False, during_round=False, timeout=900))
-        if release is not None:
-            return release[1](code)
-        return code or (1 if left else 0)
-    finally:
-        shutil.rmtree(directory, ignore_errors=True)
-
-
-def verb_plan(config, args) -> int:
-    """The steps (`apply --plan`), then what each VM of it runs now against this checkout, and
-    OpenTofu's own plan for the stacks and VMs concerned (worms_cli/release.py). --changed: what
-    `worms apply --changed` would do."""
-    from worms_cli import components, release
-
-    if getattr(args, "changed", False):
-        if args.components:
-            output.error("--changed finds the components itself: name none")
-            return 2
-        return apply_changed(config, _with(args, yes=False), plan_only=True)
-
-    code = cmd_build(config, _with(args, plan=True, rebuild=False, team=[], wait=False, yes=False))
-    if code:
-        return code
-    pipe = pipeline.Pipeline(config)
-    names = args.components or [n for n in components.COMPONENTS if components.COMPONENTS[n].kind != "devbox"]
-    try:
-        plan = components.plan(components.expand(names), _exists(pipe, config), unfinished=_unfinished(pipe))
-    except (KeyError, ValueError) as exc:
-        output.error(str(exc))
-        return 1
-    vms = [name for name, _ in plan.steps if components.COMPONENTS[name].kind == "vm"]
-    if vms:
-        print()
-        print(output.heading("what each VM runs now (its last configuration's commit) and this checkout"))
-        print(output.table(release.deployed_commits(pipe, vms), headers=["VM", "configured from", "this checkout", ""]))
-    print()
-    print(output.heading("OpenTofu's own plan (nothing is applied)"))
-    release.tofu_plans(pipe, plan)
-    return 0
-
-
-def verb_window(config, args) -> int:
-    return cmd_internet(config, _with(args, state="enable" if args.command == "open" else "disable"))
-
-
-def verb_release(config, args) -> int:
-    """`worms release`: the plan, then (once agreed) a restore point, `worms configure`, `worms check`;
-    each step recorded (worms_cli/release.py), the way back said at the end."""
-    from worms_cli import components, database, release
-
-    if not args.components:
-        return _release_changed(config, args)
-    code = verb_plan(config, _with(args, plan=True, changed=False))
-    if code:
-        return code
-    pipe = pipeline.Pipeline(config)
-    here = pipe.runner.commit()
-    if not build.confirm(f"Release {here} as planned above: a database dump, then configure, then check every team's "
-                         "devbox?", args.yes):  # fmt: skip
-        return 1
-    names = args.components or [n for n in components.COMPONENTS if components.COMPONENTS[n].kind not in ("devbox", "gameplans")]
-    vms = [n for n in components.expand(names) if components.COMPONENTS[n].kind == "vm"]
-    print(output.heading("restore point"), flush=True)
-    try:
-        dump, size = database.backup(config)
-    except build.BuildError as exc:
-        output.error(f"no restore point, nothing released: {exc}")
-        return 1
-    print(output.status_cell("ok", f"database dump {size / 1e6:.1f} MB: {dump}"), flush=True)
-    record = release.start_record(pipe, list(args.components), vms, dump)
-    print(output.heading("configure"), flush=True)
-    code = cmd_deploy(config, _with(args, plan=False, during_round=False, timeout=900))
-    checked = None
-    if code == 0 and pipe.devboxes_exist():
-        print(output.heading("check: every team's devbox"), flush=True)
-        _with_db(config)
-        checked = cmd_validate(config, _with(args, teams=[]))
-    release.finish_record(record, code, checked)
-    print()
-    print(output.heading("the release"))
-    print(output.table(release.describe(record)))
-    print(output.color("The way back: `worms rollback --code` (the commit before, configured again), `worms rollback --db` "
-                       "(the database from the dump: what was written since is lost).", "dim"))  # fmt: skip
-    return code or (checked or 0)
-
-
-def _release_changed(config, args) -> int:
-    """`worms release` alone: what changed (as `apply --changed`), with a restore point before it and
-    every team's devbox checked after, all recorded."""
-    from worms_cli import components, database, release
-
-    pipe = pipeline.Pipeline(config)
-    if pipe.runner.commit().endswith("-dirty"):
-        output.error("this checkout has uncommitted changes: a release is a commit (its record says what runs). "
-                     "Commit first; `worms apply --changed` takes the working tree as it is")  # fmt: skip
-        return 1
-    state: dict = {}
-
-    def before(names) -> int:
-        print(output.heading("restore point"), flush=True)
-        try:
-            dump, size = database.backup(config)
-        except build.BuildError as exc:
-            output.error(f"no restore point, nothing released: {exc}")
-            return 1
-        print(output.status_cell("ok", f"database dump {size / 1e6:.1f} MB: {dump}"), flush=True)
-        vms = [name for name in names if components.COMPONENTS[name].kind == "vm"]
-        state["record"] = release.start_record(pipe, list(names), vms, dump)
-        return 0
-
-    def after(code: int) -> int:
-        checked = None
-        if code == 0 and pipe.devboxes_exist():
-            print(output.heading("check: every team's devbox"), flush=True)
-            _with_db(config)
-            checked = cmd_validate(config, _with(args, teams=[]))
-        record = state["record"]
-        release.finish_record(record, code, checked)
-        print()
-        print(output.heading("the release"))
-        print(output.table(release.describe(record)))
-        print(output.color("The way back: `worms rollback --code`, `worms rollback --db` (what was written since is lost).", "dim"))
-        return code or (checked or 0)
-
-    return apply_changed(config, _with(args, changed=True), release=(before, after))
-
-
-def verb_rollback(config, args) -> int:
-    from worms_cli import release
-
-    try:
-        record = release.newest_record()
-    except build.BuildError as exc:
-        output.error(str(exc))
-        return 1
-    print(output.heading("the newest release"))
-    print(output.table(release.describe(record)))
-    if not args.db and not args.code:
-        print(output.color("`worms rollback --db`: the database back to its dump; `--code`: the checkout back to "
-                           f"{record['from'] or '?'} and that commit's `worms configure`; both: --db first.", "dim"))  # fmt: skip
-        return 0
-    if args.db:
-        if not build.confirm(f"Replace the WHOLE database with the release's dump {record['dump']}? What was written "
-                             "since is lost", args.yes):  # fmt: skip
-            return 1
-        try:
-            release.restore_db(config, record["dump"])
-        except (build.BuildError, OSError) as exc:
-            output.error(str(exc))
-            return 1
-    if args.code:
-        if not build.confirm(f"Check out {record['from']} here and configure {', '.join(record['components']) or 'everything'} "
-                             "with it?", args.yes):  # fmt: skip
-            return 1
-        try:
-            global THEN_EXEC
-            THEN_EXEC = release.rollback_code(config, record)  # main() hands over to it, once it has let go
-        except build.BuildError as exc:
-            output.error(str(exc))
-            return 1
-    return 0
-
-
-# A command to replace this process with once main() has let go of the run log and the lock
-# (`worms rollback --code`: the older commit's own CLI).
-THEN_EXEC: list[str] | None = None
-
-
-def verb_restore(config, args) -> int:
-    from worms_cli import release
+def db_restore(config, args) -> int:
+    from worms_cli import database
 
     if not build.confirm(f"Replace the WHOLE database with {args.file}? Everything written since that dump is lost; the "
                          "dashboard, the orchestrator and the round agent stop meanwhile", args.yes):  # fmt: skip
         return 1
     try:
-        return release.restore_db(config, args.file)
+        return database.restore(config, args.file)
     except (build.BuildError, OSError) as exc:
         output.error(str(exc))
         return 1
 
 
-def verb_add(config, args) -> int:
-    if args.object == "staff":
-        return cmd_admin_create_staff(config, args)
-    if args.object == "package":
-        from worms_cli import caches
-
-        try:
-            return caches.add(config, args.kind, args.names)
-        except build.BuildError as exc:
-            output.error(str(exc))
-            return 1
-    return cmd_devbox_add_key(config, args)
-
-
-def verb_remove(config, args) -> int:
-    if args.object == "package":
-        from worms_cli import caches
-
-        return caches.remove(config, args.kind, args.names)
-    return cmd_devbox_remove_key(config, args)
-
-
-def verb_refill(config, args) -> int:
-    """The lists checked, then `worms apply <caches> --packages`: a bad name fails before the window."""
-    from worms_cli import caches
-
-    kinds = ["apt", "pypi"] if args.kind == "caches" else [args.kind]
-    try:
-        failed = max(caches.check(config, kind) for kind in kinds)
-    except build.BuildError as exc:
-        output.error(str(exc))
-        return 1
-    if failed:
-        output.error("not refilled: fix the list first (`worms remove package ...`, or correct the name), nothing was opened")
-        return 1
-    return cmd_build(config, _with(args, components=caches.components(args.kind), packages=True, rebuild=False, team=[],
-                                   wait=False, ansible_args=getattr(args, "ansible_args", [])))
-
-
 HANDLERS = {
-    "status": lambda config, args: cmd_status(config, _with(args, topic=None, limit=200, hours=24, kind=None)),
-    "show": verb_show, "logs": verb_logs, "check": verb_check, "trace": verb_trace,
+    "status": cmd_status, "show": verb_show, "log": verb_log, "check": verb_check, "trace": verb_trace,
     "login": cmd_login, "run": cmd_run, "rsync": cmd_rsync,
-    "start": verb_power, "stop": verb_power, "reset": verb_reset, "rebuild": verb_rebuild, "restart": cmd_restart,
-    "pause": verb_pause, "resume": verb_resume, "cancel": verb_cancel,
-    "apply": verb_apply, "configure": cmd_deploy, "plan": verb_plan,
-    "open": verb_window, "close": verb_window, "backup": cmd_backup,
-    "destroy": cmd_destroy, "emergency-stop": cmd_emergency_stop,
-    "restore": verb_restore, "release": verb_release, "rollback": verb_rollback, "add": verb_add, "remove": verb_remove, "sync": cmd_devbox_sync_keys, "refill": verb_refill,
-    "delete": cmd_delete_team,
-    "issue": lambda config, args: cmd_secrets(config, _with(args, secrets_action="issue")),
-    "set": lambda config, args: cmd_secrets(config, _with(args, secrets_action="set")),
-    "trust": cmd_trust_node, "completion": None,  # main() runs it before anything else
+    "apply": cmd_apply, "destroy": cmd_destroy, "internet": cmd_internet,
+    "vm": list_vms, "vm start": cmd_power, "vm stop": cmd_power, "vm restart": cmd_power, "vm reset": vm_reset,
+    "vm rebuild": vm_rebuild, "vm kill": cmd_emergency_stop,
+    "jobs": list_jobs, "jobs pause": jobs_pause, "jobs resume": jobs_resume, "jobs cancel": jobs_cancel,
+    "round": list_rounds, **{f"round {verb}": round_verb for verb in ("pause", "resume", "start", "cancel")},
+    "service": list_services, "service restart": cmd_restart,
+    "db": list_tables, "db backup": cmd_backup, "db restore": db_restore, "db reset": lambda config, args: cmd_reset(
+        config, _with(args, what="database")),
+    "team": list_teams, "team delete": cmd_delete_team,
+    "key": list_keys, "key add": cmd_devbox_add_key, "key remove": cmd_devbox_remove_key, "key sync": cmd_devbox_sync_keys,
+    "user": list_users, "user add": cmd_admin_create_staff,
+    "user password": lambda config, args: cmd_admin_reset_password(config, _with(args, username=args.user or args.username
+                                                                                 or "admin")),
+    "init": verb_init, "secret": lambda config, args: cmd_secrets(config, _with(args, secrets_action=None)),
+    "secret set": lambda config, args: cmd_secrets(config, _with(args, secrets_action="set")),
+    "secret issue": lambda config, args: cmd_secrets(config, _with(args, secrets_action="issue")),
+    "completion": None,  # main() runs it before anything else
     "test": cmd_test, "step": cmd_step,
 }  # fmt: skip
+
+
+def _command(args) -> str:
+    """The command as HANDLERS names it: `status`, `vm reset`."""
+    return args.command + (f" {args.action}" if getattr(args, "action", None) else "")
 
 
 def _split(argv: list[str]) -> tuple[list[str], list[str]]:
@@ -2656,7 +2436,8 @@ def main(argv=None) -> int:
     config = Config.load(args.config)
     if args.command == "completion":  # read at every shell start: no notice, no node
         return cmd_completion(config, args)
-    tee = _run_log(config, args)
+    command = _command(args)
+    tee = _run_log(config, args, command)
     lock = None
     code = 1
     captured = getattr(args, "json", False)
@@ -2667,8 +2448,8 @@ def main(argv=None) -> int:
         terminal, sys.stdout = sys.stdout, output.Sink()
     try:
         _internet_notice(config)
-        lock = _lock(config, args, own)
-        code = HANDLERS[args.command](config, args)
+        lock = _lock(config, args, command, own)
+        code = HANDLERS[command](config, args)
     except build.BuildError as exc:  # the lock refused
         output.error(str(exc))
         code = 1
@@ -2681,55 +2462,47 @@ def main(argv=None) -> int:
             sys.stdout.flush()
             sys.stdout = terminal
             print(json.dumps(output.capture_result("worms " + " ".join(own), code), indent=2, ensure_ascii=False))
-    if THEN_EXEC and code == 0:
-        sys.stdout.flush()
-        sys.stderr.flush()
-        os.execv(sys.executable, THEN_EXEC)
     if tee is not None and code:
-        print(output.color(f"this run's whole output: {tee.path} (`worms logs run`)", "dim"), file=sys.stderr)
+        print(output.color(f"this run's whole output: {tee.path} (`worms log run`)", "dim"), file=sys.stderr)
     return code
 
 
-# The verbs that change something: their whole output goes to a run log too (worms_cli/runlog.py).
-# Never one whose output is a secret (`add staff`, `reset password`: a one-time password) or a VM's
+# The commands that change something: their whole output goes to a run log too (worms_cli/runlog.py).
+# Never one whose output is a secret (`user add`, `user password`: a one-time password) or a VM's
 # (run, login).
-LOGGED = ("apply", "configure", "rebuild", "reset", "start", "stop", "restart", "open", "close", "sync", "add",
-          "remove", "delete", "destroy", "emergency-stop", "step", "pause", "resume", "cancel", "refill", "release",
-          "rollback")
+LOGGED = {"apply", "destroy", "internet", "vm start", "vm stop", "vm restart", "vm reset", "vm rebuild", "vm kill",
+          "jobs pause", "jobs resume", "jobs cancel", "round pause", "round resume", "round start", "round cancel",
+          "service restart", "db restore", "db reset", "team delete", "key add", "key remove", "key sync", "step"}
+
+# The commands that change the platform: one at a time, by the node's lock (worms_cli/lock.py). Never
+# `vm kill`, `jobs ...`, `round ...`: they must work while a build runs.
+LOCKED = {"apply", "destroy", "internet", "vm start", "vm stop", "vm restart", "vm reset", "vm rebuild", "service restart",
+          "db restore", "db reset", "key sync", "step"}
 
 
-# The verbs that change the platform: one at a time, by the node's lock (worms_cli/release.py). Never
-# emergency-stop, pause, resume, cancel: they must work while a build runs.
-LOCKED = ("apply", "configure", "rebuild", "reset", "start", "stop", "restart", "open", "close", "destroy", "refill",
-          "sync", "step", "restore", "release", "rollback")
+def _changes_nothing(args, command) -> bool:
+    return getattr(args, "plan", False) or (command == "internet" and args.state is None)
 
 
-def _lock(config, args, own):
-    """The node's lock, when this verb changes the platform (and is not the round agent's own run)."""
-    from worms_cli import release
+def _lock(config, args, command, own):
+    """The node's lock, when this command changes the platform (and is not the round agent's own run)."""
+    from worms_cli import lock
     from worms_cli.session import NODE_WORKSPACE, for_config
 
-    if args.command not in LOCKED or Path(config.repo_root).resolve() == Path(NODE_WORKSPACE):
+    if command not in LOCKED or _changes_nothing(args, command) or Path(config.repo_root).resolve() == Path(NODE_WORKSPACE):
         return None
-    what = getattr(args, "what", None) or getattr(args, "targets", None) or []
-    if (args.command == "reset" and what[:1] == ["password"]) or (args.command == "start" and what[:1] == ["round"]):
-        return None  # the database's, no VM
-    if getattr(args, "plan", False) or (args.command == "rollback" and not (args.db or args.code)):
-        return None  # changes nothing
-    return release.Lock(for_config(config), " ".join(own)).acquire()
+    return lock.Lock(for_config(config), " ".join(own)).acquire()
 
 
-def _run_log(config, args):
+def _run_log(config, args, command):
     """Start this run's log, if it is a changing one; None otherwise, or when it cannot be (said once)."""
     from worms_cli import runlog
     from worms_cli.session import NODE_WORKSPACE
 
-    if args.command not in LOGGED or Path(config.repo_root).resolve() == Path(NODE_WORKSPACE):
+    if command not in LOGGED or _changes_nothing(args, command) or Path(config.repo_root).resolve() == Path(NODE_WORKSPACE):
         return None
-    if getattr(args, "object", None) == "staff" or (args.command == "reset" and args.what[:1] == ["password"]):
-        return None  # a one-time password
     try:
-        tee = runlog.Tee(runlog.verb(args), config=config).start()
+        tee = runlog.Tee(runlog.name(command, args), config=config).start()
     except OSError as exc:
         output.warn(f"no run log for this run ({exc})")
         return None

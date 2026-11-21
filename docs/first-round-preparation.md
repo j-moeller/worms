@@ -50,7 +50,7 @@ index (`apt_cache/tasks/check.yml`). That is the same request tomorrow's sandbox
 ```sh
 cd <checkout>
 pgrep -af 'manage.py|ansible-playbook'   # nothing: a second worms run can close the window under a build
-worms show jobs                        # nothing running or queued
+worms jobs                        # nothing running or queued
 worms status                             # internet access ● denied, no sandbox VM in the list
 ```
 
@@ -82,7 +82,7 @@ git status --short        # nothing modified: the node's workspace is synced fro
 ```sh
 worms apply --plan dashboard round-agent   # read it: database and orchestrator come along if migrations are pending
 worms apply --yes dashboard round-agent   # 8 min on dev
-worms show jobs                          # nothing running, then:
+worms jobs                          # nothing running, then:
 systemctl restart worms-round-agent
 worms login orchestrator
   sudo systemctl restart orchestrator-conduct-rounds
@@ -136,8 +136,8 @@ all as they are (its job log says `not reset: no clean snapshot`), and the cache
   in place, as it was before. Give egress and run step 4 again.
 - `Say the cache cannot serve a fresh VM`: the fill ran but the offline cache still lacks lists.
   The message names them. Send it to me; don't start the round.
-- `!!! INTERNET ACCESS IS STILL ALLOWED`: run `worms close window`.
-- **Whatever failed, and you stop there:** run `worms close window`. A build that fails inside
+- `!!! INTERNET ACCESS IS STILL ALLOWED`: run `worms internet off`.
+- **Whatever failed, and you stop there:** run `worms internet off`. A build that fails inside
   the window closes it and switches DNS and the caches back to offline mode itself (online, they
   answer every request they can't fetch with an error). `disable` does both again and checks the
   cache; it is needed for sure when the build says `!!! DNS AND THE CACHES MAY STILL BE IN ONLINE
@@ -161,10 +161,10 @@ repaired cache, and snapshotted as configured. Teams lose what's on their devbox
 are then a rollback of seconds. The gateways stay, with the `nftables` you installed.
 
 ```sh
-worms apply --yes devbox --rebuild
-worms show jobs         # one devbox_rebuild per team; wait until all are done (12–14 min each on dev, one team after another)
-worms logs <number>        # the log of one that failed
-worms show keys         # every cell ✓
+worms vm rebuild devboxes --yes
+worms jobs         # one devbox_rebuild per team; wait until all are done (12–14 min each on dev, one team after another)
+worms log <number>        # the log of one that failed
+worms key         # every cell ✓
 ```
 
 **Check on one team's devbox:**
@@ -209,26 +209,26 @@ skipped, so tell teams to upload before the start.
 ## 8. During the round
 
 ```sh
-worms show rounds       # the round, its attempts by state
-worms show jobs         # prepare, deploy, teardown jobs
-worms logs conductor -f    # what the conductor does
-worms logs <number>        # one job's log: the first prepare builds the sandbox (about 1 h)
+worms round       # the round, its attempts by state
+worms jobs         # prepare, deploy, teardown jobs
+worms log conductor -f    # what the conductor does
+worms log <number>        # one job's log: the first prepare builds the sandbox (about 1 h)
 ```
 
 - **The first attempt's `prepare` is the step that has never run on production.** If it fails,
-  `worms logs <number>` shows why. The conductor retries the attempt (up to 4 per team); send me
+  `worms log <number>` shows why. The conductor retries the attempt (up to 4 per team); send me
   the end of the log.
-- **Stop everything:** `worms emergency-stop` hard-stops all VMs and destroys nothing.
+- **Stop everything:** `worms vm kill` hard-stops all VMs and destroys nothing.
 
 ## Don'ts
 
-- **No `worms apply`, deploy or `worms open window` during the round.** A deploy restarts the
+- **No `worms apply`, deploy or `worms internet on` during the round.** A deploy restarts the
   conductor, and that costs the running team its attempt.
 - **No `worms destroy`.** It takes the database VM and its records too.
 - **No `worms apply apt-cache --packages` without egress.** It now puts the old index back, but
   achieves nothing.
 - **No `worms step devbox-configure` or `worms step devbox-keys` by hand.** Without the round
   agent's variables they write empty key files: every team loses SSH access to its devbox and the
-  gateway. If it happened: `worms sync keys` writes them back from the database.
+  gateway. If it happened: `worms key sync` writes them back from the database.
 - **If dpkg asks about `/etc/nftables.conf`, answer `N`** (keep your version). The gateway's
   rules are in that file.

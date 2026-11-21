@@ -212,7 +212,7 @@ def _reset_services(ex, cfg):
     vms = [vm for pool in SERVICE_POOLS for vm in snapshots.pool_vms(ex, pool)]
     missing = sorted(vm["name"] for vm in vms if not snapshots.has_clean(ex, vm))
     if not vms or missing:
-        return f"not reset: no clean snapshot on {', '.join(missing) or 'any service VM'} (`worms rebuild services`)"
+        return f"not reset: no clean snapshot on {', '.join(missing) or 'any service VM'} (`worms vm rebuild services`)"
     snapshots.roll_back(ex, vms)
     snapshots.wait_for_ssh(ex, cfg.get("service_hosts") or [cfg["scoring_host"], cfg["logging_host"]])
     _restore_devbox_map(ex, cfg)
@@ -873,7 +873,7 @@ def _install_ca(ex, vms):
 
 
 def _write_team_keys(ex, team, vms):
-    """The team's SSH keys on its VMs, directly: the key file `worms sync keys` writes too.
+    """The team's SSH keys on its VMs, directly: the key file `worms key sync` writes too.
     The SSH gateway's lines do not change with a reset."""
     from worms_cli import keys
 
@@ -1015,7 +1015,7 @@ HELD_DEVBOXES = "held-devboxes.json"
 
 
 def paused_path(cfg):
-    """The operator's pause (`worms pause jobs`): while it exists the agent claims no job (agent.py,
+    """The operator's pause (`worms jobs pause`): while it exists the agent claims no job (agent.py,
     claim); the one under way ends first. Its text says who paused it, and when."""
     return Path(cfg.get("state_dir", STATE_DIR)) / "agent-paused"
 

@@ -6,7 +6,7 @@
 
 The script holds what does not change with the platform, taken from the CLI's own tables when it
 is generated, so it cannot drift from them: the commands and their subcommands and flags (the
-argparse parsers), the status topics, the components and groups, the steps, the services. Run it
+argparse parsers), the topics of `show`, the components and groups, the steps, the services. Run it
 again after an update.
 
 What changes, the VMs and the teams, comes from `worms __complete`, which main() runs before its

@@ -50,7 +50,7 @@ def setup(config) -> None:
     if not db_env:
         raise NotConfigured(
             "no database configured: no vault in this checkout (set WORMS_SSH=root@<node> "
-            "in ~/.worms/config, then `worms show secrets`). See docs/03-manage-py.md."
+            "in ~/.worms/config, then `worms secret`). See docs/03-manage-py.md."
         )
 
     dashboard_src = config.repo_root / "projects" / "dashboard"

@@ -106,11 +106,11 @@ tmux new -s worms                                 # builds take about an hour
 Start with a fresh vault. Never copy another node's: its tokens, WORMS key and state belong to that node.
 
 ```sh
-worms issue token proxmox-token        # WormsProvision on /        (OpenTofu, the round agent)
-worms issue token orchestrator-token   # WormsSandboxPower on /pool/sandbox (sandbox VM power)
-worms issue token topology-token       # WormsTopology on /         (topology page, worms status)
-worms show secrets                            # generates everything else; shows states, never values
-worms trust node                         # root on the node accepts the WORMS key
+worms secret issue proxmox-token        # WormsProvision on /        (OpenTofu, the round agent)
+worms secret issue orchestrator-token   # WormsSandboxPower on /pool/sandbox (sandbox VM power)
+worms secret issue topology-token       # WormsTopology on /         (topology page, worms status)
+worms secret                            # generates everything else; shows states, never values
+worms init                         # root on the node accepts the WORMS key
 ```
 
 What each token may do: [7 Security](07-security.md#capabilities).
@@ -118,11 +118,11 @@ What each token may do: [7 Security](07-security.md#capabilities).
 ## 4. Build
 
 ```sh
-worms apply
+worms apply --all
 echo "exit $?"
 ```
 
-`worms apply` is idempotent. It runs these steps in order ([3](03-manage-py.md#worms-build)):
+`worms apply --all` is idempotent. It runs these steps in order ([3](03-manage-py.md#worms-build)):
 1. secrets, init, platform, firewall, host network
 2. with the devboxes shut down:
    1. under the internet window:
@@ -142,7 +142,7 @@ worms step ping                # every VM: SUCCESS
 worms status                    # firewall on, VMs running, internet denied, the competition
 worms check tokens             # each token: ok, exactly its rights
 worms test --live                  # end-to-end checks; the sandbox checks FAIL until a round has built one
-worms reset password      # one-time password for "admin", printed once
+worms user password      # one-time password for "admin", printed once
 ```
 
 The checks below run on the node:
@@ -173,9 +173,9 @@ Without them the platform has to be rebuilt. Nothing backs up the database ([6](
 
 | Symptom | Do |
 |---|---|
-| `root on this node does not accept the WORMS key`, or tofu fails to authenticate over SSH | `worms trust node` |
-| `the vault lacks ...`, `there is no vault` | `worms show secrets` |
-| `proxmox-token: MISSING` | `worms issue token <name>` |
+| `root on this node does not accept the WORMS key`, or tofu fails to authenticate over SSH | `worms init` |
+| `the vault lacks ...`, `there is no vault` | `worms secret` |
+| `proxmox-token: MISSING` | `worms secret issue <name>` |
 | `... overrides the vault's token for OpenTofu` | Delete that `*.auto.tfvars` |
 | `PROXMOX_VE_SSH_... is set in your environment` | `unset` it |
 | tofu cannot find a `.qcow2`; errors about `snippets`, `import`, `local-zfs-sandbox` | §2.5, §2.3 |
@@ -189,13 +189,13 @@ Without them the platform has to be rebuilt. Nothing backs up the database ([6](
 | A round shows "queued" | Its gameplan is ready; another round is under way and runs to its end first (one round at a time) |
 | `the node has no such file` for a gameplan the node has, or a gameplan the orchestrator finds valid missing from a round's choices (`the node finds it invalid`; the node's `gameplans` job log names an `AttributeError` of the framework) | The round agent running then predates its code on disk. Since 2026-11-19 it restarts itself between jobs; one started before needs `systemctl restart worms-round-agent` on the node once. Then `worms apply gameplans` (or restart the conductor as above) to check at once |
 | `Could not resolve provider bpg/proxmox: could not connect to registry.opentofu.org` on the node (`TASK [round_agent : Initialise the node's stacks ...]`, a round's sandbox build) | A plain `tofu init` asks the registry even for a provider it has installed. Since 2026-11-19 the node's stacks are initialised from its provider mirror, `/var/lib/worms/tofu-providers`, which keeps what they installed ([`scripts/tofu-init`](../scripts/tofu-init)): no internet needed. Only a provider version the code pins anew needs it, once |
-| `worms show keys`: the SSH gateway ✓, but the devbox VMs A, B, C miss the keys | `worms sync keys` copies them and shows them again. Before 2026-11-19 the round agent's key push ran the devboxes' whole configuration, and a package the offline apt cache lacks (`rsync`, added on 2026-11-18) stopped it before the keys |
-| `unknown job kind: 'gameplans'` in the orchestrator's journal | The node still runs the old round agent: the build stopped before its playbook. Run `worms apply` again |
+| `worms key`: the SSH gateway ✓, but the devbox VMs A, B, C miss the keys | `worms key sync` copies them and shows them again. Before 2026-11-19 the round agent's key push ran the devboxes' whole configuration, and a package the offline apt cache lacks (`rsync`, added on 2026-11-18) stopped it before the keys |
+| `unknown job kind: 'gameplans'` in the orchestrator's journal | The node still runs the old round agent: the build stopped before its playbook. Run `worms apply round-agent` |
 | `dataset already exists` | A leftover volume: `pvesm free <storage>:<volume>` |
 | `known_hosts has lines OpenTofu's Proxmox provider cannot read` | Delete the lines it names from `/root/.ssh/known_hosts` |
 | `Run Django migrations` fails, output hidden | `worms apply orchestrator -- -e hide_secrets=false` (prints secrets) |
-| `!!! INTERNET ACCESS IS STILL ALLOWED` | `worms close window` |
-| `warning: no snapshot of ...` | `worms step snapshot-services` before any devbox exists; later `worms rebuild services` |
+| `!!! INTERNET ACCESS IS STILL ALLOWED` | `worms internet off` |
+| `warning: no snapshot of ...` | `worms step snapshot-services` before any devbox exists; later `worms vm rebuild services` |
 | `stack devbox has outputs ... but no ansible_hosts` | A devbox apply stopped half way: see the job log, then `worms apply devbox` |
 | Rerunning one playbook hangs on `apt`/`pip` | The internet window is closed: add `--skip-tags packages -e internet_enabled=false` |
 | `worms-audit-gateway.service` fails every minute | Expected until `worms apply devbox`: there is no SSH gateway yet |
@@ -207,11 +207,11 @@ The laptop holds the checkout, the vault, the CA and the state of `platform`, `f
 
 ```sh
 echo 'WORMS_SSH=root@<public name>' >> ~/.worms/config   # its SSH port goes in ~/.ssh/config
-worms show secrets && worms trust node                           # then `worms issue token ...`, `worms apply`
+worms init                           # then `worms secret issue ...`, `worms apply --all`
 ```
 
 - **Requirements.** Python ≥ 3.12, OpenTofu, Ansible, OpenSSH and rsync on the laptop. The node's SSH port and port 8006 must be reachable from it.
 - **Moving an existing controller to the laptop:**
   1. Copy the vault and its key, `ansible/pki/worms/` and those five states to the same paths in the laptop's checkout.
-  2. Run `worms trust node`.
-  3. Run `worms apply`.
+  2. Run `worms init`.
+  3. Run `worms apply`: it finds nothing to change, or says what differs.

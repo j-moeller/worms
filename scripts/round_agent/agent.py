@@ -104,9 +104,9 @@ class Agent:
         it waits, queued, for the release. Returns (id, uuid, kind, params) or None."""
         paused = handlers.paused_path(self.cfg)
         if paused.exists():
-            # `worms pause jobs`: the operator's; the job under way (if any) has ended already.
+            # `worms jobs pause`: the operator's; the job under way (if any) has ended already.
             if not self._paused_said:
-                log.warning("paused (%s): no job is taken until `worms resume jobs`", paused)
+                log.warning("paused (%s): no job is taken until `worms jobs resume`", paused)
                 self._paused_said = True
             return None
         if self._paused_said:
@@ -273,7 +273,7 @@ def check_env(env) -> None:
         raise SystemExit(
             f"round agent: not set or not there: {', '.join(missing)} (/etc/worms/round-agent.env). "
             "Run SetupRoundAgent.yml again from the controller (`worms apply round-agent`), with the vault complete "
-            "(`worms show secrets`)"
+            "(`worms secret`)"
         )
 
 

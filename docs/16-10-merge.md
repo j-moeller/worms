@@ -86,7 +86,7 @@ During and after the deploy, old and new parts can meet:
    - Tell the teams: the devboxes are off during step 7; the dashboard is briefly unavailable in step 5; round links and the team API's round ids change ([What teams and staff notice](#what-teams-and-staff-notice)).
 2. **Check the platform.**
    - `worms status`: no sandbox VM exists, and the internet window is closed. A leftover sandbox blocks step 7 and would be reused by the next round of the same gameplan.
-   - `worms show rounds`, `worms show jobs`: nothing running or queued.
+   - `worms round`, `worms jobs`: nothing running or queued.
 3. **Update the controller's checkout.**
    - `git status` must be clean. The node's workspace is rsynced from the working tree, uncommitted edits included ([`round_agent/defaults`](../ansible/roles/host/round_agent/defaults/main.yml)).
    - Then `git pull --ff-only` to the commit being deployed (`21976d9` or later; write it down).
@@ -99,7 +99,7 @@ During and after the deploy, old and new parts can meet:
 5. **Plan, then build** the database, orchestrator, dashboard and round agent:
    - `worms apply --plan dashboard round-agent`. Expect `database` and `orchestrator` with "configure again: the database lacks migrations", a note naming the 8 migrations, `dashboard` and `round-agent`.
    - `worms apply dashboard round-agent`. One Ansible run configures the database, orchestrator and dashboard together: the orchestrator migrates (its services stopped), the dashboard restarts, the grants are applied, the conductor restarts. Then the node's play: workspace, `python3-cryptography`, the unit.
-6. **Restart the round agent** on the node, while `worms show jobs` shows nothing running, **then the conductor** on the orchestrator (`worms login orchestrator`):
+6. **Restart the round agent** on the node, while `worms jobs` shows nothing running, **then the conductor** on the orchestrator (`worms login orchestrator`):
    ```sh
    systemctl restart worms-round-agent
    journalctl -u worms-round-agent -n 20
@@ -122,7 +122,7 @@ During and after the deploy, old and new parts can meet:
 
 The rest applies by itself:
 - **The sandbox gateway's DNS** comes with the next sandbox build: the first attempt of the next round.
-- **The devbox time sync** comes with each devbox's next reset (`worms reset <team>` resets one by hand).
+- **The devbox time sync** comes with each devbox's next reset (`worms vm reset <team>` resets one by hand).
 
 ## What teams and staff notice
 
@@ -192,7 +192,7 @@ A later deploy gives every row a new UUID, so links handed out meanwhile change 
 - **Logs.** rsyslog's files on every platform VM rotate past 100 MB, checked hourly (role `log_limits`, a third play of `SetupAudit.yml`).
 - **DNS.** BIND's logs are bounded files (S8 reopened). The DNS VM's disk had filled with failed lookups: check `df -h /` there before the deploy.
 
-**`worms rsync`** ([3](03-manage-py.md#see)) is the controller's CLI. Devboxes need rsync for it: it is a new devbox package and apt cache seed. The apt cache fetches it in step 7 (`apt-cache --packages`); existing devboxes get it when they are built again (`worms rebuild devboxes`), new ones when they are built. Never with `worms step devbox-configure` by hand: without the round agent's variables it writes every team's key files empty (it is refused now); a team's keys are written by `worms sync keys`.
+**`worms rsync`** ([3](03-manage-py.md#see)) is the controller's CLI. Devboxes need rsync for it: it is a new devbox package and apt cache seed. The apt cache fetches it in step 7 (`apt-cache --packages`); existing devboxes get it when they are built again (`worms vm rebuild devboxes`), new ones when they are built. Never with `worms step devbox-configure` by hand: without the round agent's variables it writes every team's key files empty (it is refused now); a team's keys are written by `worms key sync`.
 
 **Larger seeds.** The apt cache seeds some 50 more common tools (git, build-essential, gdb, tmux, nmap, tshark, ...): 353 packages and 294 MB with their dependencies, up from 155 and 116 MB. devpi seeds 66 more (182): readers for what gameplans hand out (pyotp, pykeepass, python-docx, odfpy, pyzipper, py7zr, standard-telnetlib), build backends for offline sdists, common libraries, and tensorflow-cpu and torch (with torchvision, torchaudio and, from PyPI, the CUDA libraries: some 3.5 GB in all). Step 7 fetches them, devpi in 16 batches instead of 10, each deleted once fetched, on devpi's data disk. Sandbox VMs reach both caches: a worm running as root on one can install what they hold.
 - **worms-dev only:** devpi's leftover index `root/offline` and `.wheelhouse-import` go once `root/pypi` holds every project of both (checked after the seed; otherwise they stay and the build names what is missing). Production has neither.
@@ -200,7 +200,7 @@ A later deploy gives every row a new UUID, so links handed out meanwhile change 
 - **Did the seed run?** After a successful seed, apt-cache and devpi hold the list they fetched (`/etc/apt-cache-package-list`, `/etc/pypi-package-list`) and the commit it came from (`/etc/seed-version`; `-dirty` when the role had uncommitted changes). An older commit there means the last seed failed or did not run.
 - **nginx from nginx.org.** The dashboard, orchestrator, scoring and logging install nginx from nginx.org's stable repository (1.30 instead of Debian's 1.26), at the next build with the internet window; nginx restarts once. The role writes `nginx.conf` itself (Debian's settings: `sites-enabled/`, `www-data`) before the package, so the sites stay served, and removes nginx.org's default site. The signing keys are shipped in the role, with their fingerprints.
 - **Gameplans: SSH keys with a passphrase, SSH on another port** ([5](05-live-environment.md)). The node encrypts such a key with `cryptography` and `python3-bcrypt`, which `worms apply round-agent` installs; restart the round agent after it (step 6). Existing gameplans build as before.
-- **The serial getty.** Every VM's getty on ttyS0, which no VM has, restarted every 10 s. Platform VMs mask it with SetupAudit.yml; devboxes with their next build (`worms rebuild devboxes`), sandboxes at their next build.
+- **The serial getty.** Every VM's getty on ttyS0, which no VM has, restarted every 10 s. Platform VMs mask it with SetupAudit.yml; devboxes with their next build (`worms vm rebuild devboxes`), sandboxes at their next build.
 
 None of this alters round_one or `credential_chain.py`: neither removes a package, and `credential_chain.py`'s only telnet user is its telnet login. The round agent has to be restarted after the deploy (step 6) all the more: the new `sandbox_vm` role reads `accounts` and `purge`, which only the new `build.py` writes.
 

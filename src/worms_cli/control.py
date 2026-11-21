@@ -1,14 +1,14 @@
 """Holding things up and letting them go: the round agent's jobs and the rounds.
 
-    worms pause jobs [--reason TEXT]   the agent finishes the job under way and takes no other
-    worms resume jobs                  ... takes jobs again
-    worms cancel job <n>...            queued jobs, never run: failed, "cancelled by the operator"
-    worms cancel jobs --team <t>       every queued job of a team (its devbox's)
-    worms pause round <r>              the conductor starts no attempt of it (one under way ends as
+    worms jobs pause [--reason TEXT]   the agent finishes the job under way and takes no other
+    worms jobs resume                  ... takes jobs again
+    worms jobs cancel <n>...           queued jobs, never run: failed, "cancelled by the operator"
+    worms jobs cancel --team <t>       every queued job of a team (its devbox's)
+    worms round pause <r>              the conductor starts no attempt of it (one under way ends as
                                        usual); the devboxes it holds are started again meanwhile
-    worms resume round <r>             ... starts them again, holding the devboxes again if it wants
-    worms start round <r>              a round still to come begins now (its start is moved to now)
-    worms cancel round <r>             its attempts still to come are skipped
+    worms round resume <r>             ... starts them again, holding the devboxes again if it wants
+    worms round start <r>              a round still to come begins now (its start is moved to now)
+    worms round cancel <r>             its attempts still to come are skipped
 
 The pause is a file on the node the agent looks at before each job (scripts/round_agent/agent.py,
 claim; handlers.paused_path); the rest are the database's, which the orchestrator reads
@@ -26,7 +26,7 @@ from worms_cli import output
 from worms_cli.build import BuildError
 from worms_cli.jobs import PAUSED
 
-CANCELLED = "cancelled by the operator (`worms cancel job`)"
+CANCELLED = "cancelled by the operator (`worms jobs cancel`)"
 
 
 def _who() -> str:
@@ -39,7 +39,7 @@ def pause_jobs(session, reason: str = "") -> int:
     if code != 0:
         raise BuildError(f"could not pause the agent: {err.strip()[:200]}")
     print(output.status_cell("warn", f"the round agent is paused: it finishes the job under way and takes no other "
-                                     "(`worms resume jobs`; queued: `worms show jobs`)"))  # fmt: skip
+                                     "(`worms jobs resume`; queued: `worms jobs`)"))  # fmt: skip
     return 0
 
 
@@ -65,12 +65,12 @@ def cancel_jobs(numbers=(), team=None) -> int:
         jobs = list(HostJob.objects.filter(id__in=numbers).order_by("id"))
         missing = sorted(set(numbers) - {job.id for job in jobs})
         if missing:
-            raise BuildError(f"no host job {', '.join(f'#{n}' for n in missing)} (`worms show jobs`)")
+            raise BuildError(f"no host job {', '.join(f'#{n}' for n in missing)} (`worms jobs`)")
     problems = 0
     for job in jobs:
         if job.state != HostJob.State.QUEUED:
             output.error(f"#{job.id} {job.kind} is {job.state}: only a queued job is cancelled"
-                         + (" (a running one: `worms pause jobs`, then it ends; or `worms restart agent`)" if job.state == "running" else ""))
+                         + (" (a running one: `worms jobs pause`, then it ends; or `worms service restart agent`)" if job.state == "running" else ""))
             problems += 1
             continue
         updated = HostJob.objects.filter(id=job.id, state=HostJob.State.QUEUED).update(
@@ -84,7 +84,7 @@ def cancel_jobs(numbers=(), team=None) -> int:
 
 
 def find_round(text: str):
-    """A round of the current competition, by its id (`worms show rounds`) or its name."""
+    """A round of the current competition, by its id (`worms round`) or its name."""
     from core.models.competition import Round
     from worms_cli.queries import _require_competition
 
@@ -92,7 +92,7 @@ def find_round(text: str):
     found = rounds.filter(id=int(text)).first() if text.isdigit() else None
     found = found or rounds.filter(name=text).first() or rounds.filter(name__iexact=text).first()
     if found is None:
-        raise BuildError(f"no round {text!r} (`worms show rounds` lists them, id first)")
+        raise BuildError(f"no round {text!r} (`worms round` lists them, id first)")
     return found
 
 
@@ -101,7 +101,7 @@ def pause_round(round_) -> int:
 
     Round.objects.filter(pk=round_.pk).update(on_hold=True)
     print(output.status_cell("warn", f"round {round_.name!r} is on hold: no attempt of it starts (one under way ends as "
-                                     f"usual); `worms resume round {round_.id}`"))  # fmt: skip
+                                     f"usual); `worms round resume {round_.id}`"))  # fmt: skip
     return 0
 
 
@@ -124,13 +124,13 @@ def start_round_now(round_) -> int:
     now = timezone.now()
     if round_.round_start and round_.round_start <= now:
         raise BuildError(f"round {round_.name!r} has started already ({round_.round_start:%Y-%m-%d %H:%M} UTC)"
-                         + (": it is on hold, `worms resume round`" if round_.on_hold else ""))  # fmt: skip
+                         + (": it is on hold, `worms round resume`" if round_.on_hold else ""))  # fmt: skip
     if round_.round_end and round_.round_end <= now:
         raise BuildError(f"round {round_.name!r} ended at {round_.round_end:%Y-%m-%d %H:%M} UTC")
     Round.objects.filter(pk=round_.pk).update(round_start=now)
     print(output.status_cell("ok", f"round {round_.name!r} starts now (was {round_.round_start:%Y-%m-%d %H:%M} UTC): its "
                                    "runs are planned with the uploads made until now, then the conductor begins it "
-                                   "(`worms logs conductor -f`)"))  # fmt: skip
+                                   "(`worms log conductor -f`)"))  # fmt: skip
     return 0
 
 
@@ -141,7 +141,7 @@ def cancel_round(round_) -> int:
     pending = RoundRun.objects.filter(round=round_, state=RoundRun.State.PENDING)
     if not pending.exists() and not RoundRun.objects.filter(round=round_).exists():
         raise BuildError(f"round {round_.name!r} has not begun: nothing to cancel. To keep it from starting: "
-                         f"`worms pause round {round_.id}`, or delete it on /staff/rounds/")  # fmt: skip
-    count = pending.update(state=RoundRun.State.SKIPPED, finished_at=timezone.now(), error="cancelled by the operator (`worms cancel round`)")
+                         f"`worms round pause {round_.id}`, or delete it on /staff/rounds/")  # fmt: skip
+    count = pending.update(state=RoundRun.State.SKIPPED, finished_at=timezone.now(), error="cancelled by the operator (`worms round cancel`)")
     print(output.status_cell("ok", f"round {round_.name!r}: {count} attempt(s) still to come skipped; one under way ends as usual"))
     return 0

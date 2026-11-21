@@ -1,6 +1,6 @@
 """The vault (src/worms_cli/secrets.py): the one place secrets are kept.
 
-The Proxmox tokens are entered once (`worms set secret`); everything else is
+The Proxmox tokens are entered once (`worms secret set`); everything else is
 generated when missing and never rotated; values are never printed. Runs
 without ansible-vault (plaintext vault in a temporary checkout) and, where it
 is installed, with it (encrypted at rest).
@@ -126,14 +126,14 @@ def cli(root, *args, input=None):
 def test_secrets_command(tmp_path):
     (tmp_path / "ansible").mkdir()
     shutil.copy(REPO / "ansible" / "ansible.cfg", tmp_path / "ansible")
-    proc = cli(tmp_path, "secrets", "set", "proxmox-token", input="root@pam!worms=from-stdin\n")
+    proc = cli(tmp_path, "secret", "set", "proxmox-token", input="root@pam!worms=from-stdin\n")
     assert proc.returncode == 0, proc.stderr
-    listing = cli(tmp_path, "secrets")
+    listing = cli(tmp_path, "secret")
     assert listing.returncode == 0, listing.stderr
     assert "proxmox-token" in listing.stdout and "from-stdin" not in listing.stdout + listing.stderr
     assert "MISSING" in listing.stdout  # orchestrator-token
     assert Vault(tmp_path).get("proxmox-token") == "root@pam!worms=from-stdin"
-    bad = cli(tmp_path, "secrets", "set", "proxmox-token", input="nope\n")
+    bad = cli(tmp_path, "secret", "set", "proxmox-token", input="nope\n")
     assert bad.returncode != 0 and "full form" in bad.stderr
 
 
@@ -144,7 +144,7 @@ ENTERED = {"vault_proxmox_api_token_value", "vault_proxmox_readonly_api_token_va
 
 
 def test_build_secrets_provides_every_vault_variable(tmp_path):
-    """`worms show secrets` in a fresh checkout yields every vault_* variable
+    """`worms secret` in a fresh checkout yields every vault_* variable
     the Ansible side refers to (the Proxmox tokens are entered by the operator,
     so they may be absent or empty), and a second run changes nothing."""
     import re
@@ -162,7 +162,7 @@ def test_build_secrets_provides_every_vault_variable(tmp_path):
     env = {"PATH": str(bin_dir), "HOME": str(tmp_path / "home"), "WORMS_REPO_ROOT": str(root), "NO_COLOR": "1"}
 
     def build_secrets():
-        proc = subprocess.run([sys.executable, str(root / "src" / "manage.py"), "secrets"], env=env,
+        proc = subprocess.run([sys.executable, str(root / "src" / "manage.py"), "secret"], env=env,
                               capture_output=True, text=True)  # fmt: skip
         # The generated ones are written; the entered tokens are not, and it says so.
         token = next(line for line in proc.stdout.splitlines() if line.startswith("proxmox-token"))

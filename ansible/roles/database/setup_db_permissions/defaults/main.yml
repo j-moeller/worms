@@ -60,7 +60,7 @@ postgresql_table_privileges:
     # registration window and development competition, rounds. Column-scoped:
     # username, is_staff and is_superuser are never updated here, and the
     # accounts it inserts can be neither (postgresql_account_guard_roles);
-    # staff accounts are made on the console (`worms add staff`).
+    # staff accounts are made on the console (`worms user add`).
     # Teams and rounds are deleted only while nothing refers to them (the
     # foreign keys refuse it otherwise; no cascade rights).
     - privs: INSERT

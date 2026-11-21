@@ -230,8 +230,8 @@ def reset_password(user, *, by):
 
 def can_manage(actor, target) -> bool:
     """Staff manage student accounts; only a superuser manages staff. Nobody
-    manages a superuser here (the admin's password is `worms admin
-    reset-password`), and nobody manages themselves through these pages."""
+    manages a superuser here (the admin's password is `worms user
+    password`), and nobody manages themselves through these pages."""
     if not actor.is_authenticated or not actor.is_staff:
         return False
     if target.pk == actor.pk or target.is_superuser:

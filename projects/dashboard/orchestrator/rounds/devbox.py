@@ -71,7 +71,7 @@ def request_rebuild(team, fresh=False):
     A rebuild carries every team's keys, so it takes the devbox-job queue lock that key
     updates take too: a later rebuild cannot undo a revocation.
 
-    `fresh`: the team's VMs are built again from nothing (`worms rebuild devboxes`),
+    `fresh`: the team's VMs are built again from nothing (`worms vm rebuild devboxes`),
     not rolled back to their snapshot (a reset)."""
     with serialized_resource("devbox-jobs", "queue"):
         Team.objects.select_for_update().get(pk=team.pk)
@@ -115,7 +115,7 @@ def _next_free_index(used):
 def request_reconfigure(competition):
     """Enqueue a devbox_reconfigure host job: the round agent pushes every team's
     SSH keys and the source->team map again, from what the database says. Needed
-    after a reset of the service VMs (`worms reset services`), which takes the
+    after a reset of the service VMs (`worms vm reset services`), which takes the
     map off scoring and logging. Touches no VM's disk and no token.
 
     Returns the job, or None when no devbox is provisioned or a queued job

@@ -411,7 +411,7 @@ class Conductor:
         at a time. Otherwise the rounds with attempts to come, earliest start first: one whose
         teams all lack an upload needs no gameplan (each run is skipped); any other begins once
         _pin lets it, and until then the next round is tried."""
-        # A round on hold (`worms pause round`) starts no attempt, under way or not.
+        # A round on hold (`worms round pause`) starts no attempt, under way or not.
         self._say_held()
         pending = RoundRun.objects.filter(state=S.PENDING, round__on_hold=False).select_related("round", "team", "upload__artifact")
         under_way = pending.exclude(gameplan_sha256="").order_by("round__round_start", "round_id", "position", "attempt").first()
@@ -428,7 +428,7 @@ class Conductor:
         """Once per round put on hold: that it is."""
         held = set(Round.objects.filter(on_hold=True, runs__state=S.PENDING).distinct().values_list("pk", "name"))
         for pk, name in held - self._held_said:
-            log.warning("round %s is on hold (`worms resume round %s`): no attempt of it starts", name, pk)
+            log.warning("round %s is on hold (`worms round resume %s`): no attempt of it starts", name, pk)
         self._held_said = held
 
     # -- the tick -------------------------------------------------------------

@@ -52,8 +52,9 @@ def deployment(tmp_path_factory):
     handlers = yaml.safe_load((APP / 'handlers/main.yml').read_text())
     # Observe the production notification/listen/loop graph without systemd.
     for handler in handlers:
-        service = handler.pop('ansible.builtin.systemd')
-        handler['ansible.builtin.debug'] = {'msg': 'restart-fixture ' + service.get('name', 'systemd')}
+        service = handler.pop('ansible.builtin.systemd', None)
+        if service is not None:  # the set_fact one (the restart noted for after the migrations) stays
+            handler['ansible.builtin.debug'] = {'msg': 'restart-fixture ' + service.get('name', 'systemd')}
     for name, variables in groups.items():
         play.append({'hosts': 'localhost', 'gather_facts': False,
                      'vars': {**variables, 'infrastructure_ips': {'orchestrator': '127.0.0.1'},
@@ -73,8 +74,8 @@ def deployment(tmp_path_factory):
     playfile.write_text(yaml.safe_dump(play))
     command = ('ansible-playbook', '-i', str(inventory), str(playfile))
     first = run(*command, env=env)
-    assert 'restart-fixture orchestrator-conduct-rounds' in first
-    assert 'restart-fixture orchestrator-process-attempts' in first
+    # A new CA notes the restart; start.yml restarts the services once the migrations are through.
+    assert 'RUNNING HANDLER [Restart Django after the migrations]' in first
     again = run(*command, env=env)
     assert 'changed=0' in again and 'failed=0' in again, again
     assert dest.read_bytes() == ca.read_bytes()

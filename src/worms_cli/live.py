@@ -71,6 +71,16 @@ class Follow:
         self.following = False
 
 
+class Row:
+    """One VM of the play that runs: what it does now (worms.py's progress lines)."""
+
+    def __init__(self, host: str):
+        self.host, self.role, self.task = host, "", "waiting"
+        self.state = "running"
+        self.since = time.monotonic()
+        self.counts: dict[str, int] = {}
+
+
 class Live:
     def __init__(self, config, terminal: int, emit):
         """`terminal`: the fd the window is drawn on; `emit(bytes)`: a plain line to the terminal and
@@ -89,6 +99,9 @@ class Live:
         self.remote = None
         self.beat = time.monotonic()
         self.closed = False
+        self.play: str | None = None
+        self.play_started = time.monotonic()
+        self.rows: dict[str, Row] = {}
         self.ticker = threading.Thread(target=self._tick, daemon=True)
         self.ticker.start()
 
@@ -122,7 +135,7 @@ class Live:
                     break
                 line, data = data[:end], data[end + 1:]
                 if line.startswith(MARK):
-                    self._event(line[len(MARK):].decode(errors="replace").split())
+                    self._event(line[len(MARK):].decode(errors="replace"))
                 else:
                     out += line + b"\n"
                 continue
@@ -136,9 +149,12 @@ class Live:
             self.stream_line_start = True
         return bytes(out)
 
-    def _event(self, words: list[str]) -> None:
+    def _event(self, text: str) -> None:
+        words = text.split()
         with self.lock:
-            if len(words) == 4 and words[0] == "start":
+            if words[:1] == ["progress"]:
+                self._progress(text[len("progress "):])
+            elif len(words) == 4 and words[0] == "start":
                 _, host, task, path = words
                 self.follows.setdefault((host, task), Follow(host, path))
             elif len(words) == 3 and words[0] == "stop":
@@ -148,6 +164,54 @@ class Live:
                 if not self.follows:
                     self.lines.clear()
                     self._erase()
+
+    # -- every VM of a play, at once (ansible/callback_plugins/worms.py) --------------------------
+
+    def _progress(self, payload: str) -> None:
+        import json
+
+        try:
+            event = json.loads(payload)
+        except ValueError:
+            return
+        kind, host = event.get("event"), event.get("host", "")
+        if kind == "play":
+            self.play = event.get("name", "")
+            self.play_started = time.monotonic()
+            self.rows = {h: Row(h) for h in event.get("hosts", [])}
+        elif kind == "end":
+            self.play, self.rows = None, {}
+            self._erase()
+        elif host:
+            row = self.rows.setdefault(host, Row(host))
+            if kind == "task":
+                row.role, row.task, row.since = event.get("role", ""), event.get("task", ""), time.monotonic()
+                row.state = row.state if row.state == "failed" else "running"
+            elif kind == "result":
+                status = event.get("status")
+                row.counts[status] = row.counts.get(status, 0) + 1
+                if status in ("failed", "unreachable"):
+                    row.state = "failed"
+            elif kind == "done":
+                row.state = row.state if row.state == "failed" else "done"
+
+    def _progress_rows(self, width: int) -> list[str]:
+        """The play's VMs: one line each while it runs or after it failed, the finished ones on one."""
+        if not self.rows or len(self.rows) < 2:
+            return []
+        now = time.monotonic()
+        done = [r.host for r in self.rows.values() if r.state == "done"]
+        busy = [r for r in self.rows.values() if r.state in ("running", "failed")]
+        name = max((len(r.host) for r in busy), default=0)
+        lines = [f"{self.play} · {len(done)}/{len(self.rows)} VMs done · {_age(now - self.play_started)}"]
+        for row in sorted(busy, key=lambda r: (r.state != "failed", r.host)):
+            mark = "✗" if row.state == "failed" else "▸"
+            where = f"{row.role} : {row.task}" if row.role else row.task
+            took = "failed" if row.state == "failed" else _age(now - row.since)
+            lines.append(f"{mark} {row.host:<{name}}  {where[:max(10, width - name - 16)]}  {took}")
+        if done:
+            lines.append(f"✓ {', '.join(done)}")
+        return lines
 
     # -- following --------------------------------------------------------------------------------
 
@@ -216,7 +280,7 @@ class Live:
                     if self.tty:
                         self._erase()
                         self._draw()
-                    elif self.follows and now - self.beat >= HEARTBEAT:
+                    elif (self.follows or self._progress_rows(200)) and now - self.beat >= HEARTBEAT:
                         self.beat = now
                         self.emit(self._heartbeat().encode())
             except Exception:  # noqa: BLE001  (the window never stops the run)
@@ -238,6 +302,10 @@ class Live:
         return f"{where} · {_age(now - first.started)} · {problem or quiet}"
 
     def _heartbeat(self) -> str:
+        rows = self._progress_rows(200)
+        if rows and not self.follows:
+            busy = [r for r in rows[1:] if r.startswith("▸")]
+            return f"  … {rows[0]}" + (f"; running: {'; '.join(r[2:] for r in busy[:4])}" if busy else "") + "\n"
         shown = self._shown() or list(self.follows.values())
         text = f"  … {self._header(shown)}"
         return text + (f": {self.lines[-1]}" if self.lines else "") + "\n"
@@ -245,15 +313,18 @@ class Live:
     def _draw(self) -> None:
         if not self.tty or self.drawn or not self.at_line_start or self.closed:
             return
-        shown = self._shown()
-        if not shown:
-            return
         try:
             columns = os.get_terminal_size(self.terminal).columns
         except OSError:
             columns = 0
         width = columns - 1 if columns >= 20 else 100  # 0: a terminal that does not say
-        rows = [f"┌ {self._header(shown)}", *(f"│ {line}" for line in self.lines)]
+        shown = self._shown()
+        progress = self._progress_rows(width - 2)
+        if not shown and not progress:
+            return
+        rows = [f"┌ {progress[0]}", *(f"│ {line}" for line in progress[1:])] if progress else []
+        if shown:
+            rows += [f"{'├' if rows else '┌'} {self._header(shown)}", *(f"│ {line}" for line in self.lines)]
         text = "".join(f"\x1b[2m{row[:width]}\x1b[0m\n" for row in rows)
         _write_all(self.terminal, text.encode())
         self.drawn = len(rows)

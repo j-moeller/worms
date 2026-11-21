@@ -16,7 +16,7 @@ on the services bridge. What `worms apply` puts into the caches today is the apt
 
 ## The intended workflow
 
-1. `worms apply internet-allow`, then `SetupPrivateInternet.yml`, so the caches run online.
+1. `worms internet on`, then `worms apply private-internet`, so the caches run online.
 2. On a helper client in the private internet: `./populate-caches.sh` (apt, pip, MongoDB `.deb`s,
    the feedformatter zip).
 3. Point `cve_search_feedformatter_src` and `cve_search_mongodb_repo_url` at the local copies.

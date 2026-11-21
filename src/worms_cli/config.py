@@ -115,7 +115,7 @@ class Config:
 
     def default_ca(self) -> Path:
         """The internal CA that signed the database's certificate
-        (ansible/pki/worms/ca.crt, created by CreateCA.yml on the node); the
+        (ansible/pki/worms/ca.crt, created by Site.yml's first phase, role ca_create); the
         system bundle if this checkout has none (e.g. on a laptop)."""
         ca = self.repo_root / "ansible" / "pki" / "worms" / "ca.crt"
         return ca if ca.exists() else Path("/etc/ssl/certs/ca-certificates.crt")

@@ -104,22 +104,13 @@ Sources: [`src/worms_cli/pipeline.py`](../src/worms_cli/pipeline.py), [`src/worm
 ## Ansible
 
 - **Inventory.** [`inventory.yml`](../ansible/inventory.yml) defines the groups. [`inventory.generated.yml`](../scripts/generate_inventory.py) holds the hosts, written from the stacks' `ansible_hosts` outputs.
-- **Configure order.** `worms apply --all` runs 15 playbooks:
-  1. `WaitForVMs`
-  2. `SetupDNS`
-  3. `UpdateVMs`
-  4. `SetupTime`
-  5. `HardenSSH`
-  6. `CreateCA`
-  7. `DistributeCA`
-  8. `ConfigureNginx`
-  9. `ConfigureNginxDjango`
-  10. `SetupDbAndDashboard`
-  11. `SetupSandboxApi`
-  12. `SetupNetworkMonitor`
-  13. `SetupPrivateInternet`
-  14. `SetupAudit`
-  15. `SetupRoundAgent`
+- **Configuration.** One playbook, [`Site.yml`](../ansible/Site.yml), says which VM gets which role (a role is one intent: `nginx_tls`, `django_app`, `ca_distribute`, ...), in four phases ([3](03-manage-py.md#worms-apply)):
+  1. the CA, on the controller;
+  2. DNS (every other VM resolves through it);
+  3. every VM on its own, all at once: its roles in order (`apt_updates`, `timesync`, `sshd_listen`, `ca_distribute`, its services, `apt_client` and the cache on the private internet, `auditd`, `log_limits`);
+  4. the migrations (on the orchestrator), then the grants (on the database).
+
+  Then `SetupRoundAgent` on the node. A role whose files, variables and sources did not change since it last ran on a VM is skipped there (its stamp: [`worms_role_gate.py`](../ansible/action_plugins/worms_role_gate.py)).
 - **Playbooks the round agent runs on the node.** `SetupSandbox`, `SetupDevbox` and `SetupSSHGateway`.
 - **Secrets.** An ansible-vault file, `ansible/group_vars/vault.yml` ([7](07-security.md#secrets)).
 - **Which system.** `worms_environments` in [`group_vars/all.yml`](../ansible/group_vars/all.yml), keyed by the node's hostname:

@@ -1,6 +1,6 @@
 ---
 # This VM's own apt fetches from the Debian mirrors directly (apt_client, first in
-# SetupPrivateInternet.yml), as every VM's but the sandbox and devbox ones: apt-cacher-ng and its
+# Site.yml), as every VM's but the sandbox and devbox ones: apt-cacher-ng and its
 # updates come from there, while the internet is open. Only the seed and its check go through the
 # cache, by the clients' sources (apt_cache_client_dir, below).
 

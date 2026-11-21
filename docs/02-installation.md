@@ -127,7 +127,7 @@ echo "exit $?"
 2. with the devboxes shut down:
    1. under the internet window:
       - the private-internet and infrastructure VMs
-      - the 14 configure playbooks
+      - their configuration, `Site.yml` (the VMs in parallel), then the round agent
    2. after the window closes:
       - offline mode
       - the `clean` snapshot of the 11 service VMs

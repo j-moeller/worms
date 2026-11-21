@@ -51,8 +51,8 @@ laptop ──22 (prod) / 2222 (dev)──► node DNAT ──► devbox-ssh-gate
 | Action | Who | Host job | What the round agent does ([`handlers.py`](../scripts/round_agent/handlers.py)) |
 |---|---|---|---|
 | Provision | operator: `worms apply devbox` | `devbox_provision` | Generates `generated_devboxes.tf` for every team, applies the stack, snapshots each new VM as `clean` after its first boot (before any team key), configures, writes tokens and the attribution map |
-| Reset | team: **Reset devbox** button; a dev upload; operator: `worms vm reset <team>` | `devbox_rebuild` | Rolls A, B and C back to `clean` (VMs without a snapshot are replaced), configures again (the keys first; packages from the offline apt cache, skipping and naming one it lacks), writes new tokens, updates the map |
-| Rebuild | operator: `worms vm rebuild devboxes [--team NAME]` | `devbox_rebuild` (`fresh`) | Replaces A, B and C, snapshots them after their first boot, and goes on as a reset |
+| Reset | team: **Reset devbox** button; a dev upload; operator: `worms vm reset <team>` | `devbox_rebuild` | Rolls A, B and C back to `clean`, their configured snapshot from before any team key (VMs without a snapshot are replaced), then the CA, the team's keys and new tokens over SSH, no Ansible; updates the map. A snapshot from before the devbox's setup existed gets it once, without network. What a reset gives is what the snapshot holds: a change of the devbox role needs a rebuild ([10](10-orchestrator.md#the-resets)) |
+| Rebuild | operator: `worms vm rebuild <team>...` or `worms vm rebuild devboxes` | `devbox_rebuild` (`fresh`) | Replaces A, B and C, configures them (`SetupDevbox.yml`, the packages from the apt cache, a missing one named), snapshots them, then the keys and tokens as a reset |
 | Keys | dashboard, on any key or membership change | `devbox_reconfigure` | Pushes the keys alone (no package, no internet) and the attribution map |
 | Dev run | a dev upload | `devbox_deploy` | Places the zip on A and arms `main.sh` |
 

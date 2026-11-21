@@ -43,12 +43,12 @@ DEPLOYED = "/var/lib/worms/deployed.json"
 NOT_DEPLOYED = ("src/manage.py", "src/worms_cli/", "docs/", "tests/", "README.md", "Makefile", ".gitignore", "pytest.ini",
                 "helpers/", "bundle.git", "scripts/apt-cache-offline-index.py")  # fmt: skip
 # Run here, on the controller, by every apply and configure (the CA, the inventory, Ansible's settings).
-CONTROLLER = ("ansible/CreateCA.yml", "ansible/roles/pki/ca_create/", "scripts/generate_inventory.py", "ansible/ansible.cfg",
+CONTROLLER = ("ansible/roles/pki/ca_create/", "scripts/generate_inventory.py", "ansible/ansible.cfg",
               "ansible/callback_plugins/")  # fmt: skip
 AGENT_SOURCES = ("scripts/round_agent/", "src/gameplan/")  # the round agent's own code, besides its role
 WORKSPACE = ("ansible/", "opentofu/", "scripts/", "src/", "gameplans/")  # the round agent's copy (minus its excludes)
 WORKSPACE_EXCLUDED = ("ansible/group_vars/vault.yml", "projects/", "docs/")
-ROLE_SOURCES = {"django_app": ("projects/dashboard/", "gameplans/", "src/gameplan/")}
+ROLE_SOURCES_FILE = "ansible/roles/sources.yml"  # what a role is made from besides its directory
 SEEDS = {"apt-cache": ("ansible/roles/private_internet/apt_cache/defaults/main.yml", "apt_cache_seed_packages"),
          "devpi": ("ansible/roles/private_internet/devpi/defaults/main.yml", "devpi_seed_packages")}  # fmt: skip
 
@@ -103,16 +103,32 @@ def _targets(pattern: str, groups: set) -> bool:
     return any(t in groups for t in include) and not any(t in groups for t in exclude)
 
 
-def _included_roles(tasks) -> set:
+GROUP_CONDITION = re.compile(r"""['"]([\w-]+)['"]\s+(not\s+in|in)\s+group_names""")
+
+
+def for_groups(when, groups) -> bool:
+    """Whether a task's `when` lets hosts of these groups through, as far as it names groups
+    (`'dns_hosts' in group_names`, Site.yml): every other condition counts as true."""
+    for condition in when if isinstance(when, list) else [when]:
+        for group, how in GROUP_CONDITION.findall(str(condition or "")):
+            if (group in groups) != (how == "in"):
+                return False
+    return True
+
+
+def _included_roles(tasks, groups=None) -> set:
+    """The roles these tasks include (`groups`: for hosts of these groups only)."""
     names = set()
     for task in tasks or []:
-        if not isinstance(task, dict):
+        if not isinstance(task, dict) or (groups is not None and not for_groups(task.get("when"), groups)):
             continue
         for block in ("block", "rescue", "always"):
-            names |= _included_roles(task.get(block))
+            names |= _included_roles(task.get(block), groups)
         for module in ("ansible.builtin.include_role", "ansible.builtin.import_role", "include_role", "import_role"):
             if isinstance(task.get(module), dict) and "name" in task[module]:
                 names.add(task[module]["name"])
+        if isinstance(task.get("vars"), dict) and "worms_role" in task["vars"]:  # Site.yml: tasks/role.yml
+            names.add(task["vars"]["worms_role"])
     return names
 
 
@@ -153,7 +169,7 @@ def reach(tree: Tree, group: str, playbooks: list[str]) -> Reach:
             found.playbooks.add(playbook)
             roles |= {r if isinstance(r, str) else r.get("role", "") for r in play.get("roles") or []}
             for section in ("pre_tasks", "tasks", "post_tasks"):
-                roles |= _included_roles(play.get(section))
+                roles |= _included_roles(play.get(section), found.groups)
     found.roles = _role_closure(tree, roles)
     return found
 
@@ -274,6 +290,19 @@ def _oldest(repo, commits) -> str:
     return max(commits, key=behind) if commits else ""
 
 
+# The configure playbooks before Site.yml (2026-11-21): what an older commit configured a VM with.
+LEGACY_PLAYBOOKS = ["WaitForVMs.yml", "SetupDNS.yml", "UpdateVMs.yml", "SetupTime.yml", "HardenSSH.yml", "CreateCA.yml",
+                    "DistributeCA.yml", "ConfigureNginx.yml", "ConfigureNginxDjango.yml", "SetupDbAndDashboard.yml",
+                    "SetupSandboxApi.yml", "SetupNetworkMonitor.yml", "SetupPrivateInternet.yml", "SetupAudit.yml"]  # fmt: skip
+
+
+def _playbooks_at(tree: Tree, playbooks: list[str]) -> list[str]:
+    """`playbooks`, or at a commit before Site.yml the ones that configured the VMs then."""
+    if "Site.yml" in playbooks and tree.yaml("ansible/Site.yml") is None:
+        return [p for p in playbooks if p != "Site.yml"] + LEGACY_PLAYBOOKS
+    return playbooks
+
+
 @dataclass
 class Change:
     component: str
@@ -320,8 +349,9 @@ def analyse(config, session) -> tuple[list[Change], dict, list[str]]:
         found = reach(here, group, playbooks) if group else Reach()
         prefixes = [f"ansible/{p}" for p in found.playbooks] + [f"{d}/" for d in found.roles.values()]
         prefixes += [f"ansible/group_vars/{g}.yml" for g in found.groups] + (["ansible/inventory.yml"] if group else [])
+        sources = here.yaml(ROLE_SOURCES_FILE) or {}
         for role in found.roles:
-            prefixes += list(ROLE_SOURCES.get(role, ()))
+            prefixes += list(sources.get(role) or ())
         if name == "gameplans":
             prefixes += ["gameplans/", "src/gameplan/"]
         if name == "round-agent":
@@ -329,12 +359,16 @@ def analyse(config, session) -> tuple[list[Change], dict, list[str]]:
         every_prefix += prefixes
         if name == "round-agent":
             prefixes += list(WORKSPACE)  # its workspace: a copy of these, synced whenever it is configured
-        devbox_note = "the devboxes take it when they are reset (`worms vm reset devboxes`): never by itself, it is the teams' work"
+        devbox_note = ("the devboxes take it when they are rebuilt (`worms vm rebuild devboxes`): a reset only rolls back to "
+                       "their snapshot; never by itself, a devbox is the teams' work")  # fmt: skip
         clean_base = base.removesuffix("-dirty")
         files = changed_files(repo, clean_base, since) if clean_base else None
         if files is None:
             reason = "runs an unknown commit" if not base else f"runs {base}, not in this checkout's history"
-            changes.append(Change(name, base, [reason], note=devbox_note if component.kind == "devbox" else ""))
+            note = devbox_note if component.kind == "devbox" else (
+                "its packages cannot be compared: a package this checkout added is missing offline (--packages, "
+                "with the window, installs them)" if component.kind in ("vm", "node") else "")  # fmt: skip
+            changes.append(Change(name, base, [reason], note=note))
             continue
         all_changed |= set(files)
         relevant = [f for f in files if _claims(f, prefixes) and not (name == "round-agent" and _claims(f, WORKSPACE_EXCLUDED))]
@@ -344,7 +378,7 @@ def analyse(config, session) -> tuple[list[Change], dict, list[str]]:
         change = Change(name, base, why)
         if component.kind in ("vm", "node") and group:
             then = Tree(repo, clean_base)
-            before, after = _packages(then, reach(then, group, playbooks)), _packages(here, found)
+            before, after = _packages(then, reach(then, group, _playbooks_at(then, playbooks))), _packages(here, found)
             change.packages = sorted(f"+{n}" for n in after - before) + sorted(f"-{n}" for n in before - after)
         if name in SEEDS:
             path, key = SEEDS[name]
@@ -354,8 +388,9 @@ def analyse(config, session) -> tuple[list[Change], dict, list[str]]:
         if component.kind == "devbox":
             change.note = devbox_note
         changes.append(change)
+    legacy = [f"ansible/{p}" for p in LEGACY_PLAYBOOKS]  # gone with Site.yml, which every VM is made from now
     unclaimed = sorted(f for f in all_changed if not _claims(f, every_prefix) and not _claims(f, NOT_DEPLOYED)
-                       and not _claims(f, CONTROLLER) and not f.startswith("opentofu/"))  # fmt: skip
+                       and not _claims(f, CONTROLLER) and not _claims(f, legacy) and not f.startswith("opentofu/"))  # fmt: skip
     return changes, bases, unclaimed
 
 

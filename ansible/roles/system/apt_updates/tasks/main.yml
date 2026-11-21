@@ -3,21 +3,26 @@
 # either). Debian's own automatic runs would otherwise start at boot, hold the
 # dpkg lock for minutes and stall the roles' apt tasks, or try the internet
 # while access is denied.
+# One step for all of them (six module calls each run before 2026-11-21), changed only when one
+# was not masked yet or ran.
 - name: Stop and mask the automatic apt runs
-  ansible.builtin.systemd:
-    name: "{{ item }}"
-    state: stopped
-    enabled: false
-    masked: true
-  loop:
-    - apt-daily.timer
-    - apt-daily-upgrade.timer
-    - apt-daily.service
-    - apt-daily-upgrade.service
-    # Hourly until it succeeds once: downloads the changelog of every package,
+  ansible.builtin.shell: |
+    set -u
+    changed=0
+    # apt-listchanges: hourly until it succeeds once: it downloads the changelog of every package,
     # on all VMs at the same moment, and keeps retrying with the internet denied.
-    - apt-listchanges.timer
-    - apt-listchanges.service
+    for unit in apt-daily.timer apt-daily-upgrade.timer apt-daily.service apt-daily-upgrade.service \
+                apt-listchanges.timer apt-listchanges.service; do
+      if [ "$(systemctl is-enabled "$unit" 2>/dev/null)" = masked ] && ! systemctl is-active --quiet "$unit"; then
+        continue
+      fi
+      systemctl stop "$unit" 2>/dev/null
+      systemctl mask "$unit" || exit 1
+      changed=1
+    done
+    echo "changed=$changed"
+  register: apt_updates_masked
+  changed_when: "'changed=1' in apt_updates_masked.stdout"
 
 - name: Remove unattended-upgrades
   ansible.builtin.apt:
@@ -27,7 +32,7 @@
     lock_timeout: "{{ apt_updates_lock_timeout }}"
 
 # Only while internet access is allowed. The private-internet VMs are updated by
-# their roles (SetupPrivateInternet.yml), after apt_client has set their sources.
+# their roles (Site.yml), after apt_client has set their sources.
 - name: Update all packages
   when:
     - internet_enabled | bool

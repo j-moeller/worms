@@ -95,15 +95,28 @@ class Logs:
         return self._on_vm(name, _command(None, lines, follow, since, root=False))
 
 
-def run_log(nth: int, lines: int, follow: bool) -> int:
-    """`worms log run [N]`: the N-th newest run log of this machine (worms_cli/runlog.py)."""
+def run_log(nth: int, lines: int, follow: bool, vm: str | None = None) -> int:
+    """`worms log run [N] [<vm>]`: the N-th newest run log of this machine (worms_cli/runlog.py), or
+    one VM's own Ansible log of that run (ansible/callback_plugins/worms.py)."""
     from worms_cli import runlog
 
     try:
         path = runlog.nth(nth)
     except LookupError as exc:
         raise BuildError(f"no such run log: {exc}") from None
-    print(output.color(f"run log #{nth}: {path}", "dim"), flush=True)
+    per_vm = runlog.vm_logs(path)
+    found = sorted(per_vm.glob("*.log")) if per_vm.is_dir() else []
+    if vm:
+        wanted = per_vm / f"{vm.removesuffix('.worms.internal')}.log"
+        if wanted not in found:
+            raise BuildError(f"run #{nth} has no Ansible log of {vm!r}" + (f": {', '.join(f.stem for f in found)}" if found else ""))
+        path = wanted
+        print(output.color(f"run #{nth}, {vm}: {path}", "dim"), flush=True)
+    else:
+        print(output.color(f"run log #{nth}: {path}", "dim"), flush=True)
+        if found:
+            print(output.color(f"each VM's own Ansible log (`worms log run {nth} <vm>`): {', '.join(f.stem for f in found)}", "dim"),
+                  flush=True)  # fmt: skip
     argv = ["tail", "-n", str(int(lines)), *(["-F"] if follow else []), str(path)]
     os.execvp(argv[0], argv)
     return 0  # not reached

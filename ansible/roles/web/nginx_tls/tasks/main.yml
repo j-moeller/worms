@@ -37,7 +37,7 @@
     mode: "0644"
   register: nginx_tls_pin
 
-# apt_updates (UpdateVMs.yml) refreshed the lists within the hour, before the repository was
+# apt_updates (before it in Site.yml) refreshed the lists within the hour, before the repository was
 # there: refreshed again however recent they are (0), only when the repository changed.
 - name: Read nginx.org's package list
   when: (internet_enabled | bool) and (nginx_tls_key is changed or nginx_tls_repo is changed or nginx_tls_pin is changed)
@@ -130,9 +130,20 @@
       - serverAuth
     create_subject_key_identifier: true
   register: tls_csr
+  changed_when: false  # in memory: only what is signed below changes anything
 
+- name: Read the server certificate it has
+  ansible.builtin.slurp:
+    src: "{{ tls_cert_path }}"
+  register: tls_cert_existing
+  failed_when: false
+
+# On the controller. With the certificate the VM has, signed again only when it is missing,
+# expiring, or no longer matches the CSR (its name, its key); otherwise unchanged, and nginx is
+# not reloaded (it was, on every run, before 2026-11-21).
 - name: Sign server certificate on trusted CA
   community.crypto.x509_certificate_pipe:
+    content: "{{ (tls_cert_existing.content | b64decode) if tls_cert_existing.content is defined else omit }}"
     csr_content: "{{ tls_csr.csr }}"
     provider: ownca
     ownca_path: "{{ pki_ca_cert_path }}"
@@ -151,6 +162,7 @@
     owner: root
     group: root
     mode: "0644"
+  when: tls_certificate is changed
   notify: Reload nginx
 
 - name: Install CA certificate for local trust

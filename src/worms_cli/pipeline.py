@@ -60,32 +60,20 @@ INIT_STACKS = [
     "private_internet",
 ]
 
-# The configure playbook sequence.
-CONFIGURE_PLAYBOOKS = [
-    "WaitForVMs.yml",
-    "SetupDNS.yml",
-    "UpdateVMs.yml",
-    "SetupTime.yml",
-    "HardenSSH.yml",
-    "CreateCA.yml",
-    "DistributeCA.yml",
-    "ConfigureNginx.yml",
-    "ConfigureNginxDjango.yml",
-    "SetupDbAndDashboard.yml",
-    "SetupSandboxApi.yml",
-    "SetupNetworkMonitor.yml",
-    "SetupPrivateInternet.yml",
-    "SetupAudit.yml",
-    "SetupRoundAgent.yml",
-]
+# The configuration: every platform VM's roles, in phases, the VMs of a phase in parallel
+# (ansible/Site.yml); then the node's round agent.
+SITE = "Site.yml"
+CONFIGURE_PLAYBOOKS = [SITE, "SetupRoundAgent.yml"]
+# The playbooks before Site.yml, whose last one the VM history of an older VM names (history.unfinished).
+LEGACY_LAST_PLAYBOOK = "SetupAudit.yml"
 
 
 # The VM history (worms_cli/history.py): the playbooks after which their VMs count as configured
-# (UpdateVMs.yml with packages: "packages"), as (pools, names) of the VMs they configure; their
+# (Site.yml with packages: "packages"), as (pools, names) of the VMs they configure; their
 # --limit narrows it. Stacks without VMs are not compared before and after.
 PLATFORM_POOLS = ("persistent", "ephemeral", "private_internet")
 HISTORY_PLAYBOOKS = {
-    **{playbook: (PLATFORM_POOLS, ()) for playbook in CONFIGURE_PLAYBOOKS if playbook not in ("WaitForVMs.yml", "SetupRoundAgent.yml")},
+    SITE: (PLATFORM_POOLS, ()),
     "SetupSandbox.yml": (("sandbox",), ()),
     "SetupSSHGateway.yml": ((), ("devbox-ssh-gateway",)),
     "SetupDevbox.yml": (("devbox",), ()),
@@ -194,7 +182,9 @@ class Pipeline:
         vms = self._vms_or_none() or []
         hosts = [vm for vm in vms if (vm.get("pool") in pools or vm["name"] in names) and (not limit or vm["name"] in limit)
                  and not (playbook == "SetupDevbox.yml" and vm["name"] == "devbox-ssh-gateway")]  # SetupSSHGateway.yml's  # fmt: skip
-        packages = playbook == "UpdateVMs.yml" and "packages" not in " ".join(t for i, t in enumerate(tokens) if i and tokens[i - 1] == "--skip-tags")
+        packages = playbook == SITE and "packages" not in " ".join(t for i, t in enumerate(tokens) if i and tokens[i - 1] == "--skip-tags")
+        if playbook == SITE and any(t == "--tags" or t.startswith("--tags=") for t in tokens):
+            return  # a part of the configuration (the gameplans): the VMs are not configured by it
         self._history(hosts, "packages" if packages else "configured", playbook)
 
     # -- running steps -----------------------------------------------------------
@@ -367,10 +357,7 @@ class Pipeline:
         ]
 
     def offline(self):
-        if self.runner.flag_exists(INTERNET_FLAG):
-            raise BuildError(f"internet access is still allowed ({INTERNET_FLAG}): run `worms internet off`")
-        self._ansible("SetupDNS.yml")
-        self._ansible("SetupPrivateInternet.yml")
+        self.offline_services()
 
     # Without the user's Ansible arguments: Internet.yml runs on the node, so a
     # `--limit <vm>` would silently skip it, and the window would neither open
@@ -484,15 +471,28 @@ class Pipeline:
             limit = ",".join(vm["name"].replace("-", "_") for vm in vms)
             self._ansible("WaitForVMs.yml", "--limit", limit, user_args=False)
 
-    def _take_snapshot(self, vm: dict) -> None:
-        # Shut down first: these VMs run no guest agent, so a snapshot of a running
-        # one would hold only what a power cut leaves on the disk.
-        vmid = vm["vmid"]
-        if vm.get("status") == "running":
-            self.runner.node_sh(f"qm shutdown {vmid} --timeout 120 --forceStop 1")
-        self.runner.node_sh(f"qm snapshot {vmid} {SERVICE_SNAPSHOT} --description {shlex.quote(f'worms {self.runner.commit()}')}")
-        self._history([vm], "snapshot", SERVICE_SNAPSHOT)
-        self.runner.node_sh(f"qm start {vmid}")
+    def _rollback(self, vms: list[dict]) -> None:
+        """These VMs back to their snapshot, started: all at once."""
+        codes = self.runner.node_parallel([[f"qm rollback {vm['vmid']} {SERVICE_SNAPSHOT} --start 1"] for vm in vms])
+        self._history([vm for vm, code in zip(vms, codes) if code == 0], "rolled_back", SERVICE_SNAPSHOT)
+        failed = [vm["name"] for vm, code in zip(vms, codes) if code != 0]
+        if failed:
+            raise BuildError(f"not rolled back to their snapshot: {', '.join(failed)}")
+
+    def _take_snapshots(self, vms: list[dict], old: list[bool]) -> None:
+        """Their snapshot taken again (`old`: the one there is goes first), all at once. Shut down
+        first: these VMs run no guest agent, so a snapshot of a running one would hold only what a
+        power cut leaves on the disk."""
+        description = shlex.quote(f"worms {self.runner.commit()}")
+        chains = [[*([f"qm delsnapshot {vm['vmid']} {SERVICE_SNAPSHOT}"] if had else []),
+                   *([f"qm shutdown {vm['vmid']} --timeout 120 --forceStop 1"] if vm.get("status") == "running" else []),
+                   f"qm snapshot {vm['vmid']} {SERVICE_SNAPSHOT} --description {description}", f"qm start {vm['vmid']}"]
+                  for vm, had in zip(vms, old)]  # fmt: skip
+        codes = self.runner.node_parallel(chains)
+        self._history([vm for vm, code in zip(vms, codes) if code == 0], "snapshot", SERVICE_SNAPSHOT)
+        failed = [vm["name"] for vm, code in zip(vms, codes) if code != 0]
+        if failed:
+            raise BuildError(f"no new snapshot of {', '.join(failed)}: `qm listsnapshot <vmid>` on the node")
 
     def refuse_during_round(self) -> None:
         """A sandbox VM exists only during a round (kept, off, between its attempts): the
@@ -513,10 +513,13 @@ class Pipeline:
         running = self.running_devboxes()
         if running:
             print(output.color(f"shutting down {len(running)} devbox VM(s) while internet access is allowed", "dim"))
-        for vm in running:
-            # Noted first: one that is off when a later shutdown fails is started again too.
-            self.data["devboxes_off"] = sorted({*self.data["devboxes_off"], vm["vmid"]})
-            self.runner.node_sh(f"qm shutdown {vm['vmid']} --timeout 120 --forceStop 1")
+        # Noted first: one that is off when another's shutdown fails is started again too. All at
+        # once: each may take its 120 s (a team's VM may ignore the request).
+        self.data["devboxes_off"] = sorted({*self.data["devboxes_off"], *(vm["vmid"] for vm in running)})
+        codes = self.runner.node_parallel([[f"qm shutdown {vm['vmid']} --timeout 120 --forceStop 1"] for vm in running])
+        failed = [vm["name"] for vm, code in zip(running, codes) if code != 0]
+        if failed:
+            raise BuildError(f"devbox VM(s) did not shut down: {', '.join(failed)}")
 
     def _devboxes_on(self) -> None:
         """Start the devbox VMs this run shut down, unless the window is still open."""
@@ -528,7 +531,8 @@ class Pipeline:
             raise BuildError(
                 f"the devbox VMs stay off while internet access is allowed: start them after `worms internet off` ({start})"
             )
-        failed = [vmid for vmid in off if self.runner.node_sh(f"qm start {vmid}", check=False) != 0]
+        codes = self.runner.node_parallel([[f"qm start {vmid}"] for vmid in off])
+        failed = [vmid for vmid, code in zip(off, codes) if code != 0]
         if failed:  # `qm start` also fails on a VM that runs already
             running = {vm["vmid"] for vm in self.runner.vms() if vm.get("status") == "running"}
             failed = [vmid for vmid in failed if vmid not in running]
@@ -539,9 +543,7 @@ class Pipeline:
     def _roll_back_services(self) -> set:
         """The service VMs that have a snapshot back to it, running. Returns their vmids."""
         clean = [vm for vm in self._service_vms() if self.runner.snapshot(vm, SERVICE_SNAPSHOT)]
-        for vm in clean:
-            self.runner.node_sh(f"qm rollback {vm['vmid']} {SERVICE_SNAPSHOT} --start 1")
-            self._history([vm], "rolled_back", SERVICE_SNAPSHOT)
+        self._rollback(clean)
         self._wait_for(clean)
         self.services_rolled_back = self.services_rolled_back or bool(clean)
         return {vm["vmid"] for vm in clean}
@@ -551,10 +553,8 @@ class Pipeline:
         which are left without one."""
         vms = self._service_vms()
         taken = [vm for vm in vms if clean(vm)]
-        for vm in taken:
-            if self.runner.snapshot(vm, SERVICE_SNAPSHOT):
-                self.runner.node_sh(f"qm delsnapshot {vm['vmid']} {SERVICE_SNAPSHOT}")
-            self._take_snapshot(vm)
+        old = [bool(self.runner.snapshot(vm, SERVICE_SNAPSHOT)) for vm in taken]
+        self._take_snapshots(taken, old)
         self._wait_for(taken)
         left = sorted(vm["name"] for vm in vms if vm not in taken)
         if left:
@@ -588,9 +588,7 @@ class Pipeline:
         oldest = min(snapshots.values(), key=lambda snapshot: snapshot["snaptime"])
         taken = datetime.fromtimestamp(oldest["snaptime"]).isoformat(sep=" ", timespec="minutes")
         print(output.color(f"resetting {len(vms)} VMs to their snapshot of {taken} ({oldest.get('description', '').strip()})", "dim"))
-        for vm in vms:
-            self.runner.node_sh(f"qm rollback {vm['vmid']} {SERVICE_SNAPSHOT} --start 1")
-            self._history([vm], "rolled_back", SERVICE_SNAPSHOT)
+        self._rollback(vms)
         self._wait_for(vms)
         self.services_rolled_back = True
 
@@ -645,9 +643,7 @@ class Pipeline:
                 hosts.append("database")  # its grants, for the tables the migrations add
             limit = ",".join([*hosts, "localhost"])
             extra = ("--limit", limit) if window else ("--limit", limit, "--skip-tags", "packages")
-            for playbook in CONFIGURE_PLAYBOOKS:
-                if playbook != "SetupRoundAgent.yml":
-                    steps.append(Step(f"{playbook} ({limit})", partial(self._ansible, playbook, *extra), scope=scope))
+            steps.append(Step(f"{SITE} ({limit})", partial(self._ansible, SITE, *extra), scope=scope))
             offline = [c.group for c in vms if c.name == "dns" or c.stack == "private_internet"]
             if window and offline:
                 steps.append(Step("offline: DNS and the caches", partial(self._offline_hosts, ",".join(offline)),
@@ -668,7 +664,6 @@ class Pipeline:
         that can be read: none (said)."""
         from worms_cli import history
 
-        last = [playbook for playbook in CONFIGURE_PLAYBOOKS if playbook in HISTORY_PLAYBOOKS][-1]
         try:
             code, out, err = self.runner.session.node_run(["cat", history.LEDGER])
         except Exception as exc:  # noqa: BLE001  (the plan stands without it)
@@ -679,7 +674,7 @@ class Pipeline:
             output.warn(f"the VM history could not be read ({(err or '').strip()[:120] or code}): "
                         "a VM whose first build stopped is configured offline (--packages opens the window)")  # fmt: skip
             return set()
-        return history.unfinished(history.parse(out), last)
+        return history.unfinished(history.parse(out), (SITE, LEGACY_LAST_PLAYBOOK))
 
     def _refuse_gameplans_during_round(self) -> None:
         self._refuse_vms_in(("sandbox",), "Refusing to deploy gameplans during a round: sandbox VMs exist")
@@ -694,7 +689,7 @@ class Pipeline:
         return [
             Step("gameplans: the node's copy", partial(self._ansible, "SetupRoundAgent.yml", "--tags", "agent-sync")),
             Step("gameplans: the orchestrator's copy, then its check",
-                 partial(self._ansible, "SetupDbAndDashboard.yml", "--limit", "orchestrator", "--tags", "gameplans")),
+                 partial(self._ansible, SITE, "--limit", "orchestrator", "--tags", "gameplans")),
         ]  # fmt: skip
 
     def _apply_targets(self, stack: str, targets, recreate) -> None:
@@ -718,10 +713,12 @@ class Pipeline:
         self._offline_hosts(",".join(c.group for c in COMPONENTS.values() if c.name == "dns" or c.stack == "private_internet"))
 
     def _offline_hosts(self, limit: str) -> None:
+        """DNS and the caches in offline mode: their VMs' part of Site.yml, now that the window is
+        closed (internet_enabled false: the DNS forwarders off, the caches answering from what
+        they hold)."""
         if self.runner.flag_exists(INTERNET_FLAG):
             raise BuildError(f"internet access is still allowed ({INTERNET_FLAG}): run `worms internet off`")
-        self._ansible("SetupDNS.yml", "--limit", limit, user_args=False)
-        self._ansible("SetupPrivateInternet.yml", "--limit", limit, user_args=False)
+        self._ansible(SITE, "--limit", limit, "--skip-tags", "packages", user_args=False)
 
     # -- rounds / devbox -----------------------------------------------------
 

@@ -1,9 +1,9 @@
 ---
 # Only the teams' SSH keys: the SSH gateway's confined lines (role ssh_gateway) and each devbox
 # VM's key file (role devbox, tasks/keys.yml). The round agent's devbox_reconfigure runs this (a
-# key added or removed, `worms devbox-reconfigure`): no package, no CA, nothing that needs the
-# internet or the apt cache, so a key change arrives however the rest of a devbox is. A build or
-# a reset runs SetupSSHGateway.yml and SetupDevbox.yml, which write the keys too.
+# key added or removed on the dashboard): no package, no CA, nothing that needs the internet or the
+# apt cache, so a key change arrives however the rest of a devbox is. A build runs SetupSSHGateway.yml
+# and SetupDevbox.yml, which write the keys too; a reset writes a team's key file over SSH.
 
 - name: The teams' keys on the SSH gateway
   hosts: ssh_gateway

@@ -21,7 +21,7 @@ from worms_cli.build import BuildError  # noqa: E402
 
 CONFIGURE = [("ansible", p) for p in pipeline.CONFIGURE_PLAYBOOKS]
 ALLOW, DENY = ("ansible", "Internet.yml", "internet=allowed"), ("ansible", "Internet.yml", "internet=denied")
-OFFLINE = [("ansible", "SetupDNS.yml"), ("ansible", "SetupPrivateInternet.yml")]
+OFFLINE = [("ansible", "Site.yml")]  # DNS and the caches: their part of Site.yml, the window closed
 INIT = [("tofu", s, "init") for s in ("platform", "firewall", "infrastructure/persistent",
                                       "infrastructure/ephemeral", "sandbox", "devbox", "private_internet")]  # fmt: skip
 
@@ -83,6 +83,13 @@ class Recorder:
         self.calls.append(("node", command))
         return 0
 
+    def node_parallel(self, chains):
+        """At once on the node; recorded one command after the other, chain by chain."""
+        for chain in chains:
+            for command in chain:
+                self.node_sh(command)
+        return [0] * len(chains)
+
     def _record(self, step):
         self.calls.append(step)
         if Recorder.fail_on and step[:2] == Recorder.fail_on:
@@ -143,14 +150,14 @@ def test_every_step_is_covered():
 
 def test_failed_step_still_closes_the_window(monkeypatch):
     monkeypatch.setattr(pipeline, "Runner", Recorder)
-    Recorder.fail_on = ("ansible", "SetupDbAndDashboard.yml")
+    Recorder.fail_on = ("ansible", "Site.yml")
     try:
         pipe = pipeline.Pipeline(config=None)
         with pytest.raises(BuildError):
             build(pipe, ["scoring"], missing=("scoring",))
         steps = [c for c in pipe.runner.calls if c[0] == "ansible"]
-        assert steps[-3:] == [DENY, *OFFLINE]  # closed, and DNS and the caches offline again
-        assert ("ansible", "SetupSandboxApi.yml") not in steps  # stopped at the failure
+        assert steps[-1 - len(OFFLINE):] == [DENY, *OFFLINE]  # closed, and DNS and the caches offline again
+        assert steps.count(("ansible", "Site.yml")) == 2  # the failed configuration, then the offline mode
     finally:
         Recorder.fail_on = None
 
@@ -178,7 +185,7 @@ def test_the_cleanup_after_a_failed_step_says_the_build_is_stopping(monkeypatch,
     pipe = pipeline.Pipeline(config=None)
     with pytest.raises(BuildError, match="private_internet"):
         pipe.online(lambda: pipe._execute(pipe._plan_infrastructure()))  # build_all's window, without its `tofu init`
-    assert [c for c in pipe.runner.calls if c[0] == "ansible"][-3:] == [DENY, *OFFLINE]
+    assert [c for c in pipe.runner.calls if c[0] == "ansible"][-1 - len(OFFLINE):] == [DENY, *OFFLINE]
     err = capsys.readouterr().err
     assert "stopping the build: regenerating the inventory" in err
     assert "stopping the build: closing the internet window" in err
@@ -212,7 +219,7 @@ def test_a_limit_never_skips_the_internet_window(monkeypatch):
     pipeline.Pipeline(config=None, ansible_args="--limit dashboard").build_all()
     assert len(seen["Internet.yml"]) == 2
     assert not any("--limit dashboard" in args for args in seen["Internet.yml"])
-    assert "--limit dashboard" in seen["SetupDbAndDashboard.yml"][0]
+    assert "--limit dashboard" in seen["Site.yml"][0]
 
 
 def test_facts_are_dropped_whenever_vms_may_have_changed(monkeypatch):
@@ -337,7 +344,7 @@ def test_a_reset_waits_for_each_vm_by_its_inventory_group(monkeypatch, node):
     assert seen == [("WaitForVMs.yml", ("--limit", "docker_registry,scoring"))]
     seen.clear()
     build(node, ["orchestrator", "docker-registry"])
-    limits = {args for playbook, args in seen if playbook == "SetupDbAndDashboard.yml"}
+    limits = {args for playbook, args in seen if playbook == "Site.yml"}
     assert limits == {("--limit", "orchestrator,docker_registry,database,localhost", "--skip-tags", "packages")}
 
 
@@ -445,7 +452,7 @@ def test_devboxes_stay_off_while_the_window_is_left_open(node, monkeypatch, caps
 def test_a_failed_build_starts_the_devboxes_again(node, monkeypatch):
     """The window is closed whatever happens, and then the teams get their devboxes back."""
     monkeypatch.setattr(Recorder, "node_vms", [*SERVICES, DEVBOX])
-    monkeypatch.setattr(Recorder, "fail_on", ("ansible", "SetupDNS.yml"))
+    monkeypatch.setattr(Recorder, "fail_on", ("ansible", "Site.yml"))
     with pytest.raises(BuildError):
         node.build_all()
     assert steps(node)[-1] == ("node", "qm start 116")
@@ -457,7 +464,7 @@ def test_a_build_configures_clean_services_and_snapshots_them_again(node):
     node.build_all()
     calls = steps(node)
     rollbacks = [i for i, c in enumerate(calls) if c[0] == "node" and "rollback" in c[1]]
-    configure = calls.index(("ansible", "SetupDbAndDashboard.yml"))
+    configure = calls.index(("ansible", "Site.yml"))
     retaken = [c[1] for c in calls if c[0] == "node" and ("snapshot" in c[1])]
     assert len(rollbacks) == 2 and max(rollbacks) < configure
     assert retaken == ["qm delsnapshot 100 clean", "qm snapshot 100 clean --description 'worms abc1234'",

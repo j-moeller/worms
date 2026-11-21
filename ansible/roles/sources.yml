@@ -1,0 +1,12 @@
+# What a role is made from besides its own directory: paths of the repository (a directory ends in
+# "/"). Read by Site.yml's role stamps (action_plugins/worms_role_gate.py: a role whose files,
+# variables and these sources did not change since it last ran on a VM is not run there again) and
+# by `worms apply`'s change detection (src/worms_cli/changes.py). A source missing here is a change
+# that neither of them sees.
+django_app: [projects/dashboard/, gameplans/, src/gameplan/]
+# Signed with the CA, or trusting it: a new CA is a new certificate everywhere.
+nginx_tls: [ansible/pki/worms/ca.crt]
+setup_db_base: [ansible/pki/worms/ca.crt]
+ca_distribute: [ansible/pki/worms/ca.crt]
+# Every VM's name and address, from the inventory (templates/db.worms.internal.j2).
+setup_dns: [ansible/inventory.generated.yml]

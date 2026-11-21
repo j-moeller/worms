@@ -559,7 +559,7 @@ def _apply_all(config, args) -> int:
     if not build.confirm("Build and configure every component, packages too: the internet window opens and the devbox VMs "
                          "are off meanwhile?", args.yes):  # fmt: skip
         return 1
-    pipe = pipeline.Pipeline(config, ansible_args=" ".join(args.ansible_args))
+    pipe = _pipeline(config, args)
     code = 0
     try:
         pipe.build_all()
@@ -571,6 +571,13 @@ def _apply_all(config, args) -> int:
     if pipe.services_rolled_back and pipe.devboxes_exist():
         code = _restore_devbox_map(config) or code
     return code
+
+
+def _pipeline(config, args):
+    """The pipeline of an apply: the arguments after `--` for every playbook, and with --full every
+    role again (Site.yml's stamps skip the unchanged ones otherwise)."""
+    extra = " ".join(args.ansible_args) + (" -e worms_full=true" if getattr(args, "full", False) else "")
+    return pipeline.Pipeline(config, ansible_args=extra.strip())
 
 
 def _prepared(pipe, config, names, rebuild=False):
@@ -670,11 +677,17 @@ def _configure(config, args, pipe, plan, follow_up) -> int:
 
 def _way_back(before: dict, dump: str) -> None:
     """The last lines of an apply: the commit the components ran before, and the dump."""
+    dirty = sorted({c for c in before.values() if c.endswith("-dirty")})
+    before = {name: commit.removesuffix("-dirty") for name, commit in before.items()}
     commits = sorted(set(before.values()))
+    if dirty:
+        print(output.color(f"(they ran {', '.join(dirty)}: uncommitted changes then, which the commit alone does not have)", "dim"))
     if len(commits) == 1:
         back = f"`git checkout {commits[0]}`, then `worms apply`"
     elif commits:
-        back = "check out what they ran (" + ", ".join(f"{name} {commit}" for name, commit in sorted(before.items())) + "), then `worms apply`"
+        by = {c: sorted(n for n, commit in before.items() if commit == c) for c in commits}
+        back = "check out what they ran (" + "; ".join(f"{c}: {', '.join(n) if len(n) <= 3 else f'{len(n)} components'}"
+                                                     for c, n in by.items()) + "), then `worms apply`"  # fmt: skip
     else:
         back = "what they ran before is not recorded"
     print(output.color(f"the way back: {back}" + (f"; the database as it was: `worms db restore {dump}`" if dump else ""), "dim"))
@@ -684,10 +697,11 @@ def _ran_before(pipe, names) -> dict:
     from worms_cli import changes
 
     try:
-        recorded = changes.deployed(pipe.runner.session)
+        recorded = {name: commit for name, (commit, _time) in changes.deployed(pipe.runner.session).items()}
+        vms = changes.vm_commits(pipe.runner.session)  # a VM's last configuration, when no apply recorded it
     except Exception:  # noqa: BLE001  (the record is a convenience)
         return {}
-    return {name: recorded[name][0] for name in names if name in recorded}
+    return {name: recorded.get(name) or vms[name] for name in names if recorded.get(name) or vms.get(name)}
 
 
 def _apply_components(config, args, names, rebuild=False) -> int:
@@ -697,7 +711,7 @@ def _apply_components(config, args, names, rebuild=False) -> int:
     from worms_cli import changes, components
     from worms_cli.session import SessionError
 
-    pipe = pipeline.Pipeline(config, ansible_args=" ".join(args.ansible_args))
+    pipe = _pipeline(config, args)
     code = 0
     try:
         try:
@@ -806,7 +820,7 @@ def _apply_changed(config, args) -> int:
     from worms_cli import components
     from worms_cli.session import SessionError
 
-    pipe = pipeline.Pipeline(config, ansible_args=" ".join(args.ansible_args))
+    pipe = _pipeline(config, args)
     try:
         found, plans, directory = _changed_report(config, pipe)
     except build.BuildError as exc:
@@ -1014,7 +1028,7 @@ def _restore_devbox_map(config) -> int:
 def cmd_step(config, args) -> int:
     """`worms step <name>`: one pipeline step (pipeline.STEPS). The round agent runs these, never
     interactively; for troubleshooting too."""
-    pipe = pipeline.Pipeline(config, ansible_args=" ".join(args.ansible_args))
+    pipe = _pipeline(config, args)
     try:
         pipeline.refuse_without_varfile(args.name, args.ansible_args)
         if args.name == "debug":
@@ -1084,7 +1098,7 @@ def cmd_log(config, args) -> int:
     what = args.what
     try:
         if what == "build":
-            return logs.run_log(args.nth, args.lines, args.follow)
+            return logs.run_log(args.nth, args.lines, args.follow, args.vm)
         if what == "latest":
             return logs.Logs(config).latest(args.lines, args.follow)
         if what is None or what.isdigit():
@@ -1903,7 +1917,8 @@ LOG_HELP = """\
   worms log latest -f       the newest host job's, followed
   worms log alpha           everything about a team: its jobs, its uploads, what
                             scoring and logging refused from its devbox
-  worms log run [N]         the N-th newest run of a changing command here"""
+  worms log run [N]         the N-th newest run of a changing command here
+  worms log run [N] dns     that run's Ansible log of one VM (each VM has its own)"""
 
 
 def _command_name(usage: str) -> str:
@@ -2044,8 +2059,9 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     p.add_argument("--hours", type=int, default=24, help="audit: how far back (default 24)")
     p.add_argument("--kind", default=None, help="audit: only events starting with this: login, password, team.joined, ...")
     p = _add(sub, "log", epilog=LOG_HELP, **RAW)
-    p.add_argument("what", nargs="?", help="a service, a VM, a job's number, `latest`, a team, or `run [N]`")
-    p.add_argument("nth", nargs="?", type=int, default=1, metavar="N", help="run: the N-th newest run log (default 1)")
+    p.add_argument("what", nargs="?", help="a service, a VM, a job's number, `latest`, a team, or `run [N] [<vm>]`")
+    p.add_argument("more", nargs="*", metavar="N|vm", help="run: the N-th newest run log (default 1), and a VM: its own "
+                   "Ansible log of that run")  # fmt: skip
     p.add_argument("-f", "--follow", action="store_true", help="keep showing new lines (Ctrl-C ends it)")
     p.add_argument("-n", "--lines", type=int, default=100, help="lines to show first (default 100)")
     p.add_argument("--since", help="journals only: from this time on (\"1 hour ago\", \"2026-11-19 18:00\")")
@@ -2074,6 +2090,8 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     p.add_argument("--plan", action="store_true", help="what it would do and touch, changing nothing: the steps, what each "
                    "VM runs now, OpenTofu's own plan")  # fmt: skip
     p.add_argument("--packages", action="store_true", help="install packages too (opens the internet window)")
+    p.add_argument("--full", action="store_true", help="every role on every VM, also those unchanged since their last "
+                   "run there (skipped otherwise: their stamps, ansible/action_plugins/worms_role_gate.py)")  # fmt: skip
     p.add_argument("--during-round", action="store_true", help="even while a round is on (costs its attempt)")
     p.add_argument("--timeout", type=int, default=900, help="how long to wait for the agent's running host job (s)")
     p = _yes(_add(sub, "destroy"))
@@ -2213,6 +2231,12 @@ def verb_show(config, args) -> int:
 
 
 def verb_log(config, args) -> int:
+    numbers = [word for word in args.more if word.isdigit()]
+    words = [word for word in args.more if not word.isdigit()]
+    if args.more and (args.what != "run" or len(numbers) > 1 or len(words) > 1):
+        output.error("only `worms log run [N] [<vm>]` takes more than one word")
+        return 2
+    args = _with(args, nth=int(numbers[0]) if numbers else 1, vm=words[0] if words else None)
     what = "build" if args.what == "run" else args.what
     if what and not what.isdigit() and what not in ("build", "latest"):
         from worms_cli.services import SERVICES

@@ -19,7 +19,7 @@
 # mismatch to every offline client for good. Toggling the window (several
 # `worms apply ... --packages` in a row) is enough to produce it.
 #
-# This play runs only while the internet is open (SetupPrivateInternet.yml), so move
+# This runs only while the internet is open (Site.yml: "apt_cache (the fill)"), so move
 # the cached repository indexes aside and pull them back through acng, all of them:
 # every window then ends with a self-consistent, complete index. Only the dists/
 # metadata moves; the package pool (the .debs under pool/) is untouched, so nothing

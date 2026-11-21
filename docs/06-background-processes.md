@@ -28,12 +28,12 @@ Every unit below runs as `django:www-data`, with `/etc/orchestrator/django.env` 
 
 | Unit | Kind, schedule | Does |
 |---|---|---|
-| `orchestrator` | gunicorn behind nginx :443 | The REST API for the dashboard: devbox resets, gameplan simulations (each in a child process, [5](05-live-environment.md#simulation)) |
+| `orchestrator` | gunicorn behind nginx :443 | The REST API for the dashboard: devbox resets and key pushes (`/reconfigure/`), gameplan simulations (each in a child process, [5](05-live-environment.md#simulation)) |
 | `orchestrator-conduct-rounds` | daemon, `Restart=always` (5 s) | Plans due rounds and runs one attempt per tick; idles 5 s. SIGTERM fails a running attempt, which is then retried ([`conduct_rounds.py`](../projects/dashboard/orchestrator/management/commands/conduct_rounds.py)) |
 | `orchestrator-process-attempts` | daemon, `Restart=always`; idles 2 s | The single writer of captures and logs, for rounds and devboxes. Also applies finished devbox jobs and advances dev runs |
 | `orchestrator-collect-topology.timer` | every 2 min, `Persistent` | Snapshots VMs, bridges and firewall rules from Proxmox with the read-only token |
 
-`SetupDbAndDashboard.yml` stops the daemons while it migrates, so **a deploy during a round costs the running team an attempt**.
+`Site.yml` (phase 4) stops the daemons only while the database lacks migrations (`migrate --check`), but a change of the code or the gameplans restarts all three: **a deploy during a round costs the running team an attempt** ([10](10-orchestrator.md)).
 
 ## Dashboard VM
 
@@ -86,7 +86,7 @@ Devbox traffic is not mirrored, so it is not recorded.
 | cve-search | `mongod`, `redis-server`, `cve-search` (:5000) | `cve-search` is enabled but not started. Fill its data by hand with `/usr/local/bin/cve-search-populate` |
 | wikipedia | `kiwix-serve` (:8888) | Skipped until a ZIM file exists. Download it by hand with `/usr/local/bin/wikipedia-download` |
 
-`UpdateVMs.yml` masks `apt-daily*` and `apt-listchanges` and purges `unattended-upgrades` on every VM, so packages change only during a build.
+Role `apt_updates` (`Site.yml`) masks `apt-daily*` and `apt-listchanges` and purges `unattended-upgrades` on every VM, so packages change only during a build.
 
 ## Gateways and team VMs
 

@@ -3,6 +3,7 @@ service restart, db restore|reset, key, step) keeps its whole output, the tools'
 its own:
 
     ~/.worms/runs/<YYYYmmdd-HHMMSS>-<command>.log      `worms log run [N]`: the newest, or N-th
+    ~/.worms/runs/<YYYYmmdd-HHMMSS>-<command>/<vm>.log  each VM's own Ansible log (`worms log run [N] <vm>`)
 
 The directory is 0700 and each file 0600: Ansible's output can hold secrets. The newest KEEP files
 are kept. The terminal sees what it always did; the file gets it without colours.
@@ -21,6 +22,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import sys
 import threading
 from datetime import datetime
@@ -41,6 +43,11 @@ def logs() -> list[Path]:
     if not directory().is_dir():
         return []
     return sorted((p for p in directory().iterdir() if NAME.fullmatch(p.name)), key=lambda p: p.name, reverse=True)
+
+
+def vm_logs(log: Path) -> Path:
+    """The directory of a run's VM logs (one Ansible log per VM): the run log's name, without .log."""
+    return log.with_suffix("")
 
 
 def nth(n: int = 1) -> Path:
@@ -83,11 +90,14 @@ class Tee:
         os.chmod(folder, 0o700)
         for old in logs()[KEEP - 1:]:
             old.unlink(missing_ok=True)
+            shutil.rmtree(vm_logs(old), ignore_errors=True)
         path, n = self.path, 1
         while path.exists():  # two runs in one second
             n += 1
             path = self.path.with_name(f"{self.path.stem}-{n}.log")
         self.path = path
+        # Each VM's own Ansible log, in a directory next to it (ansible/callback_plugins/worms.py).
+        os.environ["WORMS_ANSIBLE_LOGS"] = str(vm_logs(path))
         # A file that cannot be opened stops nothing: the caller runs the command without a log.
         self._file = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_APPEND, 0o600)
         sys.stdout.flush()

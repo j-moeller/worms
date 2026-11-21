@@ -1,0 +1,44 @@
+---
+# One role on one VM, in Site.yml: skipped when its stamp says nothing it is made from changed
+# since it last ran here to its end (action_plugins/worms_role_gate.py says what that covers and
+# when it never skips); else run, its handlers run, and its stamp written.
+#   worms_role: the role;  worms_part: its tasks file (default main)
+- name: "{{ worms_role }}: changed since its last run here?"
+  worms_role_gate:
+    role: "{{ worms_role }}"
+    part: "{{ worms_part | default('main') }}"
+  register: worms_gate
+  tags: always
+
+# Its old stamp goes first: a role that fails half-way has none, so a later run with the inputs of
+# that stamp (a change reverted) does not skip what the failed run left half done.
+- name: "{{ worms_role }}: its old stamp away"
+  ansible.builtin.file:
+    path: "/var/lib/worms/stamps/{{ worms_gate.key }}"
+    state: absent
+  changed_when: false  # bookkeeping, not the VM's configuration
+  when: not worms_gate.skip and worms_gate.record and worms_gate.key in (worms_stamps.stdout | default(''))
+  tags: always
+
+- name: "{{ worms_role }}"
+  ansible.builtin.include_role:
+    name: "{{ worms_role }}"
+    tasks_from: "{{ worms_part | default('main') }}"
+  when: not worms_gate.skip
+  tags: always
+
+# Its handlers before its stamp: a reload that fails is a failed role, not a done one.
+- name: "{{ worms_role }}: its handlers"
+  ansible.builtin.meta: flush_handlers
+  tags: always
+
+- name: "{{ worms_role }}: done here, its stamp"
+  ansible.builtin.copy:
+    content: "{{ worms_gate.stamp }}\n"
+    dest: "/var/lib/worms/stamps/{{ worms_gate.key }}"
+    owner: root
+    group: root
+    mode: "0600"
+  changed_when: false  # bookkeeping, not the VM's configuration
+  when: not worms_gate.skip and worms_gate.record
+  tags: always

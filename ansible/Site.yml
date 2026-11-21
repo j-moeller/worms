@@ -1,0 +1,171 @@
+---
+# The platform's VMs, configured: which VM gets which role, in phases (`worms apply`,
+# docs/03-manage-py.md#worms-apply). The roles are the intents (nginx_tls, django_app, ca_distribute,
+# ...); this file only says where each goes and what has to come first.
+#
+#   1  the CA, here on the controller: every certificate below is signed with it
+#   2  DNS: every other VM resolves through it (a package fetch in the internet window too)
+#   3  every VM on its own, all at once (strategy free): each VM runs its own roles in this order,
+#      not waiting for the others
+#   4  what needs another VM done: the migrations (the database's users exist), then the grants
+#      (the tables exist), in step on every VM concerned
+#
+# Within phase 3 the VMs do not wait for each other, and Ansible's any_errors_fatal does not hold
+# there: so phase 4 starts by stopping the run when any VM failed before it, instead of going on
+# with the others. Each VM's whole log is a file of its own (ansible/callback_plugins/worms.py).
+#
+# The node is not here: SetupHostNetwork.yml (its network) and SetupRoundAgent.yml (the round agent)
+# configure it. Nor are the team VMs: the round agent configures them (SetupSandbox.yml,
+# SetupDevbox.yml, SetupSSHGateway.yml, DevboxKeys.yml).
+
+# Each role runs through tasks/role.yml: skipped on a VM where nothing it is made from changed since
+# it last ran there to its end (its stamp: action_plugins/worms_role_gate.py); `worms apply --full`
+# runs every role.
+
+- name: "phase 1: the CA"
+  hosts: localhost
+  gather_facts: false
+  any_errors_fatal: true
+  roles:
+    - ca_create
+
+- name: "phase 2: DNS"
+  hosts: dns_hosts
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Wait for SSH
+      ansible.builtin.wait_for_connection:
+        timeout: 600
+    - name: Wait for cloud-init
+      ansible.builtin.command: cloud-init status --wait
+      register: worms_cloud_init
+      changed_when: false
+      failed_when: worms_cloud_init.rc not in [0, 2]  # 2: finished with recoverable errors
+    - name: Gather facts
+      ansible.builtin.setup:
+    - name: The roles' stamps
+      ansible.builtin.include_tasks: tasks/stamps.yml
+    - name: DNS
+      ansible.builtin.include_tasks: tasks/role.yml
+      vars: {worms_role: setup_dns}
+      tags: always
+
+- name: "phase 3: every VM on its own"
+  hosts: "all:!proxmox_host:!untrusted:!ssh_gateway"
+  strategy: free
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Wait for SSH
+      ansible.builtin.wait_for_connection:
+        timeout: 600
+    # The private-internet VMs install their packages themselves: their cloud-init may end in
+    # errors without the internet, which their roles make good.
+    - name: Wait for cloud-init
+      ansible.builtin.command: cloud-init status --wait
+      register: worms_cloud_init
+      changed_when: false
+      failed_when: worms_cloud_init.rc not in [0, 2] and 'private_internet' not in group_names
+      when: "'dns_hosts' not in group_names"
+    - name: Gather facts
+      ansible.builtin.setup:
+      when: "'dns_hosts' not in group_names"
+    - name: The roles' stamps
+      ansible.builtin.include_tasks: tasks/stamps.yml
+      when: "'dns_hosts' not in group_names"
+
+    # Every VM: packages (Debian's automatic runs off), the clock, sshd on the management address.
+    - {name: apt_updates, ansible.builtin.include_tasks: tasks/role.yml, vars: {worms_role: apt_updates}, tags: always}
+    - {name: timesync, ansible.builtin.include_tasks: tasks/role.yml, vars: {worms_role: timesync}, tags: always}
+    - {name: sshd_listen, ansible.builtin.include_tasks: tasks/role.yml, vars: {worms_role: sshd_listen}, tags: always}
+    - {name: ca_distribute, ansible.builtin.include_tasks: tasks/role.yml, vars: {worms_role: ca_distribute}, when: "'tls_hosts' in group_names", tags: always}
+
+    # The platform's own services.
+    - {name: nginx_tls, ansible.builtin.include_tasks: tasks/role.yml, vars: {worms_role: nginx_tls}, when: "'nginx_hosts' in group_names", tags: always}
+    - name: nginx_tls_django
+      ansible.builtin.include_tasks: tasks/role.yml
+      vars: {worms_role: nginx_tls_django}
+      when: "'django_hosts' in group_names"
+      tags: always
+    - {name: setup_db_base, ansible.builtin.include_tasks: tasks/role.yml, vars: {worms_role: setup_db_base}, when: "'database_hosts' in group_names", tags: always}
+    # The Django apps up to their migrations (phase 4 migrates and starts them).
+    - name: django_app
+      ansible.builtin.include_tasks: tasks/role.yml
+      vars: {worms_role: django_app, worms_part: setup}
+      when: "'django_hosts' in group_names"
+      tags: always
+    # Scoring and logging, the monitor: they reach the database when they run, and retry until the
+    # grants of phase 4 are there (a first build).
+    - {name: sandbox_api, ansible.builtin.include_tasks: tasks/role.yml, vars: {worms_role: sandbox_api}, when: "'sandbox_api_hosts' in group_names", tags: always}
+    - name: network_monitor
+      ansible.builtin.include_tasks: tasks/role.yml
+      vars: {worms_role: network_monitor}
+      when: "'network_monitor_hosts' in group_names"
+      tags: always
+
+    # The private internet. First every VM's apt at the Debian mirrors (the team VMs alone go
+    # through the cache: group_vars/untrusted.yml); then its service; the cache is filled while
+    # the internet is open, and checked, closed, to give a fresh VM its whole package index.
+    - {name: apt_client, ansible.builtin.include_tasks: tasks/role.yml, vars: {worms_role: apt_client}, when: "'private_internet' in group_names", tags: always}
+    - {name: apt_cache, ansible.builtin.include_tasks: tasks/role.yml, vars: {worms_role: apt_cache}, when: "'apt_cache_hosts' in group_names", tags: always}
+    - name: apt_cache (the fill)
+      ansible.builtin.include_tasks: tasks/role.yml
+      vars: {worms_role: apt_cache, worms_part: seed}
+      when: "'apt_cache_hosts' in group_names and internet_enabled | bool"
+      tags: always
+    - {name: devpi, ansible.builtin.include_tasks: tasks/role.yml, vars: {worms_role: devpi}, when: "'devpi_hosts' in group_names", tags: always}
+    - name: docker_registry
+      ansible.builtin.include_tasks: tasks/role.yml
+      vars: {worms_role: docker_registry}
+      when: "'docker_registry_hosts' in group_names"
+      tags: always
+    - {name: manpages, ansible.builtin.include_tasks: tasks/role.yml, vars: {worms_role: manpages}, when: "'manpages_hosts' in group_names", tags: always}
+    - {name: ntp, ansible.builtin.include_tasks: tasks/role.yml, vars: {worms_role: ntp}, when: "'ntp_hosts' in group_names", tags: always}
+    - {name: cve_search, ansible.builtin.include_tasks: tasks/role.yml, vars: {worms_role: cve_search}, when: "'cve_search_hosts' in group_names", tags: always}
+    - {name: wikipedia, ansible.builtin.include_tasks: tasks/role.yml, vars: {worms_role: wikipedia}, when: "'wikipedia_hosts' in group_names", tags: always}
+    - name: apt_cache (the check)
+      ansible.builtin.include_tasks: tasks/role.yml
+      vars: {worms_role: apt_cache, worms_part: check}
+      when: "'apt_cache_hosts' in group_names and not (internet_enabled | bool)"
+      tags: always
+
+    # Logs: the central log server, auditd on every VM shipping to it (it queues while the server
+    # is not up yet), and the local logs bounded (after auditd, which installs rsyslog).
+    - {name: syslog_server, ansible.builtin.include_tasks: tasks/role.yml, vars: {worms_role: syslog_server}, when: "'syslog_hosts' in group_names", tags: always}
+    - {name: auditd, ansible.builtin.include_tasks: tasks/role.yml, vars: {worms_role: auditd}, when: "'audit_hosts' in group_names", tags: always}
+    - {name: log_limits, ansible.builtin.include_tasks: tasks/role.yml, vars: {worms_role: log_limits}, tags: always}
+
+    - name: Run the handlers
+      ansible.builtin.meta: flush_handlers
+      tags: always
+    - name: "worms: phase done"  # the progress view's mark: this VM is through (callback_plugins/worms.py)
+      ansible.builtin.debug: {msg: done}
+      tags: always
+
+- name: "phase 4: the migrations, then the grants"
+  hosts: "all:!proxmox_host:!untrusted:!ssh_gateway"
+  gather_facts: false
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Stop if a VM failed in an earlier phase
+      run_once: true
+      ansible.builtin.fail:
+        msg: >-
+          stopped before the migrations: {{ ansible_play_hosts_all | difference(ansible_play_hosts) | join(', ') }}
+          failed (the failures above; each VM's whole log is its own file)
+      when: ansible_play_hosts_all | difference(ansible_play_hosts) | length > 0
+      tags: always
+    # In step: the orchestrator migrates before the dashboard starts on the new schema. Never behind
+    # a stamp: the database itself says whether it lacks migrations (a dump of before them restored,
+    # new code), and the grants follow its tables; both are a few checks when nothing is missing.
+    - name: django_app
+      ansible.builtin.include_role: {name: django_app, tasks_from: start}
+      when: "'django_hosts' in group_names"
+      tags: always
+    - name: setup_db_permissions
+      ansible.builtin.include_role: {name: setup_db_permissions}
+      when: "'database_hosts' in group_names"
+      tags: always

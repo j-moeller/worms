@@ -170,7 +170,7 @@ class Plan:
         it: per component its OpenTofu stack and targets, its playbooks and their --limit; then,
         for the whole plan, the internet window, the devboxes off, the service VMs rolled back
         and snapshotted again, what restarts."""
-        from worms_cli.pipeline import CONFIGURE_PLAYBOOKS
+        from worms_cli.pipeline import SITE
 
         actions = dict(self.steps)
         vms = [COMPONENTS[n] for n in actions if COMPONENTS[n].kind == "vm"]
@@ -188,16 +188,16 @@ class Plan:
             elif c.kind == "node":
                 rows[name] = f"Ansible: {c.playbook} on the node" + (" (the agent restarts once idle)" if name == "round-agent" else "")
             elif c.kind == "gameplans":
-                rows[name] = "Ansible: SetupRoundAgent.yml --tags agent-sync; SetupDbAndDashboard.yml --limit orchestrator --tags gameplans"
+                rows[name] = "Ansible: SetupRoundAgent.yml --tags agent-sync; Site.yml --limit orchestrator --tags gameplans"
             elif c.kind == "devbox":
                 rows[name] = "a host job for the round agent (devbox_rebuild per team)" if action == "recreate" else \
                     "a host job for the round agent (devbox_provision)"  # fmt: skip
             else:
                 tofu = (f"OpenTofu: apply -target {c.stack}" + (" -replace" if action == "recreate" else "") + "; ") if c in new else ""
-                rows[name] = tofu + f"Ansible: the configure playbooks for {c.group}"
+                rows[name] = tofu + f"Ansible: Site.yml for {c.group}"
         summary = []
         if vms:
-            summary.append(f"Ansible: the {len(CONFIGURE_PLAYBOOKS) - 1} configure playbooks once, --limit {limit}"
+            summary.append(f"Ansible: {SITE} (every VM's roles, in phases, the VMs in parallel), --limit {limit}"
                            + ("" if window else " --skip-tags packages"))  # fmt: skip
             why = "new VMs" if new else f"unfinished: {', '.join(unfinished)}" if unfinished else "--packages"
             summary.append("internet window: " + (f"OPEN for the VMs' part ({why})" if window else "closed"))

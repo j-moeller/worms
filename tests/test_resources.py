@@ -48,8 +48,9 @@ def test_the_log_server_is_a_small_rsyslog_vm():
     syslog = persistent[persistent.index("    syslog = {"):]
     assert "ram               = 512" in syslog.split("}")[0]
     assert "for_each = local.persistent" in persistent
-    audit = (ANSIBLE / "SetupAudit.yml").read_text()
-    assert "syslog_server" in audit and "when:" not in audit
+    site = yaml.safe_load((ANSIBLE / "Site.yml").read_text())
+    server = [t for play in site for t in play.get("tasks", []) if (t.get("vars") or {}).get("worms_role") == "syslog_server"]
+    assert [t["when"] for t in server] == ["'syslog_hosts' in group_names"]  # on its own VM, and always there
 
 
 def test_infra_ceilings_were_trimmed():

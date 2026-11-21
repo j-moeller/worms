@@ -5,6 +5,9 @@
 # database certificate). See docs/05-live-environment.md.
 - name: Configure the round agent
   hosts: proxmox_host
+  # No facts: its roles use none (the node's packages come from package_facts), and the node's took
+  # 19 s to gather, its many interfaces and disks.
+  gather_facts: false
   any_errors_fatal: true
   become: true
   roles:

@@ -75,11 +75,12 @@ def test_every_vm_group_is_in_the_inventory():
 
 
 def test_monitor_role_in_configure_sequence():
-    # The build pipeline (src/worms_cli/pipeline.py) owns the configure order
-    # now; the monitor is set up after the database/dashboard.
-    pipeline = (REPO / "src" / "worms_cli" / "pipeline.py").read_text()
-    assert "SetupNetworkMonitor.yml" in pipeline
-    assert pipeline.index("SetupDbAndDashboard.yml") < pipeline.index("SetupNetworkMonitor.yml")
+    # Site.yml: the monitor beside the database's own setup (its shipper retries until the grants
+    # exist), the grants in the last phase, after the migrations.
+    phases = yaml.safe_load((ANSIBLE / "Site.yml").read_text())
+    included = [[(t.get("vars") or {}).get("worms_role") or t.get("ansible.builtin.include_role", {}).get("name") for t in play.get("tasks", [])] for play in phases]
+    assert "network_monitor" in included[2] and "setup_db_base" in included[2]
+    assert included[3][-1] == "setup_db_permissions"
 
 
 def test_makefile_is_a_thin_wrapper_over_the_cli():
@@ -247,7 +248,8 @@ def test_a_team_key_can_jump_through_the_ssh_gateway_but_run_nothing(render):
 def test_a_code_deploy_can_skip_everything_that_needs_the_internet():
     """With devboxes up the internet window stays closed, and pip then hangs for minutes
     (docs/03-manage-py.md). `--skip-tags packages` must leave out every package step."""
-    tasks = yaml.safe_load((ANSIBLE / "roles/applications/django_app/tasks/main.yml").read_text())
+    role = ANSIBLE / "roles/applications/django_app/tasks"
+    tasks = [task for part in ("setup.yml", "start.yml") for task in yaml.safe_load((role / part).read_text())]
     installers = [t for t in tasks if "ansible.builtin.pip" in t or "ansible.builtin.apt" in t]
     assert len(installers) == 3
     for task in installers:
@@ -564,11 +566,7 @@ def test_django_nginx_forwards_the_host_with_its_port(render):
 # --- the configure sequence (static; before/after guard for refactorings) ---
 
 # Roles every host gets from the configure sequence, and the sequence itself.
-CONFIGURE = [
-    "WaitForVMs.yml", "SetupDNS.yml", "UpdateVMs.yml", "SetupTime.yml", "HardenSSH.yml", "CreateCA.yml", "DistributeCA.yml",
-    "ConfigureNginx.yml", "ConfigureNginxDjango.yml", "SetupDbAndDashboard.yml", "SetupSandboxApi.yml",
-    "SetupNetworkMonitor.yml", "SetupPrivateInternet.yml", "SetupAudit.yml", "SetupRoundAgent.yml",
-]  # fmt: skip
+CONFIGURE = ["Site.yml", "SetupRoundAgent.yml"]
 TLS_WEB = ["ca_distribute", "nginx_tls"]
 ROLES = {
     "proxmox_host": ["round_agent"],
@@ -584,25 +582,21 @@ ROLES = {
     **{pi: ["apt_client", pi, "auditd"] for pi in ("apt_cache", "devpi", "docker_registry", "manpages", "ntp",
                                                    "cve_search", "wikipedia")},
 }  # fmt: skip
-# Every VM first gets apt_updates (UpdateVMs.yml) and the host's clock (SetupTime.yml), and last
-# the size limit of its logs (SetupAudit.yml).
+# Every VM first gets apt_updates, the host's clock and sshd on its management address, and last
+# the size limit of its logs.
 for _vm in set(ROLES) - {"proxmox_host", "localhost"}:
-    ROLES[_vm] = ["apt_updates", "timesync", *ROLES[_vm], "log_limits"]
-# Plays that wait for cloud-init on each of their VMs before their roles.
-CLOUD_INIT_WAITS = {
-    ("WaitForVMs.yml", "all:!proxmox_host:!sandbox:!sandbox_gw"), ("SetupDNS.yml", "dns_hosts"),
-    ("DistributeCA.yml", "tls_hosts"), ("ConfigureNginx.yml", "nginx_hosts"),
-    ("ConfigureNginxDjango.yml", "django_hosts"), ("SetupSandboxApi.yml", "sandbox_api_hosts"),
-    ("SetupNetworkMonitor.yml", "network_monitor_hosts"),
-    *{("SetupPrivateInternet.yml", f"{pi}_hosts") for pi in ("apt_cache", "devpi", "docker_registry", "manpages",
-                                                             "ntp", "cve_search", "wikipedia")},
-}  # fmt: skip
+    ROLES[_vm] = ["apt_updates", "timesync", "sshd_listen", *ROLES[_vm], "log_limits"]
 
 
 def test_configure_sequence_is_unchanged():
     from ansible_static import configure_playbooks
 
     assert configure_playbooks() == CONFIGURE
+    # With strategy free, any_errors_fatal does not hold, and the next play would run on the VMs that
+    # did not fail: so the phase after the parallel one stops at once when any VM fell out.
+    parallel, after = yaml.safe_load((ANSIBLE / "Site.yml").read_text())[2:4]
+    assert parallel["strategy"] == "free" and parallel["hosts"] == after["hosts"] and after["any_errors_fatal"] is True
+    assert after["tasks"][0]["when"] == "ansible_play_hosts_all | difference(ansible_play_hosts) | length > 0"
 
 
 @pytest.mark.parametrize("host", sorted(ROLES))
@@ -610,24 +604,20 @@ def test_every_host_gets_its_roles(host):
     from ansible_static import groups_of, play_roles, plays
 
     groups = {"localhost"} if host == "localhost" else groups_of(host)
-    roles = [role for _playbook, play in plays(groups) for role in play_roles(play)]
+    roles = list(dict.fromkeys(role for _playbook, play in plays(groups) for role in play_roles(play, groups)))
     assert sorted(roles) == sorted(ROLES[host])
 
 
 def test_plays_still_wait_for_cloud_init():
-    """WaitForVMs.yml first, for every VM; the plays that wait again per VM
-    keep doing so (a VM rebuilt later, e.g. by `worms apply`, may still be
-    in its first boot)."""
-    from ansible_static import configure_playbooks
-
-    waiting = set()
-    for playbook in configure_playbooks():
-        for play in yaml.safe_load((ANSIBLE / playbook).read_text()) or []:
-            tasks = (play.get("pre_tasks") or []) + (play.get("tasks") or [])
-            if any("cloud-init status --wait" in str(task) for task in tasks):
-                waiting.add((playbook, play["hosts"]))
-    assert CLOUD_INIT_WAITS <= waiting
-    assert configure_playbooks()[0] == "WaitForVMs.yml"
+    """Every VM's first phase of Site.yml waits for SSH, then cloud-init, before it gathers facts and
+    gets its roles (a VM rebuilt later, e.g. by `worms apply`, may still be in its first boot); once
+    a VM, not in every play as before."""
+    phases = yaml.safe_load((ANSIBLE / "Site.yml").read_text())
+    for play in phases[1:3]:  # DNS, then every other VM
+        names = [task.get("name") for task in play["tasks"]]
+        assert names[:3] == ["Wait for SSH", "Wait for cloud-init", "Gather facts"], play["name"]
+        assert play["gather_facts"] is False
+    assert "'dns_hosts' not in group_names" in str(phases[2]["tasks"][1]["when"])  # it waited in phase 2
 
 
 @pytest.mark.parametrize("playbook", ["SetupSSHGateway.yml", "SetupDevbox.yml", "SetupSandbox.yml"])
@@ -690,8 +680,9 @@ def test_only_sandbox_and_devbox_vms_use_the_apt_cache():
     assert "apt-cache.worms.internal" in names
     defaults = yaml.safe_load((ANSIBLE / "roles/private_internet/apt_client/defaults/main.yml").read_text())
     assert defaults["apt_client_use_cache"] is False
-    first = yaml.safe_load((ANSIBLE / "SetupPrivateInternet.yml").read_text())[0]
-    assert first["hosts"] == "private_internet" and first["roles"] == ["apt_client"]
+    tasks = yaml.safe_load((ANSIBLE / "Site.yml").read_text())[2]["tasks"]
+    included = [((t.get("vars") or {}).get("worms_role"), t.get("when")) for t in tasks]
+    assert included.index(("apt_client", "'private_internet' in group_names")) < included.index(("apt_cache", "'apt_cache_hosts' in group_names"))
 
 
 def test_the_cache_is_filled_with_what_untrusted_vms_install():
@@ -700,9 +691,9 @@ def test_the_cache_is_filled_with_what_untrusted_vms_install():
     seed = yaml.safe_load((roles / "private_internet/apt_cache/defaults/main.yml").read_text())["apt_cache_seed_packages"]
     wanted = yaml.safe_load((roles / "applications/devbox/defaults/main.yml").read_text())["devbox_packages"]
     assert {"nftables", *wanted} <= set(seed)
-    plays = yaml.safe_load((ANSIBLE / "SetupPrivateInternet.yml").read_text())
-    seeding = [t for p in plays for t in p.get("tasks", []) if t.get("ansible.builtin.include_role", {}).get("tasks_from") == "seed"]
-    assert [t["when"] for t in seeding] == ["internet_enabled | bool"]
+    plays = yaml.safe_load((ANSIBLE / "Site.yml").read_text())
+    seeding = [t for p in plays for t in p.get("tasks", []) if (t.get("vars") or {}).get("worms_part") == "seed"]
+    assert [t["when"] for t in seeding] == ["'apt_cache_hosts' in group_names and internet_enabled | bool"]
 
 
 def test_a_new_gateway_gets_as_far_as_installing_nftables():

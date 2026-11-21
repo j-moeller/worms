@@ -1,5 +1,5 @@
 """A static reading of the Ansible side, without running Ansible: which plays
-of the configure sequence (src/worms_cli/pipeline.py, CONFIGURE_PLAYBOOKS)
+of the configure sequence (src/worms_cli/pipeline.py, CONFIGURE_PLAYBOOKS: Site.yml and the round agent's)
 reach a VM, which roles they apply and which packages those roles install
 (apt/package tasks, following includes and role dependencies; a package list
 given as "{{ var }}" is looked up in the role defaults/vars).
@@ -19,7 +19,8 @@ ANSIBLE = REPO / "ansible"
 def configure_playbooks() -> list:
     pipeline = (REPO / "src" / "worms_cli" / "pipeline.py").read_text()
     block = re.search(r"CONFIGURE_PLAYBOOKS = \[(.*?)\]", pipeline, re.S).group(1)
-    return re.findall(r'"([\w.]+\.yml)"', block)
+    names = {name: value for name, value in re.findall(r'^(\w+) = "([\w.]+\.yml)"', pipeline, re.M)}
+    return [names.get(word.strip(), word.strip().strip('"')) for word in block.split(",") if word.strip()]
 
 
 def groups_of(vm: str) -> set:
@@ -96,7 +97,7 @@ def ansible_packages(vm: str) -> set:
     groups = groups_of(vm)
     names = set()
     for _playbook, play in plays(groups):
-        for role in play_roles(play):
+        for role in play_roles(play, groups):
             names |= role_packages(role)
         for section in ("pre_tasks", "tasks", "post_tasks"):
             names |= apt_names(play.get(section), play.get("vars") or {})
@@ -111,5 +112,27 @@ def plays(groups: set):
                 yield playbook, play
 
 
-def play_roles(play) -> list:
-    return [role if isinstance(role, str) else role["role"] for role in play.get("roles") or []]
+GROUP_CONDITION = re.compile(r"""['"]([\w-]+)['"]\s+(not\s+in|in)\s+group_names""")
+
+
+def for_groups(when, groups) -> bool:
+    """Whether a task's `when` lets hosts of these groups through, as far as it names groups
+    (`'dns_hosts' in group_names`, Site.yml); any other condition counts as true."""
+    for condition in when if isinstance(when, list) else [when]:
+        for group, how in GROUP_CONDITION.findall(str(condition or "")):
+            if (group in groups) != (how == "in"):
+                return False
+    return True
+
+
+def play_roles(play, groups=None) -> list:
+    """The play's roles, and those its tasks include (for hosts of `groups`: their conditions on
+    group_names), each once."""
+    roles = [role if isinstance(role, str) else role["role"] for role in play.get("roles") or []]
+    for section in ("pre_tasks", "tasks", "post_tasks"):
+        for task in play.get(section) or []:
+            include = task.get("ansible.builtin.include_role") or task.get("include_role")
+            name = include["name"] if include else (task.get("vars") or {}).get("worms_role")  # Site.yml: tasks/role.yml
+            if name and (groups is None or for_groups(task.get("when"), groups)):
+                roles.append(name)
+    return list(dict.fromkeys(roles))

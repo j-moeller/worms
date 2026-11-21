@@ -1,8 +1,0 @@
----
-- name: Create internal root CA
-  hosts: localhost
-  any_errors_fatal: true
-  gather_facts: false
-
-  roles:
-    - ca_create

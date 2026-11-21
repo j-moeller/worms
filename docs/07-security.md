@@ -273,7 +273,7 @@ IDs are cited in code comments. S = team VMs, D = dashboard, C = cross-cutting. 
     - team VMs and gateways ask only the NTP VM, with no fallback pool.
     - Still unsynced: the devbox SSH gateway. It has no package source for chrony, and it serves only SSH forwarding.
   - Disk filling by logs (with S8): rsyslog's files on every platform VM rotate past 100 MB, checked hourly.
-  - Journal noise (2026-11-18): no VM has a serial port, but the image's kernel names `console=ttyS0`, so systemd's getty there failed and restarted every 10 s on every VM (some 26,000 journal lines a day; counters past 114,000). Masked where ttyS0 does not answer ([`serial_getty.yml`](../ansible/roles/system/log_limits/tasks/serial_getty.yml)): platform VMs by SetupAudit.yml, team VMs and gateways by their roles.
+  - Journal noise (2026-11-18): no VM has a serial port, but the image's kernel names `console=ttyS0`, so systemd's getty there failed and restarted every 10 s on every VM (some 26,000 journal lines a day; counters past 114,000). Masked where ttyS0 does not answer ([`serial_getty.yml`](../ansible/roles/system/log_limits/tasks/serial_getty.yml)): platform VMs by role `log_limits` (`Site.yml`), team VMs and gateways by their roles.
 - **D** (dashboard):
   - D1: a session row per anonymous request.
   - D2: devbox rebuilds piled up.

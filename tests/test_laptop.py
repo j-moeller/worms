@@ -188,7 +188,7 @@ def test_the_preflight_leaves_stdin_alone(checkout, monkeypatch):
 
 def test_the_token_only_reaches_tofu(checkout, recorded):
     r = runner(checkout)
-    r.ansible("SetupDNS.yml")
+    r.ansible("Site.yml")
     r.python("scripts/generate_inventory.py")
     for argv, env in recorded.calls:
         assert "prov-secret" not in " ".join(argv) and "TF_VAR_proxmox_api_token" not in env
@@ -221,9 +221,9 @@ def test_init_of_the_nodes_stacks_happens_on_the_node(checkout, recorded):
 
 
 def test_laptop_playbooks_get_the_vault_and_the_nodes_internet_flag(checkout, recorded):
-    runner(checkout).ansible("SetupPrivateInternet.yml")
+    runner(checkout).ansible("Site.yml")
     (argv, _env), = recorded.calls
-    assert "ansible-playbook -e @group_vars/vault.yml -e internet_enabled=true SetupPrivateInternet.yml" in argv[2]
+    assert "ansible-playbook -e @group_vars/vault.yml -e internet_enabled=true Site.yml" in argv[2]
 
 
 def test_laptop_refuses_an_inventory_written_on_the_node(checkout, recorded):

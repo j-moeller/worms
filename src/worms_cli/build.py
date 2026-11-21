@@ -69,6 +69,30 @@ class Runner:
         return self._run(lambda: self._checked(self.session.ssh_argv(command)), command,
                          f"on {self.config.ssh}", self.session.env, check, quiet)  # fmt: skip
 
+    def node_parallel(self, chains: list[list[str]]) -> list[int]:
+        """Host commands on the node, a chain per VM: each chain's commands one after the other (the
+        first failure ends it), all chains at once. Their exit codes, in order. One VM's shutdown
+        does not wait for another's: N VMs take the time of the slowest, not of all."""
+        chains = [chain for chain in chains if chain]
+        if not chains:
+            return []
+        if len(chains) == 1:
+            return [self.node_sh(" && ".join(chains[0]), check=False)]
+        lines = ["set -u"]
+        for i, chain in enumerate(chains):
+            lines.append(f"( {' && '.join(chain)} ) >&2 & p{i}=$!")
+        lines += [f'wait "$p{i}"; echo "worms-rc {i} $?"' for i in range(len(chains))]
+        shown = "; ".join(" && ".join(chain) for chain in chains)
+        print(output.color(f"$ (at once) {shown if len(shown) < 100 else shown[:97] + '...'}  [on the node]", "dim"), flush=True)
+        try:
+            code, out, err = self.session.node_run(["sh", "-c", "\n".join(lines)])
+        except SessionError as exc:
+            raise BuildError(str(exc)) from exc
+        codes = {int(i): int(rc) for i, rc in (line.split()[1:3] for line in out.splitlines() if line.startswith("worms-rc "))}
+        if err.strip():
+            print(err.rstrip(), file=sys.stderr)
+        return [codes.get(i, code or 1) for i in range(len(chains))]
+
     def _checked(self, argv):
         self.session.check_node()
         return argv

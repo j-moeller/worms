@@ -23,3 +23,8 @@
   ansible.builtin.systemd:
     name: nginx
     state: restarted
+
+# setup.yml's: the restart is due, once start.yml has migrated (a later play of Site.yml).
+- name: Restart Django after the migrations
+  ansible.builtin.set_fact:
+    django_restart_due: true

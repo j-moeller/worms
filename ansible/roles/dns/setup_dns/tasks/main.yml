@@ -27,7 +27,7 @@
       when: dns_options_early.changed
 
 # Before resolv.conf points at the (not yet installed) local resolver. Runs
-# before UpdateVMs.yml, so an unattended upgrade may still hold the lock.
+# before apt_updates (Site.yml: DNS is phase 2), so an unattended upgrade may still hold the lock.
 - name: Install BIND
   ansible.builtin.apt:
     name: [bind9, bind9-dnsutils, ca-certificates]
@@ -43,10 +43,19 @@
     state: stopped
   failed_when: false
 
+# Only the symlink (systemd-resolved's): removing the file on every run changed it twice a run and
+# left this VM without a resolver for that moment (until 2026-11-21).
+- name: Look at resolv.conf
+  ansible.builtin.stat:
+    path: /etc/resolv.conf
+    follow: false
+  register: dns_resolv_conf
+
 - name: Remove resolv.conf symlink
   ansible.builtin.file:
     path: /etc/resolv.conf
     state: absent
+  when: dns_resolv_conf.stat.islnk | default(false)
 
 - name: Point resolv.conf to localhost
   ansible.builtin.copy:

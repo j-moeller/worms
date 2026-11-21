@@ -17,7 +17,7 @@
     fail_msg: >-
       Tables missing: {{ db_missing_tables | join(', ') }}. The Django
       migrations have not run (or failed): they run on the orchestrator in
-      SetupDbAndDashboard.yml (role django_app).
+      Site.yml, phase 4 (role django_app).
     quiet: true
   vars:
     db_missing_tables: >-

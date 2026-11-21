@@ -1,0 +1,256 @@
+---
+# The Django app up to its migrations: packages, code, virtualenv, settings, static files. No
+# database connection (Site.yml, phase 3: in parallel with the database's own setup). A change
+# that needs a restart is noted (handler "Restart Django after the migrations"); start.yml
+# restarts once the migrations are through, as one play did before.
+- name: Assert required per-host variables are set
+  ansible.builtin.assert:
+    that:
+      - django_variant is defined
+      - django_settings_module is defined
+      - django_db_user is defined
+      - django_db_password is defined
+      - django_secret_key is defined
+      - django_allowed_hosts is defined
+    fail_msg: >-
+      django_app requires django_variant, django_settings_module, django_db_user,
+      django_db_password, django_secret_key and django_allowed_hosts (set them in
+      inventory host_vars and the vault).
+
+# OpenTofu grows a VM's disk in place (disk_size), but the partition and the
+# filesystem follow only at the next boot (cloud-init). The dashboard keeps the
+# uploads on its root filesystem, so grow it now. growpart says NOCHANGE (exit 1)
+# when there is nothing to grow.
+- name: Grow the root partition to the size of its disk
+  ansible.builtin.command: growpart /dev/vda 1
+  register: django_growpart
+  changed_when: django_growpart.rc == 0
+  failed_when: django_growpart.rc not in [0, 1] or (django_growpart.rc == 1 and 'NOCHANGE' not in django_growpart.stdout)
+  when: (ansible_mounts | default([]) | selectattr('mount', 'equalto', '/') | map(attribute='device') | first | default('')) == '/dev/vda1'
+
+- name: Grow the root filesystem to the size of its partition
+  ansible.builtin.command: resize2fs /dev/vda1
+  when: django_growpart is changed
+
+- name: Install system packages
+  ansible.builtin.apt:
+    name: "{{ required_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  tags:
+    - packages
+
+- name: Configure service names and certificate trust
+  ansible.builtin.import_tasks: connectivity.yml
+
+- name: Create Django group
+  ansible.builtin.group:
+    name: "{{ django_app_group }}"
+    system: true
+    state: present
+
+- name: Create Django user
+  ansible.builtin.user:
+    name: "{{ django_app_user }}"
+    group: "{{ django_app_group }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+    state: present
+
+- name: Create application directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ django_app_user }}"
+    group: "{{ django_app_group }}"
+    mode: "0750"
+  loop:
+    - "{{ django_app_dir }}"
+    - "{{ django_source_dir }}"
+    - "{{ django_static_root }}"
+
+- name: Create the upload directory (MEDIA_ROOT)
+  when: django_media_root | length > 0
+  ansible.builtin.file:
+    path: "{{ django_media_root }}"
+    state: directory
+    owner: "{{ django_app_user }}"
+    group: "{{ django_app_group }}"
+    mode: "0750"
+
+- name: Synchronize Django application
+  ansible.posix.synchronize:
+    src: "{{ django_local_source }}/"
+    dest: "{{ django_source_dir }}/"
+    delete: true
+    recursive: true
+    # rsync spawns its own ssh; without this it ignores the connection's
+    # ssh args and uses default keys/config -> "Permission denied (publickey)"
+    # against VMs reached through the node (ProxyJump) with the WORMS key in a
+    # private agent (IdentityAgent=$WORMS_SSH_AUTH_SOCK). use_ssh_args makes it
+    # use the same ssh_common_args every other task uses. Keep it.
+    use_ssh_args: true
+    # Owner and modes as the tasks around it want them, set by rsync itself: with the checkout's
+    # (root, 0755), the directory task and the ownership task below changed them back on every run,
+    # each a change, and Django restarted after every apply (until 2026-11-21).
+    rsync_opts:
+      - "--chown={{ django_app_user }}:{{ django_app_group }}"
+      - "--chmod=Do-rwx,Fo-rwx"
+      - "--exclude=.git"
+      - "--exclude=.venv"
+      - "--exclude=venv"
+      - "--exclude=__pycache__"
+      - "--exclude=*.pyc"
+      - "--exclude=.pytest_cache"
+      - "--exclude=db.sqlite3"
+      - "--exclude=staticfiles"
+  notify:
+    - Restart Django after the migrations
+
+- name: Set Django application ownership
+  ansible.builtin.file:
+    path: "{{ django_source_dir }}"
+    state: directory
+    owner: "{{ django_app_user }}"
+    group: "{{ django_app_group }}"
+    recurse: true
+
+# The gameplans (docs/05-live-environment.md): the orchestrator runs their execute() and checks them; the
+# dashboard must never hold one. Root-owned, readable by the application (it cannot change them).
+# Tag gameplans: `worms apply gameplans` runs these alone (no packages, no internet).
+- name: Create the gameplan directories (orchestrator only)
+  when: django_variant == "orchestrator"
+  tags: [gameplans]
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: "{{ django_app_group }}"
+    mode: "0750"
+  loop:
+    - "{{ django_app_dir }}/gameplans"
+    - "{{ django_gameplan_dir }}"
+    - "{{ django_gameplan_lib }}"
+    - "{{ django_gameplan_lib }}/gameplan"
+
+- name: Synchronize the gameplans and their framework (orchestrator only)
+  when: django_variant == "orchestrator"
+  tags: [gameplans]
+  register: django_gameplans_sync
+  ansible.posix.synchronize:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    delete: true
+    recursive: true
+    use_ssh_args: true
+    # The owner and modes the task below makes them, set by rsync itself (with the checkout's, the
+    # two undid each other on every run, each a change and a restart, until 2026-11-21).
+    rsync_opts:
+      - "--chown=root:{{ django_app_group }}"
+      - "--chmod=Du=rwx,Dg=rx,Do=,Fu=rw,Fg=r,Fo="
+      - "--exclude=__pycache__"
+      - "--exclude=*.pyc"
+  loop:
+    - { src: "{{ playbook_dir }}/../gameplans/", dest: "{{ django_gameplan_dir }}/" }
+    - { src: "{{ playbook_dir }}/../src/gameplan/", dest: "{{ django_gameplan_lib }}/gameplan/" }
+  loop_control:
+    label: "{{ item.dest }}"
+  notify:
+    - Restart Django after the migrations
+
+- name: Make the gameplans root's, readable by the application only (orchestrator only)
+  when: django_variant == "orchestrator"
+  tags: [gameplans]
+  ansible.builtin.file:
+    path: "{{ django_app_dir }}/gameplans"
+    state: directory
+    recurse: true
+    owner: root
+    group: "{{ django_app_group }}"
+    mode: "u=rwX,g=rX,o="
+
+# The conductor checks the gameplans when it starts, then every 10 minutes. `worms apply
+# gameplans` synced the node's copy first, so a check now finds both copies alike: a changed copy
+# here restarts it (Restart Django); an unchanged one restarts it here.
+- name: Have the conductor check the gameplans at once (worms apply gameplans)
+  when:
+    - django_variant == "orchestrator"
+    - "'gameplans' in ansible_run_tags"
+    - django_gameplans_sync is not changed
+  tags: [gameplans]
+  ansible.builtin.systemd:
+    name: "{{ django_app_name }}-conduct-rounds"
+    state: restarted
+
+- name: Remove any gameplans from the dashboard
+  when: django_variant != "orchestrator"
+  ansible.builtin.file:
+    path: "{{ django_app_dir }}/gameplans"
+    state: absent
+
+- name: Create virtual environment
+  ansible.builtin.command:
+    cmd: python3 -m venv "{{ django_venv_dir }}"
+    creates: "{{ django_venv_dir }}/bin/python"
+
+- name: Upgrade pip
+  ansible.builtin.pip:
+    name: pip
+    state: latest
+    virtualenv: "{{ django_venv_dir }}"
+  tags:
+    - packages
+
+- name: Install Python packages
+  ansible.builtin.pip:
+    virtualenv: "{{ django_venv_dir }}"
+    name: "{{ pip_packages + django_extra_pip_packages }}"
+  tags:
+    - packages
+
+- name: Create secret directory
+  ansible.builtin.file:
+    path: "{{ django_env_file | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Install Django environment file (secrets)
+  ansible.builtin.template:
+    src: django.env.j2
+    dest: "{{ django_env_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: "{{ hide_secrets }}"
+  notify:
+    - Restart Django after the migrations
+
+# The dashboard's CSS/JS (and the admin's) as plain files for nginx: the app
+# never serves /static/ itself. Settings are imported, so it needs the same
+# environment as the service (no database connection is made).
+- name: Collect static files (served by nginx at /static/)
+  ansible.builtin.command:
+    cmd: "{{ django_venv_dir }}/bin/python manage.py collectstatic --noinput"
+    chdir: "{{ django_source_dir }}"
+  become_user: "{{ django_app_user }}"
+  no_log: "{{ hide_secrets }}"
+  register: django_collectstatic
+  changed_when: django_collectstatic.stdout is not search('^0 static files copied', multiline=True)
+  # No migrator: only migrate and the commands after it get the tables' owner.
+  environment: "{{ django_static_env | combine(django_extra_env) }}"
+  vars:
+    django_static_env:
+      PRODUCTION: "1"
+      DJANGO_SETTINGS_MODULE: "{{ django_settings_module }}"
+      DJANGO_SECRET_KEY: "{{ django_secret_key }}"
+      DJANGO_ALLOWED_HOSTS: "{{ django_allowed_hosts }}"
+      DJANGO_STATIC_ROOT: "{{ django_static_root }}"
+      # Required by the settings (postgres_database), even with no connection.
+      DB_NAME: "{{ django_db_name }}"
+      DB_HOST: "{{ django_db_host }}"
+      DB_USER: "{{ django_db_user }}"
+      DB_PASSWORD: "{{ django_db_password }}"

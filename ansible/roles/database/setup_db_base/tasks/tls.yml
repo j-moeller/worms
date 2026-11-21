@@ -34,6 +34,7 @@
     extended_key_usage:
       - serverAuth
   register: postgresql_csr
+  changed_when: false  # in memory: only what is signed below changes anything
 
 - name: Check for existing server certificate
   ansible.builtin.stat:

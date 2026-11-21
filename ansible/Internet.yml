@@ -10,6 +10,9 @@
 
 - name: Set internet access for the infrastructure VMs
   hosts: proxmox_host
+  # No facts: its roles use none (the node's packages come from package_facts), and the node's took
+  # 19 s to gather, its many interfaces and disks.
+  gather_facts: false
   become: true
   tasks:
     - name: Apply the internet state

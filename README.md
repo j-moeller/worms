@@ -21,6 +21,9 @@ Built with OpenTofu (`opentofu/`), Ansible (`ansible/`), the `worms` CLI, the ro
 | [6 Background processes](docs/06-background-processes.md) | Operators: every service, timer and loop |
 | [7 Security](docs/07-security.md) | Everyone: threat models, privileges, accounts, secrets, firewalls, findings |
 | [8 User guide](docs/08-user-guide.md) | Teams: the dashboard, the worm contract, the APIs |
+| [9 VM configuration](docs/09-vm-configuration.md) | Operators: what Ansible runs on each VM, and by which command |
+| [10 SSH gateway](docs/10-ssh-gateway.md) | Operators: how teams reach their devboxes, what is stored where, what makes it safe |
+| [11 Orchestrator](docs/11-orchestrator.md) | Developers, operators: the conductor, the processor, gameplans, VM resets |
 
 ## Quick start
 

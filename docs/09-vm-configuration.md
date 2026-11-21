@@ -1,4 +1,4 @@
-# 8. What Ansible runs on each VM
+# 9. What Ansible runs on each VM
 
 Per VM type: which command configures it, and the roles that run there, in their order. A role is one intent (`nginx_tls`, `django_app`, ...); [`Site.yml`](../ansible/Site.yml) says which VM gets which, in four phases ([3](03-manage-py.md#site)):
 
@@ -93,8 +93,8 @@ The round agent's jobs; never `Site.yml`.
 
 ## The SSH gateway (shared)
 
-- `SetupSSHGateway.yml` (in `devbox-configure`) and `DevboxKeys.yml` (a key change): `ssh_gateway` (5): the team user, its home root's, one confined `authorized_keys` line per team key; the hardened sshd drop-in comes from cloud-init ([9](09-ssh-gateway.md)).
+- `SetupSSHGateway.yml` (in `devbox-configure`) and `DevboxKeys.yml` (a key change): `ssh_gateway` (5): the team user, its home root's, one confined `authorized_keys` line per team key; the hardened sshd drop-in comes from cloud-init ([10](10-ssh-gateway.md)).
 
 ## Sandbox VMs and their gateway (a round's)
 
-- The round's `prepare` job: the sandbox stack from the gameplan, then `worms step round-configure-sandbox -- -e @<varfile>` (the round's variables): `SetupSandbox.yml`: the gateway: `apt_client` (6), `ntp_client` (3), `untrusted_gateway` (5); each VM: `ca_distribute` (4), `apt_client` (6), `ntp_client` (3), `sandbox_vm` (16: the gameplan's part for that VM: packages, users, sudo rules, files, setup commands). Snapshotted, and rolled back between attempts ([10](10-orchestrator.md)).
+- The round's `prepare` job: the sandbox stack from the gameplan, then `worms step round-configure-sandbox -- -e @<varfile>` (the round's variables): `SetupSandbox.yml`: the gateway: `apt_client` (6), `ntp_client` (3), `untrusted_gateway` (5); each VM: `ca_distribute` (4), `apt_client` (6), `ntp_client` (3), `sandbox_vm` (16: the gameplan's part for that VM: packages, users, sudo rules, files, setup commands). Snapshotted, and rolled back between attempts ([11](11-orchestrator.md)).

@@ -1,4 +1,4 @@
-# 10. The orchestrator: conductor, processor, gameplans, resets
+# 11. The orchestrator: conductor, processor, gameplans, resets
 
 What runs a round and a dev upload, and how the parts talk to each other. Gameplans are written as [5](05-live-environment.md) says, devboxes are [4](04-dev-environment.md)'s; this document is the machinery between them.
 
@@ -98,7 +98,7 @@ A queued or running rebuild of the same team is reused, not doubled. What a rese
 
 - **One job at a time**, taken with one `UPDATE … FOR UPDATE SKIP LOCKED`: devbox jobs after the others; none while the operator's pause file exists; no `devbox_*` job while a round holds the devboxes off (`hold_devboxes` and `release_devboxes` are named so that they are not caught by this).
 - A heartbeat every 30 s while a job runs; its whole output in `/var/log/worms/jobs/<uuid>.log` (and `latest.log`), kept 30 days.
-- Its Ansible runs in its own workspace, `/opt/worms`, with the host's Ansible ([8](08-vm-configuration.md)).
+- Its Ansible runs in its own workspace, `/opt/worms`, with the host's Ansible ([9](09-vm-configuration.md)).
 - **New code:** between jobs, when a module it loaded changed on disk, it exits and systemd starts it again on the new code; the gameplan files are read afresh for every job.
 
 ## Settings

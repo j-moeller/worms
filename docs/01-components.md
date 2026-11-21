@@ -18,6 +18,9 @@ Every sandbox and devbox VM is treated as malicious and rooted ([`docs/IMPORTANT
 | [6 Background processes](06-background-processes.md) | every service, timer and loop |
 | [7 Security](07-security.md) | threat models, privileges, secrets, firewalls, findings |
 | [8 User guide](08-user-guide.md) | for teams: the dashboard, APIs, the worm contract |
+| [9 VM configuration](09-vm-configuration.md) | what Ansible runs on each VM, and by which command |
+| [10 SSH gateway](10-ssh-gateway.md) | the teams' way to their devboxes: concepts, storage, security |
+| [11 Orchestrator](11-orchestrator.md) | the conductor, the processor, gameplans, VM resets |
 
 ## Overview
 

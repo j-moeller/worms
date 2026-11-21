@@ -1,4 +1,4 @@
-# 9. The SSH gateway
+# 10. The SSH gateway
 
 How a team reaches its devbox over SSH: one shared gateway VM, `devbox-ssh-gateway`, that every team jumps through to its own VM A. What is stored where, how a key gets there, and what keeps one team out of another's devbox. The devbox itself: [4](04-dev-environment.md); the security findings referred to below: [7](07-security.md).
 

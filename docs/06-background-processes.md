@@ -33,7 +33,7 @@ Every unit below runs as `django:www-data`, with `/etc/orchestrator/django.env` 
 | `orchestrator-process-attempts` | daemon, `Restart=always`; idles 2 s | The single writer of captures and logs, for rounds and devboxes. Also applies finished devbox jobs and advances dev runs |
 | `orchestrator-collect-topology.timer` | every 2 min, `Persistent` | Snapshots VMs, bridges and firewall rules from Proxmox with the read-only token |
 
-`Site.yml` (phase 4) stops the daemons only while the database lacks migrations (`migrate --check`), but a change of the code or the gameplans restarts all three: **a deploy during a round costs the running team an attempt** ([10](10-orchestrator.md)).
+`Site.yml` (phase 4) stops the daemons only while the database lacks migrations (`migrate --check`), but a change of the code or the gameplans restarts all three: **a deploy during a round costs the running team an attempt** ([11](11-orchestrator.md)).
 
 ## Dashboard VM
 

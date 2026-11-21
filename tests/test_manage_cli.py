@@ -394,12 +394,10 @@ def test_help_groups_the_commands_by_what_they_are_for():
     # One line a command, and no flat list of argparse beside it.
     assert "positional arguments" not in run_cli("--help")
     assert not [line for line in run_cli("--help").splitlines() if line.startswith("  ") and len(line) > 79]
-    # A command of the CLI before still runs, by its old words (ALIASES), and says where it went.
-    for old, new in cli.ALIASES.items():
-        assert cli._aliased(["--config", "f", *old, "x"])[0] == ["--config", "f", *new, "x"]
-    assert cli._aliased(["close", "window"])[1] == "`worms close window` is now `worms internet off`"
-    assert cli._aliased(["reset", "db", "--yes"])[0] == ["db", "reset", "--yes"]  # the longest old words win
-    assert cli._aliased(["reset", "alpha"])[0] == ["vm", "reset", "alpha"]
+    # The commands of the CLI before are gone: refused, not rewritten.
+    for old in (["configure"], ["close", "window"], ["reset", "alpha"], ["logs"], ["release"]):
+        proc = subprocess.run([sys.executable, str(MANAGE), *old], capture_output=True, text=True)
+        assert proc.returncode == 2 and "invalid choice" in proc.stderr, old
 
 
 def test_every_command_is_in_exactly_one_section(tmp_path, monkeypatch):

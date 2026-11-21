@@ -64,14 +64,13 @@ def arguments(command):
     return words
 
 
-def refusal(argv, build=parser(), split=cli()._split, aliased=cli()._aliased):
-    """Why the CLI refuses these arguments (what follows `--` is the tools', and a command that
-    moved is its new one (ALIASES), as main() has it). A missing argument is fine: prose names
-    `worms secret issue` without saying which token."""
+def refusal(argv, build=parser(), split=cli()._split):
+    """Why the CLI refuses these arguments (what follows `--` is the tools'). A missing argument is
+    fine: prose names `worms secret issue` without saying which token."""
     err = io.StringIO()
     try:
         with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
-            build.parse_args(split(aliased(argv)[0])[0])
+            build.parse_args(split(argv)[0])
     except SystemExit:
         message = err.getvalue()
         if "invalid choice" in message or "unrecognized arguments" in message:

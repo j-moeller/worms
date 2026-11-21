@@ -1857,46 +1857,6 @@ SECTIONS = (
 # Not in the help: the round agent's (and for troubleshooting, docs/03-manage-py.md).
 HIDDEN = {"step": "one pipeline step (the round agent's): " + ", ".join([*pipeline.STEPS, "debug"])}
 
-# The commands of the CLI before this one, as typed -> what they are now. main() rewrites argv with
-# it, and says so on stderr. Longest first.
-ALIASES = {
-    ("logs",): ("log",),
-    ("start", "round"): ("round", "start"), ("start",): ("vm", "start"), ("stop",): ("vm", "stop"),
-    ("reset", "db"): ("db", "reset"), ("reset", "database"): ("db", "reset"), ("reset", "password"): ("user", "password"),
-    ("reset",): ("vm", "reset"), ("rebuild",): ("vm", "rebuild"), ("restart",): ("service", "restart"),
-    ("emergency-stop",): ("vm", "kill"),
-    ("pause", "jobs"): ("jobs", "pause"), ("resume", "jobs"): ("jobs", "resume"), ("cancel", "job"): ("jobs", "cancel"),
-    ("cancel", "jobs"): ("jobs", "cancel"), ("pause", "round"): ("round", "pause"), ("resume", "round"): ("round", "resume"),
-    ("cancel", "round"): ("round", "cancel"),
-    ("apply", "--changed"): ("apply",), ("plan", "--changed"): ("apply", "--plan"), ("plan",): ("apply", "--plan"),
-    ("configure",): ("apply",), ("release",): ("apply",), ("build",): ("apply",), ("deploy",): ("apply",),
-    ("refill", "apt"): ("apply", "apt-cache", "--packages"), ("refill", "pypi"): ("apply", "devpi", "--packages"),
-    ("refill", "caches"): ("apply", "apt-cache", "devpi", "--packages"),
-    ("open", "window"): ("internet", "on"), ("close", "window"): ("internet", "off"),
-    ("internet", "enable"): ("internet", "on"), ("internet", "disable"): ("internet", "off"),
-    ("backup", "db"): ("db", "backup"), ("restore", "db"): ("db", "restore"),
-    ("show", "db"): ("show", "table"), ("check", "apt"): ("check", "packages"), ("check", "pypi"): ("check", "packages"),
-    ("check", "caches"): ("check", "packages"),
-    ("add", "key"): ("key", "add"), ("remove", "key"): ("key", "remove"), ("sync", "keys"): ("key", "sync"),
-    ("add", "staff"): ("user", "add"), ("delete", "team"): ("team", "delete"), ("delete-team",): ("team", "delete"),
-    ("admin-reset-password",): ("user", "password"), ("admin-create-staff",): ("user", "add"),
-    ("issue", "token"): ("secret", "issue"), ("set", "secret"): ("secret", "set"), ("trust", "node"): ("init",),
-}  # fmt: skip
-
-
-def _aliased(argv: list[str]) -> tuple[list[str], str]:
-    """argv with an old command's words replaced by its new ones (ALIASES), and the note that says
-    so ("" if none). Options before the command (--config FILE) stay where they are."""
-    at = 0
-    while at < len(argv) and argv[at].startswith("-") and argv[at] != "--":
-        at += 2 if argv[at] == "--config" else 1
-    for old, new in sorted(ALIASES.items(), key=lambda item: -len(item[0])):
-        if tuple(argv[at:at + len(old)]) == old:
-            note = f"`worms {' '.join(old)}` is now `worms {' '.join(new)}`"
-            return [*argv[:at], *new, *argv[at + len(old):]], note
-    return list(argv), ""
-
-
 HELP_WIDTH = 79
 
 RSYNC_HELP = """\
@@ -2183,8 +2143,7 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     v.add_argument("--first-name", default="")
     v.add_argument("--last-name", default="")
     v = _yes(_add(verbs, "user password"))
-    v.add_argument("user", nargs="?", default=None, help="its username (default: admin)")
-    v.add_argument("--username", default=None, help=argparse.SUPPRESS)  # the old `admin-reset-password --username`
+    v.add_argument("user", nargs="?", default="admin", help="its username (default: admin)")
 
     # -- set up
     _add(sub, "init")
@@ -2396,8 +2355,7 @@ HANDLERS = {
     "team": list_teams, "team delete": cmd_delete_team,
     "key": list_keys, "key add": cmd_devbox_add_key, "key remove": cmd_devbox_remove_key, "key sync": cmd_devbox_sync_keys,
     "user": list_users, "user add": cmd_admin_create_staff,
-    "user password": lambda config, args: cmd_admin_reset_password(config, _with(args, username=args.user or args.username
-                                                                                 or "admin")),
+    "user password": lambda config, args: cmd_admin_reset_password(config, _with(args, username=args.user)),
     "init": verb_init, "secret": lambda config, args: cmd_secrets(config, _with(args, secrets_action=None)),
     "secret set": lambda config, args: cmd_secrets(config, _with(args, secrets_action="set")),
     "secret issue": lambda config, args: cmd_secrets(config, _with(args, secrets_action="issue")),
@@ -2421,9 +2379,6 @@ def _split(argv: list[str]) -> tuple[list[str], list[str]]:
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
-    argv, moved = _aliased(argv)
-    if moved:
-        print(output.color(f"note: {moved}", "dim"), file=sys.stderr)
     vm_list = ""
     if len(argv) >= 2 and argv[0] in ("login", "show", "rsync", "run") and ("-h" in argv or "--help" in argv):
         vm_list = _vm_list(Config.load())

@@ -22,7 +22,7 @@ Each step says what you should see. If you don't see it, stop there.
 
 | Area | Change |
 |---|---|
-| **The CLI** | Git-style ([3](03-manage-py.md)): look with `status`, `show`, `log`, `check`, `trace`; change with `apply` and a noun's verbs (`worms vm reset alpha`, `worms jobs pause`). A team VM can be named as `<team>/a\|b\|c\|gw` (`alpha/gw`, `t2/a`). The commands of the CLI before still work, with a note naming the new one. Table below. |
+| **The CLI** | Git-style ([3](03-manage-py.md)): look with `status`, `show`, `log`, `check`, `trace`; change with `apply` and a noun's verbs (`worms vm reset alpha`, `worms jobs pause`). A team VM can be named as `<team>/a\|b\|c\|gw` (`alpha/gw`, `t2/a`). The commands before are gone: table below. |
 | **`worms status`** | Starts with an *attention* block: internet window open, devboxes held or stopped, missing `clean` snapshots, pending migrations, failed jobs, node services down. A team column; *created* and *updated* columns from the per-VM history. |
 | **`worms apply`** | Brings the platform up to the checkout: alone, what changed since what runs; or the components named. No internet window unless `--packages`. Then it syncs the gameplans and restarts the agent (once no job runs), then the conductor: no more manual restarts. Refused during a round. `--plan` shows what each line touches. |
 | **`worms run`** | `worms run <vm>... [--root] -- <command>` runs a command on VMs without a login; `worms login <vm> -- <command>` too. Groups (`services`, `private-internet`, `infrastructure`) never include team VMs; a team VM's output is escaped. |

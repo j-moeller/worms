@@ -89,7 +89,7 @@
                 {% include "staff/_field.html" with field=form.team_duration %}
                 {% include "staff/_field.html" with field=form.devboxes_off %}
             </div>
-            {% if form.gameplan.field.choices|length == 1 %}<p class="form__note">No gameplan is valid yet: the round can be created without one and given one later. Gameplans are files in <code>gameplans/</code> on the node and the orchestrator; the orchestrator's journal (<code>journalctl -u orchestrator-conduct-rounds</code>) says what is wrong with one.</p>{% endif %}
+            {% if form.gameplan.field.choices|length == 1 %}<p class="form__note">No gameplan is valid yet: the round can be created without one and given one later. Gameplans are files in <code>gameplans/</code> on the host and the orchestrator; the orchestrator's journal (<code>journalctl -u orchestrator-conduct-rounds</code>) says what is wrong with one.</p>{% endif %}
         </fieldset>
         <div class="form__actions"><button type="submit" class="btn btn--primary">Create round</button></div>
     </form>

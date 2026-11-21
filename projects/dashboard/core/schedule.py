@@ -1,7 +1,7 @@
 """A round's schedule: one source for the dashboard (staff create rounds, see whether every
 team fits) and the conductor (runs them).
 
-A round names its gameplan (a file the orchestrator and the node hold; docs/05-live-environment.md)
+A round names its gameplan (a file the orchestrator and the host hold; docs/05-live-environment.md)
 and its duration per team: seconds from a team's worm starting to the end of its run. The
 rest of a team's slot is the platform's: the fuse before the worm starts, the drain after
 the run, and an allowance for building, checking and tearing down the sandbox

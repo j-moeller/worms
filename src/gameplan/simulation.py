@@ -31,7 +31,7 @@ from gameplan.definition import GameplanError, RoundError
 from gameplan.runtime import Backend, Runner, instantiate
 
 FORMAT = 1
-# Seconds a step takes in a real round, nominally: host jobs (SSH into a VM from the node) and
+# Seconds a step takes in a real round, nominally: host jobs (SSH into a VM from the host) and
 # Proxmox API calls. The conductor's own times (the fuse, the drain) are its settings.
 TIMING = {
     "prepare": 60,  # a rollback to the round's snapshot, secrets, files, flags (the first build takes minutes)

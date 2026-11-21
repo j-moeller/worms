@@ -18,7 +18,7 @@ provider "proxmox" {
     agent    = true
     username = "root"
 
-    # How it reaches the node, per system (worms_environments): set by `worms`
+    # How it reaches the host, per system (worms_environments): set by `worms`
     # and the round agent, never a default.
     node {
       name    = var.proxmox_instance

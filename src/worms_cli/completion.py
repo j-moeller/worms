@@ -1,4 +1,4 @@
-"""Tab completion for `worms`, in bash, written by hand (no argcomplete: the node has no internet).
+"""Tab completion for `worms`, in bash, written by hand (no argcomplete: the host has no internet).
 
     worms completion bash                     the script: `eval "$(worms completion bash)"` in
                                               ~/.bashrc, or into /etc/bash_completion.d/worms
@@ -12,7 +12,7 @@ again after an update.
 What changes, the VMs and the teams, comes from `worms __complete`, which main() runs before its
 own imports (a TAB has to answer in well under a second) and which reads local files only: no
 Proxmox API, no SSH, no database. The VMs: the generated Ansible inventories the VM catalogue reads
-(this checkout's; on the node also the round agent's workspace's). The teams: ~/.worms/team-map.json,
+(this checkout's; on the host also the round agent's workspace's). The teams: ~/.worms/team-map.json,
 written whenever the team map was read from the database (worms_cli/teams.py, write_cache).
 """
 
@@ -135,7 +135,7 @@ def candidates(kind: str, root: str) -> list[str]:
         return sorted({*known, *(handle(slug, name) for slug, name in known.items())})
     if kind != "targets":
         return []
-    out = {"node", *hosts}
+    out = {"host", *hosts}
     if SHARED_GATEWAY in hosts:
         out.add("ssh-gateway")
     for slug, name in known.items():

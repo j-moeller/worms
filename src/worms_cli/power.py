@@ -1,6 +1,6 @@
-"""`worms vm start|stop|restart <target>...`: VMs on and off with `qm` on the node, by the names `worms
+"""`worms vm start|stop|restart <target>...`: VMs on and off with `qm` on the host, by the names `worms
 run` takes (worms_cli/remote.py: a VM, `<team>/<role>`, a group of platform VMs). And the devbox
-VMs that something else stopped, which are written down on the node:
+VMs that something else stopped, which are written down on the host:
 
     held        a round with "shut down every devbox" (round agent, hold_devboxes:
                 /var/lib/worms/held-devboxes.json); its release job starts them again.
@@ -32,29 +32,29 @@ NO_RECORD = 3  # read_record's exit code for "there is none"
 
 
 def read_record(runner, path: str) -> list[dict]:
-    """The VMs a record on the node lists ([{vmid, name}]); [] when there is none. A BuildError
+    """The VMs a record on the host lists ([{vmid, name}]); [] when there is none. A BuildError
     when it cannot be read: that says nothing about what it holds."""
-    code, out, err = runner.session.node_run(["sh", "-c", f"[ -e {shlex.quote(path)} ] || exit {NO_RECORD}; cat {shlex.quote(path)}"])
+    code, out, err = runner.session.host_run(["sh", "-c", f"[ -e {shlex.quote(path)} ] || exit {NO_RECORD}; cat {shlex.quote(path)}"])
     if code == NO_RECORD:
         return []
     if code != 0:
-        raise BuildError(f"cannot read {path} on the node: {err.strip()[:200] or f'exit {code}'}")
+        raise BuildError(f"cannot read {path} on the host: {err.strip()[:200] or f'exit {code}'}")
     try:
         data = json.loads(out or "{}")
     except ValueError as exc:
-        raise BuildError(f"{path} on the node is not JSON: {exc}") from None
+        raise BuildError(f"{path} on the host is not JSON: {exc}") from None
     vms = data.get("vms", []) if isinstance(data, dict) else data
     return [{"vmid": int(vm["vmid"]), "name": str(vm["name"])} for vm in vms if isinstance(vm, dict) and "vmid" in vm and "name" in vm]
 
 
 def write_record(runner, path: str, vms: list[dict]) -> None:
-    """Write (or, with no VM, remove) a record on the node, root's only."""
+    """Write (or, with no VM, remove) a record on the host, root's only."""
     if not vms:
-        runner.node_sh(f"rm -f {shlex.quote(path)}", quiet=True)
+        runner.host_sh(f"rm -f {shlex.quote(path)}", quiet=True)
         return
     text = json.dumps({"vms": [{"vmid": int(vm["vmid"]), "name": vm["name"]} for vm in vms]})
     directory = path.rsplit("/", 1)[0]
-    runner.node_sh(f"mkdir -p {shlex.quote(directory)} && umask 077 && printf '%s\\n' {shlex.quote(text)} > {shlex.quote(path)}",
+    runner.host_sh(f"mkdir -p {shlex.quote(directory)} && umask 077 && printf '%s\\n' {shlex.quote(text)} > {shlex.quote(path)}",
                    quiet=True)  # fmt: skip
 
 
@@ -68,7 +68,7 @@ def still_there(runner, recorded: list[dict]) -> list[dict]:
 
 def start(runner, vms: list[dict]) -> list[str]:
     """`qm start` each; the names of those that did not start."""
-    failed = [vm["name"] for vm in vms if runner.node_sh(f"qm start {int(vm['vmid'])}", check=False) != 0]
+    failed = [vm["name"] for vm in vms if runner.host_sh(f"qm start {int(vm['vmid'])}", check=False) != 0]
     if failed:  # `qm start` fails on a VM that runs already
         running = {vm["name"] for vm in runner.vms() if vm.get("status") == "running"}
         failed = [name for name in failed if name not in running]
@@ -112,7 +112,7 @@ class Power:
     def _targets(self, names) -> list[dict]:
         targets = self.remote.targets(self._expand(names))
         if any(t.vm is None for t in targets):
-            raise BuildError("the node is not switched on or off from here")
+            raise BuildError("the host is not switched on or off from here")
         sandboxes = [t.name for t in targets if t.vm.get("pool") == "sandbox"]
         if sandboxes:
             raise BuildError(f"{', '.join(sandboxes)}: a round's sandbox VM, the round agent's to start and stop "
@@ -125,7 +125,7 @@ class Power:
             if vm.get("status") == "stopped":
                 print(output.status_cell("stopped", f"{vm['name']}: stopped already"))
                 continue
-            if self.runner.node_sh(SHUTDOWN.format(vmid=int(vm["vmid"])), check=False) != 0:
+            if self.runner.host_sh(SHUTDOWN.format(vmid=int(vm["vmid"])), check=False) != 0:
                 failed.append(vm["name"])
             else:
                 print(output.status_cell("stopped", f"{vm['name']}: stopped"))
@@ -155,7 +155,7 @@ class Power:
             if vm["name"] not in failed:
                 print(output.status_cell("running", f"{vm['name']}: started"))
         if failed:
-            output.error(f"did not start: {', '.join(failed)} (`worms log {failed[0]}` once it is up, or the node's task log)")
+            output.error(f"did not start: {', '.join(failed)} (`worms log {failed[0]}` once it is up, or the host's task log)")
             return 1
         return 0
 
@@ -177,7 +177,7 @@ class Power:
         print(output.status_cell("ok" if not failed else "error", f"started {len(vms) - len(failed)} of {len(recorded)} held devbox VM(s)"
                                  + (f"; not: {', '.join(failed)}" if failed else "")))  # fmt: skip
         print(output.color(f"The hold stays recorded ({HELD_DEVBOXES}): the round agent takes no devbox job until the "
-                           f"round releases it. If that round is over for good: `worms run node -- rm {HELD_DEVBOXES}`", "dim"))  # fmt: skip
+                           f"round releases it. If that round is over for good: `worms run host -- rm {HELD_DEVBOXES}`", "dim"))  # fmt: skip
         return 1 if failed else 0
 
     def _refuse_while_window(self, what: str) -> None:

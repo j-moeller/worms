@@ -14,7 +14,7 @@ Never skipped:
   - in a run of a part (--tags, or any --skip-tags but packages): no stamp is read or written.
 
 What a stamp cannot see: the VM itself drifting (a hand edit, a deleted file); the facts (they
-describe the VM); the Proxmox CA django_app fetches from the node. `--full` checks everything.
+describe the VM); the Proxmox CA django_app fetches from the host. `--full` checks everything.
 A role that names `hostvars` or `groups` also hashes the inventory files. A service VM rolled back
 to its snapshot has the stamps of its snapshot: they still say what that state was made from.
 """

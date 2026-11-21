@@ -5,7 +5,7 @@
     from gameplan import FTP_PASSIVE_PORTS                      # the ports an FTP login needs open
     from gameplan import Doc, Docx, Entry, KeePass, Ods, TotpExport, Zip   # file contents
 
-Gameplans live in gameplans/ at the repository's root, one class per file, and reach the node
+Gameplans live in gameplans/ at the repository's root, one class per file, and reach the host
 and the orchestrator only (never the dashboard VM).
 """
 

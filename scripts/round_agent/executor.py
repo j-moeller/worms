@@ -5,7 +5,7 @@ the handlers (handlers.py) are pure logic and the whole agent can be tested
 with a fake executor. The real one runs commands as argument lists (never a
 shell string), with timeouts, and reads OpenTofu outputs as JSON.
 
-The agent runs as root on the Proxmox node, from the repository checkout
+The agent runs as root on the Proxmox host, from the repository checkout
 (like `make`): tofu, ansible-playbook, qm and ssh are on PATH and the
 OpenTofu stacks and scripts are in the tree.
 
@@ -39,7 +39,7 @@ _COLOUR = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 # SSH options for reaching VMs on the management bridges (host -> VM only).
 # Host keys are not pinned (lab VMs are rebuilt with fresh keys), matching the
 # repo's ansible.cfg (host_key_checking = False). The WORMS key in the agent
-# worms-node-run started is the one key offered: never root's ~/.ssh/id_*.
+# worms-host-run started is the one key offered: never root's ~/.ssh/id_*.
 SSH_OPTS = [
     "-o", "BatchMode=yes",
     "-o", "StrictHostKeyChecking=no",
@@ -105,7 +105,7 @@ class JobLog:
 
     Written as it happens, so a long build can be followed and a failure read
     afterwards: the job's `error` holds only the end of stderr and the last failed task. Ansible and OpenTofu output can be sensitive, which is why
-    the directory is root-only, and why this stays on the node and out of the database.
+    the directory is root-only, and why this stays on the host and out of the database.
 
     A problem with the log never fails a job. Without a file (no job is running, or it
     could not be opened), every call does nothing.
@@ -187,7 +187,7 @@ class Executor:
             os.environ.pop("WORMS_HISTORY_BY", None)
 
     def history(self, vms, event, detail=""):
-        """Append to the node's VM history (worms_cli/history.py; the workspace's src is on the
+        """Append to the host's VM history (worms_cli/history.py; the workspace's src is on the
         agent's PYTHONPATH). Best effort: a job never fails for it, its log says so."""
         if not vms:
             return
@@ -293,7 +293,7 @@ class Executor:
     def tofu(self, stack, *args, timeout=3600):
         path = self.repo_root / "opentofu" / "stacks" / stack
         if args[:1] == ("init",):
-            # From the node's provider mirror first, the registry only for a version it lacks: a
+            # From the host's provider mirror first, the registry only for a version it lacks: a
             # plain init needs the internet even for installed providers (scripts/tofu-init).
             return self.run(["sh", str(self.repo_root / "scripts" / "tofu-init"), str(path)], timeout=timeout, stream=True)
         if args[:1] in (("apply",), ("destroy",)):
@@ -317,7 +317,7 @@ class Executor:
         path.write_text(content)
 
     def note(self, text):
-        """A line in the current job's log (on the node only)."""
+        """A line in the current job's log (on the host only)."""
         self._log.note(text)
 
     def install_sandbox_definition(self, hcl):

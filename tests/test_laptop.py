@@ -1,6 +1,6 @@
 """The laptop as controller (src/worms_cli/session.py, build.py): which steps
-run here and which on the node, what each tool gets from the vault, the
-inventory from a laptop, and the round agent's workspace on the node (what the
+run here and which on the host, what each tool gets from the vault, the
+inventory from a laptop, and the round agent's workspace on the host (what the
 sync copies, what it never copies, what it leaves alone).
 
 Nothing here connects anywhere: subprocess is recorded, or the tools run on
@@ -26,9 +26,9 @@ sys.path.insert(0, str(REPO / "src"))
 from worms_cli import build  # noqa: E402
 from worms_cli.config import Config  # noqa: E402
 from worms_cli.secrets import SSH_PUBLIC_KEY, Vault  # noqa: E402
-from worms_cli.session import NODE_RUN, Session  # noqa: E402
+from worms_cli.session import HOST_RUN, Session  # noqa: E402
 
-NODE = "root@pve.example"
+HOST = "root@pve.example"
 
 
 @pytest.fixture
@@ -67,21 +67,21 @@ WORMS_AGENT = "/run/worms-agent"  # the CLI's agent with the WORMS key
 @pytest.fixture
 def recorded(monkeypatch):
     """The Runner's commands are recorded, not run (the vault still uses the
-    real ssh-keygen); no node to talk to (it is called `worms`). You have an
+    real ssh-keygen); no host to talk to (it is called `worms`). You have an
     ssh-agent of your own, which the build must never use."""
     import types
 
     rec = Recorded()
     monkeypatch.setattr(build, "subprocess", types.SimpleNamespace(run=rec))
-    monkeypatch.setattr(Session, "check_node", lambda self: None)
+    monkeypatch.setattr(Session, "check_host", lambda self: None)
     monkeypatch.setattr(Session, "internet_allowed", lambda self: True)
     monkeypatch.setattr(Session, "worms_agent", lambda self: {"SSH_AUTH_SOCK": WORMS_AGENT, "SSH_AGENT_PID": "1"})
-    monkeypatch.setattr(Session, "node_name", lambda self: "worms")
+    monkeypatch.setattr(Session, "host_name", lambda self: "worms")
     monkeypatch.setenv("SSH_AUTH_SOCK", OPERATOR_AGENT)
     return rec
 
 
-def runner(root, ssh=NODE):
+def runner(root, ssh=HOST):
     env = {"WORMS_REPO_ROOT": str(root)}
     if ssh:
         env["WORMS_SSH"] = ssh
@@ -96,13 +96,13 @@ def test_laptop_runs_tofu_here_with_the_vaults_inputs(checkout, recorded):
     assert env["TF_VAR_proxmox_api_url"] == "https://pve.example:8006/"
     assert env["TF_VAR_llm_access_ip"] == "192.0.2.34"
     assert Path(env["TF_VAR_ssh_public_key"]).read_text().strip() == Vault(checkout).load()[SSH_PUBLIC_KEY].strip()
-    assert env["WORMS_SSH"] == NODE
+    assert env["WORMS_SSH"] == HOST
 
 
 def test_tofu_logs_in_with_the_worms_key_only(checkout, recorded):
-    """OpenTofu's Proxmox provider logs in to root@<node> with the keys of the
-    agent in SSH_AUTH_SOCK: the WORMS key's, never yours. Its node is the one
-    the node names itself, never the stacks' default."""
+    """OpenTofu's Proxmox provider logs in to root@<host> with the keys of the
+    agent in SSH_AUTH_SOCK: the WORMS key's, never yours. Its host is the one
+    the host names itself, never the stacks' default."""
     runner(checkout).tofu("platform", "apply")
     (_argv, env), = recorded.calls
     assert env["SSH_AUTH_SOCK"] == WORMS_AGENT == env["WORMS_SSH_AUTH_SOCK"]
@@ -124,11 +124,11 @@ def test_preflight_logs_in_like_the_provider_and_says_what_to_do(checkout, monke
 
     monkeypatch.setattr("worms_cli.session.subprocess", types.SimpleNamespace(run=run, SubprocessError=Exception))
     monkeypatch.setattr(Session, "worms_agent", lambda self: {"SSH_AUTH_SOCK": WORMS_AGENT, "SSH_AGENT_PID": "1"})
-    session = Session(Config(env={"WORMS_REPO_ROOT": str(checkout), "WORMS_SSH": NODE}))
+    session = Session(Config(env={"WORMS_REPO_ROOT": str(checkout), "WORMS_SSH": HOST}))
     with pytest.raises(build.SessionError) as error:
         session.tofu_env()
     assert calls == [["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "IdentityFile=none",
-                      "-o", "IdentityAgent=SSH_AUTH_SOCK", NODE, "true"]]  # fmt: skip
+                      "-o", "IdentityAgent=SSH_AUTH_SOCK", HOST, "true"]]  # fmt: skip
     message = str(error.value)
     assert "Permission denied (publickey)" in message and "WORMS key" in message and "worms init" in message
 
@@ -144,9 +144,9 @@ def probing_with(monkeypatch, checkout, returncode):
         return subprocess.CompletedProcess(argv, returncode, "", "ssh: connect to host pve.example: timed out")
 
     monkeypatch.setattr("worms_cli.session.subprocess", types.SimpleNamespace(run=run, SubprocessError=Exception))
-    monkeypatch.setattr(Session, "check_node", lambda self: None)
+    monkeypatch.setattr(Session, "check_host", lambda self: None)
     monkeypatch.setattr(Session, "worms_agent", lambda self: {"SSH_AUTH_SOCK": WORMS_AGENT, "SSH_AGENT_PID": "1"})
-    return Session(Config(env={"WORMS_REPO_ROOT": str(checkout), "WORMS_SSH": NODE})), seen
+    return Session(Config(env={"WORMS_REPO_ROOT": str(checkout), "WORMS_SSH": HOST})), seen
 
 
 @pytest.mark.parametrize("returncode, allowed", [(0, True), (1, False)])
@@ -182,7 +182,7 @@ def test_the_preflight_leaves_stdin_alone(checkout, monkeypatch):
 
     monkeypatch.setattr("worms_cli.session.subprocess", types.SimpleNamespace(run=run, SubprocessError=Exception))
     monkeypatch.setattr(Session, "worms_agent", lambda self: {"SSH_AUTH_SOCK": WORMS_AGENT, "SSH_AGENT_PID": "1"})
-    Session(Config(env={"WORMS_REPO_ROOT": str(checkout), "WORMS_SSH": NODE})).check_node()
+    Session(Config(env={"WORMS_REPO_ROOT": str(checkout), "WORMS_SSH": HOST})).check_host()
     assert seen[0]["stdin"] == subprocess.DEVNULL
 
 
@@ -194,44 +194,44 @@ def test_the_token_only_reaches_tofu(checkout, recorded):
         assert "prov-secret" not in " ".join(argv) and "TF_VAR_proxmox_api_token" not in env
 
 
-def test_laptop_runs_the_nodes_stacks_on_the_node(checkout, recorded):
+def test_laptop_runs_the_hosts_stacks_on_the_host(checkout, recorded):
     r = runner(checkout)
     r.tofu("sandbox", "apply", "-auto-approve")
     r.ansible("SetupDevbox.yml")
     sync, apply, devbox = recorded.calls
     # The workspace is brought up to date first, once per run.
     assert "SetupRoundAgent.yml --tags agent-sync" in sync[0][2]
-    # To the node with the WORMS key only.
+    # To the host with the WORMS key only.
     assert apply[0] == ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "IdentityFile=none",
-                        "-o", "IdentityAgent=SSH_AUTH_SOCK", NODE,
-                        f"{NODE_RUN} opentofu/stacks/sandbox 'tofu apply -auto-approve'"]  # fmt: skip
+                        "-o", "IdentityAgent=SSH_AUTH_SOCK", HOST,
+                        f"{HOST_RUN} opentofu/stacks/sandbox 'tofu apply -auto-approve'"]  # fmt: skip
     assert apply[1]["SSH_AUTH_SOCK"] == WORMS_AGENT
-    assert "TF_VAR_proxmox_api_token" not in apply[1]  # the node has its own (the agent's env file)
-    assert devbox[0][0] == "ssh" and devbox[0][-2] == NODE
-    assert devbox[0][-1].startswith(f"{NODE_RUN} ansible ") and "ansible-playbook SetupDevbox.yml" in devbox[0][-1]
+    assert "TF_VAR_proxmox_api_token" not in apply[1]  # the host has its own (the agent's env file)
+    assert devbox[0][0] == "ssh" and devbox[0][-2] == HOST
+    assert devbox[0][-1].startswith(f"{HOST_RUN} ansible ") and "ansible-playbook SetupDevbox.yml" in devbox[0][-1]
     assert "vault.yml" not in devbox[0][-1]
 
 
-def test_init_of_the_nodes_stacks_happens_on_the_node(checkout, recorded):
+def test_init_of_the_hosts_stacks_happens_on_the_host(checkout, recorded):
     """A first `worms apply --all` starts with `tofu init` of every stack, before
     there is an inventory or a CA to sync with; the workspace sync initialises
-    the sandbox and devbox stacks on the node instead."""
+    the sandbox and devbox stacks on the host instead."""
     assert runner(checkout).tofu("sandbox", "init", "-input=false") == 0
     assert not recorded.calls
 
 
-def test_laptop_playbooks_get_the_vault_and_the_nodes_internet_flag(checkout, recorded):
+def test_laptop_playbooks_get_the_vault_and_the_hosts_internet_flag(checkout, recorded):
     runner(checkout).ansible("Site.yml")
     (argv, _env), = recorded.calls
     assert "ansible-playbook -e @group_vars/vault.yml -e internet_enabled=true Site.yml" in argv[2]
 
 
-def test_laptop_refuses_an_inventory_written_on_the_node(checkout, recorded):
-    """It says `ansible_connection: local` for the node: the node's roles
+def test_laptop_refuses_an_inventory_written_on_the_host(checkout, recorded):
+    """It says `ansible_connection: local` for the host: the host's roles
     would run on the laptop."""
     inventory = checkout / "ansible" / "inventory.generated.yml"
     inventory.write_text(inventory.read_text().replace("ansible_host: pve.example", "ansible_connection: local"))
-    with pytest.raises(build.BuildError, match="written on the node"):
+    with pytest.raises(build.BuildError, match="written on the host"):
         runner(checkout).ansible("SetupHostNetwork.yml")
     inventory.unlink()
     with pytest.raises(build.BuildError, match="worms step inventory"):
@@ -239,19 +239,19 @@ def test_laptop_refuses_an_inventory_written_on_the_node(checkout, recorded):
     assert not recorded.calls
 
 
-def test_a_checkout_on_the_node_uses_the_agents_workspace(checkout, recorded):
-    """Operator logged in on the node with a checkout (and vault): the sandbox
+def test_a_checkout_on_the_host_uses_the_agents_workspace(checkout, recorded):
+    """Operator logged in on the host with a checkout (and vault): the sandbox
     and devbox stacks still have one state, the agent's (/opt/worms)."""
     runner(checkout, ssh="").tofu("devbox", "apply")
     sync, apply = recorded.calls
     assert "SetupRoundAgent.yml --tags agent-sync" in sync[0][2]
-    assert apply[0] == ["sh", "-c", f"{NODE_RUN} opentofu/stacks/devbox 'tofu apply'"]
+    assert apply[0] == ["sh", "-c", f"{HOST_RUN} opentofu/stacks/devbox 'tofu apply'"]
 
 
-def test_host_commands_run_on_the_node(checkout, recorded):
-    runner(checkout).node_sh("qm list")
+def test_host_commands_run_on_the_host(checkout, recorded):
+    runner(checkout).host_sh("qm list")
     (argv, _env), = recorded.calls
-    assert argv[0] == "ssh" and argv[-2:] == [NODE, "qm list"]
+    assert argv[0] == "ssh" and argv[-2:] == [HOST, "qm list"]
 
 
 def test_without_the_token_tofu_does_not_start(tmp_path, recorded, monkeypatch):
@@ -264,7 +264,7 @@ def test_without_the_token_tofu_does_not_start(tmp_path, recorded, monkeypatch):
     assert not recorded.calls
 
 
-def test_on_the_node_without_a_vault_the_environment_is_used(tmp_path, recorded, monkeypatch):
+def test_on_the_host_without_a_vault_the_environment_is_used(tmp_path, recorded, monkeypatch):
     """The round agent: its environment file has the tofu inputs and the key;
     no vault, nothing routed elsewhere."""
     monkeypatch.setenv("TF_VAR_proxmox_api_token", "from-the-agent-env")
@@ -281,8 +281,8 @@ def test_on_the_node_without_a_vault_the_environment_is_used(tmp_path, recorded,
 
 
 def test_inventory_from_a_laptop(tmp_path):
-    """The node over SSH (host key checked), every VM through it, the node's
-    stacks read on the node."""
+    """The host over SSH (host key checked), every VM through it, the host's
+    stacks read on the host."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     sandbox = {"ansible_hosts": {"value": {"vm01": {"name": "sandbox-vm01", "management_ip": "10.4.0.11", "vm_id": 9001}}},
@@ -293,38 +293,38 @@ def test_inventory_from_a_laptop(tmp_path):
     )
     (bin_dir / "ssh").chmod(0o755)
     out = tmp_path / "inventory.generated.yml"
-    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "WORMS_SSH": NODE, "WORMS_SSH_AUTH_SOCK": WORMS_AGENT}
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "WORMS_SSH": HOST, "WORMS_SSH_AUTH_SOCK": WORMS_AGENT}
     subprocess.run([sys.executable, str(REPO / "scripts" / "generate_inventory.py"), "--repo-root", str(tmp_path),
                     "--platform-json", str(FIXTURES / "platform-outputs.json"), "--output", str(out), "--quiet"],
                    env=env, check=True, capture_output=True)  # fmt: skip
     children = yaml.safe_load(out.read_text())["all"]["children"]
-    node = children["proxmox_host"]["hosts"]["proxmox.local"]
-    # The WORMS key's agent and no key file, for the node and every VM (ssh
-    # expands the variable; the path differs per run); the VMs through the node.
+    entry = children["proxmox_host"]["hosts"]["proxmox.local"]
+    # The WORMS key's agent and no key file, for the host and every VM (ssh
+    # expands the variable; the path differs per run); the VMs through the host.
     one_key = "-o IdentityFile=none -o IdentityAgent=${WORMS_SSH_AUTH_SOCK}"
-    assert node == {"ansible_host": "pve.example", "ansible_user": "root", "ansible_host_key_checking": True,
+    assert entry == {"ansible_host": "pve.example", "ansible_user": "root", "ansible_host_key_checking": True,
                     "ansible_ssh_common_args": one_key}  # fmt: skip
     vm = children["sandbox"]["hosts"]["sandbox-vm01"]
     assert vm["ansible_host"] == "10.4.0.11"
-    assert vm["ansible_ssh_common_args"] == f"-o ProxyJump={NODE} {one_key}"
+    assert vm["ansible_ssh_common_args"] == f"-o ProxyJump={HOST} {one_key}"
 
 
 @pytest.mark.parametrize("ssh_script, ok", [
-    # A fresh node: no round agent yet, so its stacks cannot have state.
-    (f"echo 'bash: line 1: {NODE_RUN}: No such file or directory' >&2; exit 127", True),
+    # A fresh host: no round agent yet, so its stacks cannot have state.
+    (f"echo 'bash: line 1: {HOST_RUN}: No such file or directory' >&2; exit 127", True),
     ("echo 'Error: Failed to load state' >&2; exit 1", False),  # tofu failed
     ("echo 'Connection refused' >&2; exit 255", False),  # ssh failed
 ])  # fmt: skip
-def test_a_failed_read_of_the_nodes_stacks_aborts(tmp_path, ssh_script, ok):
-    """No inventory without the node's VMs: the playbooks after it would run
-    against the wrong hosts. Only a node without the round agent counts as
+def test_a_failed_read_of_the_hosts_stacks_aborts(tmp_path, ssh_script, ok):
+    """No inventory without the host's VMs: the playbooks after it would run
+    against the wrong hosts. Only a host without the round agent counts as
     'not applied'."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / "ssh").write_text(f"#!/bin/sh\n{ssh_script}\n")
     (bin_dir / "ssh").chmod(0o755)
     out = tmp_path / "inventory.generated.yml"
-    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "WORMS_SSH": NODE, "WORMS_SSH_AUTH_SOCK": WORMS_AGENT}
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "WORMS_SSH": HOST, "WORMS_SSH_AUTH_SOCK": WORMS_AGENT}
     proc = subprocess.run([sys.executable, str(REPO / "scripts" / "generate_inventory.py"), "--repo-root", str(tmp_path),
                            "--platform-json", str(FIXTURES / "platform-outputs.json"), "--output", str(out), "--quiet"],
                           env=env, capture_output=True, text=True)  # fmt: skip
@@ -334,12 +334,12 @@ def test_a_failed_read_of_the_nodes_stacks_aborts(tmp_path, ssh_script, ok):
         assert "error: 'tofu output' of stack" in proc.stderr
 
 
-def test_inventory_on_the_node(generated_inventory):
+def test_inventory_on_the_host(generated_inventory):
     children = yaml.safe_load(generated_inventory.read_text())["all"]["children"]
     assert children["proxmox_host"]["hosts"]["proxmox.local"] == {"ansible_host": "127.0.0.1", "ansible_connection": "local"}
 
 
-# --- the round agent's workspace on the node -----------------------------------
+# --- the round agent's workspace on the host -----------------------------------
 
 ROLE = REPO / "ansible" / "roles" / "host" / "round_agent"
 
@@ -352,7 +352,7 @@ def test_workspace_sync_copies_code_never_secrets_or_the_controllers_state(tmp_p
         "src/manage.py": "cli", "scripts/round_agent/agent.py": "agent", "ansible/SetupDevbox.yml": "play",
         "opentofu/modules/x/main.tf": "module", "opentofu/stacks/sandbox/main.tf": "sandbox",
         "opentofu/stacks/sandbox/generated_vms.tf": "repo default", "opentofu/stacks/devbox/main.tf": "devbox",
-        # never on the node:
+        # never on the host:
         "ansible/group_vars/vault.yml": "SECRET", "ansible/.vault_pass": "SECRET", "ansible/pki/worms/ca.key": "SECRET",
         "ansible/pki/worms/ca.crt": "copied separately", "ansible/inventory.generated.yml": "controller's",
         "opentofu/stacks/platform/main.tf": "controller's", "opentofu/stacks/platform/terraform.tfstate": "controller's",
@@ -364,10 +364,10 @@ def test_workspace_sync_copies_code_never_secrets_or_the_controllers_state(tmp_p
         (src / name).write_text(content)
     for ignore in (".gitignore", "ansible/.gitignore", "opentofu/.gitignore"):
         shutil.copy(REPO / ignore, src / ignore)
-    node_owned = {"opentofu/stacks/sandbox/terraform.tfstate": "node state",
+    host_owned = {"opentofu/stacks/sandbox/terraform.tfstate": "host state",
                   "opentofu/stacks/sandbox/generated_vms.tf": "the agent's definition",
                   "opentofu/stacks/devbox/.terraform/x": "providers", "src/stale.py": "removed upstream"}  # fmt: skip
-    for name, content in node_owned.items():
+    for name, content in host_owned.items():
         (dest / name).parent.mkdir(parents=True, exist_ok=True)
         (dest / name).write_text(content)
 
@@ -387,14 +387,14 @@ def test_workspace_sync_copies_code_never_secrets_or_the_controllers_state(tmp_p
     assert not [n for n in present if n.startswith(("opentofu/stacks/platform", "opentofu/stacks/infrastructure",
                                                      "opentofu/stacks/private_internet", "projects/"))]  # fmt: skip
     assert "ansible/inventory.generated.yml" not in present and "ansible/pki/worms/ca.crt" not in present
-    assert (dest / "opentofu/stacks/sandbox/terraform.tfstate").read_text() == "node state"
+    assert (dest / "opentofu/stacks/sandbox/terraform.tfstate").read_text() == "host state"
     assert (dest / "opentofu/stacks/sandbox/generated_vms.tf").read_text() == "the agent's definition"
     assert (dest / "opentofu/stacks/devbox/.terraform/x").exists()
     assert "src/stale.py" not in present  # code removed upstream goes
 
 
-def test_node_run_wrapper(tmp_path, render):
-    """worms-node-run: the workspace directory, the agent's environment, the
+def test_host_run_wrapper(tmp_path, render):
+    """worms-host-run: the workspace directory, the agent's environment, the
     WORMS key in a private ssh-agent."""
     require("ssh-agent", "ssh-add", "ssh-keygen")
     workspace, env_file, key = tmp_path / "ws", tmp_path / "agent.env", tmp_path / "ssh" / "worms"
@@ -402,8 +402,8 @@ def test_node_run_wrapper(tmp_path, render):
     env_file.write_text("FROM_ENV_FILE=yes\n")
     key.parent.mkdir()
     subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "worms-test", "-f", str(key)], check=True)
-    script = tmp_path / "worms-node-run"
-    script.write_text(render("ansible/roles/host/round_agent", "worms-node-run.j2", round_agent_repo_root=str(workspace),
+    script = tmp_path / "worms-host-run"
+    script.write_text(render("ansible/roles/host/round_agent", "worms-host-run.j2", round_agent_repo_root=str(workspace),
                              round_agent_env_file=str(env_file), round_agent_ssh_key=str(key)))  # fmt: skip
     proc = subprocess.run(["sh", str(script), "opentofu/stacks/devbox", 'echo "$FROM_ENV_FILE"; pwd; ssh-add -l'],
                           capture_output=True, text=True, env={"PATH": os.environ["PATH"]})  # fmt: skip

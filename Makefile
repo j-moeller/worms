@@ -5,7 +5,7 @@
 # is only a thin entry point. See docs/03-manage-py.md and `worms --help`.
 #
 #   make            Build and configure the entire infrastructure end to end
-#                   (idempotent): = `worms apply --all`. Runs on the Proxmox node (or
+#                   (idempotent): = `worms apply --all`. Runs on the Proxmox host (or
 #                   set WORMS_SSH to drive it over SSH from your laptop).
 #   make destroy    Destroy the VM stacks (keeps the firewall and platform).
 #   make destroy_all Destroy everything (VM stacks, firewall, platform).

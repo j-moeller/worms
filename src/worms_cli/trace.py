@@ -27,14 +27,14 @@ def _when(value) -> str:
     return f"{value:%Y-%m-%d %H:%M:%S}" if value else "—"
 
 
-def _job_link(session, job, node) -> tuple[str, str]:
+def _job_link(session, job, host) -> tuple[str, str]:
     """(state, text) of a host job as a link."""
     from django.utils import timezone
 
     if job is None:
         return "todo", "—"
     if job.state == "queued":
-        reasons = host_jobs.queue_reasons(job, node)
+        reasons = host_jobs.queue_reasons(job, host)
         return "wait", f"job #{job.id} queued for {host_jobs._ago((timezone.now() - job.requested_at).total_seconds())}: " + (
             "; ".join(reasons) or "about to start")
     if job.state == "running":
@@ -51,7 +51,7 @@ def chain(session, upload) -> list[tuple[str, str, str]]:
     from orchestrator.rounds import devbox_runs
 
     run = getattr(upload, "devbox_run", None)
-    node = host_jobs.node_state(session)
+    host = host_jobs.host_state(session)
     links = []
     if run is None:
         links.append(("wait", "picked up by the orchestrator", "not yet: the attempt processor picks uploads up every few "
@@ -66,13 +66,13 @@ def chain(session, upload) -> list[tuple[str, str, str]]:
             links.append(("wait", "reset of the devbox", f"waits: {waits}"))
         else:
             open_rebuild = run.team and _open_rebuild(run.team)
-            links.append(("wait", "reset of the devbox", f"waits for the rebuild already under way: {_job_link(session, open_rebuild, node)[1]}"
+            links.append(("wait", "reset of the devbox", f"waits for the rebuild already under way: {_job_link(session, open_rebuild, host)[1]}"
                           if open_rebuild else "about to be requested"))  # fmt: skip
     else:
-        state, text = _job_link(session, run.rebuild_job, node)
+        state, text = _job_link(session, run.rebuild_job, host)
         links.append((state, "reset of the devbox", text))
     # The deploy onto VM A.
-    deploy_state, deploy_text = _job_link(session, run.deploy_job, node)
+    deploy_state, deploy_text = _job_link(session, run.deploy_job, host)
     if deploy_state == "ok":
         deploy_text += f": the zip unpacked in {WORM_DIR} on VM A"
     links.append((deploy_state, "put on VM A", deploy_text))

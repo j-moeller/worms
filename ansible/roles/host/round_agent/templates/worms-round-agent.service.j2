@@ -1,6 +1,6 @@
 # Managed by Ansible (role round_agent). DO NOT EDIT.
 #
-# Runs as root on the Proxmox node (it drives tofu, ansible, qm and ssh to the
+# Runs as root on the Proxmox host (it drives tofu, ansible, qm and ssh to the
 # sandbox). Its reach is bounded by its database role (job queue only) and by
 # what the fixed job handlers do, not by systemd sandboxing, which would get in
 # the way of managing VMs.
@@ -14,11 +14,11 @@ Type=simple
 User={{ round_agent_user }}
 WorkingDirectory={{ round_agent_repo_root }}
 EnvironmentFile={{ round_agent_env_file }}
-# worms-node-run loads the environment and wraps the agent in an ssh-agent
+# worms-host-run loads the environment and wraps the agent in an ssh-agent
 # with the WORMS key (it lives exactly as long as the service): the OpenTofu
 # provider uploads snippets over SSH through an agent. A key that cannot be
 # loaded stops the service (journalctl -u worms-round-agent says why).
-ExecStart={{ round_agent_node_run }} . "exec {{ round_agent_python }} -m round_agent"
+ExecStart={{ round_agent_host_run }} . "exec {{ round_agent_python }} -m round_agent"
 Restart=always
 RestartSec=5
 

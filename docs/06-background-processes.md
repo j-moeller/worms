@@ -2,15 +2,15 @@
 
 This page lists every long-running service, timer and loop, by host. Unit files are rendered by Ansible from the role named in the table. Hardening is in [7 Security](07-security.md).
 
-## Proxmox node
+## Proxmox host
 
 | Unit | Kind, schedule | User | Does | Source |
 |---|---|---|---|---|
 | `worms-host-firewall` | oneshot at boot, before `pve-guests` | root | Loads `/etc/worms/worms.nft` (zone firewall, DNAT, bridge filters); `ExecStop` deletes it | [`host_network`](../ansible/roles/host/host_network/templates/) |
 | `worms-firewall-watchdog.timer` | every 15 s (from 1 min after boot) | root | Hard-stops **every** running sandbox and devbox VM if any of these holds: the internet window is open; `proxmox-firewall` is down; a host nft table is missing; a running team VM's tap has no rules. Logs `auth.crit` and a `watchdog_stopped` event | `worms-firewall-watchdog.sh.j2` |
 | `worms-mirror` | daemon, `Restart=always`; reacts to `ip monitor link`, rechecks every 10 s | root | Mirrors every sandbox bridge port (`vmbr1*`) into `vmbr3` for the monitor with `tc mirred`; vmbr3 itself drops everything | `worms-mirror.sh.j2` |
-| `worms-round-agent` | daemon, `Restart=always` | root | The round agent ([5](05-live-environment.md#architecture)): `LISTEN host_jobs` plus a 5 s poll; one job at a time; heartbeat every 30 s. Between jobs it exits when a module it loaded from its workspace changed on disk, and systemd starts the new code. Runs via `worms-node-run`, with the WORMS key in a private ssh-agent | [`round_agent`](../ansible/roles/host/round_agent/), [`agent.py`](../scripts/round_agent/agent.py) |
-| `worms-audit-gateway.timer` | every 60 s | root | `worms-audit collect-gateway`: reads new SSH-gateway logins and matches each to the client address the node logged (`worms-ssh-gw:`). Writes them to `ssh_gateway_logins` | [`events.py`](../scripts/round_agent/events.py) |
+| `worms-round-agent` | daemon, `Restart=always` | root | The round agent ([5](05-live-environment.md#architecture)): `LISTEN host_jobs` plus a 5 s poll; one job at a time; heartbeat every 30 s. Between jobs it exits when a module it loaded from its workspace changed on disk, and systemd starts the new code. Runs via `worms-host-run`, with the WORMS key in a private ssh-agent | [`round_agent`](../ansible/roles/host/round_agent/), [`agent.py`](../scripts/round_agent/agent.py) |
+| `worms-audit-gateway.timer` | every 60 s | root | `worms-audit collect-gateway`: reads new SSH-gateway logins and matches each to the client address the host logged (`worms-ssh-gw:`). Writes them to `ssh_gateway_logins` | [`events.py`](../scripts/round_agent/events.py) |
 | `proxmox-firewall`, `pve-*` | Proxmox | root | Per-VM firewalls (nftables backend) | Proxmox |
 
 **Job logs**
@@ -93,7 +93,7 @@ Role `apt_updates` (`Site.yml`) masks `apt-daily*` and `apt-listchanges` and pur
 | Where | Unit | Does |
 |---|---|---|
 | sandbox-gw, devbox-gw | `nftables` | Forward rules, NAT (cloud-init writes them, role `untrusted_gateway` enables them) |
-| sandbox-gw, devbox-gw | `worms-llm-route` | oneshot: a /32 route to the LLM endpoint via the node |
+| sandbox-gw, devbox-gw | `worms-llm-route` | oneshot: a /32 route to the LLM endpoint via the host |
 | devbox-ssh-gateway | `sshd` | Port forwarding to the teams' A VMs |
 | sandbox and devbox VMs, both gateways | `systemd-timesyncd` | Asks only the private NTP server, by address (`ntp.worms.internal`); no fallback pool ([`ntp_client`](../ansible/roles/private_internet/ntp_client/)) |
 | sandbox and devbox VMs | `worms-start.timer` / `.service` (transient) | The armed worm: `bash main.sh` as `debian`. On a devbox, `RuntimeMaxSec=3600` |
@@ -104,4 +104,4 @@ Role `apt_updates` (`Site.yml`) masks `apt-daily*` and `apt-listchanges` and pur
 |---|---|
 | vzdump of the persistent VMs (`worms-stateful`, 02:30 daily, keep 7 daily / 4 weekly) | Created only if `backup_storage` is set ([`backup.tf`](../opentofu/stacks/infrastructure/persistent/backup.tf)); off by default |
 | Database dumps | None scheduled. By hand: `worms db backup` (a `pg_dump -Fc` streamed to the controller, 0600, [3](03-manage-py.md#operate)) |
-| Controller state: vault, `.vault_pass`, `ansible/pki/worms/`, `terraform.tfstate` | By hand, off the node ([2](02-installation.md#4-build)) |
+| Controller state: vault, `.vault_pass`, `ansible/pki/worms/`, `terraform.tfstate` | By hand, off the host ([2](02-installation.md#4-build)) |

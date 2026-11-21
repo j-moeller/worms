@@ -3,7 +3,7 @@
 **This workflow cannot run as written** (`docs/06-background-processes.md`, "DNS and private internet"). It needs a helper
 client on the services bridge while the internet window is open, and none can exist: only the
 sandbox and devbox gateways and VMs may reach devpi and the registry, the window is refused while
-any of them runs, the private-internet VMs reach only the apt cache, and the node has no address
+any of them runs, the private-internet VMs reach only the apt cache, and the host has no address
 on the services bridge. What `worms apply` puts into the caches today is the apt seed
 (`apt_cache_seed_packages`) and a minimal devpi seed.
 

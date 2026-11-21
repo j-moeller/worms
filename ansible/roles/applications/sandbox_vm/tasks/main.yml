@@ -2,7 +2,7 @@
 # What a round's gameplan installs on one sandbox VM (src/gameplan/build.py, ansible_vars):
 # run by the round agent's prepare job when it builds the sandbox, before the snapshot every
 # team's run starts from, so before any team. The values come from the gameplan file on the
-# node and arrive tagged !unsafe (scripts/round_agent/handlers.py): none of it is templated.
+# host and arrive tagged !unsafe (scripts/round_agent/handlers.py): none of it is templated.
 # Packages come from the private apt cache: a gameplan's must be in apt_cache_seed_packages.
 #
 # In order: packages, users (groups, shells, sudo rules), SSH password logins, files, setup
@@ -98,7 +98,7 @@
 
 # apt removes whatever depends on a removed package as well, so a removal can reach further than
 # the names the gameplan gives (the gameplan's validation checks only those). Ask apt first
-# what would go, and refuse if that includes what the node, Ansible or the worm need. Packages
+# what would go, and refuse if that includes what the host, Ansible or the worm need. Packages
 # that are not installed are left out: removing them changes nothing.
 - name: Find what the removals would take with them
   when: sandbox_vm_removed | length > 0

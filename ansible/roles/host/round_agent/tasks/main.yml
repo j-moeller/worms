@@ -1,13 +1,13 @@
 ---
 # Round agent on the Proxmox host. The agent runs from its workspace on the
-# node (tasks/workspace.yml: synced from the controller's checkout); this role
+# host (tasks/workspace.yml: synced from the controller's checkout); this role
 # installs its dependency, the workspace, its key, the environment file and the
 # service, and the least-privilege Proxmox ACL for the orchestrator's VM-power
 # token.
 
-# The node's apt refreshes its lists only to install a package that is missing: with everything
+# The host's apt refreshes its lists only to install a package that is missing: with everything
 # there, deploying code or gameplans (`worms apply gameplans`) needs no internet.
-- name: Read the node's installed packages
+- name: Read the host's installed packages
   ansible.builtin.package_facts:
     manager: apt
   tags: [agent-sync]
@@ -35,8 +35,8 @@
   notify: Restart round agent
   tags: [agent-sync]
 
-# The node's event tables (docs/07-security.md, "Audit trail").
-- name: Install the node's events account
+# The host's event tables (docs/07-security.md, "Audit trail").
+- name: Install the host's events account
   ansible.builtin.template:
     src: events.env.j2
     dest: "{{ round_agent_events_env_file }}"
@@ -46,7 +46,7 @@
   no_log: "{{ hide_secrets }}"
   tags: [agent-sync]
 
-- name: Install worms-audit (records the node's events)
+- name: Install worms-audit (records the host's events)
   ansible.builtin.template:
     src: worms-audit.j2
     dest: "{{ round_agent_audit_command }}"

@@ -135,7 +135,7 @@ admin.save(update_fields=['password', 'must_change_password'])
             threading.Thread(target=server.serve_forever, daemon=True).start()
             running.append(server)
         print(json.dumps(session, indent=2), flush=True)
-        print("Local test instance ready. Database writes use django_dashboard; no conductor or node agent is running.", flush=True)
+        print("Local test instance ready. Database writes use django_dashboard; no conductor or round agent is running.", flush=True)
         threading.Event().wait()
     except KeyboardInterrupt:
         pass

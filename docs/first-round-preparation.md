@@ -4,7 +4,7 @@ The commands that bring production from today's state (2026-11-19) to a platform
 first scored round on 2026-11-20. Run them in order, the evening before. Each step says what you
 should see. If you don't see it, stop at that step: everything before it can stay as it is.
 
-Only step 4 needs egress. Every other step runs with the node offline.
+Only step 4 needs egress. Every other step runs with the host offline.
 
 **Superseded for the procedure** by [`migrate-on-production.md`](migrate-on-production.md), which uses
 the new commands and covers tonight's offline repair. This page keeps the dev rehearsal's results.
@@ -26,7 +26,7 @@ same way as production's.
 |---|---|---|
 | **The apt cache has no package index.** It holds each suite's `InRelease` only under a temporary name (`InRelease.1795048367`) and none of the `Packages` lists. Offline it answers `503 Unable to download in offline mode`. | A round's first attempt builds a fresh sandbox gateway, which installs `nftables` from the cache. It would find no package (`No package matching 'nftables'`), and that attempt and every retry would fail. | Step 4: one fill with egress, by the corrected fill (below). |
 | **Devboxes in mixed states.** Some were rolled back to a bare first-boot snapshot: Debian's own sources, `root@localhost`, no internal CA. | Nothing; teams just can't test their uploads. | Step 5: every team's devbox rebuilt. |
-| **Code and database maybe behind.** Migration `0020` (the round's "shut down every devbox" switch) and the node's offline `tofu init` (`scripts/tofu-init`). | Without `0020` the round form and `worms status` fail. Without the offline init the sandbox can't be built. | Step 3. |
+| **Code and database maybe behind.** Migration `0020` (the round's "shut down every devbox" switch) and the host's offline `tofu init` (`scripts/tofu-init`). | Without `0020` the round form and `worms status` fail. Without the offline init the sandbox can't be built. | Step 3. |
 | The devbox gateways had no `nftables`. | Nothing. | Done by hand on 2026-11-19. |
 
 **The corrected fill** (`ansible/roles/private_internet/apt_cache/tasks/seed.yml`). Two bugs left
@@ -42,7 +42,7 @@ index (`apt_cache/tasks/check.yml`). That is the same request tomorrow's sandbox
 
 ## Where to run what
 
-- **On the node, in your production checkout:** every `worms` and `git` line. `<checkout>` below.
+- **On the host, in your production checkout:** every `worms` and `git` line. `<checkout>` below.
 - **Inside a VM:** indented lines after `worms login <vm>`. Leave with `exit`.
 
 ## 0. Pre-flight
@@ -74,7 +74,7 @@ Bring the checkout to this document's commit or later, the way you always push c
 
 ```sh
 git log --oneline -1      # this document's commit, or later
-git status --short        # nothing modified: the node's workspace is synced from the working tree
+git status --short        # nothing modified: the host's workspace is synced from the working tree
 ```
 
 ## 3. Deploy the code and the migration (offline)
@@ -97,18 +97,18 @@ too, so the manual restart is only a backstop.
 
 ```sh
 worms status              # no traceback; the competition section shows
-worms show gameplans    # round_one: valid on the orchestrator and the node
+worms show gameplans    # round_one: valid on the orchestrator and the host
 cd /opt/worms && sh scripts/tofu-init opentofu/stacks/sandbox; cd -
                           # "initialised from /var/lib/worms/tofu-providers (no internet needed)"
 ```
 
 The last line is the sandbox build's first step, done offline in advance. If it says "from the
-registry (needs the internet)" instead, run it once more during step 4's window: then the node
+registry (needs the internet)" instead, run it once more during step 4's window: then the host
 keeps that provider for good.
 
 ## 4. Repair the apt cache (the one step with egress)
 
-1. Give the node egress, as for your last fill. The build opens and closes the worms window itself.
+1. Give the host egress, as for your last fill. The build opens and closes the worms window itself.
 2. Run:
    ```sh
    worms apply --yes apt-cache --packages
@@ -132,7 +132,7 @@ the round: without a `clean` snapshot on every service VM, the round's first att
 all as they are (its job log says `not reset: no clean snapshot`), and the cache stays repaired.
 
 **If it fails:**
-- `Say the indexes were not refreshed`: the node had no egress, or lost it. The old index is back
+- `Say the indexes were not refreshed`: the host had no egress, or lost it. The old index is back
   in place, as it was before. Give egress and run step 4 again.
 - `Say the cache cannot serve a fresh VM`: the fill ran but the offline cache still lacks lists.
   The message names them. Send it to me; don't start the round.
@@ -199,7 +199,7 @@ On the dashboard, **Staff → Rounds**:
   With 4 teams × 60 min that's 4 × 77¼ min ≈ 5 h 10 min. Add **about 1 hour for the first
   attempt's sandbox build** (on dev: 35 min for OpenTofu to create the 21 VMs one at a time, 13½ min
   to configure them, about 13 min to snapshot them), and room for retries: about 6½ h in all.
-- **"Shut down every devbox while its attempts run":** on, for the node's memory. It can only
+- **"Shut down every devbox while its attempts run":** on, for the host's memory. It can only
   be changed before the round starts.
 - **Simulate** the round once its gameplan is chosen: it must end `ok`.
 

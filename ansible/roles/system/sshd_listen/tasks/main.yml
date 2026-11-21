@@ -4,8 +4,8 @@
 # management IP: scripts/generate_inventory.py), so sshd has no reason to listen on the data-plane,
 # DMZ or services addresses: even with a firewall rule missing, the daemon is not there.
 #
-# Not for the node, nor the team VMs (sandbox, devbox: they also serve team SSH on the devbox
-# fabric), nor the SSH gateway (team SSH through the node's DNAT): Site.yml does not reach them.
+# Not for the host, nor the team VMs (sandbox, devbox: they also serve team SSH on the devbox
+# fabric), nor the SSH gateway (team SSH through the host's DNAT): Site.yml does not reach them.
 
 # Let sshd bind its management address even if that NIC is configured after ssh.service starts.
 # The private-internet VMs reach Ansible on their second NIC (net1); with a specific

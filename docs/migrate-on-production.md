@@ -6,7 +6,7 @@ document's commit or later. It runs in two parts: **tonight, offline**, so the t
 Every step was rehearsed on worms-dev with the same code; [`first-round-preparation.md`](first-round-preparation.md)
 has the rehearsal's details and timings.
 
-Run everything **on the node, in your checkout** (`<checkout>`), unless a step says otherwise.
+Run everything **on the host, in your checkout** (`<checkout>`), unless a step says otherwise.
 Each step says what you should see. If you don't see it, stop there.
 
 ## Where production stands
@@ -23,13 +23,13 @@ Each step says what you should see. If you don't see it, stop there.
 | Area | Change |
 |---|---|
 | **The CLI** | Git-style ([3](03-manage-py.md)): look with `status`, `show`, `log`, `check`, `trace`; change with `apply` and a noun's verbs (`worms vm reset alpha`, `worms jobs pause`). A team VM can be named as `<team>/a\|b\|c\|gw` (`alpha/gw`, `t2/a`). The commands before are gone: table below. |
-| **`worms status`** | Starts with an *attention* block: internet window open, devboxes held or stopped, missing `clean` snapshots, pending migrations, failed jobs, node services down. A team column; *created* and *updated* columns from the per-VM history. |
+| **`worms status`** | Starts with an *attention* block: internet window open, devboxes held or stopped, missing `clean` snapshots, pending migrations, failed jobs, host services down. A team column; *created* and *updated* columns from the per-VM history. |
 | **`worms apply`** | Brings the platform up to the checkout: alone, what changed since what runs; or the components named. No internet window unless `--packages`. Then it syncs the gameplans and restarts the agent (once no job runs), then the conductor: no more manual restarts. Refused during a round. `--plan` shows what each line touches. |
 | **`worms run`** | `worms run <vm>... [--root] -- <command>` runs a command on VMs without a login; `worms login <vm> -- <command>` too. Groups (`services`, `private-internet`, `infrastructure`) never include team VMs; a team VM's output is escaped. |
 | **Logs** | Every changing command keeps its whole output in `~/.worms/runs/` (`worms log run`); `worms log latest -f` follows the newest host job. |
 | **The apt cache** | The fill keeps the old index until the new one is complete, fetches every list a fresh VM needs, and checks offline that the cache serves a fresh VM. `scripts/apt-cache-offline-index.py` rebuilds the index offline from the apt-cache VM's own lists. `worms internet off` switches DNS and the caches back to offline mode. 13 more apt packages, 2 more PyPI packages (step 1 of the window). |
 | **Safety** | `worms step devbox-configure`/`devbox-keys` by hand are refused (they erased every team's keys). A build that fails inside the window switches DNS and the caches offline. Tab completion offers only plain names. |
-| **Per-VM history** | `/var/lib/worms/vm-history.jsonl` on the node: when each VM was created, configured, snapshotted or rolled back, by which commit and command. `worms show <vm>` lists it. |
+| **Per-VM history** | `/var/lib/worms/vm-history.jsonl` on the host: when each VM was created, configured, snapshotted or rolled back, by which commit and command. `worms show <vm>` lists it. |
 | **Database** | Migration `0020` (the round's "shut down every devbox" switch), if production lacks it. |
 
 | Old command | Now |
@@ -46,11 +46,11 @@ Each step says what you should see. If you don't see it, stop there.
 ### 1. The code, and a stuck agent
 
 Bring the checkout to this document's commit or later, the way you always push code there. The new CLI works at
-once; the node's round agent runs the new code only after step 4.
+once; the host's round agent runs the new code only after step 4.
 
 ```sh
 git log --oneline -1           # this document's commit, or later
-git status --short             # nothing modified: the node's workspace is synced from the working tree
+git status --short             # nothing modified: the host's workspace is synced from the working tree
 worms jobs              # a job `running` for a long time, others `queued` behind it?
 ```
 
@@ -75,7 +75,7 @@ worms status                             # read the attention block; internet ac
 ### 3. Back up the database
 
 ```sh
-worms db backup          # ● <size>: ~/.worms/backups/<node>-mydb-<time>.dump, readable by you only
+worms db backup          # ● <size>: ~/.worms/backups/<host>-mydb-<time>.dump, readable by you only
 ```
 
 ### 4. Deploy the code (offline)
@@ -86,11 +86,11 @@ worms apply dashboard orchestrator round-agent          # 12 min on dev
 ```
 
 It ends with `● agent: restarted, active`, `● conductor: restarted, active` and
-`● applied: …`. Name the components: `worms apply --all` builds and configures everything, the node's
+`● applied: …`. Name the components: `worms apply --all` builds and configures everything, the host's
 host network included, and rolls every service VM back to its snapshot.
 
 ```sh
-worms show gameplans         # round_one: valid on the orchestrator and the node
+worms show gameplans         # round_one: valid on the orchestrator and the host
 ```
 
 ### 5. Repair the apt cache (offline), and snapshot it
@@ -151,7 +151,7 @@ Every cell should be ✓. Tonight, `PyPI` may say `no pip` on a VM whose package
 tomorrow's rebuild; the line under the table says why. The command changes nothing on the VMs.
 
 **The SSH gateway's line** may be yellow, or red. Every team reaches the gateway from one address:
-the node masquerades them. OpenSSH's per-source penalties are on by default, so a few failed
+the host masquerades them. OpenSSH's per-source penalties are on by default, so a few failed
 logins by anyone shut all teams out for up to 10 minutes. Red means that happened in the last
 24 h, which may be the teams' failed SSH logins last night. Whether to turn the penalties off
 there (`PerSourcePenalties no` in its sshd) is still to be decided.
@@ -171,7 +171,7 @@ trixie's index:
 - **KeePass on the shell:** `keepassxc-minimal`, `kpcli`.
 - **On PyPI:** `pex`, `shiv`, for a Python worm and its dependencies as one runnable file.
 
-Give the node egress, then:
+Give the host egress, then:
 
 ```sh
 worms apply --yes apt-cache devpi --packages
@@ -226,7 +226,7 @@ On the dashboard, **Staff → Rounds**:
 - **Start and end:** a team's slot is its minutes + 17¼ min. Add **about an hour for the first
   attempt's sandbox build**: 67 min on dev, for 21 VMs. With 4 teams × 60 min that's about 6½ h,
   plus room for retries.
-- **"Shut down every devbox while its attempts run":** on, for the node's memory. It can only be
+- **"Shut down every devbox while its attempts run":** on, for the host's memory. It can only be
   set before the round starts.
 - **Simulate** the round: `ok`.
 - Each team runs its latest **Live** upload from before the start; a team without one is skipped.

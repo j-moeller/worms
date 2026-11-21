@@ -71,7 +71,7 @@ OPTIONAL = {"topology-token"}
 # Former homes of a secret that now has one: removed from the vault, not kept.
 SUPERSEDED = {"proxmox_api_token"}
 # The WORMS SSH key (generated; `worms secret set ssh-key` imports one): the
-# one key the platform logs in with, to every VM and to root on the node, used by
+# one key the platform logs in with, to every VM and to root on the host, used by
 # OpenTofu, Ansible, the CLI and the round agent (docs/07-security.md, "Secrets"). Never
 # replaced by a new one once VMs exist: they authorize this one (vms_deployed).
 SSH_KEY = "vault_worms_ssh_key"

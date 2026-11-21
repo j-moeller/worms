@@ -220,7 +220,7 @@ class AttemptBackend:
         return None
 
     def read_file(self, entry, strict):
-        """By its number in the gameplan's `reads`: the path stays on the node and here."""
+        """By its number in the gameplan's `reads`: the path stays on the host and here."""
         result = self._guest(HostJob.Kind.READ_FILE, strict, run_uuid=str(self.run.uuid), file=entry["id"])
         if result.get("error"):
             self._skipped(entry["vm"], f"file {entry['id']} not read: {result['error']}")
@@ -336,7 +336,7 @@ class Conductor:
     # -- gameplans ------------------------------------------------------------
 
     def check_gameplans(self, force=False):
-        """Every gameplan_check_interval: the node's view (a `gameplans` job), the table the
+        """Every gameplan_check_interval: the host's view (a `gameplans` job), the table the
         dashboard picks from, and the gameplan of every round that has not started. Returns
         {file: sha256} of the valid gameplans."""
         now = self.now()
@@ -348,8 +348,8 @@ class Conductor:
         try:
             self.jobs.run(None, HostJob.Kind.GAMEPLANS)
         except RoundError as error:
-            log.warning("the node did not list its gameplans: %s", error)
-        valid = self._valid = gameplans.refresh(gameplans.node_view())
+            log.warning("the host did not list its gameplans: %s", error)
+        valid = self._valid = gameplans.refresh(gameplans.host_view())
         for round_ in Round.objects.filter(round_start__gt=now):
             status = gameplans.check_round(round_, valid)
             Round.objects.filter(pk=round_.pk).update(gameplan_status=status, gameplan_checked_at=now)
@@ -364,7 +364,7 @@ class Conductor:
 
     def _pin(self, round_):
         """Whether the round can begin: its gameplan is chosen, and the orchestrator and the
-        node both hold it and find it valid at the round's duration per team. Then its version
+        host both hold it and find it valid at the round's duration per team. Then its version
         is fixed for every attempt still to come. Otherwise the round waits, alone, and is
         looked at again after gameplan_poll seconds: staff may choose its gameplan until its
         first attempt starts. Each look is recorded (gameplan_checked_at) for the staff pages."""
@@ -377,7 +377,7 @@ class Conductor:
         if not round_.gameplan:
             Round.objects.filter(pk=round_.pk).update(gameplan_status="", gameplan_checked_at=now)
             return self._waits(round_, "it has no gameplan yet (staff choose one on its page); the rounds after it go ahead")
-        # The node is asked again at most once a minute while the round waits.
+        # The host is asked again at most once a minute while the round waits.
         stale = self._checked_at is None or now - self._checked_at > timedelta(seconds=60)
         valid = self.check_gameplans(force=stale)
         status = gameplans.check_round(round_, valid)
@@ -466,7 +466,7 @@ class Conductor:
         return False
 
     # -- the devboxes of a round with devboxes_off ---------------------------------
-    # The node holds them for every such round at once (round_agent/handlers.py, hold_devboxes):
+    # The host holds them for every such round at once (round_agent/handlers.py, hold_devboxes):
     # one record of the VMs it shut down, while which it takes no devbox job.
 
     HOLDING = ("wanted", "held")
@@ -474,7 +474,7 @@ class Conductor:
     def _hold_devboxes(self, round_):
         """Before an attempt of a round that recorded devboxes_off when it began: every devbox VM
         and gateway shut down, until _release_devboxes. A failure is logged and the attempt goes
-        ahead: the node recorded what it did shut down, and starts those again after the round."""
+        ahead: the host recorded what it did shut down, and starts those again after the round."""
         from gameplan.definition import RoundError
 
         if not Round.objects.filter(pk=round_.pk, devbox_hold="wanted").exists():

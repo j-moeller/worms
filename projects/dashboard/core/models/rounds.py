@@ -52,7 +52,7 @@ class RoundRun(models.Model):
     error = models.TextField(blank=True, default="")
 
     # The gameplan this attempt runs (its file name and the SHA-256 the orchestrator validated:
-    # the node runs only that version) and its duration per team (seconds from the worm's start).
+    # the host runs only that version) and its duration per team (seconds from the worm's start).
     gameplan = models.TextField(blank=True, default="")
     gameplan_sha256 = models.TextField(blank=True, default="")
     # The recorded version of that SHA-256 (set with it when the run is pinned; a database
@@ -112,7 +112,7 @@ class GameplanVersion(models.Model):
     `content` is readable by the admin only: the dashboard and the orchestrator (which writes it)
     may read every other column (setup_db_permissions, postgresql_restricted_columns). Use
     `GameplanVersion.objects`, which leaves `content` out unless asked for it (`.content_of(sha256)`,
-    the admin's: `worms` on the node)."""
+    the admin's: `worms` on the host)."""
 
     sha256 = models.CharField(max_length=64, primary_key=True)
     filename = models.TextField()  # the name it was first seen under
@@ -165,12 +165,12 @@ class GameplanChange(models.Model):
 
 class GameplanFile(models.Model):
     """A gameplan the orchestrator found, by file name: the dashboard offers the valid ones for
-    a round. Written by the orchestrator from the round agent's `gameplans` job (the node's
+    a round. Written by the orchestrator from the round agent's `gameplans` job (the host's
     copy) and its own copy, whose version it records (GameplanVersion); the files stay on those
     two machines."""
 
     filename = models.TextField(unique=True)
-    valid = models.BooleanField(default=False)  # on the node and on the orchestrator, the same file
+    valid = models.BooleanField(default=False)  # on the host and on the orchestrator, the same file
     checked_at = models.DateTimeField(db_default=Now())
     # The orchestrator's copy as it is now. Null only before its first check after migration 0019.
     version = models.ForeignKey(GameplanVersion, null=True, blank=True, on_delete=models.PROTECT,
@@ -237,7 +237,7 @@ class HostJob(models.Model):
     """
 
     class Kind(models.TextChoices):
-        GAMEPLANS = "gameplans"  # the node's gameplan files: name, SHA-256, valid
+        GAMEPLANS = "gameplans"  # the host's gameplan files: name, SHA-256, valid
         PREPARE = "prepare"  # the round's sandbox (built or rolled back), the run's secrets, files, flags
         CHECK = "check"  # sanity checks (firewalls, VMs, services)
         DEPLOY = "deploy"  # worm artifact to the start VM + start timer

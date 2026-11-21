@@ -6,7 +6,7 @@ for staff's Simulations page on the dashboard (docs/05-live-environment.md).
                                   a duration per team and SIMULATION_VERSION, then kept
                                   (gameplan_simulations)
 
-The gameplans are here and on the node only, never on the dashboard VM (docs/07-security.md), so
+The gameplans are here and on the host only, never on the dashboard VM (docs/07-security.md), so
 the attempt is simulated here, in a child process limited in time, CPU and memory (a gameplan is
 code: a loop in it must not hold the web worker), and the dashboard gets the document through the
 orchestrator API (orchestrator/api.py).

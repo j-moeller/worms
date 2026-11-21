@@ -1,6 +1,6 @@
 """Run the build pipeline's commands: OpenTofu, Ansible and the generator
-scripts on this machine, and the steps of the node's own part (the sandbox and
-devbox stacks, their playbooks) in the node's workspace over SSH. Which is
+scripts on this machine, and the steps of the host's own part (the sandbox and
+devbox stacks, their playbooks) in the host's workspace over SSH. Which is
 which, and each tool's environment, comes from worms_cli/session.py. The
 pipeline itself (every former Makefile recipe) lives in worms_cli/pipeline.py.
 """
@@ -14,7 +14,7 @@ import subprocess
 import sys
 
 from worms_cli import output
-from worms_cli.session import NODE_PLAYBOOKS, NODE_RUN, NODE_STACKS, SessionError, check_known_hosts, for_config
+from worms_cli.session import HOST_PLAYBOOKS, HOST_RUN, HOST_STACKS, SessionError, check_known_hosts, for_config
 
 
 class BuildError(RuntimeError):
@@ -26,7 +26,7 @@ class Runner:
         self.config = config
         self.repo_root = config.repo_root
         self.session = for_config(config)
-        self._node_ready = False
+        self._host_ready = False
 
     def pending_migrations(self) -> list[str]:
         """The checkout's Django migrations the deployed database has not applied (read
@@ -62,30 +62,30 @@ class Runner:
         env = self.session.tofu_env if tofu else self.session.env
         return self._run(argv, f"({cwd}) {command}", "locally", env, check, quiet)
 
-    def node_sh(self, command: str, check: bool = True, quiet: bool = False) -> int:
-        """Run a host command (qm, ...) on the Proxmox node."""
+    def host_sh(self, command: str, check: bool = True, quiet: bool = False) -> int:
+        """Run a host command (qm, ...) on the Proxmox host."""
         if not self.session.laptop:
             return self.sh(command, check=check, quiet=quiet)
         return self._run(lambda: self._checked(self.session.ssh_argv(command)), command,
                          f"on {self.config.ssh}", self.session.env, check, quiet)  # fmt: skip
 
-    def node_parallel(self, chains: list[list[str]]) -> list[int]:
-        """Host commands on the node, a chain per VM: each chain's commands one after the other (the
+    def host_parallel(self, chains: list[list[str]]) -> list[int]:
+        """Host commands on the host, a chain per VM: each chain's commands one after the other (the
         first failure ends it), all chains at once. Their exit codes, in order. One VM's shutdown
         does not wait for another's: N VMs take the time of the slowest, not of all."""
         chains = [chain for chain in chains if chain]
         if not chains:
             return []
         if len(chains) == 1:
-            return [self.node_sh(" && ".join(chains[0]), check=False)]
+            return [self.host_sh(" && ".join(chains[0]), check=False)]
         lines = ["set -u"]
         for i, chain in enumerate(chains):
             lines.append(f"( {' && '.join(chain)} ) >&2 & p{i}=$!")
         lines += [f'wait "$p{i}"; echo "worms-rc {i} $?"' for i in range(len(chains))]
         shown = "; ".join(" && ".join(chain) for chain in chains)
-        print(output.color(f"$ (at once) {shown if len(shown) < 100 else shown[:97] + '...'}  [on the node]", "dim"), flush=True)
+        print(output.color(f"$ (at once) {shown if len(shown) < 100 else shown[:97] + '...'}  [on the host]", "dim"), flush=True)
         try:
-            code, out, err = self.session.node_run(["sh", "-c", "\n".join(lines)])
+            code, out, err = self.session.host_run(["sh", "-c", "\n".join(lines)])
         except SessionError as exc:
             raise BuildError(str(exc)) from exc
         codes = {int(i): int(rc) for i, rc in (line.split()[1:3] for line in out.splitlines() if line.startswith("worms-rc "))}
@@ -94,65 +94,65 @@ class Runner:
         return [codes.get(i, code or 1) for i in range(len(chains))]
 
     def _checked(self, argv):
-        self.session.check_node()
+        self.session.check_host()
         return argv
 
-    def _node_part(self) -> bool:
-        """Whether the sandbox/devbox steps belong in the node's workspace: from
+    def _host_part(self) -> bool:
+        """Whether the sandbox/devbox steps belong in the host's workspace: from
         a controller's checkout (it has the vault) yes; in the workspace itself
         (the round agent: no vault there) they run right here."""
         return self.session.has_vault()
 
-    def _node_workspace(self, cwd: str, command: str, check: bool = True) -> int:
-        """Run in the round agent's workspace on the node (over SSH from a
+    def _host_workspace(self, cwd: str, command: str, check: bool = True) -> int:
+        """Run in the round agent's workspace on the host (over SSH from a
         laptop), after bringing it up to date with this checkout once per run:
         one state for the sandbox and devbox stacks, the agent's."""
-        if not self._node_ready:
+        if not self._host_ready:
             # The agent's workspace: code, CA certificate, platform/firewall
             # outputs (ansible role round_agent, tasks/workspace.yml).
             self.ansible("SetupRoundAgent.yml", "--tags", "agent-sync")
-            self._node_ready = True
+            self._host_ready = True
         if not self.session.laptop:
-            return self._run(["sh", "-c", f"{NODE_RUN} {shlex.quote(cwd)} {shlex.quote(command)}"],
+            return self._run(["sh", "-c", f"{HOST_RUN} {shlex.quote(cwd)} {shlex.quote(command)}"],
                              f"({cwd}) {command}", "in the agent's workspace", self.session.env, check, False)  # fmt: skip
-        argv = lambda: self._checked(self.session.node_argv(cwd, command))  # noqa: E731
+        argv = lambda: self._checked(self.session.host_argv(cwd, command))  # noqa: E731
         return self._run(argv, f"({cwd}) {command}", f"on {self.config.ssh}", self.session.env, check, False)
 
     def _check_inventory(self) -> None:
-        """From a laptop, never with an inventory written on the node: it makes
-        the node `ansible_connection: local`, which would run the node's roles
+        """From a laptop, never with an inventory written on the host: it makes
+        the host `ansible_connection: local`, which would run the host's roles
         on this machine."""
         inventory = self.repo_root / "ansible" / "inventory.generated.yml"
         if not inventory.exists():
             raise BuildError("no ansible/inventory.generated.yml: run `worms step inventory` first")
         if "ansible_connection: local" in inventory.read_text():
-            raise BuildError("ansible/inventory.generated.yml was written on the node: run `worms step inventory` here")
+            raise BuildError("ansible/inventory.generated.yml was written on the host: run `worms step inventory` here")
 
     # The tools the pipeline drives.
 
     def tofu(self, stack: str, *args: str, check: bool = True) -> int:
         command = "tofu " + " ".join(args)
-        if args and args[0] in ("apply", "destroy") and not (stack in NODE_STACKS and self._node_part()):
-            try:  # OpenTofu runs here, and its provider logs in to the node over SSH
+        if args and args[0] in ("apply", "destroy") and not (stack in HOST_STACKS and self._host_part()):
+            try:  # OpenTofu runs here, and its provider logs in to the host over SSH
                 check_known_hosts()
             except SessionError as exc:
                 raise BuildError(str(exc)) from exc
-        if stack in NODE_STACKS and self._node_part():
+        if stack in HOST_STACKS and self._host_part():
             if args and args[0] == "init":
-                # Initialised on the node whenever the workspace is synced
+                # Initialised on the host whenever the workspace is synced
                 # (tasks/workspace.yml), which needs the inventory and the CA:
                 # not there yet when a first `worms apply --all` starts with init.
-                print(output.color(f"$ (opentofu/stacks/{stack}) {command}  [done on the node by agent-sync]", "dim"))
+                print(output.color(f"$ (opentofu/stacks/{stack}) {command}  [done on the host by agent-sync]", "dim"))
                 return 0
-            return self._node_workspace(f"opentofu/stacks/{stack}", command, check=check)
+            return self._host_workspace(f"opentofu/stacks/{stack}", command, check=check)
         return self.sh(command, cwd=f"opentofu/stacks/{stack}", check=check, tofu=True)
 
     def ansible(self, playbook: str, *args: str, vault: bool = True) -> int:
         extra = (" " + " ".join(args)) if args else ""
-        if playbook in NODE_PLAYBOOKS and self._node_part():
-            # The node's own inventory (its stacks) and no vault: these plays
+        if playbook in HOST_PLAYBOOKS and self._host_part():
+            # The host's own inventory (its stacks) and no vault: these plays
             # need neither the controller's secrets nor its VMs.
-            return self._node_workspace(
+            return self._host_workspace(
                 "ansible", f"python3 ../scripts/generate_inventory.py --quiet && ansible-playbook {playbook}{extra}"
             )
         base = "ansible-playbook"
@@ -160,7 +160,7 @@ class Runner:
             base += " -e @group_vars/vault.yml"
         if self.session.laptop:
             self._check_inventory()
-            # The node's internet flag (group_vars/all.yml can only test the
+            # The host's internet flag (group_vars/all.yml can only test the
             # controller's own filesystem).
             base += f" -e internet_enabled={str(self._internet_allowed()).lower()}"
         return self.sh(f"{base} {playbook}{extra}", cwd="ansible")
@@ -197,19 +197,19 @@ class Runner:
         return self.sh(f"python3 {script}{extra}")
 
     def flag_exists(self, path: str) -> bool:
-        """Whether a file exists on the node (for the internet flag check). A failed
+        """Whether a file exists on the host (for the internet flag check). A failed
         check is an error, never an answer: a lost connection says nothing about the flag."""
         if not self.session.laptop:
             return os.path.exists(path)
-        code = self.node_sh(f"test -e {shlex.quote(path)}", check=False, quiet=True)
+        code = self.host_sh(f"test -e {shlex.quote(path)}", check=False, quiet=True)
         if code not in (0, 1):
             raise BuildError(f"could not check {path} on {self.config.ssh} (exit {code})")
         return code == 0
 
-    def _node_json(self, *argv: str):
-        """A read-only command on the node whose output is JSON."""
+    def _host_json(self, *argv: str):
+        """A read-only command on the host whose output is JSON."""
         try:
-            code, out, err = self.session.node_run(list(argv))
+            code, out, err = self.session.host_run(list(argv))
         except SessionError as exc:
             raise BuildError(str(exc)) from exc
         if code != 0:
@@ -217,13 +217,13 @@ class Runner:
         return json.loads(out)
 
     def vms(self) -> list[dict]:
-        """Every VM on the node, with its vmid, name, pool, status and node."""
-        return self._node_json("pvesh", "get", "/cluster/resources", "--type", "vm", "--output-format", "json")
+        """Every VM on the host, with its vmid, name, pool, status and node."""
+        return self._host_json("pvesh", "get", "/cluster/resources", "--type", "vm", "--output-format", "json")
 
     def snapshot(self, vm: dict, name: str) -> dict | None:
         """A VM's snapshot of that name (snaptime, description), if it has one."""
         path = f"/nodes/{vm['node']}/qemu/{vm['vmid']}/snapshot"
-        return next((s for s in self._node_json("pvesh", "get", path, "--output-format", "json") if s.get("name") == name), None)
+        return next((s for s in self._host_json("pvesh", "get", path, "--output-format", "json") if s.get("name") == name), None)
 
     def commit(self) -> str:
         """The checkout's commit, to record what a snapshot was taken from and what built a VM
@@ -245,7 +245,7 @@ class Runner:
         return self._commit
 
     def record_history(self, lines) -> None:
-        """Append to the node's VM history (worms_cli/history.py): here on the node, over SSH
+        """Append to the host's VM history (worms_cli/history.py): here on the host, over SSH
         from a laptop. Raises on failure; the caller decides that it is no reason to stop."""
         from worms_cli import history
 
@@ -253,7 +253,7 @@ class Runner:
             return
         if not self.session.laptop:
             history.append(lines)
-        elif self.node_sh(history.append_command(lines), check=False, quiet=True) != 0:
+        elif self.host_sh(history.append_command(lines), check=False, quiet=True) != 0:
             raise BuildError(f"could not append to {history.LEDGER} on {self.config.ssh}")
 
 

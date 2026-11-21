@@ -1,4 +1,4 @@
-"""The node's event tables: SSH logins through the devbox gateway
+"""The host's event tables: SSH logins through the devbox gateway
 (ssh_gateway_logins), and the internet window and the firewall watchdog
 (platform_events). docs/07-security.md, "Audit trail"; the dashboard writes its
 own (projects/dashboard/core/events.py).
@@ -6,7 +6,7 @@ own (projects/dashboard/core/events.py).
     worms-audit event internet_allowed [--data '{"by": "Internet.yml"}'] [--actor NAME]
     worms-audit collect-gateway
 
-Both write as the node's events account (dbuser_events_node, EVENTS_DB_USER in
+Both write as the host's events account (dbuser_events_node, EVENTS_DB_USER in
 /etc/worms/events.env), used for nothing else: it may only INSERT into these two
 tables, never read or change a row; the database fills the time and the writer
 (setup_db_permissions). Writing is best effort: a failure is reported on stderr
@@ -16,8 +16,8 @@ collect-gateway (worms-audit-gateway.timer, every minute) reads the SSH
 gateway's sshd journal over the management network from where it stopped last,
 and records each accepted team login: when, which key (sshd's fingerprint,
 which credential_events names too, with who registered it) and, when it can
-tell, the client's public address. The gateway only sees the node (the node's DNAT
-masquerades every team), so the address comes from the node's own log of new
+tell, the client's public address. The gateway only sees the host (the host's DNAT
+masquerades every team), so the address comes from the host's own log of new
 connections to the published port (`worms-ssh-gw:` kernel log, worms.nft.j2),
 matched by source port: masquerading keeps the port unless it is taken.
 """
@@ -45,8 +45,8 @@ MAX_DATA = 2048
 
 STATE_DIR = Path("/var/lib/worms")
 CURSOR_FILE = STATE_DIR / "audit-gateway.cursor"
-NODE_LOG_PREFIX = "worms-ssh-gw:"
-# How far back, and forward, the node's connection log is searched for a login.
+HOST_LOG_PREFIX = "worms-ssh-gw:"
+# How far back, and forward, the host's connection log is searched for a login.
 MATCH_BEFORE, MATCH_AFTER = 300, 5
 BATCH = 2000  # journal entries per run at most; the next run goes on
 
@@ -54,13 +54,13 @@ ACCEPTED = re.compile(
     r"^Accepted publickey for (?P<user>[a-z_][a-z0-9_-]{0,31}) from (?P<peer>\d{1,3}(?:\.\d{1,3}){3}) "
     r"port (?P<port>\d{1,5}) ssh2: (?P<type>[A-Z0-9-]{2,32}) (?P<fingerprint>SHA256:[A-Za-z0-9+/]{43})$"
 )
-NODE_CONNECTION = re.compile(r"\bSRC=(?P<src>\d{1,3}(?:\.\d{1,3}){3}) .*\bSPT=(?P<port>\d{1,5}) .*\bDPT=\d+")
+HOST_CONNECTION = re.compile(r"\bSRC=(?P<src>\d{1,3}(?:\.\d{1,3}){3}) .*\bSPT=(?P<port>\d{1,5}) .*\bDPT=\d+")
 SSH_OPTS = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
             "-o", "ConnectTimeout=10", "-o", "LogLevel=ERROR"]  # fmt: skip
 
 
 def connect(env):
-    """The database as the node's events account, never the round agent's role."""
+    """The database as the host's events account, never the round agent's role."""
     from round_agent.agent import connect as agent_connect
 
     if not env.get("EVENTS_DB_USER"):
@@ -105,7 +105,7 @@ def parse_gateway(lines, user: str) -> tuple[list[dict], str | None]:
     return logins, cursor
 
 
-def parse_node_log(lines) -> list[tuple[float, str, int]]:
+def parse_host_log(lines) -> list[tuple[float, str, int]]:
     """(time, client address, client port) of each new connection to the published port."""
     seen = []
     for line in lines:
@@ -115,16 +115,16 @@ def parse_node_log(lines) -> list[tuple[float, str, int]]:
             at = int(entry["__REALTIME_TIMESTAMP"]) / 1e6
         except (ValueError, KeyError, TypeError):
             continue
-        if not isinstance(message, str) or NODE_LOG_PREFIX not in message:
+        if not isinstance(message, str) or HOST_LOG_PREFIX not in message:
             continue
-        match = NODE_CONNECTION.search(message)
+        match = HOST_CONNECTION.search(message)
         if match:
             seen.append((at, match["src"], int(match["port"])))
     return seen
 
 
 def client_of(login: dict, connections) -> str | None:
-    """The client address whose connection reached the node just before this login, on the
+    """The client address whose connection reached the host just before this login, on the
     port the gateway saw (the masquerade keeps it). The latest such connection wins."""
     best = None
     for at, src, port in connections:
@@ -158,7 +158,7 @@ def collect_gateway(env, conn, run=_run, cursor_file: Path = CURSOR_FILE) -> int
         since = int(min(l["at"] for l in logins) - MATCH_BEFORE)
         until = int(max(l["at"] for l in logins) + MATCH_AFTER + 1)
         try:
-            connections = parse_node_log(
+            connections = parse_host_log(
                 run(["journalctl", "-k", "-o", "json", "--no-pager", f"--since=@{since}", f"--until=@{until}"]).splitlines()
             )
         except (RuntimeError, OSError, subprocess.TimeoutExpired):
@@ -181,7 +181,7 @@ def collect_gateway(env, conn, run=_run, cursor_file: Path = CURSOR_FILE) -> int
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="worms-audit", description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="action", required=True)
-    event = sub.add_parser("event", help="record one node event")
+    event = sub.add_parser("event", help="record one host event")
     event.add_argument("kind", choices=sorted(EVENT_KINDS))
     event.add_argument("--data", default="{}", help="a JSON object")
     event.add_argument("--actor", default=None, help="who caused it, if known (e.g. the operator)")

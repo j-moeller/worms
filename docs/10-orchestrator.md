@@ -8,7 +8,7 @@ What runs a round and a dev upload, and how the parts talk to each other. Gamepl
 | **Conductor** | plans each round, runs its attempts one after the other, checks the gameplans | unit `orchestrator-conduct-rounds` (`manage.py conduct_rounds`) | `worms log conductor` |
 | **Processor** | turns what the sandboxes reported (flags, worm logs) into captures and log records; runs the dev uploads | unit `orchestrator-process-attempts` (`manage.py process_attempts`) | `worms log processor` |
 | **Topology** | the Proxmox VMs, bridges and firewall, for the staff's topology page (read-only token) | timer `orchestrator-collect-topology`, every 2 min | its unit's journal |
-| **Round agent** | does on the Proxmox node what the others ask for: builds and resets VMs, deploys worms, places flags | the node, unit `worms-round-agent` (`scripts/round_agent`) | `worms log agent`, a job's own: `worms log <n>` |
+| **Round agent** | does on the Proxmox host what the others ask for: builds and resets VMs, deploys worms, places flags | the host, unit `worms-round-agent` (`scripts/round_agent`) | `worms log agent`, a job's own: `worms log <n>` |
 
 There is no part called a gameplanner or a VM resetter: planning is the conductor's (`plan_round`, then pinning the gameplan), resets are spread over the conductor, the processor and the round agent (below).
 
@@ -16,21 +16,21 @@ There is no part called a gameplanner or a VM resetter: planning is the conducto
 
 - **Through the database only.** The conductor and the processor create **host jobs** (table `host_jobs`: a kind, its parameters, a state `queued` → `running` → `done` | `failed`, a result, an error); the round agent takes them one at a time and writes the result back. The orchestrator's role may only insert and read them; the agent's may only update their state and result ([`setup_db_permissions`](../ansible/roles/database/setup_db_permissions/defaults/main.yml)).
 - **A notification** (`NOTIFY host_jobs`) when the conductor queues a job, so the agent takes it at once; the agent also looks every 5 s (the devbox jobs come that way: they are queued without one).
-- **The dashboard** reaches the orchestrator over its API (a bearer token, compared in constant time; POST only) and never the node. The CLI does neither: it calls the same functions through Django on the controller (`worms vm reset alpha` is the dashboard's reset).
-- **Files on the node** that the agent keeps: the operator's pause (`/var/lib/worms/agent-paused`), the devboxes a round holds off (`held-devboxes.json`), a run's secrets (`/var/lib/worms/runs/<run>.json`).
+- **The dashboard** reaches the orchestrator over its API (a bearer token, compared in constant time; POST only) and never the host. The CLI does neither: it calls the same functions through Django on the controller (`worms vm reset alpha` is the dashboard's reset).
+- **Files on the host** that the agent keeps: the operator's pause (`/var/lib/worms/agent-paused`), the devboxes a round holds off (`held-devboxes.json`), a run's secrets (`/var/lib/worms/runs/<run>.json`).
 
-Job kinds ([`core/models/rounds.py`](../projects/dashboard/core/models/rounds.py)): `prepare`, `check`, `deploy`, `place_flags`, `remove_flags`, `write_file`, `read_file`, `teardown` (an attempt); `gameplans` (the node's view of the gameplan files); `hold_devboxes`, `release_devboxes` (a round that wants the devboxes off); `devbox_provision`, `devbox_rebuild`, `devbox_reconfigure`, `devbox_deploy` (the devboxes).
+Job kinds ([`core/models/rounds.py`](../projects/dashboard/core/models/rounds.py)): `prepare`, `check`, `deploy`, `place_flags`, `remove_flags`, `write_file`, `read_file`, `teardown` (an attempt); `gameplans` (the host's view of the gameplan files); `hold_devboxes`, `release_devboxes` (a round that wants the devboxes off); `devbox_provision`, `devbox_rebuild`, `devbox_reconfigure`, `devbox_deploy` (the devboxes).
 
 ## The conductor
 
 [`conduct_rounds`](../projects/dashboard/orchestrator/management/commands/conduct_rounds.py) loops; it sleeps 5 s only when a tick did nothing. Each loop first plans every round whose start has passed and that has no runs yet, then ticks ([`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py)):
 
-1. **The gameplans' check**, at its first tick and then every 10 minutes (and when a waiting round's check is older than a minute): a `gameplans` job (the node's copy and what it finds), then the orchestrator's own copy, the table `gameplans` and each upcoming round's gameplan status.
+1. **The gameplans' check**, at its first tick and then every 10 minutes (and when a waiting round's check is older than a minute): a `gameplans` job (the host's copy and what it finds), then the orchestrator's own copy, the table `gameplans` and each upcoming round's gameplan status.
 2. **Recovery** of a run the last conductor left half-way (after a restart): one ending or tearing down is finished off, any other fails.
 3. **Holding the queue** while a teardown is still due.
 4. **Releasing the devboxes** of a round that is over (`release_devboxes`).
 5. **The next attempt**: the round already under way first, else the next round by its start; a round on hold (`worms round pause`) is passed over.
-6. **Pinning** the round on its first attempt: its gameplan must be chosen, valid on both copies (the orchestrator's and the node's, by SHA-256), and its check must pass at the round's per-team duration. The SHA-256, the version and the duration are written into the round's runs; the round asks for its devboxes off (`devboxes_off`). Otherwise the round waits, and is looked at again a minute later.
+6. **Pinning** the round on its first attempt: its gameplan must be chosen, valid on both copies (the orchestrator's and the host's, by SHA-256), and its check must pass at the round's per-team duration. The SHA-256, the version and the duration are written into the round's runs; the round asks for its devboxes off (`devboxes_off`). Otherwise the round waits, and is looked at again a minute later.
 7. A run without an upload is **skipped**; the devboxes are held off when the round wants it (`hold_devboxes`); then **the attempt**.
 8. A sandbox kept for a next run nobody has is destroyed.
 
@@ -77,7 +77,7 @@ A queued devbox job never times out here (unlike an attempt's).
 ## The gameplans
 
 - **The files** are [`gameplans/*.py`](../gameplans): one `Gameplan` subclass each. **The framework** is [`src/gameplan`](../src/gameplan): the loader (a name, a file read without following links, its SHA-256), the runtime (`Runner`, a dry run, `validate`), the rendering of a VM's files with the run's secrets, the OpenTofu definition and the Ansible variables of a sandbox, the simulation.
-- **Two copies**, each checked: the orchestrator's (`/opt/orchestrator/gameplans`, root's, readable by the app: `Site.yml` copies it, `worms apply gameplans`) and the node's (the agent's workspace). A gameplan is valid only when both have the same SHA-256 and both find it valid. The dashboard holds none (any copy there is removed).
+- **Two copies**, each checked: the orchestrator's (`/opt/orchestrator/gameplans`, root's, readable by the app: `Site.yml` copies it, `worms apply gameplans`) and the host's (the agent's workspace). A gameplan is valid only when both have the same SHA-256 and both find it valid. The dashboard holds none (any copy there is removed).
 - **The records:** `gameplans` (each file: valid or not, its current SHA-256), `gameplan_versions` (every version, its bytes, immutable), `gameplan_changes`. **The dashboard never reads a gameplan's content:** no file on its VM, no read grant on the content column, and why a gameplan is invalid goes only to the conductor's journal and the job's log.
 - **The simulation** (the staff's Simulate, through the API): one at a time (an advisory lock), in a child process with limits (CPU, memory, writes) and a 20 s timeout, its result cached (20 per file).
 
@@ -98,7 +98,7 @@ A queued or running rebuild of the same team is reused, not doubled. What a rese
 
 - **One job at a time**, taken with one `UPDATE … FOR UPDATE SKIP LOCKED`: devbox jobs after the others; none while the operator's pause file exists; no `devbox_*` job while a round holds the devboxes off (`hold_devboxes` and `release_devboxes` are named so that they are not caught by this).
 - A heartbeat every 30 s while a job runs; its whole output in `/var/log/worms/jobs/<uuid>.log` (and `latest.log`), kept 30 days.
-- Its Ansible runs in its own workspace, `/opt/worms`, with the node's Ansible ([8](08-vm-configuration.md)).
+- Its Ansible runs in its own workspace, `/opt/worms`, with the host's Ansible ([8](08-vm-configuration.md)).
 - **New code:** between jobs, when a module it loaded changed on disk, it exits and systemd starts it again on the new code; the gameplan files are read afresh for every job.
 
 ## Settings

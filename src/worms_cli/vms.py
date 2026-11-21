@@ -1,13 +1,13 @@
 """The VMs `worms status`, `worms login`, `worms show`, `worms log` and `worms rsync` know: every
-VM on the node by its name, with where it belongs, which team's it is, and how to reach it.
+VM on the host by its name, with where it belongs, which team's it is, and how to reach it.
 
 A VM is named by its own name, an alias (below), or `<team>/<role>` (`alpha/gw`, `t2/a`: the team
 map, worms_cli/teams.py).
 
 Proxmox says which VMs exist (name, vmid, pool, state). The management address and login user
 come from the Ansible inventories: this checkout's (the platform's VMs and the private internet)
-and the round agent's workspace on the node (the devboxes, the SSH gateway, a round's sandbox).
-A login uses the WORMS key in its own agent, through the node from a laptop, and never forwards
+and the round agent's workspace on the host (the devboxes, the SSH gateway, a round's sandbox).
+A login uses the WORMS key in its own agent, through the host from a laptop, and never forwards
 the agent: devbox and sandbox VMs are assumed to be rooted by a team.
 """
 
@@ -66,7 +66,7 @@ class Catalogue:
             names = [vm["name"] for vm in self.vms()]
             try:
                 hosts = self.hosts()
-            except Exception:  # noqa: BLE001  (the node's inventory is a fallback's fallback)
+            except Exception:  # noqa: BLE001  (the host's inventory is a fallback's fallback)
                 hosts = {}
             self._teams = teams.team_map(self.config, names, hosts)
         return self._teams
@@ -108,7 +108,7 @@ class Catalogue:
             local = self.config.repo_root / "ansible" / "inventory.generated.yml"
             if local.exists():
                 hosts.update(self._inventory(local.read_text()))
-            code, out, _ = self.runner.session.node_run(
+            code, out, _ = self.runner.session.host_run(
                 ["sh", "-c", 'cat "$(sed -n "s/^REPO_ROOT=//p" /etc/worms/round-agent.env)/ansible/inventory.generated.yml"'])
             if code == 0:
                 for name, host in self._inventory(out).items():
@@ -120,7 +120,7 @@ class Catalogue:
     def names(self) -> list[tuple[str, str, str]]:
         """(login name, team, what it is) for every VM there is now; a team's VM also by
         `<team>/<role>`, which is what to type."""
-        out = [("node", "", "the Proxmox node (root)")]
+        out = [("host", "", "the Proxmox host (root)")]
         for vm in self.vms():
             kind = KINDS.get(vm.get("pool") or "", vm.get("pool") or "")
             state = vm.get("status", "?")
@@ -150,8 +150,8 @@ class Catalogue:
         return meant
 
     def knows(self, name: str) -> bool:
-        """Whether `name` is a VM there is now (or the node), by any of its names."""
-        if name == "node":
+        """Whether `name` is a VM there is now (or the host), by any of its names."""
+        if name == "host":
             return True
         try:
             return self.vm_name(name) is not None
@@ -171,7 +171,7 @@ class Catalogue:
         vms = {vm["name"]: vm for vm in self.vms()}
         try:
             hosts = self.hosts()
-        except Exception:  # noqa: BLE001  (the addresses are a detail; the node may be out of reach)
+        except Exception:  # noqa: BLE001  (the addresses are a detail; the host may be out of reach)
             hosts = {}
         rows = []
         for role in teams.ROLES:
@@ -207,7 +207,7 @@ class Catalogue:
         return f"{host.get('ansible_user', 'debian')}@{host['ansible_host']}"
 
     def ssh_options(self, interactive=True) -> list[str]:
-        """ssh's options for a VM: the WORMS key in its own agent, through the node from a laptop."""
+        """ssh's options for a VM: the WORMS key in its own agent, through the host from a laptop."""
         options = ["-o", "IdentityFile=none", "-o", "IdentityAgent=SSH_AUTH_SOCK", "-o", "ForwardAgent=no",
                    "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR",
                    "-o", "ConnectTimeout=10"]  # fmt: skip
@@ -224,14 +224,14 @@ class Catalogue:
         return argv, self.runner.session.env()
 
     def login(self, name: str) -> int:
-        if name == "node":
+        if name == "host":
             if not self.runner.session.laptop:
-                output.error("this is the node")
+                output.error("this is the host")
                 return 1
             os.execvpe("ssh", ["ssh", "-t", self.config.ssh], os.environ)
         vm = self.resolve(name)
         if vm.get("status") != "running":
-            raise BuildError(f"{vm['name']} is {vm.get('status')}: start it first (`qm start {vm['vmid']}` on the node)")
+            raise BuildError(f"{vm['name']} is {vm.get('status')}: start it first (`qm start {vm['vmid']}` on the host)")
         if vm.get("pool") in UNTRUSTED_POOLS:
             output.warn(f"{vm['name']} is a team VM, assumed rooted by the team: type nothing secret there")
         argv, env = self.ssh_argv(vm)
@@ -258,9 +258,9 @@ class Catalogue:
 
         vm = self.resolve(name)
         node, vmid = vm["node"], vm["vmid"]
-        config = self.runner._node_json("pvesh", "get", f"/nodes/{node}/qemu/{vmid}/config", "--output-format", "json")
+        config = self.runner._host_json("pvesh", "get", f"/nodes/{node}/qemu/{vmid}/config", "--output-format", "json")
         self._shown = (vm, config)  # for history_rows
-        snapshots = [s for s in self.runner._node_json("pvesh", "get", f"/nodes/{node}/qemu/{vmid}/snapshot",
+        snapshots = [s for s in self.runner._host_json("pvesh", "get", f"/nodes/{node}/qemu/{vmid}/snapshot",
                                                          "--output-format", "json") if s.get("name") != "current"]  # fmt: skip
         host = self.hosts().get(vm["name"], {})
         component = components.COMPONENTS.get(vm["name"])
@@ -299,7 +299,7 @@ class Catalogue:
 
 
     def history_rows(self, name: str) -> tuple[list[list[str]], str]:
-        """`worms show <vm>`: its history on the node (worms_cli/history.py), newest first, one
+        """`worms show <vm>`: its history on the host (worms_cli/history.py), newest first, one
         run's events of a kind together; and a note: from when, or why there is none."""
         from worms_cli import history
 
@@ -307,17 +307,17 @@ class Catalogue:
         if vm is None or vm["name"] != self.vm_name(name):
             vm, config = self.resolve(name), {}
         try:
-            code, out, err = self.runner.session.node_run(["grep", "-F", history.vmid_filter(vm["vmid"]), history.LEDGER])
+            code, out, err = self.runner.session.host_run(["grep", "-F", history.vmid_filter(vm["vmid"]), history.LEDGER])
         except Exception as exc:  # noqa: BLE001  (the rest of `show` stands without it)
-            return [], f"the history on the node could not be read: {exc}"
+            return [], f"the history on the host could not be read: {exc}"
         if code not in (0, 1):
-            return [], f"the history on the node could not be read: {err.strip()[:120]}"
+            return [], f"the history on the host could not be read: {err.strip()[:120]}"
         events = [e for e in history.parse(out) if e["name"] == vm["name"]]  # a vmid is given again after a destroy
         rows = history.grouped(events)
         created = history.ctime(str((config or {}).get("meta", "")))
         if created and not any(e["event"] in history.CREATED for e in events):
             rows.append([created.replace("T", " ").rstrip("Z"), "created", "?", "Proxmox (ctime: before the history)", ""])
-        return rows, (f"{history.LEDGER} on the node" if rows else f"nothing in {history.LEDGER} for {vm['name']}")
+        return rows, (f"{history.LEDGER} on the host" if rows else f"nothing in {history.LEDGER} for {vm['name']}")
 
 
 def _bridge(net: str) -> str:

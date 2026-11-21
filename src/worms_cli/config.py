@@ -4,11 +4,11 @@ in the vault, worms_cli/secrets.py).
 Precedence: process environment  >  --config file  >  ~/.worms/config  >  defaults.
 A config file is simple `KEY=value` lines (no quoting, `#` comments).
 
-  WORMS_SSH           root@<node>: this machine (a laptop) is the controller and
-                      reaches the Proxmox node over SSH; empty = this machine is
-                      the node (worms_cli/session.py)
+  WORMS_SSH           root@<host>: this machine (a laptop) is the controller and
+                      reaches the Proxmox host over SSH; empty = this machine is
+                      the host (worms_cli/session.py)
   WORMS_REPO_ROOT     the worms checkout (default: the repo this script is in)
-  WORMS_PROXMOX_URL   the node's API, if not https://<WORMS_SSH host>:8006/
+  WORMS_PROXMOX_URL   the host's API, if not https://<WORMS_SSH host>:8006/
   NO_COLOR            set: no colours in the output
 
 Overrides for development and tests (normally derived from the vault and the
@@ -77,7 +77,7 @@ class Config:
         """Environment for the Django bootstrap (manage settings): explicit
         WORMS_DB_* settings, else the admin role from the vault at the
         database's address (platform stack), through an SSH tunnel via the
-        node from a laptop (pg_hba admits the admin from the node only).
+        host from a laptop (pg_hba admits the admin from the host only).
         Returns {} if neither is available."""
         host = self.get("WORMS_DB_HOST")
         if not host:
@@ -126,8 +126,8 @@ class Config:
         return bool(self.get("WORMS_DB_HOST")) or for_config(self).has_vault()
 
     def proxmox_node(self) -> str:
-        """The node's name: WORMS_PROXMOX_NODE, else what OpenTofu deployed to.
-        A name PVE knows but that is not this node (a leftover of a renamed node
+        """The host's name: WORMS_PROXMOX_NODE, else what OpenTofu deployed to.
+        A name PVE knows but that is not this host (a leftover of a renamed host
         stays in /etc/pve/nodes) makes it forward the request and fail."""
         from worms_cli.session import SessionError, for_config
 
@@ -140,7 +140,7 @@ class Config:
 
     def proxmox(self) -> dict | None:
         """The read-only (topology) token for `worms status`: explicit
-        WORMS_PROXMOX_* settings, else from the vault, to the node's API (from
+        WORMS_PROXMOX_* settings, else from the vault, to the host's API (from
         a laptop through an SSH tunnel, so PVE's certificate, issued for
         127.0.0.1, verifies). None if neither is available."""
         if self.get("WORMS_PROXMOX_TOKEN_VALUE"):

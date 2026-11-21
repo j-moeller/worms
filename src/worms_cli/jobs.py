@@ -10,7 +10,7 @@ A queued job can wait for reasons nothing else shows (queue_reasons): the agent 
 pause`), the agent not running, a round holding the devboxes (the agent takes no devbox job then:
 scripts/round_agent/agent.py, claim), a job running ahead, jobs queued ahead (a round's first).
 
-Job logs are on the node: /var/log/worms/jobs/<uuid>.log (scripts/round_agent/executor.py, JobLog).
+Job logs are on the host: /var/log/worms/jobs/<uuid>.log (scripts/round_agent/executor.py, JobLog).
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ PAUSED = "/var/lib/worms/agent-paused"  # scripts/round_agent/agent.py, PAUSED: 
 AGENT_UNIT = "worms-round-agent"
 POLL = 3.0
 
-NODE_PROBE = f"""
+HOST_PROBE = f"""
 systemctl is-active --quiet {AGENT_UNIT} && echo agent=active || echo agent=inactive
 test -e {HELD} && echo held=yes || echo held=no
 test -e {PAUSED} && echo paused="$(head -c 200 {PAUSED} | tr -d '\\n')" || echo paused=
@@ -42,9 +42,9 @@ def _ago(seconds: float) -> str:
     return f"{seconds}s" if seconds < 60 else f"{seconds // 60} min" if seconds < 3600 else f"{seconds // 3600} h {seconds % 3600 // 60} min"
 
 
-def node_state(session) -> dict:
-    """The agent's side, read on the node: is it running, paused, are the devboxes held."""
-    code, out, _err = session.node_run(["sh", "-c", NODE_PROBE])
+def host_state(session) -> dict:
+    """The agent's side, read on the host: is it running, paused, are the devboxes held."""
+    code, out, _err = session.host_run(["sh", "-c", HOST_PROBE])
     state = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
     return {"agent": state.get("agent", "unknown"), "held": state.get("held") == "yes", "paused": state.get("paused", "")}
 
@@ -64,17 +64,17 @@ def describe(job) -> str:
     return f"#{job.id} {job.kind}" + (f" ({team})" if team else "")
 
 
-def queue_reasons(job, node: dict) -> list[str]:
+def queue_reasons(job, host: dict) -> list[str]:
     """Why a queued job has not started: each reason that holds, the strongest first."""
     from core.models.rounds import HostJob
     from django.utils import timezone
 
     reasons = []
-    if node.get("paused"):
-        reasons.append(f"the round agent is paused: it takes no job until `worms jobs resume` ({node['paused']})")
-    if node.get("agent") != "active":
+    if host.get("paused"):
+        reasons.append(f"the round agent is paused: it takes no job until `worms jobs resume` ({host['paused']})")
+    if host.get("agent") != "active":
         reasons.append(f"the round agent is not running (`worms log agent`, `worms service restart agent`)")
-    if node.get("held") and job.kind.startswith("devbox"):
+    if host.get("held") and job.kind.startswith("devbox"):
         reasons.append("a round holds the devboxes shut down: the agent takes no devbox job until its release "
                        "(`worms round`)")  # fmt: skip
     now = timezone.now()
@@ -93,7 +93,7 @@ def queue_reasons(job, node: dict) -> list[str]:
 
 
 class _Tail:
-    """`tail -F` of a job's log on the node, its lines to this terminal, until stop()."""
+    """`tail -F` of a job's log on the host, its lines to this terminal, until stop()."""
 
     def __init__(self, session, job):
         command = f"tail -n +1 -F {shlex.quote(f'{JOB_LOGS}/{job.uuid}.log')} 2>/dev/null"
@@ -135,7 +135,7 @@ def follow(session, jobs) -> int:
             while True:
                 job = HostJob.objects.select_related("run__team").get(id=number)
                 if job.state == HostJob.State.QUEUED:
-                    reasons = queue_reasons(job, node_state(session))
+                    reasons = queue_reasons(job, host_state(session))
                     text = "; ".join(reasons) or "about to start"
                     if text != said:
                         print(output.status_cell("pending", f"{describe(job)} queued: {text}"), flush=True)
@@ -191,10 +191,10 @@ def show(session, number: int, lines: int = 30) -> int:
     if job.error:
         rows.append(["error", job.error[:600]])
     if job.state == HostJob.State.QUEUED:
-        rows.append(["waiting", "; ".join(queue_reasons(job, node_state(session))) or "about to start"])
+        rows.append(["waiting", "; ".join(queue_reasons(job, host_state(session))) or "about to start"])
     print(output.table(rows))
     command = f"tail -n {int(lines)} {shlex.quote(f'{JOB_LOGS}/{job.uuid}.log')} 2>/dev/null || echo '(no log yet)'"
-    code, out, _err = session.node_run(["sh", "-c", command])
+    code, out, _err = session.host_run(["sh", "-c", command])
     print()
     print(output.heading(f"its log, the last {lines} lines (`worms log {job.id} -f` follows it)"))
     print(out.rstrip() or "(empty)")

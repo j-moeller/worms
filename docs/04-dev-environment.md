@@ -30,13 +30,13 @@ Sources: [`scripts/generate_devbox.py`](../scripts/generate_devbox.py), [`opento
 ## Access: one SSH gateway
 
 ```
-laptop ──22 (prod) / 2222 (dev)──► node DNAT ──► devbox-ssh-gateway 10.7.0.2 ──22──► A (10.7.i.11)
+laptop ──22 (prod) / 2222 (dev)──► host DNAT ──► devbox-ssh-gateway 10.7.0.2 ──22──► A (10.7.i.11)
 ```
 
 - **Account.** Teams log in to the gateway as the shared user `team`. Each registered key gets one line: `restrict,port-forwarding,command="/usr/sbin/nologin",permitopen="<A>:22"` ([`authorized_keys.j2`](../ansible/roles/applications/ssh_gateway/templates/authorized_keys.j2)). That allows no shell and only the team's own A.
 - **sshd.** No agent, X11 or tunnel forwarding; no root, no passwords; `MaxStartups 10:30:60` ([`ssh-gateway.tftpl`](../opentofu/stacks/devbox/templates/)).
-- **Firewall.** The gateway accepts 22 only from the node's DNAT address. A devbox VM's fabric NIC accepts 22 only from the gateway.
-- **Recording.** The node's collector writes every gateway login, with the key's fingerprint and the client's public address, to `ssh_gateway_logins` once a minute (`worms-audit-gateway.timer`).
+- **Firewall.** The gateway accepts 22 only from the host's DNAT address. A devbox VM's fabric NIC accepts 22 only from the gateway.
+- **Recording.** The host's collector writes every gateway login, with the key's fingerprint and the client's public address, to `ssh_gateway_logins` once a minute (`worms-audit-gateway.timer`).
 
 **Key lifecycle** ([`ssh_keys.py`](../projects/dashboard/core/ssh_keys.py), [`views/devbox.py`](../projects/dashboard/dashboard/views/devbox.py), [`membership.py`](../projects/dashboard/dashboard/membership.py)). Members add keys on their profile; operators with `worms key add` and `worms key remove`, under the same rules:
 - Validation:
@@ -92,7 +92,7 @@ worms key sync                         # copy every team's keys to its devbox an
 worms key                              # are every team's keys on the gateway and its VMs?
 worms show alpha                        # its four VMs (a, b, c, gw): vmids, addresses, states, keys
 worms login alpha/gw                    # a shell on team alpha's NAT gateway, devbox-t<id>-gw (`worms login --help` lists the VMs)
-tail -F /var/log/worms/jobs/latest.log  # on the node: the running job
+tail -F /var/log/worms/jobs/latest.log  # on the host: the running job
 ```
 
 Data: `devboxes`, `devbox_vms`, `devbox_ssh_keys`, `devbox_runs`, `devbox_captures`, `devbox_logs` ([`core/models/devbox.py`](../projects/dashboard/core/models/devbox.py)).

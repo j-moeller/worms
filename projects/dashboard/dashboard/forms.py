@@ -182,7 +182,7 @@ class RoundForm(StyledForm):
                                              "included; results are final when the last one has.")  # fmt: skip
     gameplan = forms.ChoiceField(
         required=False,
-        help_text="A file in gameplans/ (docs/05-live-environment.md). Only gameplans the orchestrator and the node both "
+        help_text="A file in gameplans/ (docs/05-live-environment.md). Only gameplans the orchestrator and the host both "
                   "hold, and find valid, are listed. It can be chosen later, until the first team's attempt starts: "
                   "the round waits for it, alone (the rounds after it go ahead), with the uploads from before its start.",
     )  # fmt: skip
@@ -197,7 +197,7 @@ class RoundForm(StyledForm):
     )  # fmt: skip
     devboxes_off = forms.BooleanField(
         required=False, label="Shut down every devbox while its attempts run",
-        help_text="For the node's memory: every team's devbox VMs and gateway are shut down before the round's "
+        help_text="For the host's memory: every team's devbox VMs and gateway are shut down before the round's "
                   "first attempt and started again after its last run; meanwhile devbox resets and dev uploads wait. "
                   "Until the round's start; the conductor records it when the round begins.",
     )  # fmt: skip

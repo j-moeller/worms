@@ -1,14 +1,14 @@
 ---
 # Round agent on the Proxmox host (docs/05-live-environment.md). Pulls host_jobs from the
 # database and executes the privileged round operations. Runs as root from its
-# workspace on the node, synced from the controller's checkout
+# workspace on the host, synced from the controller's checkout
 # (tasks/workspace.yml).
 round_agent_repo_root: /opt/worms
 round_agent_controller_repo: "{{ playbook_dir | dirname }}"
-round_agent_node_run: /usr/local/sbin/worms-node-run
+round_agent_host_run: /usr/local/sbin/worms-host-run
 # What the workspace gets from the controller's checkout: no file git ignores,
 # not the stacks the controller owns, nothing the agent does not run. The
-# explicit excludes also keep rsync from deleting the node's own files (its
+# explicit excludes also keep rsync from deleting the host's own files (its
 # state, providers, the definitions the agent writes): a .gitignore protects
 # them only once it exists in the workspace, and never the vault or keys.
 round_agent_sync_rsync_opts:
@@ -63,7 +63,7 @@ round_agent_db_sslrootcert: "{{ round_agent_repo_root }}/ansible/pki/worms/ca.cr
 # OpenTofu from the agent (sandbox / devbox stacks): the inputs the CLI gives
 # tofu on the controller, from the same vault (docs/02-installation.md, "Controller on a laptop"). The WORMS
 # SSH key (vault) is loaded into an ssh-agent around the service
-# (worms-node-run), because the bpg provider uploads snippets over SSH with
+# (worms-host-run), because the bpg provider uploads snippets over SSH with
 # `agent = true`; its .pub is what cloud-init puts on the sandbox and devbox
 # VMs, as on every other VM.
 # No defaults: a missing value stops the play (tasks/workspace.yml checks them first).
@@ -72,9 +72,9 @@ round_agent_tofu_api_token: "{{ vault_tofu_proxmox_api_token }}"
 round_agent_tofu_node: "{{ proxmox.node }}"
 round_agent_ssh_key: /etc/worms/ssh/worms
 
-# The node's event tables (scripts/round_agent/events.py, docs/06-background-processes.md):
+# The host's event tables (scripts/round_agent/events.py, docs/06-background-processes.md):
 # `worms-audit event ...` for the internet window and the firewall watchdog, and
-# a timer that records the SSH gateway's team logins, as the node's own events
+# a timer that records the SSH gateway's team logins, as the host's own events
 # account (not the agent's role), from its own 0600 file. The gateway's address
 # and login account; empty without a published gateway.
 round_agent_audit_command: /usr/local/sbin/worms-audit

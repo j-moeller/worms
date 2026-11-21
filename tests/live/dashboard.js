@@ -20,7 +20,7 @@ class Session {
 
   async open() {
     this.browser = await chromium.launch({
-      // The port forward only matches traffic arriving from outside, so a browser on the node
+      // The port forward only matches traffic arriving from outside, so a browser on the host
       // has to go to the dashboard directly, under its public name.
       args: [`--host-resolver-rules=MAP ${this.request.public_name} ${this.request.dashboard_ip}`],
     });

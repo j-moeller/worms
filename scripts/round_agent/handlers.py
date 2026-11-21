@@ -56,16 +56,16 @@ INTERNET_FLAG = "/run/worms/internet-allowed"
 # The VMs a sandbox reaches, which a new round's sandbox is built on after a rollback; their
 # snapshot is `worms apply`'s (src/worms_cli/pipeline.py).
 SERVICE_POOLS = ("ephemeral", "private_internet")
-# The agent's own records on the node (root only).
+# The agent's own records on the host (root only).
 STATE_DIR = "/var/lib/worms"
 # Team code is assumed hostile and root on its VM. This CPU offers it no hardware virtualisation,
-# so no /dev/kvm and no way to drive the node's nested-KVM code (docs/07-security.md). The
+# so no /dev/kvm and no way to drive the host's nested-KVM code (docs/07-security.md). The
 # sandbox and devbox stacks set it. These checks refuse anything else, such as a VM changed by hand.
 TEAM_VM_CPU = "x86-64-v3"
 
 
 def _has_team_vm_cpu(ex, vmid):
-    """Read from the node, because what a hostile VM says about itself proves nothing. Anything
+    """Read from the host, because what a hostile VM says about itself proves nothing. Anything
     but exactly this CPU fails, including added flags and a config that could not be read."""
     config = ex.run(["qm", "config", str(vmid)], check=False, timeout=60)
     return any(line.strip() == f"cpu: {TEAM_VM_CPU}" for line in config.splitlines())
@@ -117,7 +117,7 @@ def _quiet(job):
             raise
         except Exception as error:  # noqa: BLE001
             ex.note(f"{job.__name__} failed: {type(error).__name__}: {error}")
-            raise RuntimeError(f"the {job.__name__} job failed: its log on the node says why") from None
+            raise RuntimeError(f"the {job.__name__} job failed: its log on the host says why") from None
 
     wrapper.__name__ = wrapper.__qualname__ = job.__name__
     wrapper.__doc__ = job.__doc__
@@ -125,8 +125,8 @@ def _quiet(job):
 
 
 def _gameplan(ex, name, sha256):
-    """The gameplan the job names, from the node's own copy: the file must be exactly the one
-    the orchestrator validated (sha256), and valid here too, with the node's apt cache list.
+    """The gameplan the job names, from the host's own copy: the file must be exactly the one
+    the orchestrator validated (sha256), and valid here too, with the host's apt cache list.
     Its problems go to the job log only: the database (which the dashboard reads) gets none of
     a gameplan's content. Returns (spec, loaded)."""
     directory = ex.repo_root / GAMEPLANS
@@ -136,19 +136,19 @@ def _gameplan(ex, name, sha256):
         raise Refused(str(error)) from None
     if digest != sha256:
         raise Refused(f"{name} is not the version expected (sha256 {digest[:12]}, expected {sha256[:12]}): "
-                      "deploy the same checkout to the node and the orchestrator")  # fmt: skip
+                      "deploy the same checkout to the host and the orchestrator")  # fmt: skip
     loaded = gameplan_loader.load(directory, name, sha256)
     problems = gameplan_runtime.validate(loaded.cls, packages=gameplan_build.seeded_packages(ex.repo_root))
     if problems:
         for problem in problems:
             ex.note(f"gameplan {name}: {problem}")
-        raise validation.Invalid(f"the gameplan {name} is not valid on the node: the job log lists why")
+        raise validation.Invalid(f"the gameplan {name} is not valid on the host: the job log lists why")
     return gameplan_runtime.instantiate(loaded.cls).spec(), loaded
 
 
 @_quiet
 def gameplans(ex, cfg, params):
-    """Every gameplan file on the node, its SHA-256 and whether it is valid here. Why one is
+    """Every gameplan file on the host, its SHA-256 and whether it is valid here. Why one is
     not goes to the job log, not into the result."""
     directory = ex.repo_root / GAMEPLANS
     seeded = gameplan_build.seeded_packages(ex.repo_root)
@@ -265,7 +265,7 @@ def _run_state_path(cfg, run_uuid):
 
 
 def _save_run_state(cfg, run_uuid, state):
-    """The run's gameplan and secrets, on the node only (root, 0600), for files execute()
+    """The run's gameplan and secrets, on the host only (root, 0600), for files execute()
     writes later. Only the current run's: a new prepare removes the others."""
     directory = _run_state_path(cfg, run_uuid).parent
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -279,13 +279,13 @@ def _save_run_state(cfg, run_uuid, state):
 def _load_run_state(cfg, run_uuid):
     path = _run_state_path(cfg, run_uuid)
     if not path.is_file():
-        raise validation.Invalid(f"no state for run {run_uuid} on the node (prepare did not run, or it was torn down)")
+        raise validation.Invalid(f"no state for run {run_uuid} on the host (prepare did not run, or it was torn down)")
     return json.loads(path.read_text())
 
 
 def _generate_secrets(ex, spec):
     """{secret id: {field: value}}, new for this run: key pairs from ssh-keygen, passwords and
-    TOTP seeds from `secrets` (gameplan/render.py). They stay on the node; the database never
+    TOTP seeds from `secrets` (gameplan/render.py). They stay on the host; the database never
     sees them. Keys come last: a key's passphrase may hold the run's passwords."""
     out = {}
     keys = []
@@ -583,7 +583,7 @@ def place_flags(ex, cfg, params):
 
 @_quiet
 def write_file(ex, cfg, params):
-    """A file the run's gameplan declared, by its number: its content comes from the node's
+    """A file the run's gameplan declared, by its number: its content comes from the host's
     copy of the gameplan and the run's secrets, never from the job. A failure after the worm
     is returned, but by name only: the reason (it may quote the path) goes to the job log."""
     state = _load_run_state(cfg, params["run_uuid"])
@@ -597,7 +597,7 @@ def write_file(ex, cfg, params):
     problem = _guest_step(params["strict"], lambda: _write_gameplan_file(ex, vms[entry["vm"]]["maintenance_ip"], entry, state["secrets"]))
     if problem:
         ex.note(f"file {params['file']} on {entry['vm']}: {problem}")
-        problem = "the file could not be written: the job log on the node says why"
+        problem = "the file could not be written: the job log on the host says why"
     return {"written": problem is None, "vm": entry["vm"], "error": problem}
 
 
@@ -605,7 +605,7 @@ def write_file(ex, cfg, params):
 def read_file(ex, cfg, params):
     """Whether a file is on a sandbox VM, its size and SHA-256, for execute(): never its
     content, which would reach the database. The file is named by its number in the gameplan's
-    `reads`; its path comes from the node's copy. After the worm (not strict) the VM may lie or
+    `reads`; its path comes from the host's copy. After the worm (not strict) the VM may lie or
     fail: the reason is returned, by name only (it may quote the path); the job log has it."""
     state = _load_run_state(cfg, params["run_uuid"])
     spec, _ = _gameplan(ex, state["gameplan"], state["sha256"])
@@ -630,7 +630,7 @@ def read_file(ex, cfg, params):
     problem = _guest_step(params["strict"], read)
     if problem:
         ex.note(f"reading file {params['file']} on {entry['vm']}: {problem}")
-        return {"error": "the file could not be read: the job log on the node says why"}
+        return {"error": "the file could not be read: the job log on the host says why"}
     return found
 
 
@@ -719,7 +719,7 @@ def _write_devbox_map(ex, cfg, teams):
             lines.append(f"{info['services_source_ip']} {team['team_uuid']}")
     body = "".join(f"{line}\n" for line in lines)
     _push_devbox_map(ex, cfg, body)
-    # Kept on the node too: a rollback of scoring and logging takes the map with it
+    # Kept on the host too: a rollback of scoring and logging takes the map with it
     # (_restore_devbox_map), and the database is not the agent's to read.
     state = Path(cfg.get("state_dir", STATE_DIR))
     state.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -1021,7 +1021,7 @@ def paused_path(cfg):
 
 
 def held_devboxes_path(cfg):
-    """The node's record of the devbox VMs shut down for rounds with devboxes_off: while it
+    """The host's record of the devbox VMs shut down for rounds with devboxes_off: while it
     exists the agent takes no devbox job (agent.py, claim), which would start one (a reset) or
     need it running."""
     return Path(cfg.get("state_dir", STATE_DIR)) / HELD_DEVBOXES

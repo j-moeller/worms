@@ -6,7 +6,7 @@
     the dashboard shows the scoring and logging, and the database what an administrator expects;
     a user resets the devbox and signs in again: everything they changed is gone.
 
-It needs a deployed platform on the Proxmox node, and it takes about an hour and a half, so it runs
+It needs a deployed platform on the Proxmox host, and it takes about an hour and a half, so it runs
 only with --live (docs/03-manage-py.md):
 
     .venv-test/bin/pytest tests/live --live
@@ -82,7 +82,7 @@ class Journey:
         return [member for member in self.members if member.team == name]
 
     def chains(self, team: str, database: dict) -> dict[str, list[str]]:
-        """How to reach each VM of a team from the node: A directly, B through A, C through B."""
+        """How to reach each VM of a team from the host: A directly, B through A, C through B."""
         vms = {vm["role"]: vm for vm in database["teams"][team]["vms"]}
         entry, to_b, to_c = vms["a"]["ssh_fabric_ip"], vms["b"]["addresses"][0], vms["c"]["addresses"][0]
         return {"a": [entry], "b": [entry, to_b], "c": [entry, to_b, to_c]}
@@ -125,11 +125,11 @@ def soft_checks(journey):
 
 def test_00_base_state(journey):
     p, check = journey.platform, journey.check
-    journey.report.stage("Stage 0: the base state", "whatever the node is in now")
+    journey.report.stage("Stage 0: the base state", "whatever the host is in now")
     if p.devbox_vms():
         pytest.fail(
             f"{len(p.devbox_vms())} devbox VMs exist. Destroy them first, this suite does not: "
-            "/usr/local/sbin/worms-node-run opentofu/stacks/devbox 'tofu destroy -auto-approve -parallelism=1'",
+            "/usr/local/sbin/worms-host-run opentofu/stacks/devbox 'tofu destroy -auto-approve -parallelism=1'",
             pytrace=False,
         )
     orphans = p.orphan_volumes()
@@ -137,7 +137,7 @@ def test_00_base_state(journey):
     if orphans:
         pytest.fail(f"Remove these first, with `pvesm free <storage>:<volume>`: {orphans}", pytrace=False)
     try:
-        if check_wipe_allowed(journey.wipe, p.node):
+        if check_wipe_allowed(journey.wipe, p.host):
             proc = p.worms("reset-database", "--yes", timeout=300)
             check("`worms db reset --yes`", "Exit 0", f"exit {proc.returncode}", proc.returncode == 0)
     except NotBaseState as exc:
@@ -147,7 +147,7 @@ def test_00_base_state(journey):
     if not_clean:
         pytest.fail(
             f"The database is not empty ({len(db['teams'])} teams, {db['rounds']} rounds, {len(db['users'])} users). "
-            f"Wiping it is your decision: add --live-wipe-database={p.node}",
+            f"Wiping it is your decision: add --live-wipe-database={p.host}",
             pytrace=False,
         )
     check("`qm list`", "No devbox VMs", f"{len(p.vms())} VMs, 0 devbox", True)
@@ -284,7 +284,7 @@ def test_06_each_user_reaches_their_own_devbox(journey):
     p, check = journey.platform, journey.check
     journey.report.stage(
         "Stage 4: SSH through the gateway",
-        f"keys pushed. From the node, with the gateway's address {p.gateway_ip} in place of the public name, because the port forward only matches outside traffic",
+        f"keys pushed. From the host, with the gateway's address {p.gateway_ip} in place of the public name, because the port forward only matches outside traffic",
     )
     db = p.database()
     for member in journey.members:
@@ -385,7 +385,7 @@ def test_10_database_holds_what_an_administrator_expects(journey):
     check("Database: host jobs", "The build and the key pushes", sorted(jobs), {"devbox_provision", "devbox_reconfigure"} <= jobs)
     # Devbox bridges are not mirrored, by design (docs/06-background-processes.md).
     check("Database: `network_flows` on devbox addresses", "None, by design", db["flows_touching_devboxes"], db["flows_touching_devboxes"] == 0)
-    check("Node: mirror filters on devbox ports", "None, by design", p.mirror_filters_on_devbox_ports(), p.mirror_filters_on_devbox_ports() == 0)
+    check("Host: mirror filters on devbox ports", "None, by design", p.mirror_filters_on_devbox_ports(), p.mirror_filters_on_devbox_ports() == 0)
     heartbeat = db["zeek_heartbeat"]
     fresh = bool(heartbeat) and datetime.fromisoformat(db["now"]) - datetime.fromisoformat(heartbeat) < timedelta(minutes=15)
     check("Database: Zeek's heartbeat", "Younger than 15 minutes", heartbeat, fresh)

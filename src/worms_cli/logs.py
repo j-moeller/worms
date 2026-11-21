@@ -6,7 +6,7 @@
     worms log orchestrator     ... and any platform VM by its name: its whole journal
     -f follow · -n lines · --since (journals: "1 hour ago", "2026-11-19 18:00")
 
-It reads them where they are, as `worms login` gets there: the node (here, or over SSH from a
+It reads them where they are, as `worms login` gets there: the host (here, or over SSH from a
 laptop) and the platform's VMs over their management SSH, the WORMS key never forwarded. Not the
 team VMs (devboxes, sandboxes): they are assumed rooted, their journals are the teams'.
 """
@@ -44,8 +44,8 @@ class Logs:
         self.catalogue = Catalogue(config)
         self.session = self.catalogue.runner.session
 
-    def _on_node(self, command: str) -> int:
-        """Run `command` on the node, its output straight to this terminal (here: no SSH)."""
+    def _on_host(self, command: str) -> int:
+        """Run `command` on the host, its output straight to this terminal (here: no SSH)."""
         if self.session.laptop:
             argv, env = self.session.ssh_argv(command), self.session.env()
         else:
@@ -58,7 +58,7 @@ class Logs:
         if vm.get("pool") in UNTRUSTED_POOLS:
             raise BuildError(f"{vm['name']} is a team VM: its journal is the team's (`worms login {name}` to look anyway)")
         if vm.get("status") != "running":
-            raise BuildError(f"{vm['name']} is {vm.get('status')}: start it first (`qm start {vm['vmid']}` on the node)")
+            raise BuildError(f"{vm['name']} is {vm.get('status')}: start it first (`qm start {vm['vmid']}` on the host)")
         argv, env = self.catalogue.ssh_argv(vm, command, interactive=False)
         os.execvpe(argv[0], argv, env)
         return 0  # not reached
@@ -75,23 +75,23 @@ class Logs:
             print("Queued: the round agent has not begun it, so there is no log yet (-f waits for it).")
             return 0
         command = f"tail -n {int(lines)}{' -F' if follow else ''} {shlex.quote(f'{JOB_LOGS}/{job.uuid}.log')}"
-        return self._on_node(command)
+        return self._on_host(command)
 
     def latest(self, lines: int, follow: bool) -> int:
         """`worms log latest`: the newest host job's log, without looking up its number (the agent
         points latest.log at each job it begins: -f moves on to the next one)."""
         print(output.color(f"the newest host job · {JOB_LOGS}/latest.log", "dim"), flush=True)
-        return self._on_node(f"tail -n {int(lines)}{' -F' if follow else ''} {JOB_LOGS}/latest.log")
+        return self._on_host(f"tail -n {int(lines)}{' -F' if follow else ''} {JOB_LOGS}/latest.log")
 
     def source(self, name: str, lines: int, follow: bool, since: str | None) -> int:
         service = SERVICES[name]
-        if service.where == "node":
-            return self._on_node(_command(service.log, lines, follow, since, root=True))
+        if service.where == "host":
+            return self._on_host(_command(service.log, lines, follow, since, root=True))
         return self._on_vm(service.where, _command(service.log, lines, follow, since, root=False))
 
     def vm(self, name: str, lines: int, follow: bool, since: str | None) -> int:
-        if name == "node":
-            return self._on_node(_command(None, lines, follow, since, root=True))
+        if name == "host":
+            return self._on_host(_command(None, lines, follow, since, root=True))
         return self._on_vm(name, _command(None, lines, follow, since, root=False))
 
 
@@ -133,7 +133,7 @@ def overview() -> None:
         print()
     print(output.heading("logs: worms log <name>"))
     print(output.table([[name, s.where, s.about] for name, s in SERVICES.items()], headers=["name", "on", "what"]))
-    print(output.color("Any platform VM by its name (`worms log orchestrator`, `worms log apt-cache`, `worms log node`; a name above comes first): "
+    print(output.color("Any platform VM by its name (`worms log orchestrator`, `worms log apt-cache`, `worms log host`; a name above comes first): "
                        "its whole journal. -f follows, -n lines, --since a time.", "dim"))  # fmt: skip
     print()
     print(output.heading("host jobs: worms log <#>, worms log latest [-f]"))

@@ -1,7 +1,7 @@
 """Finding and loading gameplans: one file in the gameplans directory, one Gameplan class in it.
 
 A gameplan is named by its file name (`round_one.py`), a version of it by the SHA-256 of its
-bytes. The file is read here only, on the node (the round agent) and on the orchestrator; the
+bytes. The file is read here only, on the host (the round agent) and on the orchestrator; the
 dashboard VM has no copy and never loads one (docs/05-live-environment.md). The orchestrator
 records every version it sees in the database, bytes included, where only it and the admin can
 read them: the dashboard sees names, hashes and descriptions (and simulations made on the
@@ -78,11 +78,11 @@ def read(directory, filename) -> tuple[bytes, str]:
 
 def load(directory, filename, sha256=None) -> Loaded:
     """Run the file and return its Gameplan class. With `sha256`, the file must be exactly that
-    one (the orchestrator and the node must run the same gameplan)."""
+    one (the orchestrator and the host must run the same gameplan)."""
     source, digest = read(directory, filename)
     if sha256 is not None and digest != sha256:
         raise GameplanError(f"{filename} is not the version expected (sha256 {digest[:12]}, expected {sha256[:12]}): "
-                            "deploy the same checkout to the node and the orchestrator")  # fmt: skip
+                            "deploy the same checkout to the host and the orchestrator")  # fmt: skip
     return load_source(directory, filename, source)
 
 

@@ -32,14 +32,14 @@ django_hosts, ...) have these VM groups as children, and per-VM settings live
 in group_vars/<vm group>.yml. Re-run after every `tofu apply` (`worms step inventory`).
 
 How Ansible connects is written here too: with the WORMS key in the agent, and no
-other key (IdentityFile=none). On the Proxmox node (WORMS_SSH unset) the node is
-`ansible_connection: local`. On a laptop (WORMS_SSH = root@<node>, as the `worms`
-CLI sets it) the node is reached over SSH, every VM through it (ProxyJump), and
-the node's own stacks (sandbox, devbox: state in the round agent's workspace
+other key (IdentityFile=none). On the Proxmox host (WORMS_SSH unset) the host is
+`ansible_connection: local`. On a laptop (WORMS_SSH = root@<host>, as the `worms`
+CLI sets it) the host is reached over SSH, every VM through it (ProxyJump), and
+the host's own stacks (sandbox, devbox: state in the round agent's workspace
 there) are read over SSH. Written by `worms` (WORMS_SSH_AUTH_SOCK set), the
 connections name its agent; in the round agent's workspace, the agent
-worms-node-run started (SSH_AUTH_SOCK). The ProxyJump hop reads your
-~/.ssh/config: it must not name another IdentityAgent for the node.
+worms-host-run started (SSH_AUTH_SOCK). The ProxyJump hop reads your
+~/.ssh/config: it must not name another IdentityAgent for the host.
 
 Every value the inventory needs must be there: a missing platform output, or a
 VM stack whose last apply did not finish (outputs, but no `ansible_hosts`), stops
@@ -59,18 +59,18 @@ import sys
 from pathlib import Path
 
 
-# Stacks whose state lives on the node (the round agent's workspace).
-NODE_STACKS = {"sandbox", "devbox"}
-NODE_RUN = "/usr/local/sbin/worms-node-run"
+# Stacks whose state lives on the host (the round agent's workspace).
+HOST_STACKS = {"sandbox", "devbox"}
+HOST_RUN = "/usr/local/sbin/worms-host-run"
 # The one key: the agent's, never a key file (~/.ssh/id_*).
 ONE_KEY = ["-o", "IdentityFile=none", "-o", "IdentityAgent=SSH_AUTH_SOCK"]
 # How to finish (or remove) a stack whose last apply stopped half way.
 UNFINISHED = {
     "devbox": "the round agent applies it: `worms apply devbox` (follow it: `tail -F /var/log/worms/jobs/latest.log` "
-              "on the node). Or remove what was built, on the node: "
-              "`worms-node-run opentofu/stacks/devbox 'tofu destroy -auto-approve -parallelism=1'`",
-    "sandbox": "the round agent builds it again for the next round. Or remove it, on the node: "
-               "`worms-node-run opentofu/stacks/sandbox 'tofu destroy -auto-approve -parallelism=1'`",
+              "on the host). Or remove what was built, on the host: "
+              "`worms-host-run opentofu/stacks/devbox 'tofu destroy -auto-approve -parallelism=1'`",
+    "sandbox": "the round agent builds it again for the next round. Or remove it, on the host: "
+               "`worms-host-run opentofu/stacks/sandbox 'tofu destroy -auto-approve -parallelism=1'`",
 }
 # What the platform stack's `infrastructure` output must have.
 PLATFORM_KEYS = ("infrastructure_ips", "management_ips", "services_ips", "host_ips", "private_internet_ips",
@@ -78,14 +78,14 @@ PLATFORM_KEYS = ("infrastructure_ips", "management_ips", "services_ips", "host_i
                  "proxmox")  # fmt: skip
 
 
-def node_output(target: str, stack: str) -> dict:
-    """`tofu output -json` of a node-owned stack, over SSH ({} if unavailable)."""
+def host_output(target: str, stack: str) -> dict:
+    """`tofu output -json` of a host-owned stack, over SSH ({} if unavailable)."""
     proc = subprocess.run(
-        ["ssh", "-o", "BatchMode=yes", *ONE_KEY, target, f"{NODE_RUN} opentofu/stacks/{stack} 'tofu output -json'"],
+        ["ssh", "-o", "BatchMode=yes", *ONE_KEY, target, f"{HOST_RUN} opentofu/stacks/{stack} 'tofu output -json'"],
         capture_output=True, text=True,
     )  # fmt: skip
-    if proc.returncode == 127 and NODE_RUN in proc.stderr:
-        # A fresh node: the round agent (and its wrapper) comes later in the build.
+    if proc.returncode == 127 and HOST_RUN in proc.stderr:
+        # A fresh host: the round agent (and its wrapper) comes later in the build.
         print(f"note: stack {stack} on {target}: no round agent yet, so not applied", file=sys.stderr)
         return {}
     if proc.returncode != 0:
@@ -100,8 +100,8 @@ def tofu_output(stack_dir: Path, tofu_bin: str) -> dict:
     """Return the parsed `tofu output -json` map for a stack, or {} if the stack
     has no state yet (not applied)."""
     controller = os.environ.get("WORMS_SSH", "")
-    if controller and stack_dir.name in NODE_STACKS:
-        return node_output(controller, stack_dir.name)
+    if controller and stack_dir.name in HOST_STACKS:
+        return host_output(controller, stack_dir.name)
     if not (stack_dir / "terraform.tfstate").exists():
         # Not applied yet; nothing to read. Caller decides whether that is fatal.
         return {}
@@ -166,8 +166,8 @@ def build_inventory(infrastructure: dict, stacks: dict, sandbox: dict, controlle
     """Assemble the generated-inventory structure from the stack outputs.
 
     `stacks` maps a VM stack name to its `ansible_hosts` output ({} if the
-    stack is not applied). `controller` is the node's SSH target when Ansible
-    runs elsewhere (a laptop), empty on the node itself. `worms_agent`: the VM
+    stack is not applied). `controller` is the host's SSH target when Ansible
+    runs elsewhere (a laptop), empty on the host itself. `worms_agent`: the VM
     connections use the agent in WORMS_SSH_AUTH_SOCK (expanded by ssh)."""
     missing = [key for key in PLATFORM_KEYS if key not in infrastructure]
     proxmox = dict(infrastructure.get("proxmox") or {})
@@ -209,15 +209,15 @@ def build_inventory(infrastructure: dict, stacks: dict, sandbox: dict, controlle
                 host.setdefault(var, value)
             children.setdefault(group, {"hosts": {}})["hosts"][hostname] = host
 
-    # The node itself: local on the node; from a laptop over SSH as root, with
+    # The host itself: local on the host; from a laptop over SSH as root, with
     # its host key checked (known_hosts), unlike the frequently rebuilt VMs.
     if controller:
         user, _, host = controller.rpartition("@")
-        node = {"ansible_host": host, "ansible_user": user or "root", "ansible_host_key_checking": True,
+        entry = {"ansible_host": host, "ansible_user": user or "root", "ansible_host_key_checking": True,
                 "ansible_ssh_common_args": " ".join(agent)}  # fmt: skip
     else:
-        node = {"ansible_host": "127.0.0.1", "ansible_connection": "local"}
-    children["proxmox_host"] = {"hosts": {"proxmox.local": node}}
+        entry = {"ansible_host": "127.0.0.1", "ansible_connection": "local"}
+    children["proxmox_host"] = {"hosts": {"proxmox.local": entry}}
 
     return {"all": {"vars": group_vars, "children": children}}
 

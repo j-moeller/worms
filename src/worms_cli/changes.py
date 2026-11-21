@@ -2,7 +2,7 @@
 alone (and `--plan`); `worms apply <component>... --plan`'s view of what each VM runs and of
 OpenTofu's own plan.
 
-    what runs       per component, the commit it was last brought up to: the node's record
+    what runs       per component, the commit it was last brought up to: the host's record
                     (/var/lib/worms/deployed.json, written after every successful apply or
                     rebuild of it), else for a VM the VM history (its last configuration),
                     else unknown. A commit with "-dirty" had uncommitted changes nobody can see now.
@@ -225,8 +225,8 @@ def _packages(tree: Tree, found: Reach) -> set:
 
 
 def deployed(session) -> dict[str, tuple[str, str]]:
-    """{component: (the commit it was last brought up to, when)}, from the node's record."""
-    code, out, _err = session.node_run(["cat", DEPLOYED])
+    """{component: (the commit it was last brought up to, when)}, from the host's record."""
+    code, out, _err = session.host_run(["cat", DEPLOYED])
     try:
         return {k: (v["commit"], v.get("time", "")) for k, v in (json.loads(out) if code == 0 and out.strip() else {}).items()}
     except (ValueError, KeyError, TypeError, AttributeError):
@@ -235,7 +235,7 @@ def deployed(session) -> dict[str, tuple[str, str]]:
 
 def record_deployed(session, names, commit: str) -> None:
     """After a successful apply or rebuild: these components run `commit` now."""
-    code, out, _err = session.node_run(["cat", DEPLOYED])
+    code, out, _err = session.host_run(["cat", DEPLOYED])
     try:
         current = json.loads(out) if code == 0 and out.strip() else {}
     except ValueError:
@@ -246,7 +246,7 @@ def record_deployed(session, names, commit: str) -> None:
     text = json.dumps(current, indent=1, sort_keys=True)
     import shlex
 
-    session.node_run(["sh", "-c", f"install -d -m 755 /var/lib/worms && printf '%s\\n' {shlex.quote(text)} > {DEPLOYED}.new "
+    session.host_run(["sh", "-c", f"install -d -m 755 /var/lib/worms && printf '%s\\n' {shlex.quote(text)} > {DEPLOYED}.new "
                                   f"&& mv {DEPLOYED}.new {DEPLOYED}"])  # fmt: skip
 
 
@@ -254,7 +254,7 @@ def vm_commits(session) -> dict[str, str]:
     """{VM name: the commit of its last configuration}, from the VM history (worms_cli/history.py)."""
     from worms_cli import history
 
-    code, out, _err = session.node_run(["cat", history.LEDGER])
+    code, out, _err = session.host_run(["cat", history.LEDGER])
     last: dict[str, str] = {}
     for event in history.parse(out) if code == 0 else []:
         if event["event"] in ("configured", "packages", *history.CREATED):
@@ -340,7 +340,7 @@ def analyse(config, session) -> tuple[list[Change], dict, list[str]]:
         bases[name] = base
         if component.kind == "devbox":
             playbooks, group = ["SetupDevbox.yml", "SetupSSHGateway.yml"], "devbox"
-        elif component.kind == "node":
+        elif component.kind == "host":
             playbooks, group = [component.playbook], "proxmox_host"
         elif component.kind == "gameplans":
             playbooks, group = [], ""
@@ -367,7 +367,7 @@ def analyse(config, session) -> tuple[list[Change], dict, list[str]]:
             reason = "runs an unknown commit" if not base else f"runs {base}, not in this checkout's history"
             note = devbox_note if component.kind == "devbox" else (
                 "its packages cannot be compared: a package this checkout added is missing offline (--packages, "
-                "with the window, installs them)" if component.kind in ("vm", "node") else "")  # fmt: skip
+                "with the window, installs them)" if component.kind in ("vm", "host") else "")  # fmt: skip
             changes.append(Change(name, base, [reason], note=note))
             continue
         all_changed |= set(files)
@@ -376,7 +376,7 @@ def analyse(config, session) -> tuple[list[Change], dict, list[str]]:
         if not why:
             continue
         change = Change(name, base, why)
-        if component.kind in ("vm", "node") and group:
+        if component.kind in ("vm", "host") and group:
             then = Tree(repo, clean_base)
             before, after = _packages(then, reach(then, group, _playbooks_at(then, playbooks))), _packages(here, found)
             change.packages = sorted(f"+{n}" for n in after - before) + sorted(f"-{n}" for n in before - after)
@@ -455,11 +455,11 @@ def plan_stack(pipe, stack: str, out_dir) -> StackPlan:
 def stacks_to_plan() -> list[str]:
     """The stacks the CLI applies (the devbox and sandbox stacks are the round agent's)."""
     from worms_cli import components
-    from worms_cli.session import NODE_STACKS
+    from worms_cli.session import HOST_STACKS
 
     seen = []
     for component in components.COMPONENTS.values():
-        if component.stack and component.stack not in NODE_STACKS and component.stack not in seen:
+        if component.stack and component.stack not in HOST_STACKS and component.stack not in seen:
             seen.append(component.stack)
     return seen
 
@@ -473,7 +473,7 @@ def deployed_commits(pipe, names) -> list[list[str]]:
     from worms_cli import history
 
     here = pipe.runner.commit()
-    code, out, _err = pipe.runner.session.node_run(["cat", history.LEDGER])
+    code, out, _err = pipe.runner.session.host_run(["cat", history.LEDGER])
     events = history.parse(out) if code == 0 else []
     last = {}
     for event in events:
@@ -505,11 +505,11 @@ def tofu_plans(pipe, plan) -> None:
             targets.setdefault(component.stack, [])
         elif component.kind == "vm":
             targets.setdefault(component.stack, []).append(f"-target={component.module}")
-    from worms_cli.session import NODE_STACKS
+    from worms_cli.session import HOST_STACKS
 
     for stack, args in targets.items():
-        if stack in NODE_STACKS:
-            print(output.color(f"OpenTofu: {stack} is the round agent's (planned and applied on the node, per team)", "dim"))
+        if stack in HOST_STACKS:
+            print(output.color(f"OpenTofu: {stack} is the round agent's (planned and applied on the host, per team)", "dim"))
             continue
         label = stack + (f" ({len(args)} VM(s))" if len(args) > 2 else f" ({', '.join(a.split('=', 1)[1] for a in args)})" if args else "")
         print(output.color(f"OpenTofu plan of {label} ...", "dim"), flush=True)

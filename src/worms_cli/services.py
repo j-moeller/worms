@@ -11,7 +11,7 @@ halfway. It waits for that (`--timeout`), and refuses once it has waited that lo
 in the second between that check and the restart finishes on SIGTERM (agent.py, main) as long as
 systemd lets it.
 
-The conductor checks the gameplans when it starts, against the node: after the agent, then.
+The conductor checks the gameplans when it starts, against the host: after the agent, then.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from worms_cli.build import BuildError
 
 @dataclass(frozen=True)
 class Service:
-    where: str  # "node" or the VM it runs on
+    where: str  # "host" or the VM it runs on
     about: str
     units: tuple[str, ...] = ()  # its systemd units: its journal, and what a restart restarts
     files: str = ""  # its log as a file glob, instead of the journal
@@ -45,13 +45,13 @@ class Service:
         return self.files or list(self.units)
 
 
-# In restart order: the agent before the conductor (it checks the gameplans against the node when
+# In restart order: the agent before the conductor (it checks the gameplans against the host when
 # it starts), the orchestrator's before the website and the sandboxes' APIs.
 SERVICES: dict[str, Service] = {
-    "agent": Service("node", "the round agent: each host job started, done or failed", ("worms-round-agent",)),
-    "firewall": Service("node", "the host firewall, its watchdog and the traffic mirror",
+    "agent": Service("host", "the round agent: each host job started, done or failed", ("worms-round-agent",)),
+    "firewall": Service("host", "the host firewall, its watchdog and the traffic mirror",
                         ("worms-host-firewall", "worms-firewall-watchdog", "worms-mirror"), restartable=False,
-                        why_not="the node's firewall: `worms apply host-network` applies it again",
+                        why_not="the host's firewall: `worms apply host-network` applies it again",
                         active=("worms-host-firewall", "worms-firewall-watchdog.timer", "worms-mirror")),
     "processor": Service("orchestrator", "captures and worm logs counted; dev uploads run", ("orchestrator-process-attempts",)),
     "api": Service("orchestrator", "the orchestrator's API: simulations, devbox key pushes", ("orchestrator",)),
@@ -132,10 +132,10 @@ class Restarter:
         """Restart one service's units where it runs, then check that they are active."""
         service = SERVICES[name]
         units = " ".join(service.units)
-        if service.where == "node":
-            print(output.color(f"restarting {name} on the node: {units}", "dim"), flush=True)
-            self.runner.node_sh(f"systemctl restart {units}")
-            if self.runner.node_sh(f"systemctl is-active --quiet {units}", check=False, quiet=True) != 0:
+        if service.where == "host":
+            print(output.color(f"restarting {name} on the host: {units}", "dim"), flush=True)
+            self.runner.host_sh(f"systemctl restart {units}")
+            if self.runner.host_sh(f"systemctl is-active --quiet {units}", check=False, quiet=True) != 0:
                 raise BuildError(f"{name} is not active after its restart: `worms log {name}`")
             return
         vm = self.catalogue.resolve(service.where)

@@ -10,7 +10,7 @@ django_secret_key: "{{ vault_orchestrator_secret_key }}"
 django_allowed_hosts: "orchestrator.worms.internal,{{ infrastructure_ips.orchestrator }}"
 django_run_migrations: true
 django_trust_proxmox_ca: true
-# The PVE certificate includes the node name, not the management-bridge IP.
+# The PVE certificate includes the host name, not the management-bridge IP.
 django_host_aliases:
   - name: "{{ proxmox.node }}"
     address: "{{ proxmox.host }}"
@@ -21,14 +21,14 @@ django_extra_pip_packages:
 # application user must be able to read it.
 proxmox_ca_bundle: "{{ django_proxmox_ca_dest }}"
 # Proxmox credentials delivered securely into the env file (0600 root).
-# The host is the node's name, not proxmox.host: PVE's certificate names the node
+# The host is the host's name, not proxmox.host: PVE's certificate names the host
 # but not its address on the core bridge. /etc/hosts maps the one to the other.
 django_extra_env:
   # The dashboard's dev view builds its `ssh -J` command from this: without it
   # teams never see how to connect. See host_publish_ssh_gateway for the port.
   DEVBOX_SSH_GATEWAY_HOST: "{{ worms_environment.public_name }}"
   DEVBOX_SSH_GATEWAY_PORT: "{{ ssh_gateway_public_port }}"
-  # The gameplans (docs/05-live-environment.md), deployed here and on the node only.
+  # The gameplans (docs/05-live-environment.md), deployed here and on the host only.
   WORMS_GAMEPLAN_DIR: "{{ django_gameplan_dir }}"
   WORMS_GAMEPLAN_LIB: "{{ django_gameplan_lib }}"
   PROXMOX_HOST: "{{ proxmox.node }}"

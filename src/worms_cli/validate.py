@@ -15,10 +15,10 @@ team or its worm does, end to end, and changes nothing there:
 A login is asked as an SSH client asks before it signs, with the public key alone (RFC 4252, 7:
 sshd says whether it would take the key). No private key is needed, nobody logs in, and the round
 agent records no team login (it counts "Accepted publickey" only). The gateway is asked from the
-node, on its management address; A, B and C from the gateway, where a team's connection comes from.
+host, on its management address; A, B and C from the gateway, where a team's connection comes from.
 One connection to each sshd, every key in it.
 
-The SSH gateway's sshd sees every team as one address: the node masquerades them (host_network,
+The SSH gateway's sshd sees every team as one address: the host masquerades them (host_network,
 worms.nft: "present teams as the host"; inventory host_ips.devbox_ssh). With OpenSSH's per-source
 penalties (on by default since 9.8), a few failed logins by anyone shut every team out, for up to
 10 minutes. So this reads whether they are off there or that address is exempt, and how often the
@@ -324,7 +324,7 @@ class Validator:
             proc = subprocess.run(argv, env=env, input=script.encode(), capture_output=True, timeout=timeout)
         except subprocess.TimeoutExpired:
             return 124, f"no answer in {timeout} s"
-        except Exception as exc:  # noqa: BLE001  (no address in the inventories, the node out of reach)
+        except Exception as exc:  # noqa: BLE001  (no address in the inventories, the host out of reach)
             return 255, str(exc)
         out = proc.stdout[:MAX_BYTES].decode(errors="replace")
         if proc.returncode == 255 and not out.strip():
@@ -390,7 +390,7 @@ class Validator:
         jobs = {}
         if running(GATEWAY):
             if keys and gateway_address:
-                jobs["node"] = (Target("node", None), probe_script(keys, [("gateway", f"{GATEWAY_USER}@{gateway_address}", list(range(1, len(keys) + 1)))]), False, 60)
+                jobs["host"] = (Target("host", None), probe_script(keys, [("gateway", f"{GATEWAY_USER}@{gateway_address}", list(range(1, len(keys) + 1)))]), False, 60)
             probes = [(f"{slug}-{role}", f"root@{fabric[(slug, role)]}", numbers[slug]) for slug, role in at_vms]
             jobs["gateway"] = (Target(GATEWAY, gateway_vm), probe_script(keys, probes, PENALTIES), True, 90)
         for team, _, _ in chosen:
@@ -405,7 +405,7 @@ class Validator:
         if checked:
             script = FIREWALL_SCRIPT.replace("@IDS@", " ".join(str(int(vm["vmid"])) for vm in checked)).replace(
                 "@NODE@", shlex.quote(str(checked[0].get("node", ""))))
-            jobs["@firewalls"] = (Target("node", None), script, False, 120)
+            jobs["@firewalls"] = (Target("host", None), script, False, 120)
 
         print(f"checking the devboxes of {len(chosen)} team(s): {', '.join(CHECKS)} on A, B, C and the NAT gateway; "
               "the SSH gateway; their jobs and uploads (a minute or two) ...", flush=True)  # fmt: skip
@@ -415,15 +415,15 @@ class Validator:
             results = {name: future.result() for name, future in futures.items()}
             gateway_text, gateway_problem = gateway_file.result()
 
-        node = parse_probes(results["node"][1]) if "node" in results else None
-        if node is not None and "gateway" not in node.reached:
-            node.errors.setdefault("gateway", escape(results["node"][1].strip())[:160] or "no answer")
+        host = parse_probes(results["host"][1]) if "host" in results else None
+        if host is not None and "gateway" not in host.reached:
+            host.errors.setdefault("gateway", escape(results["host"][1].strip())[:160] or "no answer")
         gateway = parse_probes(results["gateway"][1]) if "gateway" in results else None
-        failed = self._gateway(gateway_vm, results.get("gateway"), gateway, node)
+        failed = self._gateway(gateway_vm, results.get("gateway"), gateway, host)
         targets = permitted(gateway_text) if gateway_text is not None else None
         firewalls = parse_firewalls(results["@firewalls"][1]) if "@firewalls" in results else {}
         for team, team_keys, invalid in chosen:
-            cells = self._team(team, team_keys, invalid, vms, fabric, numbers.get(team.slug, []), results, node, gateway, targets, gateway_problem)
+            cells = self._team(team, team_keys, invalid, vms, fabric, numbers.get(team.slug, []), results, host, gateway, targets, gateway_problem)
             for role in COLUMNS:
                 vm = vms.get(vm_name(team.slug, role))
                 if vm is not None:
@@ -440,7 +440,7 @@ class Validator:
         print(output.status_cell("ok", "every checked devbox works as its team needs it"))
         return 0
 
-    def _gateway(self, vm, result, gateway: Probes | None, node: Probes | None) -> int:
+    def _gateway(self, vm, result, gateway: Probes | None, host: Probes | None) -> int:
         """The SSH gateway's own lines; the number of problems."""
         print(output.heading(f"SSH gateway ({GATEWAY})"))
         if vm is None or vm.get("status") != "running":
@@ -448,8 +448,8 @@ class Validator:
             print(output.status_cell("error", f"{state}: no team can log in (`worms vm start ssh-gateway`)"))
             return 1
         problems = 0
-        if node is not None and "gateway" not in node.reached:
-            print(output.status_cell("error", f"sshd does not answer the node: {node.errors.get('gateway', 'no answer')}"))
+        if host is not None and "gateway" not in host.reached:
+            print(output.status_cell("error", f"sshd does not answer the host: {host.errors.get('gateway', 'no answer')}"))
             problems += 1
         if gateway is None or not gateway.penalties:
             why = escape(result[1].strip())[:160] if result and result[0] else "sshd -T said nothing"
@@ -466,14 +466,14 @@ class Validator:
             # A risk until it has refused someone; then the teams felt it.
             print(output.status_cell("error" if count else "warn",
                                      f"OpenSSH's per-source penalties are on, and every team comes from one address, the "
-                                     f"node's ({address or 'host_ips.devbox_ssh'}): a few failed logins by anyone shut all "
+                                     f"host's ({address or 'host_ips.devbox_ssh'}): a few failed logins by anyone shut all "
                                      f"teams out, for up to 10 minutes{refused}. Off: `PerSourcePenalties no`, or "
                                      f"`PerSourcePenaltyExemptList {address or '<it>'}`, in its sshd"))  # fmt: skip
             problems += bool(count)
         return problems
 
     def teams_address(self) -> str | None:
-        """The address the SSH gateway sees every team come from: the node's on the SSH fabric
+        """The address the SSH gateway sees every team come from: the host's on the SSH fabric
         (inventory: host_ips.devbox_ssh), from the inventory the VM catalogue reads first."""
         import yaml
 
@@ -481,7 +481,7 @@ class Validator:
         if local.exists():
             text = local.read_text()
         else:
-            code, text, _ = self.catalogue.runner.session.node_run(
+            code, text, _ = self.catalogue.runner.session.host_run(
                 ["sh", "-c", 'cat "$(sed -n "s/^REPO_ROOT=//p" /etc/worms/round-agent.env)/ansible/inventory.generated.yml"'])
             if code != 0:
                 return None
@@ -491,7 +491,7 @@ class Validator:
         except (yaml.YAMLError, AttributeError, ValueError):
             return None
 
-    def _team(self, team, team_keys, invalid, vms, fabric, mine, results, node, gateway, targets, gateway_problem) -> dict:
+    def _team(self, team, team_keys, invalid, vms, fabric, mine, results, host, gateway, targets, gateway_problem) -> dict:
         """{(check, role): Cell} of one team."""
         cells: dict[tuple[str, str], Cell] = {}
         n = len(team_keys)
@@ -531,14 +531,14 @@ class Validator:
                 cells[(check, role)] = found.get(check) or Cell("unknown", "unknown", why)
                 if not found:
                     why = ""
-            cells[("login", role)] = self._login(team, role, n, mine, fabric, node, gateway, targets, gateway_problem, vms)
+            cells[("login", role)] = self._login(team, role, n, mine, fabric, host, gateway, targets, gateway_problem, vms)
         if invalid:
             cell = cells.get(("login", "a"))
             if cell is not None:
                 cell.why = "; ".join(x for x in (cell.why, f"{invalid} of the team's keys are no SSH public key: left out") if x)
         return cells
 
-    def _login(self, team, role, n, mine, fabric, node, gateway, targets, gateway_problem, vms) -> Cell:
+    def _login(self, team, role, n, mine, fabric, host, gateway, targets, gateway_problem, vms) -> Cell:
         if not n:
             return Cell("error", "no key", "the team has no SSH key registered (its profile on the dashboard)") if role == "a" else Cell("n/a", "—")
         tag = f"{team.slug}-{role}"
@@ -555,11 +555,11 @@ class Validator:
             sync = True
         if role == "a":
             # The team's way in: the gateway takes the key and forwards to A, and A takes it too.
-            if node is None or "gateway" not in node.reached:
-                whys.append("the SSH gateway was not asked (no answer to the node)")
+            if host is None or "gateway" not in host.reached:
+                whys.append("the SSH gateway was not asked (no answer to the host)")
                 taken = set()
             else:
-                at_gateway = node.accepts.get("gateway", set()) & set(mine)
+                at_gateway = host.accepts.get("gateway", set()) & set(mine)
                 if len(at_gateway) < n:
                     whys.append(f"the SSH gateway takes {len(at_gateway)} of them")
                     sync = True
@@ -618,11 +618,11 @@ class Validator:
         now = timezone.now()
         found = HostJob.objects.filter(params__team_uuid=str(db_team.uuid)).filter(
             Q(state__in=["queued", "running"]) | Q(state="failed", finished_at__gte=now - timedelta(hours=24))).order_by("id")
-        node = None
+        host = None
         for job in found:
             if job.state == "queued":
-                node = node or host_jobs.node_state(self.remote.session)
-                why = "; ".join(host_jobs.queue_reasons(job, node)) or "about to start"
+                host = host or host_jobs.host_state(self.remote.session)
+                why = "; ".join(host_jobs.queue_reasons(job, host)) or "about to start"
                 print(output.color(f"  job #{job.id} {job.kind} queued for "
                                    f"{host_jobs._ago((now - job.requested_at).total_seconds())}: {why}", "yellow"))
             elif job.state == "running":

@@ -196,7 +196,7 @@ def test_end_to_end_competition_journey(site, monkeypatch, gameplans):  # noqa: 
     r1 = Round.objects.get(name="R1")
 
     # ---- STEP 3: the gameplan assigned to round 1 ------------------------------
-    # Created without one; the orchestrator lists the gameplans it and the node hold
+    # Created without one; the orchestrator lists the gameplans it and the host hold
     # (by file name only), and staff choose one on the round's page.
     assert (r1.gameplan, r1.team_duration) == ("", 600)
     conductor, agent, flow_clock = make_conductor(gameplans)

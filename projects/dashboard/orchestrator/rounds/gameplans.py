@@ -13,7 +13,7 @@ copy is (core/models/rounds.py):
 The dashboard reads all of it but a version's bytes, which only the orchestrator and the admin
 may read. Why a gameplan is not valid goes to the orchestrator's journal, never to the database.
 
-A gameplan is valid when the orchestrator's copy and the node's (the round agent's
+A gameplan is valid when the orchestrator's copy and the host's (the round agent's
 `gameplans` job) are the same file (SHA-256) and both find nothing wrong with it. A round's
 gameplan is checked against its duration per team before the round starts, and pinned (its
 SHA-256 on every attempt) when its first attempt starts: every team runs the same version.
@@ -52,7 +52,7 @@ def framework():
 def directory():
     path = getattr(settings, "GAMEPLAN_DIR", "")
     if not path:
-        raise Unavailable("WORMS_GAMEPLAN_DIR is not set: gameplans exist on the orchestrator and the node only")
+        raise Unavailable("WORMS_GAMEPLAN_DIR is not set: gameplans exist on the orchestrator and the host only")
     return path
 
 
@@ -81,8 +81,8 @@ def description(filename, source):
         return ""
 
 
-def node_view():
-    """{file: (sha256, valid)} from the node's latest `gameplans` job, or None if it has none."""
+def host_view():
+    """{file: (sha256, valid)} from the host's latest `gameplans` job, or None if it has none."""
     job = HostJob.objects.filter(kind=HostJob.Kind.GAMEPLANS, state=HostJob.State.DONE).order_by("-id").first()
     if job is None:
         return None
@@ -93,9 +93,9 @@ def node_view():
     return out
 
 
-def refresh(node):
+def refresh(host):
     """Record the orchestrator's copy (its versions, what changed, the files now) and check
-    each file against the node's view (`node`: node_view()). Returns {file: sha256} of the
+    each file against the host's view (`host`: host_view()). Returns {file: sha256} of the
     valid ones. Each file is read once: the version recorded is those bytes, and the check
     loads the file by that hash (a file changed meanwhile fails it until the next check)."""
     loader, _ = framework()
@@ -108,13 +108,13 @@ def refresh(node):
     valid = {}
     for name, (_, sha) in current.items():
         _, found = problems(name, sha256=sha)
-        theirs = (node or {}).get(name)
+        theirs = (host or {}).get(name)
         if theirs is None:
-            found = found + ["the node has no such file (is the agent's workspace synced?)"]
+            found = found + ["the host has no such file (is the agent's workspace synced?)"]
         elif theirs[0] != sha:
-            found = found + ["the node's copy is a different version: deploy one checkout to both"]
+            found = found + ["the host's copy is a different version: deploy one checkout to both"]
         elif not theirs[1]:
-            found = found + ["the node finds it invalid: its gameplans job log on the node (/var/log/worms/jobs/) says why"]
+            found = found + ["the host finds it invalid: its gameplans job log on the host (/var/log/worms/jobs/) says why"]
         for problem in found:
             log.warning("gameplan %s: %s", name, problem)
         if not found:

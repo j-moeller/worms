@@ -1,12 +1,12 @@
 #!/bin/sh
-# `tofu init` of one of the node's stacks (sandbox, devbox) that works without internet.
+# `tofu init` of one of the host's stacks (sandbox, devbox) that works without internet.
 #
 #   tofu-init <stack directory> [mirror]
 #
 # A plain `tofu init` asks the registry for every provider, even one it has installed and
-# locked (OpenTofu 1.13), and so fails on a node with no outbound connection: the workspace
+# locked (OpenTofu 1.13), and so fails on a host with no outbound connection: the workspace
 # sync (role round_agent, tasks/workspace.yml) and a round's sandbox build (the round agent,
-# executor.py) then stop there. So: first from the node's provider mirror, which keeps every
+# executor.py) then stop there. So: first from the host's provider mirror, which keeps every
 # provider version the stacks have installed; the registry only for a version the mirror lacks
 # (a new pin in the code: that needs the internet once), and what it installs is kept too.
 set -eu

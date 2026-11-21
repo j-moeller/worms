@@ -106,7 +106,7 @@ postgresql_table_privileges:
       tables: [topology_snapshots]
     # Round orchestration (orchestrator/rounds, docs/05-live-environment.md): runs (attempts) and the
     # sandbox VMs they register; host jobs are only requested. The gameplans it and the
-    # node hold (file names, valid or not) and its check of each round's gameplan.
+    # host hold (file names, valid or not) and its check of each round's gameplan.
     - privs: INSERT, UPDATE
       tables: [round_runs, virtual_machines]
     - privs: INSERT, UPDATE, DELETE
@@ -229,7 +229,7 @@ postgresql_append_only_tables:
 
 # Columns only their readers may read: whatever a grant gave another role, it keeps SELECT on
 # the table's other columns only. A gameplan version's bytes are code that runs as root on the
-# node: only the admin reads them. Not the dashboard (docs/07-security.md, T3), and not the
+# host: only the admin reads them. Not the dashboard (docs/07-security.md, T3), and not the
 # orchestrator either, which writes them and has the files anyway, but never reads them back.
 postgresql_restricted_columns:
   gameplan_versions:

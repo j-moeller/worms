@@ -13,7 +13,7 @@ This is the dashboard's **Live** view.
 
 ```
 dashboard ──(round: name, dates, gameplan file name, minutes per team)──► database
-orchestrator: conduct_rounds ──HostJob rows──► round agent (root, node) ──► OpenTofu, Ansible, SSH into VMs
+orchestrator: conduct_rounds ──HostJob rows──► round agent (root, host) ──► OpenTofu, Ansible, SSH into VMs
              └─ Proxmox API (power token: VM.Audit + VM.PowerMgmt on /pool/sandbox) ──► start/stop/suspend sandbox VMs
 ```
 
@@ -37,10 +37,10 @@ orchestrator: conduct_rounds ──HostJob rows──► round agent (root, node
 
 **Where gameplans live**
 - **Orchestrator.** `/opt/orchestrator/gameplans/{plans,lib}`, readable by the service only. Set by `WORMS_GAMEPLAN_DIR` and `WORMS_GAMEPLAN_LIB`.
-- **Node.** `/opt/worms/gameplans` and `/opt/worms/src/gameplan`.
+- **Host.** `/opt/worms/gameplans` and `/opt/worms/src/gameplan`.
 - **Dashboard VM.** It holds no copy; Ansible deletes one if present.
 - **Database.** Every version the orchestrator has seen, bytes included ([Versions](#versions)). Only the orchestrator and the admin may read the bytes.
-- **What the dashboard sees.** The files and whether each is valid, every version's SHA-256, file name, size and `description` for teams, which runs pinned it and the files' history; a round's `gameplan_status`; and the simulations staff ask for ([Simulation](#simulation)). Never a version's bytes. Why a gameplan is invalid goes to the orchestrator's journal and the node's job log, never to the database.
+- **What the dashboard sees.** The files and whether each is valid, every version's SHA-256, file name, size and `description` for teams, which runs pinned it and the files' history; a round's `gameplan_status`; and the simulations staff ask for ([Simulation](#simulation)). Never a version's bytes. Why a gameplan is invalid goes to the orchestrator's journal and the host's job log, never to the database.
 
 ### Versions
 
@@ -56,7 +56,7 @@ A gameplan version is its bytes, named by their SHA-256. Once recorded, a versio
   - The time and the recording account are filled by the database; the orchestrator may insert only the other columns.
   - `worms db reset` keeps both tables.
 - **Pinned.** When a round's first attempt starts, every run of the round gets the version its file has then: `round_runs.gameplan_sha256`, and `gameplan_version` pointing at the record (a constraint keeps the two equal). Retries keep it. Before that, the round shows its file's current version.
-- **Run from the files.** The node and the orchestrator run the file in their copy, after checking it is exactly the pinned SHA-256. Neither ever runs code from the database: whoever could write to the database could otherwise put code on the node, where it runs as root. The record is for the audit.
+- **Run from the files.** The host and the orchestrator run the file in their copy, after checking it is exactly the pinned SHA-256. Neither ever runs code from the database: whoever could write to the database could otherwise put code on the host, where it runs as root. The record is for the audit.
 - **Edits.** A file edited after a round pinned it is a new version. The record keeps the old one. The round's attempts fail until both copies hold the pinned version again, so edit a gameplan only when no round has pinned the old version and still has attempts to run.
 - **Older runs.** Runs pinned before versions were recorded are linked to their version when a file with that SHA-256 is checked. A hash whose file is gone stays known by hash only: its bytes were never recorded.
 - **Where to look.**
@@ -78,7 +78,7 @@ A gameplan version is its bytes, named by their SHA-256. Once recorded, a versio
    - Before its start a round can be edited fully. After it, its end, its gameplan and its duration per team can change until its first attempt starts. A team skipped for want of an upload does not count as a start.
    - Every staff page warns of a round not over whose gameplan is missing or not valid.
 2. **Validation, every 10 minutes** ([`orchestrator/rounds/gameplans.py`](../projects/dashboard/orchestrator/rounds/gameplans.py)).
-   - The conductor asks the node for its view (the `gameplans` job: SHA-256 and validity, with the packages checked against the apt cache). It validates its own copy.
+   - The conductor asks the host for its view (the `gameplans` job: SHA-256 and validity, with the packages checked against the apt cache). It validates its own copy.
    - A file is valid only if both copies are identical and both find nothing wrong.
    - Each upcoming round gets `gameplan_status` `ok` or `invalid`, checked at its duration per team.
 3. **Planning.** Once `round_start` has passed, the round is planned ([`planner.py`](../projects/dashboard/orchestrator/rounds/planner.py)), with or without a gameplan.
@@ -86,7 +86,7 @@ A gameplan version is its bytes, named by their SHA-256. Once recorded, a versio
    - Each run uses the team's latest Live upload from **before** `round_start`, however late the gameplan comes. A team without one is SKIPPED.
 4. **Pin, or wait alone** ([`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py), `_next` and `_pin`).
    - Before a round's first attempt, its gameplan's SHA-256 is written into every run of that round, so every team runs the same version.
-   - The gameplan must be chosen, and valid on the orchestrator and the node at the round's duration per team.
+   - The gameplan must be chosen, and valid on the orchestrator and the host at the round's duration per team.
    - If it is not, the round waits, **alone**: the rounds after it go ahead. The conductor looks at it again every `gameplan_poll` seconds (60) and records each look (`gameplan_checked_at`). Once staff choose a valid gameplan, the round begins at the next look, as soon as no other round is under way.
    - A round whose teams all lack an upload needs no gameplan: each run is skipped.
 5. **Attempts.** One round at a time. The round under way (a pinned attempt still to come) goes on until every team's run is over, retries included. Then the next round that can begin, earliest start first. Within a round, attempts run by (position, attempt) (next section).
@@ -108,12 +108,12 @@ PENDING → PREPARING → CHECKING → RUNNING → ENDING → TEARING_DOWN → F
 | TEARING_DOWN | Job `teardown`: clears the current-team file, deletes the run's secrets. If another attempt of the round follows, the sandbox is stopped and kept; otherwise it is destroyed |
 
 **`prepare`** ([`handlers.py`](../scripts/round_agent/handlers.py)):
-1. The node loads its own copy of the gameplan, pinned to the SHA-256, and validates it again.
+1. The host loads its own copy of the gameplan, pinned to the SHA-256, and validates it again.
 2. It builds the sandbox, or reuses it:
    - **First attempt of a round, or another gameplan.** It refuses while the internet window is open. It destroys the old sandbox, shuts down the devboxes and rolls the 11 service VMs back to `clean`. Then it writes `generated_vms.tf`, applies the sandbox stack and runs [`SetupSandbox.yml`](../ansible/SetupSandbox.yml): the CA, apt, and role [`sandbox_vm`](../ansible/roles/applications/sandbox_vm/) for the gameplan's packages, users, files, setup commands and services. It snapshots every sandbox VM as `clean` and starts the devboxes again.
    - **Later attempts.** `qm rollback … clean` of the same sandbox.
-3. It generates **this run's** secrets on the node: SSH keys, passwords and TOTP seeds.
-4. It sets the passwords, installs the keys and writes the files marked `at_reset`. Documents, archives and vaults are made on the node at this point, with the secrets in them ([`render.py`](../src/gameplan/render.py)).
+3. It generates **this run's** secrets on the host: SSH keys, passwords and TOTP seeds.
+4. It sets the passwords, installs the keys and writes the files marked `at_reset`. Documents, archives and vaults are made on the host at this point, with the secrets in them ([`render.py`](../src/gameplan/render.py)).
 5. It places a fresh flag on **every** VM, reads it back and reports only its hash.
 6. It keeps the secrets in `/var/lib/worms/runs/<run>.json` (root, 0600) until teardown.
 
@@ -172,7 +172,7 @@ Flags released late are credited for submissions up to 900 s earlier. The round 
 
 One file in `gameplans/`, named `[a-z][a-z0-9_]*.py`, holding exactly one `Gameplan` subclass. Commit it like any other file and deploy it with `worms apply gameplans` ([Running a round](#running-a-round)).
 
-- **Who runs it.** The code runs as root on the node and as the orchestrator's service user, so gameplan authors are trusted.
+- **Who runs it.** The code runs as root on the host and as the orchestrator's service user, so gameplan authors are trusted.
 - **Teams never see it.**
 - **Reference.** [`src/gameplan/definition.py`](../src/gameplan/definition.py) (API, limits), [`runtime.py`](../src/gameplan/runtime.py) (`execute()`, validation), [`loader.py`](../src/gameplan/loader.py), [`build.py`](../src/gameplan/build.py).
 
@@ -236,7 +236,7 @@ class RoundOne(Gameplan):                       # gameplans/round_one.py
   - `port` is an int, a `(low, high)` range, or `None`.
   - `peers` are VMs or networks; the default is every network the VM is on.
   - Scoring, logging, DNS, the private internet and the LLM endpoint are always allowed.
-- **Secrets, new for every run.** Each stands for its value in a file's content (a marker, `@@worms-secret:…@@`, filled in on the node). They are allowed nowhere else.
+- **Secrets, new for every run.** Each stands for its value in a file's content (a marker, `@@worms-secret:…@@`, filled in on the host). They are allowed nowhere else.
 
   | Call | Gives | In a file |
   |---|---|---|
@@ -245,7 +245,7 @@ class RoundOne(Gameplan):                       # gameplans/round_one.py
   | `generate_password(length=16, charset="alnum"\|"digits"\|"hex")` | a password of no user, itself a string | `pw` |
   | `generate_totp(account, issuer="worms", digits=6, period=30, algorithm="SHA1")` | an authenticator's seed | `totp.secret`, `totp.uri` (`otpauth://…`) |
 
-- **Logins.** Each makes its user on the VM if it is new; `add_user` sets its shell, groups and sudo. A password login admits only its own users: a user with a password for `su` does not get in over telnet or FTP. The node's own SSH access stays key-only. Open the ports with firewall rules.
+- **Logins.** Each makes its user on the VM if it is new; `add_user` sets its shell, groups and sudo. A password login admits only its own users: a user with a password for `su` does not get in over telnet or FTP. The host's own SSH access stays key-only. Open the ports with firewall rules.
 
   | Call | The worm needs |
   |---|---|
@@ -257,8 +257,8 @@ class RoundOne(Gameplan):                       # gameplans/round_one.py
   | `add_local_login(vms, login)` | the password, from the VM itself: `su`, and `sudo` for a user in the group `sudo`. No way in from outside |
   | `add_private_ssh_key(vms, key, user="debian")` | nothing: puts `~/.ssh/<name>` (0600) there for the worm to find |
 
-  - **A key's passphrase** is text: fixed, for a worm to guess from hints, the run's own (`generate_password()`, a login's `pwd`), or both. It may hold the run's passwords and TOTP secrets, not a key; it is one line. The node encrypts the key with it in Python, so the passphrase is never a command's argument there. `key.passphrase` stands for it in a file.
-  - **SSH on another port.** `vm.set_ssh_port(2222)` (or `ssh_port = 2222` on a VM class): sshd answers there, and every SSH login of the VM with it. It keeps listening on 22, which the node logs in on over the management NIC; the gameplan's firewall decides which port the sandbox networks see, so open the new one and leave 22 closed. Validation refuses a port one of the VM's services takes (23 for telnet, 21 and 40000–40019 for FTP, 8000 for `DjangoVM`, 5432 for `PostgreVM`).
+  - **A key's passphrase** is text: fixed, for a worm to guess from hints, the run's own (`generate_password()`, a login's `pwd`), or both. It may hold the run's passwords and TOTP secrets, not a key; it is one line. The host encrypts the key with it in Python, so the passphrase is never a command's argument there. `key.passphrase` stands for it in a file.
+  - **SSH on another port.** `vm.set_ssh_port(2222)` (or `ssh_port = 2222` on a VM class): sshd answers there, and every SSH login of the VM with it. It keeps listening on 22, which the host logs in on over the management NIC; the gameplan's firewall decides which port the sandbox networks see, so open the new one and leave 22 closed. Validation refuses a port one of the VM's services takes (23 for telnet, 21 and 40000–40019 for FTP, 8000 for `DjangoVM`, 5432 for `PostgreVM`).
 
   ```python
   pin = self.generate_password(length=4, charset="digits")
@@ -286,7 +286,7 @@ class RoundOne(Gameplan):                       # gameplans/round_one.py
 - **`vm.write_file(path, content, mode=0o644, owner="debian", at_reset=True)`** (or `self.write_file(vm, path, …)`) returns a `FileHandle`.
   - `~` is the owner's home. The owner is root, debian, or a user of that VM.
   - With `at_reset=False` the file is written only when `execute()` calls `self.write_file(handle)`.
-  - `content` is text or one of these ([`content.py`](../src/gameplan/content.py)). Any text in them, a zip's password and a vault's password can be secrets. The node makes the file when it writes it ([`render.py`](../src/gameplan/render.py)); it never passes the database.
+  - `content` is text or one of these ([`content.py`](../src/gameplan/content.py)). Any text in them, a zip's password and a vault's password can be secrets. The host makes the file when it writes it ([`render.py`](../src/gameplan/render.py)); it never passes the database.
 
   | Content | File |
   |---|---|
@@ -372,21 +372,21 @@ PYTHONPATH=src python3 -c "from gameplan import loader, runtime; print(runtime.v
 
 ## Running a round
 
-1. **Create the round** on **Staff → Rounds**: its window (the start is the upload deadline; teams' latest Live uploads before it are used) and its duration per team. The gameplan is optional here. Tick **Shut down every devbox while its attempts run** when the node needs the memory ([Devboxes during a round](#devboxes-during-a-round)).
-2. **Commit and deploy** the gameplan: `worms apply gameplans`, outside a round. It copies `gameplans/` and the framework (`src/gameplan`) to the node, then to the orchestrator, and restarts the conductor, which checks them at once. Nothing else is configured and no package installed, so it needs no internet and takes seconds. The round agent reads gameplan files fresh for every job, and restarts itself, between jobs, when the framework or its own code changed on disk ([`agent.py`](../scripts/round_agent/agent.py), `LoadedCode`).
-3. **Check it is valid, and the version.** **Staff → Rounds** marks it valid. The gameplan choice, the rounds list, the round's page and **Staff → Simulations** name each gameplan's version by the first 12 hex digits of its SHA-256: compare them with `sha256sum gameplans/<file> | cut -c1-12` in your checkout. A file missing from the choice is not valid. If not, read `journalctl -u orchestrator-conduct-rounds` on the orchestrator and the `gameplans` job log on the node. **Staff → Simulations** (or **Simulate** on the round's page) replays its attempt at the round's duration per team ([Simulation](#simulation)).
+1. **Create the round** on **Staff → Rounds**: its window (the start is the upload deadline; teams' latest Live uploads before it are used) and its duration per team. The gameplan is optional here. Tick **Shut down every devbox while its attempts run** when the host needs the memory ([Devboxes during a round](#devboxes-during-a-round)).
+2. **Commit and deploy** the gameplan: `worms apply gameplans`, outside a round. It copies `gameplans/` and the framework (`src/gameplan`) to the host, then to the orchestrator, and restarts the conductor, which checks them at once. Nothing else is configured and no package installed, so it needs no internet and takes seconds. The round agent reads gameplan files fresh for every job, and restarts itself, between jobs, when the framework or its own code changed on disk ([`agent.py`](../scripts/round_agent/agent.py), `LoadedCode`).
+3. **Check it is valid, and the version.** **Staff → Rounds** marks it valid. The gameplan choice, the rounds list, the round's page and **Staff → Simulations** name each gameplan's version by the first 12 hex digits of its SHA-256: compare them with `sha256sum gameplans/<file> | cut -c1-12` in your checkout. A file missing from the choice is not valid. If not, read `journalctl -u orchestrator-conduct-rounds` on the orchestrator and the `gameplans` job log on the host. **Staff → Simulations** (or **Simulate** on the round's page) replays its attempt at the round's duration per team ([Simulation](#simulation)).
 4. **Choose it** on the round's page. That works until the round's first attempt starts: a round without a valid gameplan waits alone, and the conductor looks again every minute ([`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py), `_pin`). Then the gameplan's version is pinned for every attempt.
-5. **Watch it** (next section). `worms status` shows the active run. On the node, `tail -F /var/log/worms/jobs/latest.log`.
+5. **Watch it** (next section). `worms status` shows the active run. On the host, `tail -F /var/log/worms/jobs/latest.log`.
 
 ### Devboxes during a round
 
-A round can run with every devbox shut down, for the node's memory: the switch **Shut down every devbox while its attempts run** (`rounds.devboxes_off`).
+A round can run with every devbox shut down, for the host's memory: the switch **Shut down every devbox while its attempts run** (`rounds.devboxes_off`).
 - **Until the round's start** staff can set it, on creating the round or on its page. After the start it is no longer on the form.
 - **When the round begins** (its gameplan pinned, [`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py), `_pin`), the conductor records it once, in `rounds.devbox_hold`: `no`, or `wanted`. From then on only the record counts, whatever the switch says. The round's page shows it.
-- **Before its first attempt** the conductor asks the round agent (`hold_devboxes`): every devbox VM and gateway that runs (the Proxmox pool `devbox`) is shut down, each one recorded on the node first (`/var/lib/worms/held-devboxes.json`); the round is `held`. A failure is logged and the attempts go ahead.
+- **Before its first attempt** the conductor asks the round agent (`hold_devboxes`): every devbox VM and gateway that runs (the Proxmox pool `devbox`) is shut down, each one recorded on the host first (`/var/lib/worms/held-devboxes.json`); the round is `held`. A failure is logged and the attempts go ahead.
 - **Meanwhile** the agent takes no `devbox_*` job (resets, key updates, dev uploads wait in the queue) and dev uploads wait to start.
 - **Once no round that holds them has a run to come or under way** (after the last run's teardown), the agent starts again exactly the VMs it recorded (`release_devboxes`) and the round is `released`. A failed release (the internet window open, ...) is tried again every minute; a next round that holds them too keeps them off until it is over.
-- **By hand**, if the conductor is gone: `qm start` the VMs listed in that file on the node, then delete the file (the agent takes devbox jobs again).
+- **By hand**, if the conductor is gone: `qm start` the VMs listed in that file on the host, then delete the file (the agent takes devbox jobs again).
 
 ### Following a round
 
@@ -422,7 +422,7 @@ colour of the most severe.
 
 As of 2026-11-08. The gameplan rework is uncommitted and not yet deployed.
 
-- **Testing.** No round has run on a real node yet. The conductor's tests run it against a fake Proxmox and a fake round agent ([`tests/test_rounds.py`](../tests/test_rounds.py)).
+- **Testing.** No round has run on a real host yet. The conductor's tests run it against a fake Proxmox and a fake round agent ([`tests/test_rounds.py`](../tests/test_rounds.py)).
 - **Shared services.** The service VMs are rolled back only when a sandbox is built, i.e. the first attempt of a round. What one team's worm does to them stays for later attempts.
 - **Operations.**
   - Nothing clears a failed-teardown hold.

@@ -1,19 +1,19 @@
-# Which node, and how OpenTofu logs in to it (snippet uploads): no defaults. `worms`
-# sets them from the node's own name and the switch in ansible/group_vars/all.yml
+# Which host, and how OpenTofu logs in to it (snippet uploads): no defaults. `worms`
+# sets them from the host's own name and the switch in ansible/group_vars/all.yml
 # (worms_environments: worms = production, worms-dev = development), the round agent
 # from its environment file; a run without them stops ("No value for required variable").
 variable "proxmox_instance" {
-  description = "Name of the Proxmox node (its hostname): worms or worms-dev"
+  description = "Name of the Proxmox host (its hostname): worms or worms-dev"
   type        = string
 }
 
 variable "node_ssh_address" {
-  description = "Address OpenTofu's provider logs in to the node at (127.0.0.1 on the node itself)"
+  description = "Address OpenTofu's provider logs in to the host at (127.0.0.1 on the host itself)"
   type        = string
 }
 
 variable "node_ssh_port" {
-  description = "Port of the node's sshd (worms_environments: operator_ssh_port)"
+  description = "Port of the host's sshd (worms_environments: operator_ssh_port)"
   type        = number
 }
 

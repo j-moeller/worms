@@ -24,9 +24,9 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 def pytest_addoption(parser):
     group = parser.getgroup("live", "the live journey on a deployed platform (tests/live, docs/03-manage-py.md)")
-    group.addoption("--live", action="store_true", help="run only the live journey; it creates accounts and VMs on this node")
+    group.addoption("--live", action="store_true", help="run only the live journey; it creates accounts and VMs on this host")
     group.addoption("--live-out", metavar="DIR", help="where the protocol and screenshots go (default: a new directory in /var/tmp)")
-    group.addoption("--live-wipe-database", metavar="NODE", help="wipe the database first; you must name this node")
+    group.addoption("--live-wipe-database", metavar="HOST", help="wipe the database first; you must name this host")
 
 
 def pytest_collection_modifyitems(config, items):

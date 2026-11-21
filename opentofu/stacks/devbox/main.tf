@@ -39,7 +39,7 @@ provider "proxmox" {
     agent    = true
     username = "root"
 
-    # How it reaches the node, per system (worms_environments): set by `worms`
+    # How it reaches the host, per system (worms_environments): set by `worms`
     # and the round agent, never a default.
     node {
       name    = var.proxmox_instance
@@ -191,7 +191,7 @@ module "devbox_vm" {
   dns_server        = local.services_ips.dns
 
   # Team code is assumed hostile and root on these VMs. This CPU offers no hardware
-  # virtualisation, so they get no /dev/kvm and cannot drive the node's nested-KVM code
+  # virtualisation, so they get no /dev/kvm and cannot drive the host's nested-KVM code
   # (docs/07-security.md). Never "host" or "max". The same as a sandbox VM.
   cpu_type = "x86-64-v3"
   # As the operator set it on the running VMs on 2026-11-05.
@@ -374,7 +374,7 @@ resource "proxmox_virtual_environment_firewall_rules" "ssh_gateway" {
     comment        = "SSH from the Proxmox host (Ansible) on the management NIC"
   }
   # The internet window (Internet.yml), as every VM but the sandbox and devbox ones: its
-  # management NIC has the node as gateway, on mgmt-exposed (an internet zone).
+  # management NIC has the host as gateway, on mgmt-exposed (an internet zone).
   rule {
     security_group = local.sg.provisioning
     iface          = "net1"

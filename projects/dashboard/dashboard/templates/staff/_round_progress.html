@@ -46,7 +46,7 @@ steps so far. `p`: progress(); `show_name`: link the round. The page refreshes t
             {% if a.run_time %}
             <p class="progress__run"><span>The worm's run: <strong>{{ a.run_time.elapsed_text }}</strong> of {{ a.run_time.total_text }}</span> <progress class="pbar pbar--run" max="{{ a.run_time.total }}" value="{{ a.run_time.elapsed }}">{{ a.run_time.percent }}%</progress> <span>{{ a.run_time.percent }}% · {{ a.flags }} flag{{ a.flags|pluralize }} so far (they count if the attempt finishes)</span></p>
             {% endif %}
-            {% if a.waiting_on %}<p class="muted">Waiting for the node: <span class="mono">{{ a.waiting_on.kind }}</span>, {{ a.waiting_on.state }} since {{ a.waiting_on.requested_at|date:"H:i:s" }} UTC.</p>{% endif %}
+            {% if a.waiting_on %}<p class="muted">Waiting for the host: <span class="mono">{{ a.waiting_on.kind }}</span>, {{ a.waiting_on.state }} since {{ a.waiting_on.requested_at|date:"H:i:s" }} UTC.</p>{% endif %}
             <svg class="tl tl--attempt" role="img" aria-label="The attempt's steps over time" width="100%" height="70">
                 <line class="tl__base" x1="0" x2="100%" y1="34" y2="34"></line>
                 {% for b in a.segments %}<g class="tl__block tl__block--{{ b.cls }}"><title>{{ b.title }}</title><rect x="{{ b.x }}" y="22" width="{{ b.w }}" height="24" rx="3"></rect>{% if b.wide %}<text x="{{ b.mid }}" y="38" text-anchor="middle">{{ b.label }}</text>{% endif %}</g>{% endfor %}

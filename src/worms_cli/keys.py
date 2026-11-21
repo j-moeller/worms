@@ -54,7 +54,7 @@ DEVBOX_WRITE = f"sudo sh -c {shlex.quote(DEVBOX_SCRIPT)}"  # the round agent run
 GATEWAY_WRITE = f"sudo install -m 644 -o root -g root /dev/stdin {GATEWAY_FILE}"
 # The internal CA a devbox VM must trust: a worm reaches scoring and logging over verified HTTPS. A VM
 # rolled back to its first-boot snapshot lacks it (role ca_distribute installs it in a configuration).
-CA_FILE = "ansible/pki/worms/ca.crt"  # in the checkout, and in the node's workspace
+CA_FILE = "ansible/pki/worms/ca.crt"  # in the checkout, and in the host's workspace
 CA_SCRIPT = "install -m 644 /dev/stdin /usr/local/share/ca-certificates/worms-internal-ca.crt && update-ca-certificates"
 CA_WRITE = f"sudo sh -c {shlex.quote(CA_SCRIPT)}"
 GATEWAY_HEADER = "# WORMS devbox SSH gateway authorized_keys (`worms key sync`, role ssh_gateway). DO NOT EDIT."

@@ -16,8 +16,8 @@ As of 2026-11-16. Production runs `33dae12` ("worms apply database: the orchestr
 | Database | Migrations `0010`–`0017`: a UUID for rounds (`0010`–`0012`), access tokens and devbox SSH keys (`0013`–`0015`); the host job kind `read_file` (`0016`); the table `gameplan_simulations` (`0017`). The orchestrator may insert into and delete from that table | the orchestrator (migrations), then the database's grants play |
 | Dashboard | Round, progression, token and SSH key URLs use the UUID; **Staff → Simulations**; **Simulate** on a round's page; the round badge in the Dev view; a favicon | `dashboard` |
 | Orchestrator | The simulation API (`/gameplans/<file>/simulation/`), run in a child process with limits ([5](05-live-environment.md#simulation)); the conductor's `read_file` step | `orchestrator` |
-| Gameplan framework (`src/gameplan`) | Documents, archives, KeePass vaults, TOTP and telnet logins, `read_file`, simulation. Only additions: `round_one.py` is unchanged and loads as before | `orchestrator` (its copy) and `round-agent` (the node's) |
-| Round agent (node) | The `read_file` job; new secret kinds; `python3-cryptography` (KeePass files) | `round-agent`, **plus a restart** |
+| Gameplan framework (`src/gameplan`) | Documents, archives, KeePass vaults, TOTP and telnet logins, `read_file`, simulation. Only additions: `round_one.py` is unchanged and loads as before | `orchestrator` (its copy) and `round-agent` (the host's) |
+| Round agent (host) | The `read_file` job; new secret kinds; `python3-cryptography` (KeePass files) | `round-agent`, **plus a restart** |
 | Sandbox VMs | `sandbox_vm` takes its password logins from a new key, `ssh_password_users`, that only the new `build.py` writes | the round agent, at the next sandbox build |
 | Sandbox gateway | Resolves `worms.internal` through the private DNS ([`main.tf`](../opentofu/stacks/sandbox/main.tf)) | the round agent, at the next sandbox build |
 | Gameplans | A second example, [`credential_chain.py`](../gameplans/credential_chain.py). It needs packages the apt cache does not hold yet | `orchestrator`, `round-agent`; packages: `apt-cache --packages` |
@@ -25,7 +25,7 @@ As of 2026-11-16. Production runs `33dae12` ("worms apply database: the orchestr
 | devpi | 116 seed packages (some 650 MB) instead of one; downloaded in batches into `/var/tmp` | `devpi --packages` |
 | Devboxes | Time from `ntp.worms.internal`. The pip index ends where production has it (`root/pypi`): GitLab's `fix/devbox-pip-ntp` moved it to a `root/offline` that does not exist, and `fix/devpi-seed-common-packages` moved it back | each devbox's next reset |
 
-Unchanged: the platform and firewall stacks, the node's network, DNS, syslog, scoring, logging, the monitor, `group_vars` and the vault (no new secret), and the Django apps' Python requirements.
+Unchanged: the platform and firewall stacks, the host's network, DNS, syslog, scoring, logging, the monitor, `group_vars` and the vault (no new secret), and the Django apps' Python requirements.
 
 ## The migrations
 
@@ -74,9 +74,9 @@ During and after the deploy, old and new parts can meet:
 |---|---|---|
 | Old dashboard, new schema | Creating a round, an access token or an SSH key fails (500). Everything else works | Within one build: until the dashboard's restart at the end of the Django play, about a minute. **For good** if only the orchestrator is built (`worms apply orchestrator`) |
 | New dashboard, old schema | Pages answer 500 (`column ... does not exist`) | Prevented: `worms apply dashboard` brings the database and the orchestrator into the plan while migrations are pending ([`components.py`](../src/worms_cli/components.py), `plan`) |
-| New orchestrator, old round agent | A gameplan using `read_file` fails its attempt: the agent does not know the job. Gameplans using the new contents (such as `credential_chain.py`) are invalid on the node | Until the agent is rebuilt and restarted |
+| New orchestrator, old round agent | A gameplan using `read_file` fails its attempt: the agent does not know the job. Gameplans using the new contents (such as `credential_chain.py`) are invalid on the host | Until the agent is rebuilt and restarted |
 | Agent's code synced, agent not restarted | **The dangerous one.** The running agent keeps the old `src/gameplan` in memory, but runs the new `sandbox_vm` role from disk. The old `build.py` writes no `ssh_password_users`, so the new role lets no user log in with a password. round_one's `vm2` login stops working, and its flag cannot be reached. Nothing reports an error | Until `systemctl restart worms-round-agent`. Syncing never restarts the agent ([`workspace.yml`](../ansible/roles/host/round_agent/tasks/workspace.yml)), and `worms apply round-agent` restarts it only when its unit or environment file changes. Neither does here |
-| Full role not run on the node | `python3-cryptography` missing: a gameplan writing a KeePass file fails on the node. The tag-limited sync (`agent-sync`, run by other builds) does not install it | Until `worms apply round-agent` |
+| Full role not run on the host | `python3-cryptography` missing: a gameplan writing a KeePass file fails on the host. The tag-limited sync (`agent-sync`, run by other builds) does not install it | Until `worms apply round-agent` |
 | New dashboard, old orchestrator | Staff → Simulations answers 502 (the orchestrator lacks the API) | Not in the order below |
 
 ## Procedure
@@ -88,7 +88,7 @@ During and after the deploy, old and new parts can meet:
    - `worms status`: no sandbox VM exists, and the internet window is closed. A leftover sandbox blocks step 7 and would be reused by the next round of the same gameplan.
    - `worms round`, `worms jobs`: nothing running or queued.
 3. **Update the controller's checkout.**
-   - `git status` must be clean. The node's workspace is rsynced from the working tree, uncommitted edits included ([`round_agent/defaults`](../ansible/roles/host/round_agent/defaults/main.yml)).
+   - `git status` must be clean. The host's workspace is rsynced from the working tree, uncommitted edits included ([`round_agent/defaults`](../ansible/roles/host/round_agent/defaults/main.yml)).
    - Then `git pull --ff-only` to the commit being deployed (`21976d9` or later; write it down).
 4. **Dump the database.** `worms login database`, then `sudo -i` and:
    ```sh
@@ -98,8 +98,8 @@ During and after the deploy, old and new parts can meet:
    Copy it off the VM if the database disk itself is the worry.
 5. **Plan, then build** the database, orchestrator, dashboard and round agent:
    - `worms apply --plan dashboard round-agent`. Expect `database` and `orchestrator` with "configure again: the database lacks migrations", a note naming the 8 migrations, `dashboard` and `round-agent`.
-   - `worms apply dashboard round-agent`. One Ansible run configures the database, orchestrator and dashboard together: the orchestrator migrates (its services stopped), the dashboard restarts, the grants are applied, the conductor restarts. Then the node's play: workspace, `python3-cryptography`, the unit.
-6. **Restart the round agent** on the node, while `worms jobs` shows nothing running, **then the conductor** on the orchestrator (`worms login orchestrator`):
+   - `worms apply dashboard round-agent`. One Ansible run configures the database, orchestrator and dashboard together: the orchestrator migrates (its services stopped), the dashboard restarts, the grants are applied, the conductor restarts. Then the host's play: workspace, `python3-cryptography`, the unit.
+6. **Restart the round agent** on the host, while `worms jobs` shows nothing running, **then the conductor** on the orchestrator (`worms login orchestrator`):
    ```sh
    systemctl restart worms-round-agent
    journalctl -u worms-round-agent -n 20
@@ -108,7 +108,7 @@ During and after the deploy, old and new parts can meet:
    sudo systemctl restart orchestrator-conduct-rounds
    sudo journalctl -u orchestrator-conduct-rounds -n 20   # "version ... recorded" for each gameplan
    ```
-   The conductor restarts during the build right after the migrations, before the grants play gives it the new tables. Its first gameplan check then fails (`permission denied for table gameplan_versions`), and the next one comes 10 minutes later. Restarting it, after the agent, makes it check at once, against an agent that lists every file. Seen on worms-dev on 2026-11-16: the agent still running then predated `credential_chain.py` and left it out (`the node has no such file`).
+   The conductor restarts during the build right after the migrations, before the grants play gives it the new tables. Its first gameplan check then fails (`permission denied for table gameplan_versions`), and the next one comes 10 minutes later. Restarting it, after the agent, makes it check at once, against an agent that lists every file. Seen on worms-dev on 2026-11-16: the agent still running then predated `credential_chain.py` and left it out (`the host has no such file`).
 7. **Fill the private internet:** `worms apply apt-cache devpi --packages`.
    - This opens the internet window and shuts the devboxes down. Both VMs are rolled back to `clean`, seeded, put back into offline mode and snapshotted as `clean` again.
    - The apt cache refetches its indexes and the new packages. devpi fetches 116 packages in 10 batches. On worms-dev, the batches took 4–5 minutes straight from PyPI; through devpi it takes longer.
@@ -118,7 +118,7 @@ During and after the deploy, old and new parts can meet:
    - **Staff → Rounds** opens. A round's URL is now `/staff/rounds/<uuid>/`.
    - **Staff → Simulations** lists the gameplans; round_one simulates as `ok`.
    - As a team member: create and revoke an access token; add and delete a devbox SSH key. These write the new columns.
-   - `worms show gameplans`: round_one is valid on both sides. The node's view refreshes on the conductor's next check (every 10 minutes). `credential_chain.py` is valid only after step 7.
+   - `worms show gameplans`: round_one is valid on both sides. The host's view refreshes on the conductor's next check (every 10 minutes). `credential_chain.py` is valid only after step 7.
 
 The rest applies by itself:
 - **The sandbox gateway's DNS** comes with the next sandbox build: the first attempt of the next round.
@@ -199,7 +199,7 @@ A later deploy gives every row a new UUID, so links handed out meanwhile change 
 - **devpi's data disk: 20 GB** (from 10): the seed is some 4.5 GB, and the first one runs next to the old leftovers and its own scratch. OpenTofu grows it in place; the role grows the partition and file system (`grow_disks`). apt-cache keeps 20 GB: its seed is some 400 MB.
 - **Did the seed run?** After a successful seed, apt-cache and devpi hold the list they fetched (`/etc/apt-cache-package-list`, `/etc/pypi-package-list`) and the commit it came from (`/etc/seed-version`; `-dirty` when the role had uncommitted changes). An older commit there means the last seed failed or did not run.
 - **nginx from nginx.org.** The dashboard, orchestrator, scoring and logging install nginx from nginx.org's stable repository (1.30 instead of Debian's 1.26), at the next build with the internet window; nginx restarts once. The role writes `nginx.conf` itself (Debian's settings: `sites-enabled/`, `www-data`) before the package, so the sites stay served, and removes nginx.org's default site. The signing keys are shipped in the role, with their fingerprints.
-- **Gameplans: SSH keys with a passphrase, SSH on another port** ([5](05-live-environment.md)). The node encrypts such a key with `cryptography` and `python3-bcrypt`, which `worms apply round-agent` installs; restart the round agent after it (step 6). Existing gameplans build as before.
+- **Gameplans: SSH keys with a passphrase, SSH on another port** ([5](05-live-environment.md)). The host encrypts such a key with `cryptography` and `python3-bcrypt`, which `worms apply round-agent` installs; restart the round agent after it (step 6). Existing gameplans build as before.
 - **The serial getty.** Every VM's getty on ttyS0, which no VM has, restarted every 10 s. Platform VMs mask it with SetupAudit.yml; devboxes with their next build (`worms vm rebuild devboxes`), sandboxes at their next build.
 
 None of this alters round_one or `credential_chain.py`: neither removes a package, and `credential_chain.py`'s only telnet user is its telnet login. The round agent has to be restarted after the deploy (step 6) all the more: the new `sandbox_vm` role reads `accounts` and `purge`, which only the new `build.py` writes.

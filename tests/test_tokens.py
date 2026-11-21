@@ -55,7 +55,7 @@ def test_every_entered_proxmox_secret_has_a_definition():
 
 
 def test_no_token_can_change_permissions_or_the_host():
-    """Least privilege: none of them may grant rights or administer the node."""
+    """Least privilege: none of them may grant rights or administer the host."""
     forbidden = {"Permissions.Modify", "User.Modify", "Realm.Allocate", "Sys.PowerMgmt", "Sys.Console", "Group.Allocate"}
     for name, spec in TOKENS.items():
         assert not forbidden & set(spec.privs), name

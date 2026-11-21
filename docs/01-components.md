@@ -1,6 +1,6 @@
 # 1. Components
 
-WORMS runs a competition for self-spreading programs ("worms") on a single Proxmox VE node.
+WORMS runs a competition for self-spreading programs ("worms") on a single Proxmox VE host.
 
 - **Teams** develop against their own three VMs (the *devbox*, the dashboard's **Dev** view).
 - They upload a zip.
@@ -11,7 +11,7 @@ Every sandbox and devbox VM is treated as malicious and rooted ([`docs/IMPORTANT
 | Doc | Topic |
 |---|---|
 | [1 Components](01-components.md) | this page |
-| [2 Installation](02-installation.md) | from a bare Proxmox node to a running platform |
+| [2 Installation](02-installation.md) | from a bare Proxmox host to a running platform |
 | [3 manage.py](03-manage-py.md) | the `worms` CLI and Django's management commands, testing |
 | [4 Dev environment](04-dev-environment.md) | devboxes |
 | [5 Live environment](05-live-environment.md) | rounds, gameplans, the round agent |
@@ -25,7 +25,7 @@ Every sandbox and devbox VM is treated as malicious and rooted ([`docs/IMPORTANT
                       internet
                          │ 443 (dashboard), 22/2222 (devbox SSH gateway), 2222/22 + 8006 (operators)
 ┌────────────────────────┴───────────────────────────────────────────────────────────────┐
-│ Proxmox node: nftables zone firewall, traffic mirror, firewall watchdog, round agent   │
+│ Proxmox host: nftables zone firewall, traffic mirror, firewall watchdog, round agent   │
 │                                                                                        │
 │  dmz        dashboard ──────────┐                                                      │
 │  core       orchestrator ── database ── (ingest) scoring, logging, monitor             │
@@ -43,11 +43,11 @@ Every sandbox and devbox VM is treated as malicious and rooted ([`docs/IMPORTANT
 
 | Component | Where | What it does | Source |
 |---|---|---|---|
-| `worms` CLI | the controller: the node itself, or a laptop with `WORMS_SSH` | Builds, deploys and operates everything | [`src/manage.py`](../src/manage.py), [`src/worms_cli/`](../src/worms_cli/) |
-| OpenTofu stacks | controller; sandbox and devbox stacks on the node | Bridges, VMs, per-VM firewalls, security groups | [`opentofu/stacks/`](../opentofu/stacks/) |
-| Ansible | controller; sandbox and devbox playbooks on the node | Configures the node and every VM | [`ansible/`](../ansible/) |
-| Host network | node | Bridges' sysctls, nftables zone firewall, DNAT, internet window, traffic mirror, firewall watchdog | role [`host_network`](../ansible/roles/host/host_network/) |
-| Round agent | node, as root | Runs a fixed menu of validated host jobs: sandbox build, flags, worm deploy, devbox jobs | [`scripts/round_agent/`](../scripts/round_agent/), role [`round_agent`](../ansible/roles/host/round_agent/) |
+| `worms` CLI | the controller: the host itself, or a laptop with `WORMS_SSH` | Builds, deploys and operates everything | [`src/manage.py`](../src/manage.py), [`src/worms_cli/`](../src/worms_cli/) |
+| OpenTofu stacks | controller; sandbox and devbox stacks on the host | Bridges, VMs, per-VM firewalls, security groups | [`opentofu/stacks/`](../opentofu/stacks/) |
+| Ansible | controller; sandbox and devbox playbooks on the host | Configures the host and every VM | [`ansible/`](../ansible/) |
+| Host network | host | Bridges' sysctls, nftables zone firewall, DNAT, internet window, traffic mirror, firewall watchdog | role [`host_network`](../ansible/roles/host/host_network/) |
+| Round agent | host, as root | Runs a fixed menu of validated host jobs: sandbox build, flags, worm deploy, devbox jobs | [`scripts/round_agent/`](../scripts/round_agent/), role [`round_agent`](../ansible/roles/host/round_agent/) |
 | Dashboard | VM `dashboard` (dmz) | Django and gunicorn behind nginx: teams, uploads, results, staff pages, team API | [`projects/dashboard/dashboard/`](../projects/dashboard/dashboard/) |
 | Orchestrator | VM `orchestrator` (core) | The same Django project with other settings: runs migrations, the round conductor, capture processing, topology collection, the REST API (devbox resets, gameplan simulations) | [`projects/dashboard/orchestrator/`](../projects/dashboard/orchestrator/) |
 | Database | VM `database` (core) | PostgreSQL. TLS only; one role per component with column-level grants | roles [`database/*`](../ansible/roles/database/) |
@@ -65,7 +65,7 @@ Every sandbox and devbox VM is treated as malicious and rooted ([`docs/IMPORTANT
 
 All addresses are defined once, in [`opentofu/shared/shared-variables.tf`](../opentofu/shared/shared-variables.tf), which is symlinked into every stack. They are Linux bridges, not SDN.
 
-| Bridge | Zone | CIDR | Node address | Members |
+| Bridge | Zone | CIDR | Host address | Members |
 |---|---|---|---|---|
 | vmbr20 | dmz | 10.10.0.0/24 | .1 | dashboard (.18) |
 | vmbr21 | core | 10.11.0.0/24 | .1 | database (.16), orchestrator (.19) |
@@ -94,12 +94,12 @@ Every stack keeps its state locally, in `terraform.tfstate` next to it, and runs
 | `infrastructure/persistent` | database, dashboard, orchestrator, syslog. No snapshot; an optional vzdump job | `worms apply` |
 | `infrastructure/ephemeral` | dns, scoring, logging, monitor. Snapshot `clean` | `worms apply` |
 | `private_internet` | the 7 private-internet VMs. Snapshot `clean` | `worms apply` |
-| `devbox` | per-team bridges, VMs, gateways; the SSH gateway | the round agent, in `/opt/worms` on the node |
-| `sandbox` | one round's networks and VMs, generated from the gameplan | the round agent, in `/opt/worms` on the node |
+| `devbox` | per-team bridges, VMs, gateways; the SSH gateway | the round agent, in `/opt/worms` on the host |
+| `sandbox` | one round's networks and VMs, generated from the gameplan | the round agent, in `/opt/worms` on the host |
 
 Order: `platform` → `firewall` → the VM stacks. The VM stacks read the first two through `terraform_remote_state`.
 
-Sources: [`src/worms_cli/pipeline.py`](../src/worms_cli/pipeline.py), [`src/worms_cli/session.py`](../src/worms_cli/session.py) (`NODE_STACKS`).
+Sources: [`src/worms_cli/pipeline.py`](../src/worms_cli/pipeline.py), [`src/worms_cli/session.py`](../src/worms_cli/session.py) (`HOST_STACKS`).
 
 ## Ansible
 
@@ -110,12 +110,12 @@ Sources: [`src/worms_cli/pipeline.py`](../src/worms_cli/pipeline.py), [`src/worm
   3. every VM on its own, all at once: its roles in order (`apt_updates`, `timesync`, `sshd_listen`, `ca_distribute`, its services, `apt_client` and the cache on the private internet, `auditd`, `log_limits`);
   4. the migrations (on the orchestrator), then the grants (on the database).
 
-  Then `SetupRoundAgent` on the node. A role whose files, variables and sources did not change since it last ran on a VM is skipped there (its stamp: [`worms_role_gate.py`](../ansible/action_plugins/worms_role_gate.py)).
-- **Playbooks the round agent runs on the node.** `SetupSandbox`, `SetupDevbox` and `SetupSSHGateway`.
+  Then `SetupRoundAgent` on the host. A role whose files, variables and sources did not change since it last ran on a VM is skipped there (its stamp: [`worms_role_gate.py`](../ansible/action_plugins/worms_role_gate.py)).
+- **Playbooks the round agent runs on the host.** `SetupSandbox`, `SetupDevbox` and `SetupSSHGateway`.
 - **Secrets.** An ansible-vault file, `ansible/group_vars/vault.yml` ([7](07-security.md#secrets)).
-- **Which system.** `worms_environments` in [`group_vars/all.yml`](../ansible/group_vars/all.yml), keyed by the node's hostname:
+- **Which system.** `worms_environments` in [`group_vars/all.yml`](../ansible/group_vars/all.yml), keyed by the host's hostname:
 
-  | Node | System | Operators' SSH port | Teams' SSH gateway port | Public name |
+  | Host | System | Operators' SSH port | Teams' SSH gateway port | Public name |
   |---|---|---|---|---|
   | `worms` | production | 2222 | 22 | `worms.mlsec.tu-berlin.de` |
   | `worms-dev` | development | 22 | 2222 | `worms-dev.mlsec.tu-berlin.de` |
@@ -131,7 +131,7 @@ Sources: [`src/worms_cli/pipeline.py`](../src/worms_cli/pipeline.py), [`src/worm
 | `scripts/` | `round_agent/`, the generators for the inventory and the devbox, local dashboard rehearsals |
 | `projects/dashboard/` | one Django project: apps `core` (models), `dashboard` (web), `orchestrator` (background work) |
 | `opentofu/`, `ansible/` | infrastructure as code |
-| `tests/` | the offline suite, `live/` (against a node), `browser/`, `docker/` |
+| `tests/` | the offline suite, `live/` (against a host), `browser/`, `docker/` |
 | `worm.sh` | a minimal worm: rename it to `main.sh`, zip it, upload it |
 
 ## Resources

@@ -10,7 +10,7 @@ it, after the window has opened and the devboxes have been shut down. The check 
   apt   offline, on the apt-cache VM: `apt-get install -s` of the whole list against the index the
         cache holds (/var/lib/apt-cache-client/lists, which every fill keeps: role apt_cache), with
         nothing installed; every unknown name and every conflict, as apt says them.
-  pypi  each name against PyPI's JSON API, from here: only with internet here (on the node of
+  pypi  each name against PyPI's JSON API, from here: only with internet here (on the host of
         production, only while it has egress). Whether they install together is the fill's to find.
 
 The lists are the roles' defaults (apt_cache_seed_packages, devpi_seed_packages): a change is a

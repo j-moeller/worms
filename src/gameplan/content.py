@@ -7,7 +7,7 @@ A gameplan describes them in `__init__` and writes them like text:
     self.vm0.write_file("~/passwords.kdbx", KeePass(vault, [Entry("db", login.user, login.pwd)]))
     self.vm1.write_file("~/backup.zip", Zip({"id_ops": key.private}, password=login.pwd))
 
-They are descriptions only, plain data in the spec. The node makes the file when it writes it
+They are descriptions only, plain data in the spec. The host makes the file when it writes it
 (gameplan/render.py), with the run's secrets in place: a document's text, a zip's password and a
 vault's master password can be any of them (`login.pwd`, `key.private`, `totp.secret`, a
 `generate_password()`, ...). Nothing of the file passes the database.
@@ -62,7 +62,7 @@ def _texts(value, what):
 
 
 class Content:
-    """A file the node makes when it writes it (see the module)."""
+    """A file the host makes when it writes it (see the module)."""
 
     kind = ""
 
@@ -95,7 +95,7 @@ def strings(spec):
 
 
 def check(spec, depth=0):
-    """Every problem of a content spec, for validation (the node renders only what passes)."""
+    """Every problem of a content spec, for validation (the host renders only what passes)."""
     if isinstance(spec, str):
         return []
     if depth >= MAX_DEPTH:

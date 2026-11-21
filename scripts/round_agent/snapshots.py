@@ -10,7 +10,7 @@ VM, and never replaced while it may have.
 
 Snapshots are taken of stopped VMs: these VMs run no guest agent, so a snapshot of a running
 one would hold only what a power cut leaves on the disk. A rollback therefore starts the VM
-from a cold boot. Everything here goes through `qm` and `pvesh` on the node itself, with
+from a cold boot. Everything here goes through `qm` and `pvesh` on the host itself, with
 numbers it read from Proxmox, never a value from the database.
 """
 
@@ -68,7 +68,7 @@ def start(ex, vms):
 
 
 def recording(ex):
-    """Whether this executor keeps the node's VM history (src/worms_cli/history.py)."""
+    """Whether this executor keeps the host's VM history (src/worms_cli/history.py)."""
     return getattr(ex, "history", None) is not None
 
 

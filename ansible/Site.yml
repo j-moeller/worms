@@ -14,7 +14,7 @@
 # there: so phase 4 starts by stopping the run when any VM failed before it, instead of going on
 # with the others. Each VM's whole log is a file of its own (ansible/callback_plugins/worms.py).
 #
-# The node is not here: SetupHostNetwork.yml (its network) and SetupRoundAgent.yml (the round agent)
+# The host is not here: SetupHostNetwork.yml (its network) and SetupRoundAgent.yml (the round agent)
 # configure it. Nor are the team VMs: the round agent configures them (SetupSandbox.yml,
 # SetupDevbox.yml, SetupSSHGateway.yml, DevboxKeys.yml).
 

@@ -19,7 +19,7 @@ class Infra:
         self.error = None
         try:
             self._cfg = config.proxmox()
-        except SessionError as exc:  # e.g. the tunnel to the node failed
+        except SessionError as exc:  # e.g. the tunnel to the host failed
             self._cfg, self.error = None, str(exc)
         self._api = None
 
@@ -55,7 +55,7 @@ class Infra:
         return (self._cfg or {}).get("node", "worms-pve")
 
     def vms(self) -> list[dict]:
-        """Every VM on the node with its status, name, VMID and pool."""
+        """Every VM on the host with its status, name, VMID and pool."""
         node = self.api().nodes(self.node)
         vms = node.qemu.get()
         # Map VMID -> pool.
@@ -70,7 +70,7 @@ class Infra:
         return vms
 
     def bridges(self) -> list[dict]:
-        """Linux bridges configured on the node."""
+        """Linux bridges configured on the host."""
         return self.api().nodes(self.node).network.get(type="bridge")
 
     def firewall_enabled(self) -> bool:

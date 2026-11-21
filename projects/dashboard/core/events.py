@@ -35,7 +35,7 @@ def _using() -> str:
 
 
 def client_ip(request) -> str | None:
-    """The client's address: nginx sets X-Real-IP to the connection's address (the node
+    """The client's address: nginx sets X-Real-IP to the connection's address (the host
     publishes the dashboard by DNAT without SNAT, so it is the real one)."""
     if request is None:
         return None
@@ -176,7 +176,7 @@ def competition(kind: str, *, request, round_id=None, detail=None) -> bool:
 
 
 def platform(kind: str, *, actor=None, detail=None, using=None) -> bool:
-    """The console's platform events (the node writes its own: scripts/round_agent/events.py)."""
+    """The console's platform events (the host writes its own: scripts/round_agent/events.py)."""
     return _insert("platform_events", {"kind": kind, "actor": _text(actor), "detail": _detail(detail)}, using)
 
 

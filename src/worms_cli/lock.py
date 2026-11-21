@@ -1,6 +1,6 @@
 """One change of the platform at a time: every `worms` that changes it (apply, destroy, internet,
 vm start|stop|restart|reset|rebuild, service restart, db restore|reset, key sync, step) holds
-/run/worms/worms.lock on the node while it runs; a second one is refused, saying who holds it.
+/run/worms/worms.lock on the host while it runs; a second one is refused, saying who holds it.
 Never `vm kill`, `jobs ...` or `round ...`: those must work while a build runs. On 2026-11-18 a
 second `worms` closed the internet window under a running build, and its apt hung for 1 h 40 min.
 A raw ansible-playbook or tofu does not take the lock.
@@ -21,8 +21,8 @@ LOCK = "/run/worms/worms.lock"
 
 
 class Lock:
-    """The node's lock for changing the platform, held for this process's life (release() ends it).
-    On the node: flock(2) on LOCK. From a laptop: `flock` on the node over SSH, held while its
+    """The host's lock for changing the platform, held for this process's life (release() ends it).
+    On the host: flock(2) on LOCK. From a laptop: `flock` on the host over SSH, held while its
     stdin is open."""
 
     def __init__(self, session, what: str):
@@ -34,7 +34,7 @@ class Lock:
         return f"pid {os.getpid()} · {getpass.getuser()} · worms {self.what} · since {datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S} UTC"
 
     def holder(self) -> str:
-        code, out, _err = self.session.node_run(["cat", f"{LOCK}.info"])
+        code, out, _err = self.session.host_run(["cat", f"{LOCK}.info"])
         return out.strip() if code == 0 and out.strip() else "another worms"
 
     def acquire(self) -> "Lock":

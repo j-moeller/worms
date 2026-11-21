@@ -1,6 +1,6 @@
 """The event tables (core/events.py, scripts/round_agent/events.py, docs/06-background-processes.md):
 the dashboard records the events an investigation needs, with who, whom and from
-where, and nothing a writer should not hold; the node records the SSH gateway's
+where, and nothing a writer should not hold; the host records the SSH gateway's
 team logins, matched to the client's address. The database's side (each account
 appends to its own tables only, reads nothing) is in test_database.py.
 """
@@ -43,9 +43,9 @@ def csrf(client, path="/profile/"):
 def test_a_row_is_small_and_names_its_writer(db_clean):
     from core import events
 
-    assert events.platform("database_reset", actor="console:root@node", detail={"x": "y" * 10000})
+    assert events.platform("database_reset", actor="console:root@host", detail={"x": "y" * 10000})
     [row] = rows("PlatformEvent")
-    assert row.created_at is not None and row.actor == "console:root@node"
+    assert row.created_at is not None and row.actor == "console:root@host"
     assert row.detail["truncated"] is True and len(json.dumps(row.detail)) < 2200
 
 
@@ -151,7 +151,7 @@ def test_keys_and_tokens_are_recorded_without_the_secret(site):  # noqa: F811
     assert added.ssh_fingerprint.startswith("SHA256:") and KEY.split()[1] not in str(added.__dict__)
 
 
-# --- the node: SSH gateway logins (scripts/round_agent/events.py) -----------------------------
+# --- the host: SSH gateway logins (scripts/round_agent/events.py) -----------------------------
 
 FP = "SHA256:0LmkJGBxvhAjZu7ePV1quGGe15XFKdd57xdy0g+yVQA"
 
@@ -161,7 +161,7 @@ def journal(message, at, cursor):
 
 
 def test_gateway_logins_are_parsed_strictly():
-    from round_agent import events as node
+    from round_agent import events as host_events
 
     lines = [
         journal(f"Accepted publickey for team from 10.7.0.1 port 48215 ssh2: ED25519 {FP}", 1000.0, "c1"),
@@ -170,13 +170,13 @@ def test_gateway_logins_are_parsed_strictly():
         journal(f"Accepted publickey for team from 10.7.0.1 port 1 ssh2: ED25519 {FP} '; DROP TABLE", 1003.0, "c4"),
         "not json",
     ]
-    logins, cursor = node.parse_gateway(lines, "team")
+    logins, cursor = host_events.parse_gateway(lines, "team")
     assert cursor == "c4"
     assert logins == [{"at": 1000.0, "user": "team", "port": 48215, "peer": "10.7.0.1", "key_type": "ED25519", "fingerprint": FP}]
 
 
 def test_a_login_is_matched_to_its_client_by_port_and_time():
-    from round_agent import events as node
+    from round_agent import events as host_events
 
     lines = [
         json.dumps({"MESSAGE": "worms-ssh-gw: IN=vmbr0 OUT= SRC=203.0.113.5 DST=141.23.117.61 LEN=60 PROTO=TCP SPT=48215 DPT=2222 SYN",
@@ -185,14 +185,14 @@ def test_a_login_is_matched_to_its_client_by_port_and_time():
                     "__REALTIME_TIMESTAMP": str(int(999.6 * 1e6))}),
         json.dumps({"MESSAGE": "something else SRC=192.0.2.1 SPT=48215 DPT=1", "__REALTIME_TIMESTAMP": "999700000"}),
     ]  # fmt: skip
-    connections = node.parse_node_log(lines)
-    assert node.client_of({"at": 1000.0, "port": 48215}, connections) == "203.0.113.5"
-    assert node.client_of({"at": 1000.0, "port": 1}, connections) is None
-    assert node.client_of({"at": 2000.0, "port": 48215}, connections) is None  # too long ago
+    connections = host_events.parse_host_log(lines)
+    assert host_events.client_of({"at": 1000.0, "port": 48215}, connections) == "203.0.113.5"
+    assert host_events.client_of({"at": 1000.0, "port": 1}, connections) is None
+    assert host_events.client_of({"at": 2000.0, "port": 48215}, connections) is None  # too long ago
 
 
 def test_the_collector_records_new_logins_and_remembers_where_it_stopped(tmp_path):
-    from round_agent import events as node
+    from round_agent import events as host_events
 
     class Conn:
         def __init__(self):
@@ -229,27 +229,27 @@ def test_the_collector_records_new_logins_and_remembers_where_it_stopped(tmp_pat
     cursor_file = tmp_path / "cursor"
     conn = Conn()
     env = {"SSH_GATEWAY_HOST": "10.5.0.40", "SSH_KEY": "/etc/worms/ssh/worms"}
-    assert node.collect_gateway(env, conn, run=run, cursor_file=cursor_file) == 1
+    assert host_events.collect_gateway(env, conn, run=run, cursor_file=cursor_file) == 1
     logged_in_at, user, key_type, fingerprint, client, port = conn.rows[0]
     assert (user, key_type, fingerprint, client, port) == ("team", "ED25519", FP, "203.0.113.5", 48215)
     assert logged_in_at.timestamp() == 1000.0
     assert cursor_file.read_text().strip() == "cur;s=1" and conn.commits == 1
     # The next run starts after that cursor, quoted for the gateway's shell.
-    node.collect_gateway(env, conn, run=run, cursor_file=cursor_file)
+    host_events.collect_gateway(env, conn, run=run, cursor_file=cursor_file)
     assert "--after-cursor='cur;s=1'" in calls[-2][-1] or "'--after-cursor=cur;s=1'" in calls[-2][-1]
-    assert node.collect_gateway({}, conn, run=run, cursor_file=cursor_file) == 0  # no gateway: nothing
+    assert host_events.collect_gateway({}, conn, run=run, cursor_file=cursor_file) == 0  # no gateway: nothing
 
 
 def test_event_kinds_from_the_node_are_a_fixed_list():
-    from round_agent import events as node
+    from round_agent import events as host_events
 
     with pytest.raises(SystemExit):
-        node.main(["event", "anything.else"])
-    assert node.EVENT_KINDS == {"internet_allowed", "internet_denied", "watchdog_stopped"}
+        host_events.main(["event", "anything.else"])
+    assert host_events.EVENT_KINDS == {"internet_allowed", "internet_denied", "watchdog_stopped"}
 
 
 def test_the_node_writes_as_its_events_account_only():
-    from round_agent import events as node
+    from round_agent import events as host_events
 
     seen = {}
 
@@ -262,10 +262,10 @@ def test_the_node_writes_as_its_events_account_only():
     original = agent.connect
     agent.connect = connect
     try:
-        node.connect({"DB_USER": "round_agent", "DB_PASSWORD": "agent", "EVENTS_DB_USER": "dbuser_events_node",
+        host_events.connect({"DB_USER": "round_agent", "DB_PASSWORD": "agent", "EVENTS_DB_USER": "dbuser_events_node",
                       "EVENTS_DB_PASSWORD": "events"})  # fmt: skip
         assert (seen["DB_USER"], seen["DB_PASSWORD"]) == ("dbuser_events_node", "events")
         with pytest.raises(RuntimeError):
-            node.connect({"DB_USER": "round_agent", "DB_PASSWORD": "agent"})  # never falls back to the agent's role
+            host_events.connect({"DB_USER": "round_agent", "DB_PASSWORD": "agent"})  # never falls back to the agent's role
     finally:
         agent.connect = original

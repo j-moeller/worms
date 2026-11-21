@@ -1,4 +1,4 @@
-"""From a gameplan's spec to what the node builds (the round agent, scripts/round_agent):
+"""From a gameplan's spec to what the host builds (the round agent, scripts/round_agent):
 
   hcl(spec)              the sandbox stack's generated_vms.tf: bridges, VMs, their firewall rules
   ansible_vars(spec)     what SetupSandbox.yml installs on each VM (role sandbox_vm)

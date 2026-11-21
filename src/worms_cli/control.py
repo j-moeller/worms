@@ -10,10 +10,10 @@
     worms round start <r>              a round still to come begins now (its start is moved to now)
     worms round cancel <r>             its attempts still to come are skipped
 
-The pause is a file on the node the agent looks at before each job (scripts/round_agent/agent.py,
+The pause is a file on the host the agent looks at before each job (scripts/round_agent/agent.py,
 claim; handlers.paused_path); the rest are the database's, which the orchestrator reads
 (conductor.py: Round.on_hold; devbox_runs.py: a cancelled reset fails its upload, said why).
-A running job is not cancelled here: it is a process on the node, half-way through something.
+A running job is not cancelled here: it is a process on the host, half-way through something.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ def _who() -> str:
 
 def pause_jobs(session, reason: str = "") -> int:
     text = f"paused by {_who()}" + (f": {reason}" if reason else "")
-    code, _out, err = session.node_run(["sh", "-c", f"install -d -m 755 /var/lib/worms && printf '%s\\n' {shlex.quote(text)} > {PAUSED}"])
+    code, _out, err = session.host_run(["sh", "-c", f"install -d -m 755 /var/lib/worms && printf '%s\\n' {shlex.quote(text)} > {PAUSED}"])
     if code != 0:
         raise BuildError(f"could not pause the agent: {err.strip()[:200]}")
     print(output.status_cell("warn", f"the round agent is paused: it finishes the job under way and takes no other "
@@ -44,7 +44,7 @@ def pause_jobs(session, reason: str = "") -> int:
 
 
 def resume_jobs(session) -> int:
-    code, _out, err = session.node_run(["rm", "-f", PAUSED])
+    code, _out, err = session.host_run(["rm", "-f", PAUSED])
     if code != 0:
         raise BuildError(f"could not resume the agent: {err.strip()[:200]}")
     print(output.status_cell("ok", "the round agent takes jobs again"))

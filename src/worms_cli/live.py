@@ -224,8 +224,8 @@ class Live:
                 self.remote = Remote(self.config)
             lines = 0 if follow.path == APT_LOG else LINES
             command = f"tail -n {lines} -F {shlex.quote(follow.path)} 2>/dev/null"
-            if follow.name in ("localhost", "proxmox.local", "node"):
-                target = Target("node", None)
+            if follow.name in ("localhost", "proxmox.local", "host"):
+                target = Target("host", None)
             else:
                 vm = self.remote.catalogue.resolve(follow.name)
                 target = Target(vm["name"], vm, vm.get("pool") in self.remote.untrusted_pools)

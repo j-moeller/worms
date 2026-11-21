@@ -2,13 +2,13 @@
 which code (its commit) and by what (`worms apply`, a host job). `worms status` shows each VM's
 creation and last update, `worms show <vm>` all of it.
 
-    /var/lib/worms/vm-history.jsonl     on the node, root's only (0600), append-only
+    /var/lib/worms/vm-history.jsonl     on the host, root's only (0600), append-only
 
 One JSON object per line: {"time", "vmid", "name", "event", "commit", "by", "detail"}, time in
-UTC. Events: EVENTS. It lives on the node only: sandbox and devbox VMs are assumed rooted by
+UTC. Events: EVENTS. It lives on the host only: sandbox and devbox VMs are assumed rooted by
 their team, so nothing a VM says about itself is taken. Two writers may append at once, the CLI
 and the round agent: each takes an exclusive flock(2) on the file and writes whole lines in one
-write (flock(1) does the same from a laptop, over the node session). Writing it is best effort:
+write (flock(1) does the same from a laptop, over the host session). Writing it is best effort:
 a build never fails for its history.
 
 The commit is the controller's checkout (`git rev-parse --short=7 HEAD`, "-dirty" when tracked
@@ -46,7 +46,7 @@ def entry(vmid, name, event, commit, by, detail="") -> str:
 
 
 def append(lines, path: str = LEDGER) -> None:
-    """Append on this machine (the node): an exclusive lock, whole lines, one write."""
+    """Append on this machine (the host): an exclusive lock, whole lines, one write."""
     import fcntl
 
     if not lines:
@@ -61,14 +61,14 @@ def append(lines, path: str = LEDGER) -> None:
 
 
 def append_command(lines, path: str = LEDGER) -> str:
-    """The same as a shell command for the node (from a laptop): flock(1) takes the same lock."""
+    """The same as a shell command for the host (from a laptop): flock(1) takes the same lock."""
     text = "".join(f"{line}\n" for line in lines)
     write = f"printf %s {shlex.quote(text)} >> {shlex.quote(path)}"
     return f"mkdir -p {shlex.quote(os.path.dirname(path))} && umask 077 && flock {shlex.quote(path)} sh -c {shlex.quote(write)}"
 
 
 def vmid_filter(vmid) -> str:
-    """What every line of one VM's history holds (for grep -F on the node)."""
+    """What every line of one VM's history holds (for grep -F on the host)."""
     return f'"vmid":{int(vmid)},'
 
 

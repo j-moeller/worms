@@ -1,11 +1,11 @@
 ---
-# The round agent's workspace on the node (docs/02-installation.md, "Controller on a laptop"): what the agent
-# runs from -- the sandbox and devbox stacks (their state is the node's and
+# The round agent's workspace on the host (docs/02-installation.md, "Controller on a laptop"): what the agent
+# runs from -- the sandbox and devbox stacks (their state is the host's and
 # stays here), the OpenTofu modules, the scripts, the CLI and the playbooks it
 # runs -- plus the CA certificate and the platform/firewall state those two
 # stacks read their inputs from. Never the vault, the CA key, or the code or
 # state of the stacks the controller owns. `worms` runs these tasks
-# (--tags agent-sync) before every step it runs on the node, so the node runs
+# (--tags agent-sync) before every step it runs on the host, so the host runs
 # the controller's code.
 
 # Everything the agent needs, checked before anything changes: `worms` adds the vault
@@ -47,7 +47,7 @@
     group: root
     mode: "0700"
 
-# The agent used to run from a checkout on the node (REPO_ROOT in its env
+# The agent used to run from a checkout on the host (REPO_ROOT in its env
 # file). The first time, its sandbox and devbox state moves here, or OpenTofu
 # would build those VMs a second time.
 - name: Take over the sandbox and devbox state of the previous checkout
@@ -73,9 +73,9 @@
     dest: "{{ round_agent_repo_root }}/"
     delete: true
     # rsync spawns its own ssh: use the connection's ssh args, not default keys
-    # (same reason as django_app's sync). The node is reached directly today, so
+    # (same reason as django_app's sync). The host is reached directly today, so
     # this only adds ansible.cfg's ControlMaster opts; it stays correct if the
-    # node is ever reached through a jump.
+    # host is ever reached through a jump.
     use_ssh_args: true
     rsync_opts: "{{ round_agent_sync_rsync_opts }}"
 
@@ -147,7 +147,7 @@
     mode: "0700"
   loop: [ansible/pki/worms, opentofu/stacks/platform, opentofu/stacks/firewall]
 
-# State only (outputs for terraform_remote_state), no code: the node cannot
+# State only (outputs for terraform_remote_state), no code: the host cannot
 # apply these stacks.
 - name: Copy the CA certificate and the platform and firewall state
   ansible.builtin.copy:
@@ -160,8 +160,8 @@
     - { src: "{{ round_agent_controller_repo }}/opentofu/stacks/firewall/terraform.tfstate", dest: opentofu/stacks/firewall/terraform.tfstate }
 
 # Without internet too (scripts/tofu-init): a plain `tofu init` asks the registry even for a
-# provider it has installed, and the node may have no outbound connection at all.
-- name: Initialise the node's stacks (providers, from the node's mirror first)
+# provider it has installed, and the host may have no outbound connection at all.
+- name: Initialise the host's stacks (providers, from the host's mirror first)
   ansible.builtin.command:
     argv: [sh, "{{ round_agent_repo_root }}/scripts/tofu-init", "{{ round_agent_repo_root }}/opentofu/stacks/{{ item }}"]
   loop: [sandbox, devbox]
@@ -176,7 +176,7 @@
     mode: "0700"
 
 # The one key every VM authorizes (vault, worms_cli/secrets.py): the agent
-# logs in to the VMs with it, OpenTofu uploads snippets to this node with it.
+# logs in to the VMs with it, OpenTofu uploads snippets to this host with it.
 - name: Install the WORMS SSH key
   ansible.builtin.copy:
     content: "{{ item.content }}"
@@ -200,7 +200,7 @@
     or round_agent_key_public.stdout.split()[:2] != vault_worms_ssh_public_key.split()[:2]
 
 # On Proxmox root's authorized_keys is a symlink into /etc/pve: keep it.
-- name: Let the WORMS key log in as root on this node
+- name: Let the WORMS key log in as root on this host
   ansible.posix.authorized_key:
     user: root
     key: "{{ vault_worms_ssh_public_key }}"
@@ -224,10 +224,16 @@
   no_log: "{{ hide_secrets }}"
   notify: Restart round agent
 
-- name: Install worms-node-run (runs a command in the workspace as the agent)
+- name: Install worms-host-run (runs a command in the workspace as the agent)
   ansible.builtin.template:
-    src: worms-node-run.j2
-    dest: "{{ round_agent_node_run }}"
+    src: worms-host-run.j2
+    dest: "{{ round_agent_host_run }}"
     owner: root
     group: root
     mode: "0755"
+
+# Its name until 2026-11-22: the systemd unit above starts the agent through the new one.
+- name: Remove worms-node-run, its old name
+  ansible.builtin.file:
+    path: /usr/local/sbin/worms-node-run
+    state: absent

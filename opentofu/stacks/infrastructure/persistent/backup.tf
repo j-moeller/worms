@@ -4,11 +4,11 @@
 #
 #   TF_VAR_backup_storage=local worms apply infrastructure
 #
-# vzdump runs on the node as root at the scheduled time. Without a guest agent,
+# vzdump runs on the host as root at the scheduled time. Without a guest agent,
 # a snapshot backup of a running VM is crash-consistent: PostgreSQL recovers
-# from it as from a power cut. A storage on the node's own pool only protects
+# from it as from a power cut. A storage on the host's own pool only protects
 # against mistakes (a wipe, a bad migration), not against losing the disk:
-# copy the dumps off the node as well (docs/06-background-processes.md).
+# copy the dumps off the host as well (docs/06-background-processes.md).
 
 variable "backup_storage" {
   description = "Proxmox storage for the nightly backups of the stateful VMs; empty = no backup job."

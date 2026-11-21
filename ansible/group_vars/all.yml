@@ -27,14 +27,14 @@ llm_access_name: teachllm.mlsec.tu-berlin.de
 hide_secrets: true
 
 # --- Which system this is -----------------------------------------------------
-# The switch: the Proxmox node's name (its hostname, `hostname -s`; proxmox.node in
+# The switch: the Proxmox host's name (its hostname, `hostname -s`; proxmox.node in
 # the inventory) says whether this is production or development, and this is
-# everything that differs between the two. A node not listed here is refused, by
+# everything that differs between the two. A host not listed here is refused, by
 # `worms` (src/worms_cli/session.py) and by every play that needs one of these.
 # Django's DEBUG is not part of it: off on both (PRODUCTION=1 means "deployed").
 #   public_name              teams reach the dashboard (HTTPS) and the devbox SSH
 #                            gateway under it
-#   operator_ssh_port        the node's own sshd (management; OpenTofu uploads
+#   operator_ssh_port        the host's own sshd (management; OpenTofu uploads
 #                            snippets over it)
 #   ssh_gateway_public_port  the devbox SSH gateway's port on the WAN (DNAT to its :22)
 worms_environments:
@@ -152,9 +152,9 @@ proxmox_readonly_api_token_name: "readonly"
 proxmox_readonly_api_token_value: "{{ vault_proxmox_readonly_api_token_value | default('') }}"
 
 # Whether internet access is currently allowed (Internet.yml writes this flag
-# on the Proxmox node). Not a switch: it follows the host. The `exists` test
-# runs on the controller, so it is right on the node; from a laptop `worms`
-# probes the node and passes `-e internet_enabled=...` to every playbook.
+# on the Proxmox host). Not a switch: it follows the host. The `exists` test
+# runs on the controller, so it is right on the host; from a laptop `worms`
+# probes the host and passes `-e internet_enabled=...` to every playbook.
 #   true  = caches proxy/forward upstream (population), DNS forwards upstream
 #   false = standalone offline caches, no internet anywhere
 internet_enabled: "{{ '/run/worms/internet-allowed' is exists }}"

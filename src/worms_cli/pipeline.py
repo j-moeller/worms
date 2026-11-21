@@ -1,7 +1,7 @@
 """The build/operate pipeline: every step the top-level Makefile used to run,
 now driven from the CLI. Each step runs the real tools (tofu, ansible-playbook,
 the generator scripts, qm) through a Runner: on this machine (your laptop, or
-the node), and the node's own part (sandbox and devbox stacks) on the node
+the host), and the host's own part (sandbox and devbox stacks) on the host
 (worms_cli/session.py).
 
 A component is a list of named steps (Step). The first one that fails ends the
@@ -61,7 +61,7 @@ INIT_STACKS = [
 ]
 
 # The configuration: every platform VM's roles, in phases, the VMs of a phase in parallel
-# (ansible/Site.yml); then the node's round agent.
+# (ansible/Site.yml); then the host's round agent.
 SITE = "Site.yml"
 CONFIGURE_PLAYBOOKS = [SITE, "SetupRoundAgent.yml"]
 # The playbooks before Site.yml, whose last one the VM history of an older VM names (history.unfinished).
@@ -82,7 +82,7 @@ VM_FREE_STACKS = ("platform", "firewall")
 
 
 def start_command(vmids) -> str:
-    """What starts these VMs again, on the node: `qm start` takes one vmid."""
+    """What starts these VMs again, on the host: `qm start` takes one vmid."""
     return "; ".join(f"qm start {vmid}" for vmid in vmids)
 
 
@@ -359,7 +359,7 @@ class Pipeline:
     def offline(self):
         self.offline_services()
 
-    # Without the user's Ansible arguments: Internet.yml runs on the node, so a
+    # Without the user's Ansible arguments: Internet.yml runs on the host, so a
     # `--limit <vm>` would silently skip it, and the window would neither open
     # nor close.
     def internet_allow(self):
@@ -473,7 +473,7 @@ class Pipeline:
 
     def _rollback(self, vms: list[dict]) -> None:
         """These VMs back to their snapshot, started: all at once."""
-        codes = self.runner.node_parallel([[f"qm rollback {vm['vmid']} {SERVICE_SNAPSHOT} --start 1"] for vm in vms])
+        codes = self.runner.host_parallel([[f"qm rollback {vm['vmid']} {SERVICE_SNAPSHOT} --start 1"] for vm in vms])
         self._history([vm for vm, code in zip(vms, codes) if code == 0], "rolled_back", SERVICE_SNAPSHOT)
         failed = [vm["name"] for vm, code in zip(vms, codes) if code != 0]
         if failed:
@@ -488,11 +488,11 @@ class Pipeline:
                    *([f"qm shutdown {vm['vmid']} --timeout 120 --forceStop 1"] if vm.get("status") == "running" else []),
                    f"qm snapshot {vm['vmid']} {SERVICE_SNAPSHOT} --description {description}", f"qm start {vm['vmid']}"]
                   for vm, had in zip(vms, old)]  # fmt: skip
-        codes = self.runner.node_parallel(chains)
+        codes = self.runner.host_parallel(chains)
         self._history([vm for vm, code in zip(vms, codes) if code == 0], "snapshot", SERVICE_SNAPSHOT)
         failed = [vm["name"] for vm, code in zip(vms, codes) if code != 0]
         if failed:
-            raise BuildError(f"no new snapshot of {', '.join(failed)}: `qm listsnapshot <vmid>` on the node")
+            raise BuildError(f"no new snapshot of {', '.join(failed)}: `qm listsnapshot <vmid>` on the host")
 
     def refuse_during_round(self) -> None:
         """A sandbox VM exists only during a round (kept, off, between its attempts): the
@@ -516,7 +516,7 @@ class Pipeline:
         # Noted first: one that is off when another's shutdown fails is started again too. All at
         # once: each may take its 120 s (a team's VM may ignore the request).
         self.data["devboxes_off"] = sorted({*self.data["devboxes_off"], *(vm["vmid"] for vm in running)})
-        codes = self.runner.node_parallel([[f"qm shutdown {vm['vmid']} --timeout 120 --forceStop 1"] for vm in running])
+        codes = self.runner.host_parallel([[f"qm shutdown {vm['vmid']} --timeout 120 --forceStop 1"] for vm in running])
         failed = [vm["name"] for vm, code in zip(running, codes) if code != 0]
         if failed:
             raise BuildError(f"devbox VM(s) did not shut down: {', '.join(failed)}")
@@ -531,14 +531,14 @@ class Pipeline:
             raise BuildError(
                 f"the devbox VMs stay off while internet access is allowed: start them after `worms internet off` ({start})"
             )
-        codes = self.runner.node_parallel([[f"qm start {vmid}"] for vmid in off])
+        codes = self.runner.host_parallel([[f"qm start {vmid}"] for vmid in off])
         failed = [vmid for vmid, code in zip(off, codes) if code != 0]
         if failed:  # `qm start` also fails on a VM that runs already
             running = {vm["vmid"] for vm in self.runner.vms() if vm.get("status") == "running"}
             failed = [vmid for vmid in failed if vmid not in running]
         self.data["devboxes_off"] = failed
         if failed:
-            raise BuildError(f"devbox VM(s) {', '.join(map(str, failed))} did not start again: `qm start <vmid>` on the node")
+            raise BuildError(f"devbox VM(s) {', '.join(map(str, failed))} did not start again: `qm start <vmid>` on the host")
 
     def _roll_back_services(self) -> set:
         """The service VMs that have a snapshot back to it, running. Returns their vmids."""
@@ -596,7 +596,7 @@ class Pipeline:
 
     def build_components(self, plan, packages: bool = False) -> None:
         """Build the plan's components (components.plan): their stacks, their VMs (`tofu apply
-        -target`, `-replace` to recreate), their share of the configuration (`--limit`), node
+        -target`, `-replace` to recreate), their share of the configuration (`--limit`), host
         plays. Packages need the internet window: when a VM is new or recreated, or with
         `packages`. Service VMs are configured from their snapshot and snapshotted again, with
         the devboxes off (as a full build does)."""
@@ -665,7 +665,7 @@ class Pipeline:
         from worms_cli import history
 
         try:
-            code, out, err = self.runner.session.node_run(["cat", history.LEDGER])
+            code, out, err = self.runner.session.host_run(["cat", history.LEDGER])
         except Exception as exc:  # noqa: BLE001  (the plan stands without it)
             code, err = None, str(exc)
         if code != 0 and "No such file" in (err or ""):
@@ -681,13 +681,13 @@ class Pipeline:
 
     def _plan_gameplans(self) -> list[Step]:
         """`worms apply gameplans`: gameplans/ and src/gameplan to both copies, nothing else. The
-        node's first: the round agent restarts itself on new framework code once it is idle
+        host's first: the round agent restarts itself on new framework code once it is idle
         (scripts/round_agent/agent.py, LoadedCode), so the conductor, restarted with the
-        orchestrator's copy, checks against a node that has the same files and code. No package
-        is installed, so no internet is needed (the node's apt refreshes its lists only for a
+        orchestrator's copy, checks against a host that has the same files and code. No package
+        is installed, so no internet is needed (the host's apt refreshes its lists only for a
         missing package)."""
         return [
-            Step("gameplans: the node's copy", partial(self._ansible, "SetupRoundAgent.yml", "--tags", "agent-sync")),
+            Step("gameplans: the host's copy", partial(self._ansible, "SetupRoundAgent.yml", "--tags", "agent-sync")),
             Step("gameplans: the orchestrator's copy, then its check",
                  partial(self._ansible, SITE, "--limit", "orchestrator", "--tags", "gameplans")),
         ]  # fmt: skip
@@ -776,17 +776,17 @@ class Pipeline:
         self._destroy("platform")
 
     def stop_all(self):
-        """Freeze: hard-stop every running VM on the node, destroy nothing."""
-        self.runner.node_sh("qm list | awk 'NR>1 && $3 == \"running\" {print $1}' | xargs -r -I {} qm stop {}")
+        """Freeze: hard-stop every running VM on the host, destroy nothing."""
+        self.runner.host_sh("qm list | awk 'NR>1 && $3 == \"running\" {print $1}' | xargs -r -I {} qm stop {}")
 
     def terminate(self):
         """Stop, unlock and destroy every VM, then destroy all stacks (the full
         teardown the Makefile's `terminate` did). Best effort on the VMs: one
         that is gone already is no reason to stop."""
-        self.runner.node_sh("qm list | awk 'NR>1 {print $1}' | xargs -r -I {} qm stop {}", check=False)
-        self.runner.node_sh("qm list | awk 'NR>1 {print $1}' | xargs -r -I {} qm unlock {}", check=False)
+        self.runner.host_sh("qm list | awk 'NR>1 {print $1}' | xargs -r -I {} qm stop {}", check=False)
+        self.runner.host_sh("qm list | awk 'NR>1 {print $1}' | xargs -r -I {} qm unlock {}", check=False)
         self.destroy_all()
-        self.runner.node_sh("qm list | awk 'NR>1 {print $1}' | xargs -r -I {} qm destroy {}", check=False)
+        self.runner.host_sh("qm list | awk 'NR>1 {print $1}' | xargs -r -I {} qm destroy {}", check=False)
 
 
 def has_varfile(ansible_args) -> bool:

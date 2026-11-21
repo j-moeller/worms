@@ -5,7 +5,7 @@
                                             them (the player's tabs)
     /staff/simulations/<file>/?duration=N   one simulation, as the round player's document
 
-The gameplans are on the orchestrator and the node only, never here (docs/07-security.md). The
+The gameplans are on the orchestrator and the host only, never here (docs/07-security.md). The
 orchestrator simulates the attempt (orchestrator/rounds/simulations.py), keeps the document and
 hands it out through its API; this view asks for it and passes it on. The document is a run's
 kind of record: the sandbox and what happened when, no path, file content, log line or problem

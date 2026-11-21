@@ -32,7 +32,7 @@ def test_fixture_matches_shared_variables(tofu_copy, tmp_path):
     (stack / "outputs.tf").write_text(re.search(r'output "infrastructure" \{.*?\n\}\n', outputs, re.S).group(0))
     run = lambda *a: subprocess.run(["tofu", *a], cwd=stack, check=True, capture_output=True, text=True)  # noqa: E731
     run("init", "-input=false")
-    # The inputs without defaults (`worms` sets them); the node as in the fixture.
+    # The inputs without defaults (`worms` sets them); the host as in the fixture.
     inputs = {"proxmox_api_url": "x", "proxmox_api_token": "x", "proxmox_instance": "worms", "node_ssh_address": "x",
               "node_ssh_port": "22", "ssh_public_key": "x", "llm_access_ip": "192.0.2.34"}  # fmt: skip
     run("apply", "-auto-approve", "-input=false", *(arg for k, v in inputs.items() for arg in ("-var", f"{k}={v}")))
@@ -125,7 +125,7 @@ def test_a_devbox_reset_keeps_the_operators_memory_floor():
 
 def test_no_team_vm_is_offered_hardware_virtualisation():
     """Sandbox and devbox VMs are assumed hostile and rooted. `host` and `max` pass VMX on to them,
-    which gives root /dev/kvm and a way into the node's nested-KVM code. Measured on 2026-11-05: with
+    which gives root /dev/kvm and a way into the host's nested-KVM code. Measured on 2026-11-05: with
     `host`, /dev/kvm opened; with x86-64-v3, kvm_intel refuses to load (docs/07-security.md)."""
     agent = (REPO / "scripts" / "round_agent" / "handlers.py").read_text()
     expected = re.search(r'^TEAM_VM_CPU = "(.+)"$', agent, re.M).group(1)
@@ -279,7 +279,7 @@ def test_a_replaced_vm_gets_its_firewall_back(path, resource, vm):
 def test_the_ssh_gateway_lets_only_the_node_administer_it():
     """Ansible configures the gateway as debian. `AllowUsers team` alone locked
     it out before the team keys could be installed (live, on the first devbox
-    build); debian may log in from the node's management address, and only there."""
+    build); debian may log in from the host's management address, and only there."""
     template = (REPO / "opentofu" / "stacks" / "devbox" / "templates" / "ssh-gateway.tftpl").read_text()
     line = next(l.strip() for l in template.splitlines() if l.strip().startswith("AllowUsers"))
     assert line == "AllowUsers ${gateway_user} debian@${mgmt_host_ip}"

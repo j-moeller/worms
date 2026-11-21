@@ -30,13 +30,13 @@ class NotBaseState(Exception):
     """The platform is not in the state the journey starts from."""
 
 
-def check_wipe_allowed(given: str | None, node: str) -> bool:
-    """`--live-wipe-database=<node>`: the operator must name the node whose database gets
+def check_wipe_allowed(given: str | None, host: str) -> bool:
+    """`--live-wipe-database=<host>`: the operator must name the host whose database gets
     wiped, so a command copied from another machine does nothing."""
     if not given:
         return False
-    if given != node:
-        raise NotBaseState(f"--live-wipe-database names {given!r}, but this node is {node!r}: nothing wiped")
+    if given != host:
+        raise NotBaseState(f"--live-wipe-database names {given!r}, but this host is {host!r}: nothing wiped")
     return True
 
 
@@ -88,15 +88,15 @@ class Member:
 
 
 class Platform:
-    """The deployed platform, as seen from the Proxmox node."""
+    """The deployed platform, as seen from the Proxmox host."""
 
     def __init__(self, out: Path):
         self.out = out
-        self.node = socket.gethostname()
+        self.host = socket.gethostname()
         systems = yaml.safe_load((REPO / "ansible/group_vars/all.yml").read_text())["worms_environments"]
-        if self.node not in systems:
-            raise NotBaseState(f"this node ({self.node}) is not in worms_environments: the journey runs on a deployed Proxmox node")
-        self.public_name = systems[self.node]["public_name"]
+        if self.host not in systems:
+            raise NotBaseState(f"this host ({self.host}) is not in worms_environments: the journey runs on a deployed Proxmox host")
+        self.public_name = systems[self.host]["public_name"]
         addressing = json.loads((REPO / "tests/fixtures/platform-outputs.json").read_text())["infrastructure"]["value"]
         self.dashboard_ip = addressing["infrastructure_ips"]["dashboard"]
         self.gateway_ip = addressing["ssh_gateway_ips"]["devbox_ssh"]
@@ -221,7 +221,7 @@ class Platform:
         return self.agents[member.short][1]
 
     def ssh(self, member: Member, command: str, target: str | None = None, *, jump=True, extra=(), stdin: str | None = None, timeout=120) -> subprocess.CompletedProcess:
-        """As the member, from the node. Through the gateway to `target`, or to the gateway itself."""
+        """As the member, from the host. Through the gateway to `target`, or to the gateway itself."""
         gateway = f"team@{self.gateway_ip}"
         args = ["ssh", "-F", member.config, *extra]
         if jump and target:

@@ -1,4 +1,4 @@
-"""Making a file from its content spec (gameplan/content.py), on the node, when it is written.
+"""Making a file from its content spec (gameplan/content.py), on the host, when it is written.
 
     render(spec, values) -> bytes
 
@@ -6,7 +6,7 @@
 marker in the spec's strings is replaced by its value first, so a document's text, a zip's
 password and a vault's master password can be secrets of the run. The formats are written here
 from their specifications, with the standard library, and `cryptography` for KeePass (a
-dependency of Ansible, so on the node anyway; the round agent's role installs it).
+dependency of Ansible, so on the host anyway; the round agent's role installs it).
 
 What is made is a real file of its kind, not a look-alike: `file` names it, and the usual tools
 open it (unzip and 7z; Word, LibreOffice, antiword and catdoc; KeePassXC and pykeepass).
@@ -59,7 +59,7 @@ def new_secret(secret):
 def encrypt_ssh_key(private, passphrase):
     """An OpenSSH private key, as ssh-keygen writes it unencrypted, encrypted with `passphrase`
     in the same format (aes256-ctr, bcrypt KDF), as `ssh-keygen -p -N` would. Here, not with
-    ssh-keygen: its passphrase would be an argument, which every process on the node can read.
+    ssh-keygen: its passphrase would be an argument, which every process on the host can read.
     (cryptography needs the bcrypt module for it; the round agent's role installs both.)"""
     from cryptography.hazmat.primitives import serialization
 

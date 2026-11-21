@@ -18,7 +18,7 @@ provider "proxmox" {
     agent    = true
     username = "root"
 
-    # How it reaches the node, per system (worms_environments): set by `worms`
+    # How it reaches the host, per system (worms_environments): set by `worms`
     # and the round agent, never a default.
     node {
       name    = var.proxmox_instance
@@ -82,7 +82,7 @@ locals {
 }
 
 # Guard rails: a sandbox must never coexist with internet access (the flag is
-# written by ansible/Internet.yml; tofu runs on the Proxmox node), and the
+# written by ansible/Internet.yml; tofu runs on the Proxmox host), and the
 # router can carry at most 32 NICs (sandbox legs + services + management).
 locals {
   internet_allowed = fileexists("/run/worms/internet-allowed")
@@ -220,7 +220,7 @@ resource "proxmox_virtual_environment_vm" "gw" {
     }
 
     # The router resolves worms.internal through the private DNS, like the
-    # sandbox VMs below; without it it inherits the node's upstream resolver,
+    # sandbox VMs below; without it it inherits the host's upstream resolver,
     # which the isolated sandbox cannot reach, so `apt` (and every other
     # worms.internal name) fails and the sandbox never comes up.
     dns {
@@ -475,7 +475,7 @@ resource "proxmox_virtual_environment_vm" "vm" {
   node_name = var.proxmox_instance
 
   # Team code is assumed hostile and root on these VMs. This CPU offers no hardware
-  # virtualisation, so they get no /dev/kvm and cannot drive the node's nested-KVM code
+  # virtualisation, so they get no /dev/kvm and cannot drive the host's nested-KVM code
   # (docs/07-security.md). Never "host" or "max". The same as a devbox VM, and the
   # round's check job refuses any other (round_agent/handlers.py).
   cpu {

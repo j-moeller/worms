@@ -1,6 +1,6 @@
 ---
 # Allow or deny internet access for the infrastructure VMs (runtime state on
-# the Proxmox node; see roles/host/host_network/tasks/internet.yml):
+# the Proxmox host; see roles/host/host_network/tasks/internet.yml):
 #
 #   ansible-playbook Internet.yml -e internet=allowed
 #   ansible-playbook Internet.yml -e internet=denied
@@ -10,7 +10,7 @@
 
 - name: Set internet access for the infrastructure VMs
   hosts: proxmox_host
-  # No facts: its roles use none (the node's packages come from package_facts), and the node's took
+  # No facts: its roles use none (the host's packages come from package_facts), and the host's took
   # 19 s to gather, its many interfaces and disks.
   gather_facts: false
   become: true

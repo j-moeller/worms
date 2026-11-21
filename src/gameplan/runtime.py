@@ -346,8 +346,8 @@ class DryRun(Backend):
 def validate(cls, duration=None, packages=None):
     """Every problem of a gameplan class, for this duration per team (None: its own
     round_duration): [] if there is none. Builds the spec twice (it must not change: the
-    orchestrator and the node each build it), then dry-runs execute(). packages: the names
-    the private apt cache holds, if known (the node knows them; gameplan/build.py)."""
+    orchestrator and the host each build it), then dry-runs execute(). packages: the names
+    the private apt cache holds, if known (the host knows them; gameplan/build.py)."""
     try:
         first = instantiate(cls)
         spec = first.spec()

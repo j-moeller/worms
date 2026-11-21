@@ -89,7 +89,7 @@ def as_yaml(result: dict, indent: int = 4) -> str:
 
 def _parts(result):
     """(host name, task, result dict) of a task's result: ansible-core 2.19 on has .host/.task/.result,
-    older ones only ._host/._task/._result (a laptop's Ansible may be older than the node's)."""
+    older ones only ._host/._task/._result (a laptop's Ansible may be older than the host's)."""
     host = getattr(result, "host", None) or result._host
     task = getattr(result, "task", None) or result._task
     res = getattr(result, "result", None)

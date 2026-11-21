@@ -4,7 +4,7 @@
 <header class="page-head">
     <p class="page-head__kicker">Staff</p>
     <h1 class="page-head__title">Gameplans</h1>
-    <p class="page-head__lead">Every version of every gameplan the orchestrator has seen, by its SHA-256, and the rounds that ran it. A version never changes: the database checks that the hash is its bytes' and refuses to alter or remove a row. A round pins the version of its file when its first attempt starts, and every attempt runs exactly that one (the node and the orchestrator check the hash before they run it).</p>
+    <p class="page-head__lead">Every version of every gameplan the orchestrator has seen, by its SHA-256, and the rounds that ran it. A version never changes: the database checks that the hash is its bytes' and refuses to alter or remove a row. A round pins the version of its file when its first attempt starts, and every attempt runs exactly that one (the host and the orchestrator check the hash before they run it).</p>
 </header>
 {% include "staff/_tabs.html" with section="gameplans" %}
 

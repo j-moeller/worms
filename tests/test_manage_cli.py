@@ -119,8 +119,8 @@ def test_teams_are_created_on_the_dashboard_not_here(initialised):
 
 def cli(cluster, call):
     """One of the CLI's functions (src/manage.py) in a process of its own, against the test
-    cluster as `worms` sees it: for what `worms apply devbox` does after it has asked the node
-    about the devboxes' dependencies (there is no node here)."""
+    cluster as `worms` sees it: for what `worms apply devbox` does after it has asked the host
+    about the devboxes' dependencies (there is no host here)."""
     code = (f"import sys; sys.path.insert(0, {str(MANAGE.parent)!r}); import manage; "
             f"from worms_cli.config import Config; config = Config.load(); sys.exit(manage.{call})")  # fmt: skip
     return worms(cluster, "-c", code, python=True)
@@ -208,8 +208,8 @@ def _cli_module():
     return module
 
 
-def test_internet_probe_runs_locally_on_the_node(tmp_path, monkeypatch):
-    """Without WORMS_SSH the CLI is on the node (the build steps run locally
+def test_internet_probe_runs_locally_on_the_host(tmp_path, monkeypatch):
+    """Without WORMS_SSH the CLI is on the host (the build steps run locally
     too), so `status` reads the host flag directly."""
     cli = _cli_module()
     from worms_cli.config import Config
@@ -251,7 +251,7 @@ def test_proxmox_url_keeps_its_port(monkeypatch):
     for url, host, port in [("https://10.11.0.1:8006/", "10.11.0.1", 8006), ("https://pve.lab:9443", "pve.lab", 9443),
                             ("127.0.0.1", "127.0.0.1", 8006)]:
         seen.clear()
-        # The node named: else it is read from this checkout's platform state, which a test has not.
+        # The host named: else it is read from this checkout's platform state, which a test has not.
         Infra(Config(env={"WORMS_PROXMOX_URL": url, "WORMS_PROXMOX_USER": "topology@pve", "WORMS_PROXMOX_NODE": "pve",
                           "WORMS_PROXMOX_TOKEN_NAME": "readonly", "WORMS_PROXMOX_TOKEN_VALUE": "x"})).api()
         assert (seen["host"], seen["port"]) == (host, port), url
@@ -476,7 +476,7 @@ def test_there_is_no_dry_run():
 
 
 def run_on(tmp_path, *args, **env):
-    """The CLI in an empty checkout: it is on no node unless the test says so."""
+    """The CLI in an empty checkout: it is on no host unless the test says so."""
     return subprocess.run(
         [sys.executable, str(MANAGE), *args], capture_output=True, text=True,
         env={k: v for k, v in os.environ.items() if not k.startswith("WORMS_")}

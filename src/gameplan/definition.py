@@ -6,7 +6,7 @@ places files and names the VM the worm starts on. Nothing is built or contacted 
 description becomes a spec (`spec()`, plain JSON), which
 
   - validation checks before a round is scheduled (gameplan/runtime.py, `validate`),
-  - the round agent on the node builds into OpenTofu and Ansible (gameplan/build.py),
+  - the round agent on the host builds into OpenTofu and Ansible (gameplan/build.py),
   - the conductor runs `execute()` against (gameplan/runtime.py, `Runner`).
 
 What a VM runs is defined by its class: `packages`, `services`, `setup` commands and `files`
@@ -31,8 +31,8 @@ from gameplan.errors import GameplanError, RoundError
 # networks.sandbox_vms). Each network's .1 is sandbox-gw, the way to scoring, logging and the
 # private internet; VMs get addresses from .10 on.
 SANDBOX_NETWORK = ipaddress.ip_network("10.64.0.0/10")
-# The sandbox management bridge (vmbr4): the node reaches every VM here, SSH only. .1-.9 are
-# reserved (the node is .1, sandbox-gw .2).
+# The sandbox management bridge (vmbr4): the host reaches every VM here, SSH only. .1-.9 are
+# reserved (the host is .1, sandbox-gw .2).
 MAINTENANCE_NETWORK = ipaddress.ip_network("10.4.0.0/16")
 MAINTENANCE_FIRST_HOST = 10
 # The OS images a VM can boot from (opentofu/modules/os_images, local.platform.os_images).
@@ -80,7 +80,7 @@ NOLOGIN = "/usr/sbin/nologin"
 # commas, quotes, backslashes or wildcards a rule could be widened with, beyond sudoers' own `*`.
 SUDO_COMMAND = re.compile(r"^/[A-Za-z0-9._+/-]+(?: [A-Za-z0-9._+/=:@*-]+)*$")
 
-# What every sandbox VM keeps, whatever a gameplan removes: the node logs in over SSH as the
+# What every sandbox VM keeps, whatever a gameplan removes: the host logs in over SSH as the
 # image's user and becomes root with sudo, Ansible needs Python, the agent systemd, coreutils and
 # chpasswd, the worm bash and Python, scoring is HTTPS (ca-certificates), the VM's network comes
 # from cloud-init. The sandbox build also refuses a removal that would take one of these with it
@@ -90,7 +90,7 @@ PROTECTED_PACKAGES = frozenset({
     "libpam-runtime", "login", "netplan.io", "openssh-server", "passwd", "python3", "python3-minimal", "sudo",
     "systemd", "systemd-sysv", "util-linux",
 })  # fmt: skip
-# A per-run secret inside a file's content: replaced on the node, when the file is written.
+# A per-run secret inside a file's content: replaced on the host, when the file is written.
 SECRET_MARKER = re.compile(r"@@worms-secret:([a-z0-9]+)\.([a-z]+)@@")
 PASSWORD_CHARSETS = ("alnum", "digits", "hex")
 TOTP_LABEL = re.compile(r"^[A-Za-z0-9._@+-]{1,64}$")
@@ -100,7 +100,7 @@ TOTP_LABEL = re.compile(r"^[A-Za-z0-9._@+-]{1,64}$")
 # is built, after the users are made. The Match block goes at the end of sshd_config, as the
 # password logins' (roles/applications/sandbox_vm), not into sshd_config.d.
 TOTP_GROUP = "worms-totp"
-TOTP_WINDOW = 17  # codes accepted around the current one: the VMs' clocks come from the node
+TOTP_WINDOW = 17  # codes accepted around the current one: the VMs' clocks come from the host
 TOTP_SETUP = (
     "set -e; getent group worms-totp >/dev/null || groupadd --system worms-totp; "
     "grep -q '^# BEGIN worms totp logins' /etc/ssh/sshd_config || printf '%s\\n' '# BEGIN worms totp logins' "
@@ -134,7 +134,7 @@ FTP_PASSIVE_PORTS = (40000, 40019)
 FTP_USERS = "/etc/vsftpd.user_list"
 
 # SSH on another port (BasicVM.set_ssh_port): sshd answers there as well as on 22, which the
-# node logs in on over the management NIC (its rule is the platform's, not the gameplan's). The
+# host logs in on over the management NIC (its rule is the platform's, not the gameplan's). The
 # gameplan's firewall decides which of the two the sandbox networks see. A drop-in with any Port
 # replaces sshd's default, so 22 is listed too. sshd re-binds on reload (SIGHUP).
 SSH_PORT_CONF = "/etc/ssh/sshd_config.d/20-worms-port.conf"
@@ -179,8 +179,8 @@ Outgoing = "out"
 
 
 class Secret(str):
-    """A per-run secret, as it stands in a file's content until the node writes the file. Use it
-    like a string (an f-string, `+`): the node replaces it with the run's value."""
+    """A per-run secret, as it stands in a file's content until the host writes the file. Use it
+    like a string (an f-string, `+`): the host replaces it with the run's value."""
 
     def __new__(cls, owner, field):
         return super().__new__(cls, f"@@worms-secret:{owner}.{field}@@")
@@ -262,7 +262,7 @@ def _fields(secret):
 
 class FileState:
     """What `vm.read_file(path)` learns about a file in execute(): whether it is there, its size
-    and its SHA-256. Its content stays on the node (it would pass the database, which the
+    and its SHA-256. Its content stays on the host (it would pass the database, which the
     dashboard reads). Compare two reads to see a change. `error`: why it could not be read
     (only after the worm, which is root on the VM; before it, that fails the attempt)."""
 
@@ -400,7 +400,7 @@ class BasicVM:
 
     image = "debian"
     cores = 1
-    memory = 512  # MB: the ceiling; the node may reclaim unused RAM (docs/01-components.md)
+    memory = 512  # MB: the ceiling; the host may reclaim unused RAM (docs/01-components.md)
     disk = 5  # GB
     packages: tuple = ()
     remove: tuple = ()
@@ -471,7 +471,7 @@ class BasicVM:
     def set_ssh_port(self, port):
         """sshd answers on `port` in the sandbox networks instead of 22: open it with a firewall
         rule, and leave 22 closed, for a worm to find it (or a file to tell). sshd still listens
-        on 22, for the node's own access over the management NIC, which gameplan rules do not
+        on 22, for the host's own access over the management NIC, which gameplan rules do not
         reach. Every login over SSH (keys, passwords, TOTP) is on this port then."""
         self._defining("set_ssh_port")
         self.ssh_port = port
@@ -881,7 +881,7 @@ class _Plan:
                 out.append(f"{name}: {package!r} is not a Debian package name")
         for package in [p for p in [*vm._uninstall, *vm._purge] if isinstance(p, str)]:
             if package in PROTECTED_PACKAGES:
-                out.append(f"{name}: {package} cannot be removed: every sandbox VM needs it (the node's access, "
+                out.append(f"{name}: {package} cannot be removed: every sandbox VM needs it (the host's access, "
                            "Ansible, the worm, scoring)")  # fmt: skip
             elif package in vm._required:
                 out.append(f"{name}: {package} cannot be removed: a login of the gameplan needs it")
@@ -1049,7 +1049,7 @@ class Gameplan:
 
     def generate_password(self, length=16, charset="alnum"):
         """A password of no user, new for every run: for a vault, a zip, a document. It is a
-        string (a marker the node fills in), so f-strings and `+` work.
+        string (a marker the host fills in), so f-strings and `+` work.
 
         charset: alnum (letters and digits), digits (a PIN), hex."""
         plan = self._plan
@@ -1203,7 +1203,7 @@ class Gameplan:
         worm), or with at_reset=False only when execute() writes it. `~` is the owner's home.
 
         `content` is text, or a document, archive or vault (gameplan/content.py: Doc, Docx, Ods,
-        Zip, KeePass, TotpExport), made on the node. Either may hold the run's secrets
+        Zip, KeePass, TotpExport), made on the host. Either may hold the run's secrets
         (login.pwd, key.private, totp.secret, a generate_password(), ...). Returns its handle.
 
         In execute(): self.write_file(handle) writes a declared file now. Only declared files
@@ -1251,7 +1251,7 @@ class Gameplan:
         """`user` on each VM (made if it is new) logs in over SSH with the key *and* the TOTP's
         current code (keyboard-interactive, pam_google_authenticator). Both have to be found:
         put the private key in a file, and the TOTP's secret in another (TotpExport, totp.uri).
-        Only this user needs the code; the node's own access and the other logins do not.
+        Only this user needs the code; the host's own access and the other logins do not.
         The VM needs libpam-google-authenticator in the apt cache."""
         plan = self._plan
         plan.defining("add_ssh_totp_login")
@@ -1260,7 +1260,7 @@ class Gameplan:
         if totp.algorithm != "SHA1" or totp.digits != 6:
             raise GameplanError("add_ssh_totp_login: pam_google_authenticator takes SHA1 and 6 digits")
         if user in ("root", DEFAULT_USER):
-            raise GameplanError(f"add_ssh_totp_login: give the login its own user (not {user}: the node logs in as it)")
+            raise GameplanError(f"add_ssh_totp_login: give the login its own user (not {user}: the host logs in as it)")
         for vm in _as_list(vms, "add_ssh_totp_login"):
             self.add_ssh_key_login(vm, key, user)
             vm._require("libpam-google-authenticator")

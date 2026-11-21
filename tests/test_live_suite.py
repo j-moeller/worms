@@ -66,11 +66,11 @@ def test_passwords_never_reach_a_screenshot_or_the_command_line():
 
 
 def test_wiping_the_database_needs_the_node_named():
-    assert livelib.check_wipe_allowed(None, "node-a") is False
-    assert livelib.check_wipe_allowed("", "node-a") is False
-    assert livelib.check_wipe_allowed("node-a", "node-a") is True
+    assert livelib.check_wipe_allowed(None, "host-a") is False
+    assert livelib.check_wipe_allowed("", "host-a") is False
+    assert livelib.check_wipe_allowed("host-a", "host-a") is True
     with pytest.raises(livelib.NotBaseState):
-        livelib.check_wipe_allowed("node-b", "node-a")
+        livelib.check_wipe_allowed("host-b", "host-a")
 
 
 def test_key_values():

@@ -3,17 +3,17 @@
 A component is one of:
 
   a stack       platform, firewall: an OpenTofu stack of its own (no VM)
-  a node play   host-network, round-agent: an Ansible play on the Proxmox node
+  a host play   host-network, round-agent: an Ansible play on the Proxmox host
   a VM          dns, database, dashboard, ...: one VM of a shared OpenTofu stack (built with
                 `tofu apply -target`, recreated with `-replace`) and its share of the
                 configuration playbooks (`--limit` to its inventory group)
   devbox        the teams' devboxes: the round agent builds them (orchestrator chain)
   gameplans     gameplans/ and the framework (src/gameplan), copied to the orchestrator and the
-                node, which then check them: no packages, no internet window
+                host, which then check them: no packages, no internet window
 
 `deps` are what a component needs to exist before it is built. `worms apply` builds a missing
 dependency only after showing the plan and asking (build.confirm). Whether a component exists
-(`built`) is answered from the node: a VM by its name in Proxmox, a node play by its service,
+(`built`) is answered from the host: a VM by its name in Proxmox, a host play by its service,
 a stack by its OpenTofu state.
 """
 
@@ -29,15 +29,15 @@ class Component:
     name: str
     help: str
     deps: tuple[str, ...] = ()
-    kind: str = "vm"  # "vm", "stack", "node", "devbox", "gameplans"
+    kind: str = "vm"  # "vm", "stack", "host", "devbox", "gameplans"
     stack: str = ""  # its OpenTofu stack
     module: str = ""  # its VM's module in that stack (-target)
     resource: str = ""  # its VM resource in that module (-replace)
     group: str = ""  # its inventory group (--limit)
     service: bool = False  # a service VM: snapshot `clean`, which a reset returns to
     stateful: bool = False  # holds records a rebuild loses
-    node_service: str = ""  # for kind "node": the systemd unit that says it is built
-    playbook: str = ""  # for kind "node": its play
+    host_service: str = ""  # for kind "host": the systemd unit that says it is built
+    playbook: str = ""  # for kind "host": its play
 
 
 def _persistent(name, help, deps, stateful=False):
@@ -57,8 +57,8 @@ COMPONENTS: dict[str, Component] = {
         Component("platform", "bridges, OS images, cloud-init files, pools, hookscript", kind="stack", stack="platform"),
         Component("firewall", "the Proxmox cluster and node firewall, security groups", ("platform",), kind="stack",
                   stack="firewall"),  # fmt: skip
-        Component("host-network", "the node's nftables, NAT, sysctls and firewall watchdog", ("firewall",), kind="node",
-                  node_service="worms-host-firewall", playbook="SetupHostNetwork.yml"),  # fmt: skip
+        Component("host-network", "the host's nftables, NAT, sysctls and firewall watchdog", ("firewall",), kind="host",
+                  host_service="worms-host-firewall", playbook="SetupHostNetwork.yml"),  # fmt: skip
         Component("dns", "internal names, and the resolver the VMs use", ("host-network",), stack="infrastructure/ephemeral",
                   module="module.dns", resource="proxmox_virtual_environment_vm.service_vm", group="dns", service=True),  # fmt: skip
         _persistent("syslog", "the central log server: every VM's audit log", ("dns",)),
@@ -82,9 +82,9 @@ COMPONENTS: dict[str, Component] = {
         _private("ntp", "the private internet: time"),
         _private("cve-search", "the private internet: CVE search"),
         _private("wikipedia", "the private internet: Wikipedia"),
-        Component("round-agent", "the round agent on the node: runs rounds and builds devboxes", ("database", "orchestrator"),
-                  kind="node", node_service="worms-round-agent", playbook="SetupRoundAgent.yml"),  # fmt: skip
-        Component("gameplans", "the gameplans and their framework, copied to the orchestrator and the node, "
+        Component("round-agent", "the round agent on the host: runs rounds and builds devboxes", ("database", "orchestrator"),
+                  kind="host", host_service="worms-round-agent", playbook="SetupRoundAgent.yml"),  # fmt: skip
+        Component("gameplans", "the gameplans and their framework, copied to the orchestrator and the host, "
                   "checked at once; no packages, no internet; not during a round", ("orchestrator", "round-agent"),
                   kind="gameplans"),  # fmt: skip
         Component("devbox", "the teams' missing devboxes, built by the round agent; --rebuild: every team's (or "
@@ -161,7 +161,7 @@ class Plan:
             "dependency": "create: a missing dependency",
             "migrations": "configure again: the database lacks migrations",
             "provision": "build the teams' missing devboxes (round agent)",
-            "deploy": "copy to the node and the orchestrator, check at once",
+            "deploy": "copy to the host and the orchestrator, check at once",
         }
         return [[name, what[action], COMPONENTS[name].help] for name, action in self.steps]
 
@@ -185,8 +185,8 @@ class Plan:
             c = COMPONENTS[name]
             if c.kind == "stack":
                 rows[name] = f"OpenTofu: init + apply {c.stack}"
-            elif c.kind == "node":
-                rows[name] = f"Ansible: {c.playbook} on the node" + (" (the agent restarts once idle)" if name == "round-agent" else "")
+            elif c.kind == "host":
+                rows[name] = f"Ansible: {c.playbook} on the host" + (" (the agent restarts once idle)" if name == "round-agent" else "")
             elif c.kind == "gameplans":
                 rows[name] = "Ansible: SetupRoundAgent.yml --tags agent-sync; Site.yml --limit orchestrator --tags gameplans"
             elif c.kind == "devbox":

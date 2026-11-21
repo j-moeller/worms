@@ -6,7 +6,7 @@ important events, so they stay small: tens to a few hundred rows a day.
 
 How they are protected (setup_db_permissions):
 - Each writing component has its own database account, used for nothing else:
-  `dbuser_events_dashboard` on the dashboard, `dbuser_events_node` on the node;
+  `dbuser_events_dashboard` on the dashboard, `dbuser_events_node` on the host;
   the console writes as the admin. An account may only INSERT, only into the
   tables of its component, and only the columns it fills.
 - The database fills `created_at` (now()) and `written_by` (the inserting account,
@@ -154,7 +154,7 @@ class SSHGatewayLogin(Event):
     gateway_user = models.TextField()
     key_type = models.TextField()
     ssh_fingerprint = models.TextField()  # matches credential_events.ssh_fingerprint
-    # The team's public address, from the node's log of new connections to the
+    # The team's public address, from the host's log of new connections to the
     # published port, matched by source port; null when it could not be told.
     client_ip = models.GenericIPAddressField(null=True)
     gateway_peer_port = models.IntegerField()
@@ -166,7 +166,7 @@ class SSHGatewayLogin(Event):
 
 class PlatformEvent(Event):
     """The platform itself: the internet window, the firewall watchdog stopping team
-    VMs (the node), a wipe of the database (the console)."""
+    VMs (the host), a wipe of the database (the console)."""
 
     kind = models.TextField()  # internet_allowed, internet_denied, watchdog_stopped, database_reset
     actor = models.TextField(null=True)  # the operator or the tool, as the writer knows it

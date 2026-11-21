@@ -1,5 +1,5 @@
 """The gameplan framework (src/gameplan, docs/05-live-environment.md): describing a sandbox,
-validating it, loading a file safely, running execute() by its rules, and what the node builds."""
+validating it, loading a file safely, running execute() by its rules, and what the host builds."""
 
 from __future__ import annotations
 
@@ -112,7 +112,7 @@ def test_the_spec_names_vms_after_their_attributes_and_assigns_addresses():
     assert vms["sandbox-a"]["firewall"][0]["peers"] == ["10.64.0.0/24"]
     assert [s["op"] for s in spec["setup"]] == ["private_key", "public_key", "password"]
     assert spec["files"][0]["at_reset"] is False and spec["files"][0]["mode"] == "0644"
-    # The same description twice is the same spec (the node and the orchestrator each build it).
+    # The same description twice is the same spec (the host and the orchestrator each build it).
     assert spec == spec_of(Chain)
 
 
@@ -385,7 +385,7 @@ def test_a_file_defines_exactly_one_gameplan(tmp_path):
     assert loader.load(tmp_path, "imported.py").cls.__name__ == "X"
 
 
-# -- what the node builds -----------------------------------------------------------------------
+# -- what the host builds -----------------------------------------------------------------------
 
 
 def test_the_build_renders_bridges_vms_rules_and_ansible_vars():

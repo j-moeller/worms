@@ -1,6 +1,6 @@
 # WORMS platform
 
-WORMS is a competition platform for self-spreading programs ("worms"), running on one Proxmox node.
+WORMS is a competition platform for self-spreading programs ("worms"), running on one Proxmox host.
 
 - **Teams** sign in to a dashboard and develop against their own three VMs (the **devbox**).
 - **Uploads.** Each team uploads its worm as a zip.
@@ -14,7 +14,7 @@ Built with OpenTofu (`opentofu/`), Ansible (`ansible/`), the `worms` CLI, the ro
 | Doc | For |
 |---|---|
 | [1 Components](docs/01-components.md) | Everyone: what runs where, networks, stacks, repository layout |
-| [2 Installation](docs/02-installation.md) | Operators: from a bare Proxmox node to a running platform |
+| [2 Installation](docs/02-installation.md) | Operators: from a bare Proxmox host to a running platform |
 | [3 manage.py](docs/03-manage-py.md) | Operators: the `worms` CLI, Django's management commands, testing, logs |
 | [4 Dev environment](docs/04-dev-environment.md) | Developers: devboxes, the SSH gateway, dev uploads |
 | [5 Live environment](docs/05-live-environment.md) | Developers, gameplan authors: rounds, attempts, the round agent, writing a gameplan |
@@ -24,7 +24,7 @@ Built with OpenTofu (`opentofu/`), Ansible (`ansible/`), the `worms` CLI, the ro
 
 ## Quick start
 
-On the node (details: [2 Installation](docs/02-installation.md)):
+On the host (details: [2 Installation](docs/02-installation.md)):
 
 ```sh
 worms() { /root/app/.venv-test/bin/python /root/app/src/manage.py "$@"; }
@@ -32,7 +32,7 @@ worms secret issue proxmox-token          # OpenTofu and the round agent
 worms secret issue orchestrator-token     # sandbox VM power, for rounds
 worms secret issue topology-token         # the topology page and `worms status`
 worms secret                              # generates everything else
-worms init                           # root on the node accepts the WORMS key
+worms init                           # root on the host accepts the WORMS key
 worms apply --all                          # = make: everything, idempotent
 worms user password                 # one-time password for `admin`
 ```
@@ -43,5 +43,5 @@ worms user password                 # one-time password for `admin`
 
 ```sh
 worms test          # offline suite: no Proxmox needed
-worms test --live      # on the node: the deployed platform end to end, PASS/FAIL report
+worms test --live      # on the host: the deployed platform end to end, PASS/FAIL report
 ```

@@ -12,9 +12,9 @@ file), a later source `:path` is on the first source's VM, a trailing "/" on a s
 contents rather than itself, and `vm:` alone is the home. rsync gets these as they are, with only
 the VM's name changed to its management address; rsync's daemon syntax (`host::`, `rsync://`) is
 refused. The VM's rsync runs as the user before the "@" (sudo), from that user's home: root's on
-a devbox, where the team works as root, the login user's (`debian`) elsewhere, root's on the node.
+a devbox, where the team works as root, the login user's (`debian`) elsewhere, root's on the host.
 
-A devbox or sandbox VM is assumed rooted by its team, and the CLI often runs on the node as root,
+A devbox or sandbox VM is assumed rooted by its team, and the CLI often runs on the host as root,
 so with one of them this end of the transfer is guarded: downloaded files get no setuid bits, no
 owner of the VM's and no device files (--no-perms keeps their other permissions), and symbolic
 links are kept inert (--munge-links) on the way down and restored on the way up, so a backup
@@ -160,18 +160,18 @@ class Rsync:
 
     def _resolve(self, specs: list[Spec], side: Spec, down: bool, base: list[str], options: list[str]) -> Plan:
         env = self.session.env()
-        if side.vm == "node":
+        if side.vm == "host":
             user = side.user or "root"
-            if not self.session.laptop:  # the node is here: its paths are local ones
+            if not self.session.laptop:  # the host is here: its paths are local ones
                 home = _home(user)
                 argv = [_local(home, s.path) if s.remote else s.arg for s in specs]
-                return Plan(["rsync", *base, *options, "--", *argv], env, "node", user, down, False)
-            self.session.check_node()
+                return Plan(["rsync", *base, *options, "--", *argv], env, "host", user, down, False)
+            self.session.check_host()
             ssh, destination, guarded, host = ["ssh", *self.session.ssh_opts()], self.config.ssh, False, {}
         else:
             vm = self.catalogue.resolve(side.vm)
             if vm.get("status") != "running":
-                raise BuildError(f"{vm['name']} is {vm.get('status')}: start it first (`qm start {vm['vmid']}` on the node)")
+                raise BuildError(f"{vm['name']} is {vm.get('status')}: start it first (`qm start {vm['vmid']}` on the host)")
             host = self.catalogue.hosts().get(vm["name"], {})
             user = side.user or ("root" if host.get("group") == "devbox" else host.get("ansible_user", "debian"))
             ssh = ["ssh", *self.catalogue.ssh_options(interactive=False), "-o", "ServerAliveInterval=15"]
@@ -217,8 +217,8 @@ def _home(user: str) -> str:
 
 
 def _local(home: str, path: str) -> str:
-    """`node:<path>` on the node itself: a path from the user's home, as the remote end takes it
-    (`node:` alone is the home's contents, as `host:` is)."""
+    """`host:<path>` on the host itself: a path from the user's home, as the remote end takes it
+    (`host:` alone is the home's contents, as for rsync's own `<remote>:`)."""
     if path.startswith("/"):
         return path
     return os.path.join(home, path) if path else home.rstrip("/") + "/"

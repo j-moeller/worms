@@ -49,7 +49,7 @@ def setup(config) -> None:
         raise NotConfigured(f"database: {exc}") from exc
     if not db_env:
         raise NotConfigured(
-            "no database configured: no vault in this checkout (set WORMS_SSH=root@<node> "
+            "no database configured: no vault in this checkout (set WORMS_SSH=root@<host> "
             "in ~/.worms/config, then `worms secret`). See docs/03-manage-py.md."
         )
 
@@ -90,4 +90,4 @@ def _name_the_system(config) -> None:
         system = for_config(config).environment()
     except SessionError:
         return
-    os.environ["WORMS_ENVIRONMENT"] = f"{system['name']}: {system['node']}"
+    os.environ["WORMS_ENVIRONMENT"] = f"{system['name']}: {system['host']}"

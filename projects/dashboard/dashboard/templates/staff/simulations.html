@@ -25,7 +25,7 @@ the player (the tabs are the gameplans, then the durations per team their rounds
                     <td><a href="{% url 'staff_simulation' g.file %}">its own duration</a>{% for r in g.rounds %} · <a href="{% url 'staff_simulation' g.file %}?duration={{ r.team_duration }}">{{ r.name }} ({{ r.team_duration }} s)</a>{% endfor %}</td>
                 </tr>
                 {% empty %}
-                <tr><td colspan="3" class="empty">The orchestrator lists no gameplan yet (files in <code>gameplans/</code> on the node and the orchestrator).</td></tr>
+                <tr><td colspan="3" class="empty">The orchestrator lists no gameplan yet (files in <code>gameplans/</code> on the host and the orchestrator).</td></tr>
                 {% endfor %}
             </tbody>
         </table>

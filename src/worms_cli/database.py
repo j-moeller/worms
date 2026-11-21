@@ -95,7 +95,7 @@ def backup(config, path: str | None = None) -> tuple[str, int]:
         raise BuildError(f"the database VM is {vm.get('status')}: `worms vm start database`")
     if path is None:
         try:
-            system = session.environment()["node"]
+            system = session.environment()["host"]
         except SessionError:
             system = "worms"
         directory = Path(BACKUPS).expanduser()
@@ -158,8 +158,8 @@ def restore(config, path: str) -> int:
         for service_name in names:
             service = SERVICES[service_name]
             command = f"systemctl {action} {' '.join(service.units)}"
-            if service.where == "node":
-                code, _out, err = session.node_run(["sh", "-c", command])
+            if service.where == "host":
+                code, _out, err = session.host_run(["sh", "-c", command])
             else:
                 vm = catalogue.resolve(service.where)
                 argv, env = catalogue.ssh_argv(vm, f"sudo -n {command}", interactive=False)

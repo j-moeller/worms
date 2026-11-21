@@ -145,7 +145,7 @@ class Agent:
         left = self.fail.get(job.kind, 0)
         if left:
             self.fail[job.kind] = left if left is True else left - 1
-            job.state, job.error = HostJob.State.FAILED, f"the {job.kind} job failed: its log on the node says why"
+            job.state, job.error = HostJob.State.FAILED, f"the {job.kind} job failed: its log on the host says why"
         else:
             job.state, job.result = HostJob.State.DONE, self.result(job)
         job.finished_at = timezone.now()
@@ -168,7 +168,7 @@ class Agent:
                                   for name in loader.available(self.directory)]}  # fmt: skip
         if job.kind == K.PREPARE:
             loaded, spec = self.spec(params["gameplan"])
-            assert loaded.sha256 == params["gameplan_sha256"]  # the node runs only the pinned version
+            assert loaded.sha256 == params["gameplan_sha256"]  # the host runs only the pinned version
             networks = build.vm_networks(spec)
             return {
                 "topology": build.topology(spec),

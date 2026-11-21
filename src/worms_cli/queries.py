@@ -339,7 +339,7 @@ def devbox_rows() -> list[list[str]]:
 
 
 def gameplan_rows(repo_root) -> list[list[str]]:
-    """The gameplans: what the orchestrator and the node found (the `gameplans` table: valid or
+    """The gameplans: what the orchestrator and the host found (the `gameplans` table: valid or
     not, its version's SHA-256), and this checkout's own check of each file (src/gameplan, the
     dry run): why one is invalid. Every version and the rounds that ran it: Staff → Gameplans."""
     import sys

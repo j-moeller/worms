@@ -31,7 +31,7 @@ from round_agent.agent import Agent  # noqa: E402
 @pytest.fixture(autouse=True)
 def _agent_state(monkeypatch, tmp_path):
     """A test's own agent records and internet flag, never this machine's: the tests may
-    run on the node itself."""
+    run on the host itself."""
     monkeypatch.setattr(handlers, "STATE_DIR", str(tmp_path / "agent-state"))
     monkeypatch.setattr(handlers, "INTERNET_FLAG", str(tmp_path / "internet-allowed"))
 
@@ -409,7 +409,7 @@ def test_prepare_builds_the_gameplans_sandbox_and_reports_its_topology():
 
 def test_a_failed_build_tells_the_database_nothing_of_the_gameplan():
     """Ansible prints the setup command that failed; the job's error (which the dashboard can
-    read) names the job only, and the reason goes to the job log on the node."""
+    read) names the job only, and the reason goes to the job log on the host."""
 
     class Failing(FakeExecutor):
         def worms(self, component, timeout=3600, args=None):
@@ -419,12 +419,12 @@ def test_a_failed_build_tells_the_database_nothing_of_the_gameplan():
     ex.sandbox_built = False
     with pytest.raises(RuntimeError) as failure:
         _prepare(ex)
-    assert str(failure.value) == "the prepare job failed: its log on the node says why"
+    assert str(failure.value) == "the prepare job failed: its log on the host says why"
     assert any("hunter2" in note for note in ex.notes)
 
 
 def test_the_gameplans_packages_and_files_reach_ansible_unsafe(monkeypatch):
-    """Ansible renders the varfile on the node as root: a gameplan's text is never templated."""
+    """Ansible renders the varfile on the host as root: a gameplan's text is never templated."""
     seen = {}
 
     class Capture(FakeExecutor):
@@ -460,7 +460,7 @@ def test_a_run_gets_its_own_keys_password_files_and_flags_before_the_worm():
     for entry in result["released"]:
         host = {"sandbox-a": "10.4.0.10", "sandbox-b": "10.4.0.11"}[entry["vm"]]
         assert hashlib.sha256(ex.flags[host].encode()).hexdigest() == entry["flag_hash"]
-    # The run's secrets stay on the node, root only, and nothing of them is in the result.
+    # The run's secrets stay on the host, root only, and nothing of them is in the result.
     state = Path(handlers.STATE_DIR) / "runs" / f"{RUN}.json"
     assert oct(state.stat().st_mode & 0o777) == "0o600" and secret in state.read_text()
     assert secret not in json.dumps(result)
@@ -631,7 +631,7 @@ def test_check_flags_a_down_vm_and_dead_service():
     ["cpu: host", "cpu: max", "cpu: x86-64-v3,flags=+vmx", "cpu: x86-64-v3,flags=+nested-virt", "cpu: qemu64", "name: no-cpu-line", ""],
 )
 def test_check_refuses_a_sandbox_vm_without_the_cpu_that_hides_kvm(config):
-    """Hostile root on a VM must not get /dev/kvm. Asked of the node, and anything unknown fails."""
+    """Hostile root on a VM must not get /dev/kvm. Asked of the host, and anything unknown fails."""
     ex = FakeExecutor()
     ex.qm_config["901"] = config
     result = handlers.check(ex, CFG, {})
@@ -674,7 +674,7 @@ def test_after_the_worm_a_vm_it_broke_is_reported_not_failed():
     assert remove["argv"] == ["sudo", "sh", "-c", "rm -f /etc/worms/flag && test ! -e /etc/worms/flag"]
 
 
-def test_a_declared_file_is_written_later_from_the_nodes_copy():
+def test_a_declared_file_is_written_later_from_the_hosts_copy():
     ex = FakeExecutor()
     _prepare(ex)
     public = next(c for c in ex.ssh_calls if c["argv"][:3] == ["sudo", "tee", "-a"])["input"].strip()
@@ -1235,7 +1235,7 @@ def test_round_agent_env_renders(render):
 
 
 def test_the_agent_is_the_node_whatever_roots_worms_config_says(render, tmp_path, monkeypatch):
-    """A /root/.worms/config with WORMS_SSH on the node (laptop mode) made the
+    """A /root/.worms/config with WORMS_SSH on the host (laptop mode) made the
     agent's `worms step devbox-apply` fail with "no ansible/inventory.generated.yml"
     (2026-11-06, production). The agent's environment empties it."""
     env = render("ansible/roles/host/round_agent", "round-agent.env.j2", **AGENT_ENV_VARS)
@@ -1250,7 +1250,7 @@ def test_the_agent_is_the_node_whatever_roots_worms_config_says(render, tmp_path
         if line.startswith("WORMS_"):
             key, _, value = line.partition("=")
             monkeypatch.setenv(key, value)
-    assert config.Config.load().ssh == ""  # with the agent's environment: the node
+    assert config.Config.load().ssh == ""  # with the agent's environment: the host
 
 
 def test_round_agent_env_names_every_service_vm_it_waits_for(render):
@@ -1279,14 +1279,14 @@ def test_round_agent_env_carries_the_opentofu_inputs(render):
 def test_round_agent_unit_wraps_an_ssh_agent(render, tmp_path):
     """The bpg provider uploads snippets over SSH through an agent (agent =
     true); systemd kills anything ExecStartPre forks, so ssh-agent wraps the
-    service command instead: worms-node-run (tests/test_laptop.py runs it)."""
+    service command instead: worms-host-run (tests/test_laptop.py runs it)."""
     import shutil
     import subprocess
 
     unit = render("ansible/roles/host/round_agent", "worms-round-agent.service.j2")
     exec_start = next(line for line in unit.splitlines() if line.startswith("ExecStart="))
-    assert exec_start == 'ExecStart=/usr/local/sbin/worms-node-run . "exec /usr/bin/python3 -m round_agent"'
-    wrapper = render("ansible/roles/host/round_agent", "worms-node-run.j2")
+    assert exec_start == 'ExecStart=/usr/local/sbin/worms-host-run . "exec /usr/bin/python3 -m round_agent"'
+    wrapper = render("ansible/roles/host/round_agent", "worms-host-run.j2")
     assert "exec ssh-agent sh -c 'ssh-add -q" in wrapper and "/etc/worms/ssh/worms" in wrapper
     assert "ExecStartPre" not in unit
     path = tmp_path / "worms-round-agent.service"

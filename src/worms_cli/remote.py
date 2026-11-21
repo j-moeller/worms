@@ -3,16 +3,16 @@ login. (`worms login <vm> -- <command>` is the same for one VM.)
 
     worms run dashboard -- systemctl is-active dashboard nginx
     worms run services -- df -h /            every service VM, one prefix per VM
-    worms run node -- qm list                the Proxmox node
+    worms run host -- qm list                the Proxmox host
     worms run alpha/a --root -- ls /root     a team's VM: only when named
 
-A target is `node`, a VM by its name, an alias or `<team>/<role>` (worms_cli/teams.py), or a
+A target is `host`, a VM by its name, an alias or `<team>/<role>` (worms_cli/teams.py), or a
 group: `infrastructure`, `services`, `private-internet` (worms_cli/components.py, GROUPS). A group
 holds platform VMs only: a team's VM (devbox, sandbox) runs a command only when it is named
 itself.
 
 It goes as `worms login` does, never interactive (BatchMode, no terminal, no prompt): the WORMS
-key in its own agent, never forwarded; the node over the session's SSH (here: a local shell).
+key in its own agent, never forwarded; the host over the session's SSH (here: a local shell).
 The words after `--` are joined with spaces and run by the VM's shell, as ssh does; `--root`
 runs them with `sudo -n sh -c`. Each VM's output comes as it comes, one `[<vm>]` prefix per line
 when there are several; what a team's VM prints is escaped (it is assumed rooted by its team).
@@ -39,7 +39,7 @@ STOPPED = 1  # the exit code of a VM that is not running (it is not started for 
 @dataclass(frozen=True)
 class Target:
     name: str
-    vm: dict | None  # None: the node
+    vm: dict | None  # None: the host
     untrusted: bool = False
 
 
@@ -81,8 +81,8 @@ class Remote:
         known = groups()
         out: dict[str, Target] = {}
         for name in names:
-            if name == "node":
-                out.setdefault("node", Target("node", None))
+            if name == "host":
+                out.setdefault("host", Target("host", None))
             elif name in known:
                 there = {vm["name"]: vm for vm in self.catalogue.vms()}
                 members = [there[n] for n in known[name] if n in there and there[n].get("pool") not in self.untrusted_pools]
@@ -98,7 +98,7 @@ class Remote:
     def argv(self, target: Target, command: str, root: bool) -> tuple[list[str], dict]:
         if target.vm is None:
             if self.session.laptop:
-                self.session.check_node()
+                self.session.check_host()
                 return self.session.ssh_argv(command), self.session.env()
             return ["sh", "-c", command], dict(os.environ)
         if root:
@@ -129,11 +129,11 @@ class Remote:
     def _one(self, target: Target, command: str, root: bool, several: bool, stdin) -> int:
         prefix = f"[{target.name}] " if several else ""
         if target.vm is not None and target.vm.get("status") != "running":
-            self._write(sys.stderr, f"{prefix}{target.name} is {target.vm.get('status')}: not run (`qm start {target.vm['vmid']}` on the node)\n")
+            self._write(sys.stderr, f"{prefix}{target.name} is {target.vm.get('status')}: not run (`qm start {target.vm['vmid']}` on the host)\n")
             return STOPPED
         try:
             argv, env = self.argv(target, command, root)
-        except Exception as exc:  # noqa: BLE001  (no address in the inventories, the node out of reach)
+        except Exception as exc:  # noqa: BLE001  (no address in the inventories, the host out of reach)
             self._write(sys.stderr, f"{prefix}{exc}\n")
             return 255
         proc = subprocess.Popen(argv, env=env, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

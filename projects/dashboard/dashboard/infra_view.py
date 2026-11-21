@@ -5,7 +5,7 @@ Proxmox snapshot (orchestrator/proxmox_inventory.py, stored in
 `topology_snapshots`) into what the visualization draws:
 
     {
-      "host":     {...},  # the Proxmox node: name, version, firewall daemons
+      "host":     {...},  # the Proxmox host: name, version, firewall daemons
       "nodes":    [...],  # every VM, plus the Proxmox host, as first-class nodes
       "groups":   [...],  # the untrusted environments: the sandbox, each team's devbox
       "networks": [...],  # the operational L2 segments inside those groups
@@ -328,7 +328,7 @@ def _bridges(data) -> dict:
 
 
 def _host_node(data, bridges, groups) -> dict:
-    """The Proxmox node itself. Its addresses are its bridge addresses (it is
+    """The Proxmox host itself. Its addresses are its bridge addresses (it is
     what connects to the database as the round agent / admin role)."""
     nics, addresses = [], []
     for b in sorted(bridges.values(), key=lambda b: b["name"]):

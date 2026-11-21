@@ -36,10 +36,10 @@ class Token:
 
 
 TOKENS = {
-    # OpenTofu on the controller, and the round agent on the node for the
+    # OpenTofu on the controller, and the round agent on the host for the
     # sandbox and devbox stacks. It builds VMs, bridges, pools and firewall
     # rules, so it needs these on the whole tree; it cannot grant rights, manage
-    # users, reach a console or power off the node.
+    # users, reach a console or power off the host.
     "proxmox-token": Token(
         user="worms-provision@pve",
         token_id="worms",
@@ -67,7 +67,7 @@ TOKENS = {
             "VM.PowerMgmt",
         ),
         path="/",
-        purpose="OpenTofu (controller) and the round agent (node)",
+        purpose="OpenTofu (controller) and the round agent (host)",
         full_form=True,
     ),
     # The orchestrator VM, for the game plan: start and stop sandbox VMs, and
@@ -81,7 +81,7 @@ TOKENS = {
         purpose="the orchestrator VM (sandbox VM power)",
     ),
     # The orchestrator's topology collector and `worms status`: read-only, and
-    # only VMs, pools and the node's network and firewall.
+    # only VMs, pools and the host's network and firewall.
     "topology-token": Token(
         user="topology@pve",
         token_id="readonly",
@@ -103,7 +103,7 @@ class ApiError(RuntimeError):
         self.status = status
 
 
-# (argv) -> (returncode, stdout, stderr), on the Proxmox node.
+# (argv) -> (returncode, stdout, stderr), on the Proxmox host.
 Run = Callable[[list], tuple]
 
 

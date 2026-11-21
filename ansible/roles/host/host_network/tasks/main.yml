@@ -10,8 +10,8 @@
 
 # Sandbox and devbox VMs are assumed hostile and rooted. Their CPU type already hides hardware
 # virtualisation from them. This is the second lock: with nesting off, no VM can get it from this
-# node, whatever its config says (docs/07-security.md). It applies when the module next
-# loads, so after a node restart, or with every VM stopped and kvm_intel reloaded.
+# host, whatever its config says (docs/07-security.md). It applies when the module next
+# loads, so after a host restart, or with every VM stopped and kvm_intel reloaded.
 - name: Turn off nested virtualisation
   ansible.builtin.copy:
     dest: /etc/modprobe.d/worms-no-nesting.conf
@@ -29,8 +29,8 @@
       - proxmox.node in worms_environments
       - (worms_environment.ssh_gateway_public_port | int) != (worms_environment.operator_ssh_port | int)
     fail_msg: >-
-      Node {{ proxmox.node }}: not in worms_environments (group_vars/all.yml), or its
-      ssh_gateway_public_port is its operator_ssh_port. Every node is listed there, with
+      Host {{ proxmox.node }}: not in worms_environments (group_vars/all.yml), or its
+      ssh_gateway_public_port is its operator_ssh_port. Every host is listed there, with
       two different ports.
     quiet: true
 
@@ -52,8 +52,8 @@
     mode: "0755"
 
 # Port 22 on the WAN goes to the devbox SSH gateway: without sshd on another port the
-# operators would lose SSH to the node with this ruleset.
-- name: Check that operators keep SSH to the node
+# operators would lose SSH to the host with this ruleset.
+- name: Check that operators keep SSH to the host
   when: host_publish_ssh_gateway | bool and (ssh_gateway_public_port | int) == 22
   block:
     - name: Read sshd's listening ports
@@ -65,7 +65,7 @@
       ansible.builtin.assert:
         that: host_operator_sshd.stdout | length > 0
         fail_msg: >-
-          Nothing listens on port {{ host_operator_ssh_port }} on this node, and this ruleset
+          Nothing listens on port {{ host_operator_ssh_port }} on this host, and this ruleset
           forwards port 22 from {{ host_wan_interface }} to the devbox SSH gateway: operators
           would lose SSH. Add "Port 22" and "Port {{ host_operator_ssh_port }}" to sshd and allow
           {{ host_operator_ssh_port }} in the Proxmox firewall first (docs/02-installation.md, 2.5).

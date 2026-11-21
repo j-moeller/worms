@@ -148,14 +148,14 @@ def test_host_firewall_publishes_the_dashboard(render, tmp_path):
     assert proc.returncode == 0, proc.stderr
 
 
-def _dashboard_vars(tmp_path, node):
-    """tls_dns_name and django_allowed_hosts of group_vars/dashboard.yml on a node."""
+def _dashboard_vars(tmp_path, host):
+    """tls_dns_name and django_allowed_hosts of group_vars/dashboard.yml on a host."""
     out = tmp_path / "out.yml"
     playbook = [{
         "hosts": "localhost",
         "connection": "local",
         "gather_facts": False,
-        "vars": {"proxmox": {"node": node}, "infrastructure_ips": {"dashboard": "10.10.0.18"}},
+        "vars": {"proxmox": {"node": host}, "infrastructure_ips": {"dashboard": "10.10.0.18"}},
         "tasks": [
             {"ansible.builtin.include_vars": {"file": str(ANSIBLE / "group_vars" / "all.yml")}},
             {"ansible.builtin.include_vars": {"file": str(ANSIBLE / "group_vars" / "dashboard.yml")}},
@@ -171,21 +171,21 @@ def _dashboard_vars(tmp_path, node):
 
 
 @pytest.mark.parametrize(
-    "node, public_name",
+    "host, public_name",
     [("worms-dev", "worms-dev.mlsec.tu-berlin.de"), ("worms", "worms.mlsec.tu-berlin.de")],
 )
-def test_dashboard_has_one_public_name_per_node(tmp_path, node, public_name):
+def test_dashboard_has_one_public_name_per_host(tmp_path, host, public_name):
     """The name on the certificate and the only name it answers to. Live, it is
-    not the node's own: worms serves worms.mlsec.tu-berlin.de."""
+    not the host's own: worms serves worms.mlsec.tu-berlin.de."""
     require("ansible-playbook")
-    proc, out = _dashboard_vars(tmp_path, node)
+    proc, out = _dashboard_vars(tmp_path, host)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert yaml.safe_load(out.read_text()) == {"name": public_name, "hosts": public_name}
 
 
 def test_dashboard_on_an_unknown_node_fails_loudly(tmp_path):
     require("ansible-playbook")
-    proc, _ = _dashboard_vars(tmp_path, "some-other-node")
+    proc, _ = _dashboard_vars(tmp_path, "some-other-host")
     assert proc.returncode != 0
 
 
@@ -358,7 +358,7 @@ def test_host_firewall_publishes_the_devbox_ssh_gateway(render, tmp_path):
     path = tmp_path / "worms.nft"
     # Production's ports (group_vars/all.yml, worms_environments: worms).
     text = render("ansible/roles/host/host_network", "worms.nft.j2", host_publish_ssh_gateway=True, ssh_gateway_public_port=22)
-    # From the WAN, only 22 is forwarded (the node's own sshd is on 2222), and only to the gateway's SSH port.
+    # From the WAN, only 22 is forwarded (the host's own sshd is on 2222), and only to the gateway's SSH port.
     assert 'iifname "vmbr0" fib daddr type local tcp dport 22 dnat ip to 10.7.0.2:22' in text
     from_wan = [line for line in text.splitlines() if "10.7.0.2" in line and 'iifname "vmbr0"' in line]
     assert len(from_wan) == 2 and 'oifname "vmbr7" ip daddr 10.7.0.2 tcp dport 22 ct status dnat accept' in from_wan[0]
@@ -399,7 +399,7 @@ def test_the_watchdog_stops_team_vms_while_internet_access_is_allowed(render, tm
     if flag:
         flag_file.write_text("allowed\n")
     script = tmp_path / "watchdog.sh"
-    # A stub for worms-audit: run on the node, the real one would record this fake stop in the
+    # A stub for worms-audit: run on the host, the real one would record this fake stop in the
     # live event tables (it did once, on 2026-11-06).
     audit = tmp_path / "worms-audit"
     audit.write_text(f'#!/bin/sh\necho "$@" >> {tmp_path}/audit.log\n')
@@ -751,7 +751,7 @@ def test_speed_settings():
 def test_synchronize_tasks_use_the_connections_ssh_args():
     """ansible.posix.synchronize spawns its own rsync->ssh, which ignores the
     connection's ssh args unless use_ssh_args is set. The VMs are reached
-    through the node (ProxyJump) with the WORMS key in a private agent
+    through the host (ProxyJump) with the WORMS key in a private agent
     (IdentityAgent=$WORMS_SSH_AUTH_SOCK); without use_ssh_args rsync falls back
     to default keys and fails with "Permission denied (publickey)". Every
     synchronize task must opt in, so a sync against a jumped host keeps working.
@@ -797,8 +797,8 @@ def test_apt_does_not_refresh_its_index_offline():
 
 
 def test_orchestrator_verifies_the_proxmox_api_with_both_tokens():
-    """PVE's certificate names the node, not its address on the core bridge, and
-    is issued by PVE's own CA. So the orchestrator connects by the node's name
+    """PVE's certificate names the host, not its address on the core bridge, and
+    is issued by PVE's own CA. So the orchestrator connects by the host's name
     with that CA, for the power token as well as the read-only one."""
     import sys
 

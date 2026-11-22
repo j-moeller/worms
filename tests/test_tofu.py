@@ -281,7 +281,7 @@ def test_a_replaced_vm_gets_its_firewall_back(path, resource, vm):
     assert f"replace_triggered_by = [proxmox_virtual_environment_vm.{vm}]" in block
 
 
-def test_the_ssh_gateway_lets_only_the_node_administer_it():
+def test_the_ssh_gateway_lets_only_the_host_administer_it():
     """Ansible configures the gateway as debian. `AllowUsers team` alone locked
     it out before the team keys could be installed (live, on the first devbox
     build); debian may log in from the host's management address, and only there."""

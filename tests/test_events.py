@@ -240,7 +240,7 @@ def test_the_collector_records_new_logins_and_remembers_where_it_stopped(tmp_pat
     assert host_events.collect_gateway({}, conn, run=run, cursor_file=cursor_file) == 0  # no gateway: nothing
 
 
-def test_event_kinds_from_the_node_are_a_fixed_list():
+def test_event_kinds_from_the_host_are_a_fixed_list():
     from round_agent import events as host_events
 
     with pytest.raises(SystemExit):
@@ -248,7 +248,7 @@ def test_event_kinds_from_the_node_are_a_fixed_list():
     assert host_events.EVENT_KINDS == {"internet_allowed", "internet_denied", "watchdog_stopped"}
 
 
-def test_the_node_writes_as_its_events_account_only():
+def test_the_host_writes_as_its_events_account_only():
     from round_agent import events as host_events
 
     seen = {}

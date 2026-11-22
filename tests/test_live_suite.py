@@ -65,7 +65,7 @@ def test_passwords_never_reach_a_screenshot_or_the_command_line():
     assert "input=json.dumps(request)" in (LIVE / "livelib.py").read_text()
 
 
-def test_wiping_the_database_needs_the_node_named():
+def test_wiping_the_database_needs_the_host_named():
     assert livelib.check_wipe_allowed(None, "host-a") is False
     assert livelib.check_wipe_allowed("", "host-a") is False
     assert livelib.check_wipe_allowed("host-a", "host-a") is True

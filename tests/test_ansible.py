@@ -183,7 +183,7 @@ def test_dashboard_has_one_public_name_per_host(tmp_path, host, public_name):
     assert yaml.safe_load(out.read_text()) == {"name": public_name, "hosts": public_name}
 
 
-def test_dashboard_on_an_unknown_node_fails_loudly(tmp_path):
+def test_dashboard_on_an_unknown_host_fails_loudly(tmp_path):
     require("ansible-playbook")
     proc, _ = _dashboard_vars(tmp_path, "some-other-host")
     assert proc.returncode != 0
@@ -294,7 +294,7 @@ def test_devpi_only_lets_root_modify_and_root_has_a_generated_password(render):
     assert "vault_devpi_root_password" in defaults["devpi_root_password"]
 
 
-def test_the_node_turns_nesting_off_for_every_vm():
+def test_the_host_turns_nesting_off_for_every_vm():
     """The second lock behind the team VMs' CPU type (docs/07-security.md)."""
     tasks = yaml.safe_load((ANSIBLE / "roles/host/host_network/tasks/main.yml").read_text())
     task = next(t for t in tasks if t["name"] == "Turn off nested virtualisation")

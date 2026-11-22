@@ -1,7 +1,8 @@
 """What the host itself knows about its VMs, for the round's jobs (handlers: prepare, check,
 preflight, observe). After the worm every sandbox VM is assumed rooted, so nothing here asks a
-VM anything: QEMU's processes in /proc, the host's memory, and the host's own records (its
-kernel's and systemd's log, qmeventd's, Proxmox's task list). A guest can write to none of them.
+VM anything: QEMU's processes in /proc (each one's pid and start), the host's memory, and the
+host's own records (its kernel's and systemd's log, qmeventd's, Proxmox's task list). A guest
+can write to none of them.
 
 The OOM priority: every QEMU starts with oom_score_adj 0, so when the host runs out of memory
 the kernel kills the biggest VM, the database or cve-search. Each running sandbox and devbox
@@ -108,6 +109,36 @@ def _threads(pid):
         return sorted(int(entry.name) for entry in Path(PROC, str(pid), "task").iterdir() if entry.name.isdigit())
     except OSError:
         return []
+
+
+def clock():
+    """The host's clock as its kernel counts from its boot: {boot_id, uptime (seconds, /proc/uptime:
+    CLOCK_BOOTTIME), at (the wall clock, for people)}. A QEMU's start (qemu_started) is on the same
+    count, so a wall clock set back or forward between the two does not move them apart. None
+    where the kernel does not say."""
+    try:
+        uptime = float(Path(PROC, "uptime").read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        uptime = None
+    try:
+        boot_id = Path(PROC, "sys", "kernel", "random", "boot_id").read_text().strip() or None
+    except OSError:
+        boot_id = None
+    return {"boot_id": boot_id, "uptime": uptime, "at": time.time()}
+
+
+def qemu_started(vmid):
+    """When a running VM's QEMU started, in seconds since the host booted (clock's uptime): its
+    process's start time (/proc/<pid>/stat, field 22, in clock ticks). Each power-on starts a new
+    QEMU, so this is when the VM last booted from off. None without a QEMU of this VM."""
+    pid = qemu_pid(vmid)
+    if pid is None:
+        return None
+    try:
+        fields = Path(PROC, str(pid), "stat").read_text().rsplit(")", 1)[1].split()  # its name may hold spaces
+        return int(fields[19]) / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError):
+        return None
 
 
 def qemu_rss_mb(vmid):

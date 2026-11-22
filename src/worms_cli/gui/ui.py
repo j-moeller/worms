@@ -861,8 +861,8 @@ class TeamsTab(VmsTab):
     @staticmethod
     def others(r, ui) -> list[tuple[str, dict]]:
         """What the checks say of this VM that has no column of its own: a devbox VM's firewall as `worms check`
-        read it (its options and security groups); a sandbox VM's other records (running, no-kvm, isolated,
-        time, firewall, files, ...). [(name, cell)]."""
+        read it (its options and security groups); a sandbox VM's other records (start, no-kvm, init and its
+        init:<what>, isolated, time, firewall, files, ...). [(name, cell)]."""
         if vm_group(r) == "team":
             result = team_check(ui, r.get("team_slug"))
             named = {check for check, _, _, _ in VERDICTS}
@@ -891,6 +891,9 @@ class TeamsTab(VmsTab):
         probe = SANDBOX_PROBES.get(check)
         found = next((record for record in records if record and record[0] == probe), None) if probe else None
         if found is None:
+            # Off: the VM is not running (or a check job of before 2026-11-22 found it so: `running` failed). A
+            # failed `start` of a VM that runs (its QEMU older than the attempt) is not "off": its probes did not
+            # run, and the record's detail says why.
             down = r.get("status") not in ("running", "paused") or any(rec and rec[0] == "running" and not rec[1] for rec in records)
             return {"state": "stopped" if probe and down else "n/a", "text": "", "reason": ""}
         return {"state": "ok" if found[1] else "error", "text": "", "reason": str(found[2] if len(found) > 2 else ""), "from_vm": True}
@@ -1203,9 +1206,11 @@ class TeamsTab(VmsTab):
             out.append(kv("", "no record of this VM in it (not in the gameplan, or not probed)", "dim"))
             return out
         out.append([("  the round agent's records of this VM; a detail may be what the VM answered (the VM says), escaped:", "dim")])
+        # One column for the glyphs: the names run from `dns` to `init:cloud-init`.
+        width = max(12, min(24, 4 + max(len(flat((list(record) + [""])[0])) for record in records)))
         for record in records:
             probe, ok, detail = (list(record) + ["", False, ""])[:3]
-            line = kv(f"  {flat(probe)}", glyph(ui, "ok" if ok else "error"), "ok" if ok else "error")
+            line = kv(f"  {flat(probe)}", glyph(ui, "ok" if ok else "error"), "ok" if ok else "error", width)
             if detail:
                 line.append((f"  {flat(detail)}", "normal" if ok else "error"))
             out.append(line)
@@ -3417,8 +3422,9 @@ def help_lines(ui) -> list:
         ("The Teams tab", H),
         ("login (the team's keys its sshd takes as root, n/m), DNS, apt, PyPI, flag (/etc/worms/flag there and well-formed: "
          "never shown), score, log, NAT (a gateway's), other (the rest: a devbox VM's firewall as `worms check` reads it, its "
-         "options and security groups; a sandbox VM's other records: running, no-kvm, isolated, time, ...; a number: how many "
-         "failed): what `worms check <team> --json` said, the CLI's read-only check of a devbox; " + glyph(ui, "ok") + " ok, "
+         "options and security groups; a sandbox VM's other records: start, no-kvm, init:boot, init:addresses, isolated, time, "
+         "...; a number: how many failed): what `worms check <team> --json` said, the CLI's read-only check of a devbox; "
+         + glyph(ui, "ok") + " ok, "
          + glyph(ui, "error") + " failed, ! warning, ? not known, " + glyph(ui, "n/a") + " not checked there, off: the VM is "
          f"stopped. checked: its age, `checking{'' if ui.ascii else '…'} 12s`, queued, failed (no answer), VM restarted (one "
          "of the team's VMs started or changed after the check began). An old verdict (older than 5 min, or a VM restarted "

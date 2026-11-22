@@ -1,5 +1,7 @@
 """The check job's look from inside every sandbox VM, before the worm: is the run's sandbox what
-its gameplan says, and does everything a worm needs answer there?
+its gameplan says, and does everything a worm needs answer there? It runs once the VM has shown
+that it started in this attempt and came up as it should (startup.py, whose script shares this
+one's scaffolding, PRELUDE).
 
 One SSH per VM, all VMs at once: PROBE runs as root (python3, which every image keeps), with
 what it is to try as its first line. It changes nothing on the VM: apt's index goes to a
@@ -49,7 +51,9 @@ FORBIDDEN = (
 INTERNET = ("internet", "1.1.1.1", 80)  # 80: the LLM endpoint is reached on 443 only
 BLOCKED = ("timeout", "unreachable")
 
-PROBE = r'''
+# What every script run on a VM here starts with: its parameters (P), the answer it builds (put),
+# commands with a timeout, and the deadline, at which it answers with what it has (finish).
+PRELUDE = r'''
 import base64, errno, http.client, json, os, pwd, shutil, signal, socket, ssl, stat, subprocess, sys, tempfile
 import threading, time
 
@@ -111,6 +115,15 @@ def command(argv, timeout, **options):
         raise TimeoutError from None
     return child.returncode, output
 
+
+def guarded(key, step, *args):
+    try:
+        step(*args)
+    except Exception as e:
+        put(key, [False, "%s: %s" % (type(e).__name__, e)])
+'''
+
+PROBE = PRELUDE + r'''
 
 def connect(address, port):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -257,21 +270,7 @@ def files():
     put("files", found)
 
 
-def services():
-    found = {}
-    for unit in P["services"]:
-        found[unit] = command(["systemctl", "is-active", unit], 15)[1].strip() or "unknown"
-    put("services", found)
-
-
-def guarded(key, step, *args):
-    try:
-        step(*args)
-    except Exception as e:
-        put(key, [False, "%s: %s" % (type(e).__name__, e)])
-
-
-steps = [("flag", flag), ("dns", dns), ("pypi", pypi), ("apt", apt), ("time", clock), ("files", files), ("services", services)]
+steps = [("flag", flag), ("dns", dns), ("pypi", pypi), ("apt", apt), ("time", clock), ("files", files)]
 steps += [(key, https, key, host, port) for key, (host, port) in sorted(P["https"].items())]
 steps += [("error-connect-" + key, reach, "connect", key, a, port, want) for key, a, port, want in P["connect"]]
 steps += [("error-forbidden-" + key, reach, "forbidden", key, a, port, "blocked") for key, a, port in P["forbidden"]]
@@ -388,14 +387,14 @@ def plan(spec, name, addressing, maintenance, devbox_address=None):
         "connect": [[str(i), c["address"], c["port"], c["want"]] for i, c in enumerate(conns)],
         "forbidden": [[label, address, port] for label, address, port in forbidden],
         "files": [[str(f["id"]), f["path"], f["owner"], f["mode"]] for f in files],
-        "services": list(vm["services"]),
     }  # fmt: skip
     return params, {"connect": conns, "files": {str(f["id"]): f for f in files}}
 
 
-def script(params):
-    """PROBE with its parameters as the first line (base64: no quoting to get wrong)."""
-    return f'P = "{base64.b64encode(json.dumps(params).encode()).decode()}"\n{PROBE}'
+def script(params, body=None):
+    """PROBE (or another script on PRELUDE: startup.INIT) with its parameters as the first line
+    (base64: no quoting to get wrong)."""
+    return f'P = "{base64.b64encode(json.dumps(params).encode()).decode()}"\n{PROBE if body is None else body}'
 
 
 def params_of(text):
@@ -484,22 +483,16 @@ def records(name, params, notes, reply, sent, note, why=None):
                 note(f"check {name}: file {key} ({entry['path']}, {entry['owner']} {entry['mode']}): {problem}")
         out.append((f"{prefix}:files", not wrong, f"file{'s' if len(wrong) > 1 else ''} {', '.join(wrong)} not as declared "
                     "(the job log on the host says how)" if wrong else f"{len(notes['files'])} as declared"))  # fmt: skip
-    if params["services"]:
-        found = reply.get("services") if isinstance(reply.get("services"), dict) else {}
-        down = [unit for unit in params["services"] if found.get(unit) != "active"]
-        for unit in down:
-            note(f"check {name}: service {unit}: {_text(found.get(unit, 'no answer'), 40)}")
-        out.append((f"{prefix}:services", not down, f"{len(down)} of {len(params['services'])} not running "
-                    "(the job log on the host names them)" if down else f"{len(params['services'])} running"))  # fmt: skip
     return out
 
 
-def run(ex, ip, params):
-    """PROBE on the VM at `ip` (python3 -I: nothing of the VM's own on its path; -B: no .pyc
-    written): (its answer or None, when it was sent by the host's clock, why there is none)."""
+def run(ex, ip, params, body=None, timeout=DEADLINE + 60):
+    """PROBE (or `body`: startup.INIT) on the VM at `ip` (python3 -I: nothing of the VM's own on
+    its path; -B: no .pyc written): (its answer or None, when it was sent by the host's clock, why
+    there is none)."""
     sent = time.time()
     try:
-        output = ex.ssh(ip, ["sudo", "python3", "-I", "-B", "-"], input=script(params), timeout=DEADLINE + 60)
+        output = ex.ssh(ip, ["sudo", "python3", "-I", "-B", "-"], input=script(params, body), timeout=timeout)
     except Exception as error:  # noqa: BLE001  (SSH, a timeout: the VM did not answer)
         return None, sent, f"{type(error).__name__}: {_text(error, 300)}"
     reply = answer(output or "")

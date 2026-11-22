@@ -590,11 +590,25 @@ def demo_sandbox_check(vms: dict, now: float) -> dict:
     for vm in vms.values():
         if vm["pool"] != "sandbox":
             continue
-        name, up = vm["name"], vm["status"] != "stopped"
-        rows = [["running", up, f"status: {'running' if up else 'stopped'}"], ["no-kvm", True, "its CPU must be x86-64-v2-AES"]]
+        name, up, gw = vm["name"], vm["status"] != "stopped", vm["name"].endswith("-gw")
+        rows = [["start", up, "running, booted in this attempt (its QEMU started 41 s into prepare, 402 s ago)" if up else "stopped"]]
+        rows += [] if gw else [["no-kvm", True, "its CPU must be x86-64-v3"]]
         if not up:
-            rows.append(["probe", False, "no answer (the job log on the host says why)"])
-        elif not name.endswith("-gw"):
+            rows.append(["init", False, "not checked: it did not start in this attempt (start)"])
+            rows += [] if gw else [["probe", False, "not run: it did not start in this attempt (start)"]]
+            records[name] = rows
+            continue
+        rows += [["init", True, ""], ["init:cloud-init", True, "done"],
+                 ["init:boot", True, "degraded: 1 unit failed, none that its start rests on (the job log on the host names them)"
+                  if gw else "running"],
+                 ["init:addresses", True, f"{3 if gw else 2} NICs, each with its address"],
+                 ["init:route", True, "none, as its stack has it" if gw else "via its network's gateway"],
+                 ["init:sshd", True, f"sshd listens on {'22' if gw else 'its SSH port'}"]]  # fmt: skip
+        if gw:
+            rows += [["init:nftables", True, "4 chains as its cloud-init has them (forward: policy drop)"],
+                     ["init:sysctl", True, "net.ipv4.ip_forward 1, net.netfilter.nf_conntrack_max 262144"]]  # fmt: skip
+        else:
+            rows += [["init:users", True, "1 there"], ["init:services", True, "1 running"]]
             rows += [["probe", True, ""], ["flag", True, ""], ["dns", True, ""], ["scoring", True, ""], ["logging", True, ""],
                      ["apt", True, ""], ["pypi", name != "sb-db-01", "" if name != "sb-db-01" else "ERROR: Could not find a "
                       "version that satisfies the requirement requests (from versions: none)"],

@@ -33,7 +33,8 @@ OPEN = RoundRun.OPEN_STATES
 # An attempt's steps, as the stepper shows them.
 STEPS = [
     (S.PREPARING, "Build", "the sandbox built, or rolled back to its snapshot; the run's flags and files"),
-    (S.CHECKING, "Checks", "firewalls, VMs and services checked on the host"),
+    (S.CHECKING, "Checks", "the host's firewalls; every VM and the gateway started in this attempt and came up (cloud-init, "
+                           "boot, addresses, route, sshd, users, services; the gateway's rules); then each VM probed from inside"),
     (S.RUNNING, "Gameplan", "the gameplan's execute(): the worm deployed, flags, power, files"),
     (S.ENDING, "Drain", "every VM stopped; the monitor catches up"),
     (S.TEARING_DOWN, "Teardown", "the sandbox destroyed, or kept for the next team"),
@@ -55,7 +56,7 @@ EVENT_TEXT = {
 }
 STATE_TEXT = {
     S.PREPARING: "attempt {attempt}: building the sandbox (or rolling it back)",
-    S.CHECKING: "checks on the host",
+    S.CHECKING: "checks: every VM started in this attempt and came up as it should, then probed from inside",
     S.RUNNING: "the gameplan runs",
     S.ENDING: "run over: every VM stopped, draining",
     S.TEARING_DOWN: "tearing the sandbox down",

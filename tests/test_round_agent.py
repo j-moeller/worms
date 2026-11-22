@@ -24,36 +24,44 @@ from conftest import REPO, require
 sys.path.insert(0, str(REPO / "scripts"))
 sys.path.insert(0, str(REPO / "src"))  # the gameplan framework, as the agent's PYTHONPATH has it
 
-from round_agent import handlers, host_state, probe, validation  # noqa: E402
+from round_agent import handlers, host_state, probe, startup, validation  # noqa: E402
 from round_agent.agent import Agent  # noqa: E402
+
+HOST_BOOT = "6c1f0a52-2b1e-4d0e-9a57-0d6f2b9b8c11"  # the test host's boot id
 
 
 @pytest.fixture(autouse=True)
 def _agent_state(monkeypatch, tmp_path):
     """A test's own agent records, internet flag, /proc, /sys, QEMU pid files and task list,
     never this machine's: the tests may run on the host itself, whose VMs have the vmids the
-    fakes use (a test once set a real devbox QEMU's OOM priority)."""
+    fakes use (a test once set a real devbox QEMU's OOM priority). The host has been up 1000 s."""
     monkeypatch.setattr(handlers, "STATE_DIR", str(tmp_path / "agent-state"))
     monkeypatch.setattr(handlers, "INTERNET_FLAG", str(tmp_path / "internet-allowed"))
     for name in ("PROC", "SYS", "QEMU_PIDS", "TASKS"):
         (tmp_path / "host" / name).mkdir(parents=True)
         monkeypatch.setattr(host_state, name, str(tmp_path / "host" / name))
+    (tmp_path / "host" / "PROC" / "uptime").write_text("1000.00 3600.00\n")
+    (tmp_path / "host" / "PROC" / "sys" / "kernel" / "random").mkdir(parents=True)
+    (tmp_path / "host" / "PROC" / "sys" / "kernel" / "random" / "boot_id").write_text(HOST_BOOT + "\n")
 
 
 def _host(tmp_path):
     return {name: tmp_path / "host" / name for name in ("PROC", "SYS", "QEMU_PIDS", "TASKS")}
 
 
-def _fake_qemu(tmp_path, vmid, pid, threads=()):
-    """A running VM's QEMU in the test's /proc: its pid file, command line, OOM priority, threads."""
+def _fake_qemu(tmp_path, vmid, pid, threads=(), started=0.0):
+    """A running VM's QEMU in the test's /proc: its pid file, command line, OOM priority, threads,
+    and when it started (seconds after the host booted: /proc/<pid>/stat's field 22, in ticks)."""
     host = _host(tmp_path)
     (host["QEMU_PIDS"] / f"{vmid}.pid").write_text(f"{pid}\n")
     proc = host["PROC"] / str(pid)
-    (proc / "task").mkdir(parents=True)
+    (proc / "task").mkdir(parents=True, exist_ok=True)
     (proc / "cmdline").write_bytes(b"\0".join([b"/usr/bin/kvm", b"-id", str(vmid).encode(), b"-name", b"vm", b""]))
     (proc / "oom_score_adj").write_text("0\n")
+    ticks = round(started * os.sysconf("SC_CLK_TCK"))
+    (proc / "stat").write_text(f"{pid} (kvm) S 1 {pid} {pid} 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 9 0 {ticks} 3221225472 1000 0\n")
     for tid in (pid, *threads):
-        (proc / "task" / str(tid)).mkdir()
+        (proc / "task" / str(tid)).mkdir(exist_ok=True)
     return proc / "oom_score_adj"
 
 
@@ -306,8 +314,20 @@ PAIR_SHA = hashlib.sha256(PAIR.encode()).hexdigest()
                                  "devpi": {"network": "10.2.0.21", "maintenance": "10.5.0.21"}},
         "host_ips": {"mgmt_sandbox": "10.4.0.1"},
         "devbox_services_block": "10.2.0.32/27",
+        "networks": {"services": "10.2.0.0/24", "mgmt_sandbox": "10.4.0.0/16", "sandbox_vms": "10.64.0.0/10"},
     }}})  # JSON is YAML
 )  # fmt: skip
+# sandbox-gw's cloud-init on the fake host, its snippet (the sandbox stack renders it from its template,
+# whose rules and settings it has unchanged): the check reads them back from the gateway.
+GATEWAY_TEMPLATE = REPO / "opentofu" / "stacks" / "sandbox" / "templates" / "sandbox-gw.tftpl"
+GATEWAY_SNIPPET = GAMEPLAN_ROOT / "snippets" / "sandbox-gw.yml"
+GATEWAY_SNIPPET.parent.mkdir()
+GATEWAY_SNIPPET.write_text(GATEWAY_TEMPLATE.read_text())
+
+
+def _mac(vmid, nic):
+    """The MAC address of a VM's NIC, as the fake host's Proxmox configs give them."""
+    return f"bc:24:11:{vmid >> 8:02x}:{vmid & 0xFF:02x}:{nic:02x}"
 
 
 def _pair_hcl():
@@ -353,9 +373,37 @@ class FakeExecutor:
         self.api_units = {"10.5.0.14": "active\nactive\n", "10.5.0.15": "active\nactive\n"}
         self.apt_cache = "jq_1.7.1-6_amd64.deb\ncurl_8.14.1-2_amd64.deb\n"
         # The probes: each one's parameters by VM address, and changes to the answer of a VM
-        # that has everything right (probe_answer).
+        # that has everything right (probe_answer). The same of the start and initialisation
+        # check that comes before them (init_answer).
         self.probes = {}
         self.probe_hooks = []
+        self.inits = {}
+        self.init_hooks = []
+        # The cloud-init snippets on the host (`pvesm path` of the volume a VM's config names).
+        self.snippets = {"local:snippets/sandbox-gw.yml": GATEWAY_SNIPPET}
+
+    def init_answer(self, host, params):
+        """What a VM (or the gateway) that came up as it should answers startup.INIT: everything as
+        it was asked to find it, the gateway's settings as the cloud-init it was built with has them."""
+        reply = {
+            "started": time.time(),
+            "cloud-init": {"code": 0, "status": "done", "extended": "done", "errors": [], "recoverable": {}, "stage": None,
+                           "waited": 0.3, "late": False},
+            "boot": {"state": "running", "failed": [], "jobs": 0, "waited": 0.1, "late": False},
+            "addresses": {key: "" for key, _, _ in params["nics"]},
+            "route": [True, f"via {params['gateway']} dev eth0" if params["gateway"] else "no default route"],
+            "sshd": [True, "sshd"],
+            "users": {user: True for user in params["users"]},
+            "services": {unit: "active" for unit in params["services"]},
+        }  # fmt: skip
+        if params["chains"]:
+            reply["nftables"] = {" ".join(chain[:3]): "" for chain in params["chains"]}
+        if params["sysctl"]:
+            _, sysctl = startup.gateway_template(self.snippets["local:snippets/sandbox-gw.yml"].read_text())
+            reply["sysctl"] = {key: sysctl.get(key) for key in params["sysctl"]}
+        for hook in self.init_hooks:
+            hook(host, params, reply)
+        return reply
 
     def probe_answer(self, host, params):
         """What a VM where everything is as its gameplan says answers the probe."""
@@ -365,7 +413,6 @@ class FakeExecutor:
             "connect": {key: {"open": "open", "reachable": "refused", "blocked": "timeout"}[want] for key, _, _, want in params["connect"]},
             "forbidden": {label: "timeout" for label, _, _ in params["forbidden"]},
             "files": {key: "" for key, *_ in params["files"]},
-            "services": {unit: "active" for unit in params["services"]},
         }  # fmt: skip
         for hook in self.probe_hooks:
             hook(host, params, reply)
@@ -414,8 +461,12 @@ class FakeExecutor:
                 **{name: {"name": name, "vm_id": info["vmid"], "management_ip": info["maintenance_ip"]}
                    for name, info in self._vms.items()},
             },
-            "sandbox": {"hosts": {name: {"addresses": info["addresses"]} for name, info in self._vms.items()}},
-        }
+            "sandbox": {
+                "hosts": {name: {"addresses": info["addresses"]} for name, info in self._vms.items()},
+                "gateway": {"name": "sandbox-gw", "maintenance_ip": "10.4.0.2", "services_ip": "10.2.0.2",
+                            "sandbox_legs": [{"bridge": "vmbr1000", "cidr": "10.64.0.1/24"}]},
+            },
+        }  # fmt: skip
 
     def note(self, text):
         self.notes.append(text)
@@ -457,7 +508,13 @@ class FakeExecutor:
         if argv[0] == "systemctl":
             return self.systemctl.get(argv[2], "active")
         if argv[:2] == ["qm", "config"]:
-            return self.qm_config.get(argv[2], "cores: 1\ncpu: x86-64-v3\nname: a-vm\n")
+            nics = "".join(f"net{i}: virtio={_mac(int(argv[2]), i).upper()},bridge=vmbr{1000 + i},firewall=1,rate=10\n" for i in range(3))
+            user = "sandbox-gw" if argv[2] == "950" else "sandbox-vm"
+            return self.qm_config.get(argv[2], f"cicustom: user=local:snippets/{user}.yml\ncores: 1\ncpu: x86-64-v3\nname: a-vm\n{nics}")
+        if argv[:2] == ["pvesm", "path"]:
+            if argv[2] not in self.snippets:
+                raise RuntimeError(f"pvesm path {argv[2]}: no such volume")
+            return f"{self.snippets[argv[2]]}\n"
         if argv[0] == "qm":
             return self.qm.get(argv[2], "status: running")
         if argv[0] == "/usr/local/sbin/worms-mirror":
@@ -477,6 +534,9 @@ class FakeExecutor:
             return f"{hashlib.sha256(flag.encode()).hexdigest()}  {handlers.FLAG_PATH}\n" if flag else ""
         if argv == ["sudo", "python3", "-I", "-B", "-"]:
             params = probe.params_of(input)
+            if params.get("kind") == "init":
+                self.inits[host] = params
+                return probe.MARK + json.dumps(self.init_answer(host, params)) + "\n"
             self.probes[host] = params
             return "debian@vm: some login banner\n" + probe.MARK + json.dumps(self.probe_answer(host, params)) + "\n"
         if argv[:2] == ["sh", "-c"] and "sandbox-api nginx" in argv[2]:
@@ -504,8 +564,18 @@ DEVBOX_VMS = [{"vmid": 116, "name": "devbox-t1-a", "node": "n", "status": "runni
               {"vmid": 117, "name": "devbox-t1-b", "node": "n", "status": "stopped", "pool": "devbox"}]  # fmt: skip
 
 
-def _prepare(ex, cfg=None):
-    return handlers.prepare(ex, cfg or CFG, validation.validate("prepare", PREPARE))
+def _prepare(ex, cfg=None, booted=None):
+    """The run's prepare job. With `booted` (the test's tmp_path): it begins when the host has been
+    up 1000 s, its sandbox's VMs and gateway boot 10 to 19 s later (each a QEMU of its own), and
+    the check comes 300 s after it began."""
+    if booted is None:
+        return handlers.prepare(ex, cfg or CFG, validation.validate("prepare", PREPARE))
+    (_host(booted)["PROC"] / "uptime").write_text("1000.00 3600.00\n")
+    result = handlers.prepare(ex, cfg or CFG, validation.validate("prepare", PREPARE))
+    for vmid in SANDBOX_VMIDS:
+        _fake_qemu(booted, vmid, 4000 + vmid, started=1010 + vmid % 10)
+    (_host(booted)["PROC"] / "uptime").write_text("1300.00 3600.00\n")
+    return result
 
 
 def _first_index(steps, prefix):
@@ -755,8 +825,10 @@ PREFLIGHT = {"gameplan": "pair.py", "gameplan_sha256": PAIR_SHA, "hold_devboxes"
 
 
 def _stand_ins(tmp_path):
-    """A VM's commands for the probe, on this machine: apt, the clock and systemd answer, and
-    change nothing."""
+    """A VM's commands for the probe and the start and initialisation check, on this machine: apt,
+    the clock, systemd, cloud-init, ip and nft answer as on a VM of the image (Debian 13, read on
+    the platform's dns VM), and change nothing. WORMS_TEST_SLOW: apt and cloud-init take their
+    time (cloud-init still running), and systemd is still starting (a slow unit's job left)."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     for name, body in {
@@ -764,7 +836,46 @@ def _stand_ins(tmp_path):
                    'if [ -n "$WORMS_TEST_SLOW" ]; then sleep 30 & echo $! > "$WORMS_TEST_PIDS/sleep"; wait; fi',
         # A VM whose gameplan took its time service away (WORMS_TEST_NO_NTP) has no NTP to ask.
         "timedatectl": 'printf "NTP=%s\\nNTPSynchronized=%s\\nCanNTP=yes\\n" "${WORMS_TEST_NO_NTP:-yes}" "${WORMS_TEST_NO_NTP:-yes}"',
-        "systemctl": 'case "$2" in cron) echo active ;; *) echo inactive; exit 3 ;; esac',
+        # Booted, but a unit nothing rests on failed (the serial getty of a VM without a serial port).
+        # Slow: still starting, a timer's catch-up still running and the target waiting for it.
+        "systemctl": 'case "$1" in\n'
+                     '  is-active) case "$2" in cron) echo active ;; *) echo inactive; exit 3 ;; esac ;;\n'
+                     '  is-system-running) if [ -n "$WORMS_TEST_SLOW" ]; then echo starting; else echo degraded; fi; exit 1 ;;\n'
+                     '  show) if [ -n "$WORMS_TEST_SLOW" ]; then printf "NJobs=2\\nSystemState=starting\\n"; '
+                     'else printf "NJobs=0\\nSystemState=degraded\\n"; fi ;;\n'
+                     "  list-units) echo '[{\"unit\":\"serial-getty@ttyS0.service\",\"load\":\"loaded\",\"active\":\"failed\","
+                     "\"sub\":\"failed\",\"description\":\"Serial Getty on ttyS0\"}]' ;;\n"
+                     "  list-jobs) printf '118 multi-user.target start waiting\\n131 fstrim.service start running\\n' ;;\n"
+                     'esac',
+        # Done, with recoverable errors (exit 2), and a word on stderr first; slow: still running.
+        "cloud-init": 'if [ -n "$WORMS_TEST_SLOW" ] && [ "$2" = "--wait" ]; then\n'
+                      '  sleep 30 & echo $! > "$WORMS_TEST_PIDS/cloud-init"; wait\nfi\n'
+                      'if [ -n "$WORMS_TEST_SLOW" ]; then\n'
+                      "  echo '{\"status\": \"running\", \"extended_status\": \"running\", \"errors\": [], \"recoverable_errors\": {}, "
+                      "\"stage\": \"modules-final\"}'; exit 0\nfi\n"
+                      'echo "WARNING: the stand-in says so" >&2\n'
+                      "echo '{\"boot_status_code\": \"enabled-by-generator\", \"status\": \"done\", \"extended_status\": \"degraded done\", "
+                      "\"errors\": [], \"recoverable_errors\": {\"DEPRECATED\": [\"a key\", \"another\"]}, \"stage\": null}'; exit 2",
+        # Two NICs, the second down, and a VLAN on the first (its MAC, no address); a default route.
+        # (`ip -4` would leave each link's MAC out.)
+        "ip": 'case "$*" in\n'
+              "  '-j addr show') echo '[{\"ifindex\":1,\"ifname\":\"lo\",\"flags\":[\"LOOPBACK\",\"UP\",\"LOWER_UP\"],\"link_type\":\"loopback\","
+              "\"address\":\"00:00:00:00:00:00\",\"addr_info\":[{\"family\":\"inet\",\"local\":\"127.0.0.1\",\"prefixlen\":8},"
+              "{\"family\":\"inet6\",\"local\":\"::1\",\"prefixlen\":128}]},"
+              "{\"ifindex\":2,\"ifname\":\"eth0\",\"flags\":[\"BROADCAST\",\"MULTICAST\",\"UP\",\"LOWER_UP\"],\"link_type\":\"ether\","
+              "\"address\":\"bc:24:11:03:84:00\",\"altnames\":[\"enp0s18\"],\"addr_info\":[{\"family\":\"inet\",\"local\":\"10.64.0.10\","
+              "\"prefixlen\":24,\"scope\":\"global\",\"label\":\"eth0\"},{\"family\":\"inet6\",\"local\":\"fe80::be24:11ff:fe03:8400\","
+              "\"prefixlen\":64,\"scope\":\"link\"}]},{\"ifindex\":3,\"ifname\":\"eth1\",\"flags\":[\"BROADCAST\",\"MULTICAST\"],"
+              "\"link_type\":\"ether\",\"address\":\"bc:24:11:03:84:01\",\"addr_info\":[{\"family\":\"inet\",\"local\":\"10.4.0.10\","
+              "\"prefixlen\":16}]},{\"ifindex\":4,\"link\":\"eth0\",\"ifname\":\"eth0.5\",\"flags\":[\"BROADCAST\",\"MULTICAST\",\"UP\","
+              "\"LOWER_UP\"],\"link_type\":\"ether\",\"address\":\"bc:24:11:03:84:00\",\"addr_info\":[]}]' ;;\n"
+              "  '-j -4 route show default') echo '[{\"dst\":\"default\",\"gateway\":\"10.64.0.1\",\"dev\":\"eth0\",\"protocol\":\"static\","
+              "\"flags\":[]}]' ;;\n"
+              '  *) exit 1 ;;\nesac',
+        # A forward chain that lets everything through.
+        "nft": "echo '{\"nftables\": [{\"metainfo\": {\"version\": \"1.1.3\", \"json_schema_version\": 1}}, {\"table\": {\"family\": "
+               "\"inet\", \"name\": \"sandbox_gw\", \"handle\": 1}}, {\"chain\": {\"family\": \"inet\", \"table\": \"sandbox_gw\", \"name\": "
+               "\"forward\", \"handle\": 2, \"type\": \"filter\", \"hook\": \"forward\", \"prio\": 0, \"policy\": \"accept\"}}]}'",
     }.items():  # fmt: skip
         (bin_dir / name).write_text(f"#!/bin/sh\n{body}\n")
         (bin_dir / name).chmod(0o755)
@@ -780,8 +891,12 @@ def test_check_reports_ok_when_everything_is_up(tmp_path):
     ex = FakeExecutor()
     result = handlers.check(ex, CFG, validation.validate("check", {}))
     assert result["ok"] is True and result["failures"] == []
-    assert any(c["check"] == "vm:sandbox-a:running" and c["ok"] for c in result["checks"])
-    assert ex.probes == {}  # without the run, the host alone
+    # Without the run, the host alone: each VM and the gateway in the pool and running, its QEMU too;
+    # the CPU of each but the gateway. Nothing is asked of a VM.
+    assert {c["check"]: c["detail"] for c in result["checks"] if c["check"].startswith("vm:")} == {
+        "vm:sandbox-a:start": "running", "vm:sandbox-a:no-kvm": "its CPU must be x86-64-v3", "vm:sandbox-b:start": "running",
+        "vm:sandbox-b:no-kvm": "its CPU must be x86-64-v3", "vm:sandbox-gw:start": "running"}  # fmt: skip
+    assert ex.probes == {} and ex.inits == {}
 
     # Before an attempt: the host can take the gameplan's sandbox, and everything around it is up.
     _fake_memory(tmp_path, available_mb=20000)
@@ -818,19 +933,50 @@ def test_check_reports_ok_when_everything_is_up(tmp_path):
     assert "grow by 908 MB" in flight["warnings"][0] and "apt-cache 595 MB, scoring 313 MB" in flight["warnings"][0]
     assert "with that, 264 MB would be missing" in flight["warnings"][0]  # 1656 + 1024 + 908 - 3324
 
-    # Right before the worm, with the run: every VM of its gameplan looked at from inside, all at once.
+    # Right before the worm, with the run: every VM of its gameplan and the gateway started in this
+    # attempt and came up as they should, then every VM of the gameplan looked at from inside, all at once.
     ex.states = {}
-    _prepare(ex)
+    _prepare(ex, booted=tmp_path)
+    assert json.loads(handlers._run_state_path({}, RUN).read_text())["began"] == {"boot_id": HOST_BOOT, "uptime": 1000.0,
+                                                                                  "at": pytest.approx(time.time(), abs=60)}  # fmt: skip
     result = handlers.check(ex, CFG, validation.validate("check", {"run_uuid": RUN}))
     assert result["ok"] is True, result["failures"]
     names = {c["check"] for c in result["checks"]}
+    detail = {c["check"]: c["detail"] for c in result["checks"]}
+    for vm in ("sandbox-a", "sandbox-b", "sandbox-gw"):
+        assert {f"vm:{vm}:{p}" for p in ("start", "init", "init:cloud-init", "init:boot", "init:addresses", "init:route", "init:sshd")} <= names
     for vm in ("sandbox-a", "sandbox-b"):
         assert {f"vm:{vm}:{p}" for p in ("probe", "flag", "dns", "scoring", "logging", "apt", "pypi", "time", "isolated", "firewall")} <= names
-    assert {"vm:sandbox-b:files", "vm:sandbox-b:services", "host:inventory"} <= names
+    assert {"vm:sandbox-b:files", "vm:sandbox-b:init:users", "vm:sandbox-b:init:services", "host:inventory"} <= names
     assert "vm:sandbox-a:files" not in names  # its one file is written later, not at the reset
+    assert "vm:sandbox-a:init:users" not in names and "vm:sandbox-a:init:services" not in names  # it has none
+    assert {name.split(":", 2)[2] for name in names if name.startswith("vm:sandbox-gw:")} == {
+        "start", "init", "init:cloud-init", "init:boot", "init:addresses", "init:route", "init:sshd", "init:nftables", "init:sysctl"}
+    assert detail["vm:sandbox-a:start"] == "running, booted in this attempt (its QEMU started 10 s into prepare, 290 s ago)"
+    assert [detail[f"vm:sandbox-b:init:{p}"] for p in ("cloud-init", "boot", "addresses", "route", "sshd", "users", "services")] == [
+        "done", "running", "2 NICs, each with its address", "via its network's gateway", "sshd listens on its SSH port", "1 there",
+        "1 running"]  # fmt: skip
+    assert [detail[f"vm:sandbox-gw:init:{p}"] for p in ("addresses", "route", "sshd", "nftables", "sysctl")] == [
+        "3 NICs, each with its address", "none, as its stack has it", "sshd listens on 22",
+        "4 chains as its cloud-init has them (forward: policy drop)", "net.ipv4.ip_forward 1, net.netfilter.nf_conntrack_max 262144"]
     assert next(c for c in ex.ssh_calls if c["argv"][:2] == ["sudo", "python3"])["argv"] == ["sudo", "python3", "-I", "-B", "-"]
+    # Each VM is asked to come up first, and probed after.
+    asked = [(c["host"], probe.params_of(c["input"]).get("kind")) for c in ex.ssh_calls if c["argv"][:2] == ["sudo", "python3"]]
+    assert all(asked.index((host, "init")) < asked.index((host, None)) for host in ("10.4.0.10", "10.4.0.11"))
+    assert ("10.4.0.2", None) not in asked  # the gateway has no probe
     spec = handlers._gameplan(ex, "pair.py", PAIR_SHA)[0]
     address = {vm["name"]: vm["nics"][0]["address"].split("/")[0] for vm in spec["vms"]}
+    # Each NIC by the MAC the host's config gives it, in the stack's order: the gameplan's networks, the
+    # management NIC. The gateway's: one per sandbox network, the services, the management.
+    init_b, init_gw = ex.inits["10.4.0.11"], ex.inits["10.4.0.2"]
+    assert init_b["nics"] == [["net0", _mac(901, 0), f"{address['sandbox-b']}/24"], ["net1", _mac(901, 1), "10.4.0.11/16"]]
+    assert (init_b["gateway"], init_b["ssh_port"], init_b["users"], init_b["services"]) == ("10.64.0.1", 22, ["alice"], ["cron"])
+    assert init_b["chains"] == [] and init_b["sysctl"] == [] and init_b["wait"] == startup.WAIT
+    assert init_gw["nics"] == [["net0", _mac(950, 0), "10.64.0.1/24"], ["net1", _mac(950, 1), "10.2.0.2/24"],
+                               ["net2", _mac(950, 2), "10.4.0.2/16"]]  # fmt: skip
+    assert init_gw["gateway"] is None and init_gw["users"] == [] and init_gw["sysctl"] == list(startup.GATEWAY_SYSCTLS)
+    assert init_gw["chains"] == [["inet", "sandbox_gw", "input", "input", "drop"], ["inet", "sandbox_gw", "forward", "forward", "drop"],
+                                 ["inet", "sandbox_gw", "output", "output", "accept"], ["ip", "sandbox_gw_nat", "postrouting", "postrouting", None]]
     a, b = ex.probes["10.4.0.10"], ex.probes["10.4.0.11"]
     # The gameplan's firewall: a may reach b's SSH (both sides allow it), b may not reach a's.
     assert a["connect"] == [["0", address["sandbox-b"], 22, "open"]] and b["connect"] == [["0", address["sandbox-a"], 22, "blocked"]]
@@ -839,11 +985,21 @@ def test_check_reports_ok_when_everything_is_up(tmp_path):
                               ["maintenance", "10.4.0.11", 22]]  # fmt: skip
     assert a["dns"] == {"scoring.worms.internal": "10.2.0.14", "logging.worms.internal": "10.2.0.15",
                         "apt-cache.worms.internal": "10.2.0.20", "pypi.worms.internal": "10.2.0.21"}  # fmt: skip
-    assert b["files"] == [["0", "/home/debian/note", "debian", "0644"]] and a["files"] == [] and b["services"] == ["cron"]
+    assert b["files"] == [["0", "/home/debian/note", "debian", "0644"]] and a["files"] == [] and "services" not in b  # init's
     assert a["pypi"] == ["pypi.worms.internal", 3141, "/root/pypi/+simple/requests/"]
     # The database (which the dashboard reads) gets none of the gameplan: no path, user, unit or rule.
     text = json.dumps(result)
     assert "/home/debian/note" not in text and "alice" not in text and "cron" not in text and address["sandbox-b"] not in text
+    # A gateway built before a deploy changed its template (the round's sandbox is not rebuilt for that;
+    # here: built before nf_conntrack_max was set): read against the cloud-init it was built with, its
+    # snippet on the host, not against the template in the workspace.
+    older = tmp_path / "sandbox-gw.yml"
+    older.write_text("".join(line for line in GATEWAY_TEMPLATE.read_text().splitlines(True) if "nf_conntrack_max" not in line))
+    ex.snippets["local:snippets/sandbox-gw.yml"] = older
+    result = handlers.check(ex, CFG, validation.validate("check", {"run_uuid": RUN}))
+    assert result["ok"] is True and ex.inits["10.4.0.2"]["sysctl"] == ["net.ipv4.ip_forward"]
+    assert next(c["detail"] for c in result["checks"] if c["check"] == "vm:sandbox-gw:init:sysctl") == "net.ipv4.ip_forward 1"
+    assert ("run", "pvesm", "path", "local:snippets/sandbox-gw.yml") in ex.calls
 
     # The probe itself, run here as on a VM, against stand-ins on this machine: a port that answers,
     # one that refuses, a page, and commands of its own on PATH. Nothing reaches out, nothing changes.
@@ -875,7 +1031,6 @@ def test_check_reports_ok_when_everything_is_up(tmp_path):
         "forbidden": [["internet", "127.0.0.1", open_port]],
         "files": [["0", str(tmp_path / "note"), me, "0644"], ["1", str(tmp_path / "gone"), me, "0644"],
                   ["2", str(tmp_path / "note"), "nobody", "0600"]],
-        "services": ["cron", "other"],
     }  # fmt: skip
     env = {"PATH": f"{_stand_ins(tmp_path)}:/usr/bin:/bin", "WORMS_TEST_PIDS": str(tmp_path / "pids")}
     try:
@@ -885,7 +1040,7 @@ def test_check_reports_ok_when_everything_is_up(tmp_path):
         assert [reply[key] for key in ("flag", "dns", "pypi", "apt", "time")] == [[True, ""], [True, ""], [True, "HTTP 200"], [True, ""], [True, ""]]
         assert reply["scoring"][0] is False and "Refused" in reply["scoring"][1]
         assert reply["connect"] == {"0": "open", "1": "refused", "2": "refused"} and reply["forbidden"] == {"internet": "open"}
-        assert reply["files"] == {"0": "", "1": "missing", "2": f"owner {me}, mode 0644"} and reply["services"] == {"cron": "active", "other": "inactive"}
+        assert reply["files"] == {"0": "", "1": "missing", "2": f"owner {me}, mode 0644"} and "services" not in reply
         assert "deadline" not in reply and not list(tmp_path.glob("worms-check-*"))  # apt's directory is gone again
         # Its own deadline: it says what it has, and leaves no command running and nothing behind. What
         # it cut off stays absent (apt's step, its command killed, would say "exit -9"). And a VM whose
@@ -903,19 +1058,102 @@ def test_check_reports_ok_when_everything_is_up(tmp_path):
                 break
             time.sleep(0.1)
         assert not left.exists() or not left.read_bytes()
+
+        # The start and initialisation check, run here the same way: cloud-init done with a recoverable
+        # error, systemd degraded by a unit nothing rests on, a NIC down, one missing, a route as asked,
+        # its SSH port held by this test (not sshd), a user that is not there, a forward chain that lets
+        # everything through. It reads /proc and /proc/sys, and changes nothing.
+        init = {
+            "kind": "init", "deadline": 30, "wait": 5, "gateway": "10.64.0.1", "ssh_port": open_port, "users": [me, "nobody-here"],
+            "nics": [["net0", _mac(900, 0).upper(), "10.64.0.10/24"], ["net1", _mac(900, 1), "10.4.0.10/16"], ["net2", _mac(900, 2), "10.2.0.2"]],
+            "services": ["cron", "other"], "chains": [["inet", "sandbox_gw", "input", "input", "drop"], ["inet", "sandbox_gw", "forward", "forward", "drop"]],
+            "sysctl": ["net.ipv4.ip_forward", "net.no.such"],
+        }  # fmt: skip
+        ran = subprocess.run(["python3", "-I", "-B", "-"], input=probe.script(init, startup.INIT), capture_output=True, text=True, timeout=60, env=env)
+        reply = probe.answer(ran.stdout)
+        assert reply is not None, ran.stderr
+        assert {**reply["cloud-init"], "waited": 0} == {"code": 2, "status": "done", "extended": "degraded done", "errors": [],
+                                                        "recoverable": {"DEPRECATED": 2}, "stage": None, "waited": 0, "late": False}
+        assert {**reply["boot"], "waited": 0} == {"state": "degraded", "failed": ["serial-getty@ttyS0.service"], "pending": None,
+                                                  "jobs": 0, "waited": 0, "late": False}  # fmt: skip
+        # net0 is found though a VLAN on it carries its MAC too (without its address).
+        assert reply["addresses"] == {"net0": "", "net1": "eth1 is down", "net2": f"no interface has its MAC address ({_mac(900, 2)})"}
+        assert reply["route"] == [True, "via 10.64.0.1 dev eth0"] and reply["sshd"][0] is False
+        assert reply["sshd"][1] == Path("/proc/self/comm").read_text().strip()  # this test's process: python, or pytest
+        assert reply["users"] == {me: True, "nobody-here": False} and reply["services"] == {"cron": "active", "other": "inactive"}
+        assert reply["nftables"] == {"inet sandbox_gw input": "missing", "inet sandbox_gw forward": "policy accept, not drop"}
+        assert reply["sysctl"]["net.ipv4.ip_forward"] in ("0", "1") and reply["sysctl"]["net.no.such"] is None
+        # What the host makes of it: a recoverable error and a failed getty are not failures.
+        notes = {"router": False, "critical": set(startup.PLATFORM_UNITS) | {"cron.service"}, "theirs": {"cron.service"},
+                 "sysctl": {"net.ipv4.ip_forward": "1"}}  # fmt: skip
+        logged = []
+        rows = {row[0]: row[1:] for row in startup.records("vm-a", init, notes, reply, logged.append)}
+        assert rows["vm:vm-a:init"] == (True, "") and rows["vm:vm-a:init:cloud-init"] == (True, "done, with recoverable errors (2 DEPRECATED)")
+        assert rows["vm:vm-a:init:boot"] == (True, "degraded: 1 unit failed, none that its start rests on (the job log on the host names them)")
+        assert rows["vm:vm-a:init:addresses"][0] is False and rows["vm:vm-a:init:route"] == (True, "via its network's gateway")
+        assert rows["vm:vm-a:init:sshd"] == (False, "sshd does not listen on its SSH port (the job log on the host says what does)")
+        assert rows["vm:vm-a:init:users"] == (False, "1 of 2 missing (the job log on the host names them)")
+        assert rows["vm:vm-a:init:services"] == (False, "1 of 2 not running (the job log on the host names them)")
+        assert rows["vm:vm-a:init:nftables"] == (False, "inet sandbox_gw input: missing; inet sandbox_gw forward: policy accept, not drop")
+        assert "check vm-a: serial-getty@ttyS0.service failed" in logged and "check vm-a: user nobody-here: missing" in logged
+        # A boot still under way: cloud-init is waited for up to `wait`, then said to be running. systemd
+        # still starting after the wait: the jobs it has left, by unit; a slow unit nothing rests on
+        # passes, one the start rests on fails. Its own deadline cuts the rest off: what it has, no
+        # command left running.
+        slow = {**env, "WORMS_TEST_SLOW": "1"}
+        ran = subprocess.run(["python3", "-I", "-B", "-"], input=probe.script({**init, "wait": 1, "ssh_port": closed_port}, startup.INIT),
+                             capture_output=True, text=True, timeout=60, env=slow)  # fmt: skip
+        reply = probe.answer(ran.stdout)
+        assert reply["cloud-init"]["late"] is True and reply["cloud-init"]["status"] == "running" and reply["sshd"] == [False, "nothing listens"]
+        assert startup._cloud_init("vm-a", {"wait": 1}, reply, logged.append) == (False, "running after 1 s (stage modules-final)")
+        assert {**reply["boot"], "waited": 0} == {"state": "starting", "failed": ["serial-getty@ttyS0.service"], "jobs": 2, "waited": 0,
+                                                  "pending": ["fstrim.service", "multi-user.target"], "late": False}  # fmt: skip
+        assert startup._boot("vm-a", {"wait": 1}, notes, reply, logged.append) == (True, (
+            "still starting after 1 s: 1 unit failed, none that its start rests on; 2 jobs to go, none for a unit its start rests on "
+            "(the job log on the host names them)"))  # fmt: skip
+        assert "check vm-a: fstrim.service still starting after 1 s" in logged
+        waiting = {**reply, "boot": {**reply["boot"], "pending": ["cron.service", "multi-user.target", "ssh.service"]}}
+        assert startup._boot("vm-a", {"wait": 1}, notes, waiting, logged.append) == (False, (
+            "still starting after 1 s: ssh.service not started yet; 1 of the gameplan's services not started yet; 1 other unit failed; "
+            "1 other job to go (the job log on the host names them)"))  # fmt: skip
+        started = time.monotonic()
+        ran = subprocess.run(["python3", "-I", "-B", "-"], input=probe.script({**init, "deadline": 2}, startup.INIT), capture_output=True,
+                             text=True, timeout=60, env=slow)  # fmt: skip
+        reply = probe.answer(ran.stdout)
+        assert time.monotonic() - started < 10 and reply["deadline"] is True and "cloud-init" not in reply and "addresses" not in reply
+        assert reply["boot"]["state"] == "starting"
+        left = Path("/proc") / (tmp_path / "pids" / "cloud-init").read_text().strip() / "cmdline"
+        for _ in range(20):
+            if not left.exists() or not left.read_bytes():
+                break
+            time.sleep(0.1)
+        assert not left.exists() or not left.read_bytes()
     finally:
         page.shutdown()
         listening.close()
 
 
-def test_check_flags_a_down_vm_and_dead_service(tmp_path):
+def test_check_flags_a_down_vm_and_dead_service(tmp_path, monkeypatch):
     ex = FakeExecutor()
     ex.systemctl["worms-mirror"] = "inactive"
-    ex.qm["900"] = "status: stopped"
+    # A VM stopped, one whose guest halted it (its QEMU is still there), and a gateway paused.
+    ex.states = {900: ("stopped", None), 901: ("running", "internal-error"), 950: ("running", "paused")}
     result = handlers.check(ex, CFG, {})
     assert result["ok"] is False
-    assert "host:worms-mirror" in result["failures"]
-    assert "vm:sandbox-a:running" in result["failures"]
+    assert set(result["failures"]) == {"host:worms-mirror", "vm:sandbox-a:start", "vm:sandbox-b:start", "vm:sandbox-gw:start"}
+    detail = {c["check"]: c["detail"] for c in result["checks"]}
+    assert detail["vm:sandbox-a:start"] == "stopped"
+    assert detail["vm:sandbox-b:start"] == "Proxmox says running, but its QEMU is internal-error (halted)"
+    assert detail["vm:sandbox-gw:start"] == "Proxmox says running, but its QEMU is paused (not running)"
+    # Not in the sandbox's pool, or another VM by now under its number.
+    ex.states = {}
+    ex.sandbox_pool = lambda: [{"vmid": 900, "name": "sandbox-a", "node": "n", "status": "running", "pool": "devbox"},
+                               {"vmid": 901, "name": "sandbox-c", "node": "n", "status": "running", "pool": "sandbox"}]  # fmt: skip
+    detail = {c["check"]: c["detail"] for c in handlers.check(ex, CFG, {})["checks"]}
+    assert detail["vm:sandbox-a:start"] == "VM 900 is sandbox-a in the pool devbox, not sandbox-a in sandbox"
+    assert detail["vm:sandbox-b:start"] == "VM 901 is sandbox-c in the pool sandbox, not sandbox-b in sandbox"
+    assert detail["vm:sandbox-gw:start"] == "Proxmox has no VM 950"
+    del ex.sandbox_pool
 
     # Before an attempt: each thing the host lacks for it fails the preflight, and says so.
     (tmp_path / "internet-allowed").write_text("allowed\n")
@@ -947,46 +1185,151 @@ def test_check_flags_a_down_vm_and_dead_service(tmp_path):
     flight = handlers.preflight(ex, CFG, validation.validate("preflight", {**PREFLIGHT, "hold_devboxes": False}))
     assert "devboxes:held" not in {c["check"] for c in flight["checks"]} and "sandbox:not-running" not in flight["failures"]
 
-    # Right before the worm: a VM that is not as its gameplan says fails its probe's records.
+    # Right before the worm: a VM that is not as its gameplan says fails its probe's records, and its
+    # service that failed at boot its start and initialisation records.
     (tmp_path / "internet-allowed").unlink()
     ex = FakeExecutor()
-    _prepare(ex)
+    _prepare(ex, booted=tmp_path)
 
     def broken(host, params, reply):
         if host == "10.4.0.11":  # sandbox-b
             reply["files"]["0"] = "owner root, mode 0600"
-            reply["services"]["cron"] = "failed"
             reply["forbidden"]["database"] = "refused"  # an answer: it got there
             reply["apt"] = [False, "E: Failed to fetch http://apt-cache.worms.internal:3142/... 503"]
             reply["started"] -= 600  # its clock
         else:  # sandbox-a: b's SSH does not answer where the gameplan lets it in
             reply["connect"] = {key: "refused" for key in reply["connect"]}
 
+    def failed_service(host, params, reply):
+        if host == "10.4.0.11":
+            reply["services"]["cron"] = "failed"
+            reply["boot"].update(state="degraded", failed=["cron.service"])
+
     ex.probe_hooks.append(broken)
+    ex.init_hooks.append(failed_service)
     result = handlers.check(ex, CFG, validation.validate("check", {"run_uuid": RUN}))
-    assert set(result["failures"]) == {"vm:sandbox-a:firewall", "vm:sandbox-b:files", "vm:sandbox-b:services", "vm:sandbox-b:isolated",
-                                       "vm:sandbox-b:apt", "vm:sandbox-b:time"}  # fmt: skip
+    assert set(result["failures"]) == {"vm:sandbox-a:firewall", "vm:sandbox-b:files", "vm:sandbox-b:init:services", "vm:sandbox-b:init:boot",
+                                       "vm:sandbox-b:isolated", "vm:sandbox-b:apt", "vm:sandbox-b:time"}  # fmt: skip
     detail = {c["check"]: c["detail"] for c in result["checks"]}
     assert detail["vm:sandbox-b:isolated"] == "got to: database" and "-600 s" in detail["vm:sandbox-b:time"]
     assert detail["vm:sandbox-a:firewall"].startswith("1 of 1 connections not as the gameplan's firewall says")
+    assert detail["vm:sandbox-b:init:boot"] == "degraded: 1 of the gameplan's services failed (the job log on the host names them)"
     # What is wrong, in the job log; the database gets numbers and the platform's names only.
     text = json.dumps(result)
     assert "/home/debian/note" not in text and "cron" not in text
     assert any("file 0 (/home/debian/note, debian 0644): owner root, mode 0600" in note for note in ex.notes)
-    assert any("service cron: failed" in note for note in ex.notes)
+    assert any("service cron: failed" in note for note in ex.notes) and "check sandbox-b: cron.service failed" in ex.notes
     assert any("sandbox-b port 22" in note and "open expected, got refused" in note for note in ex.notes)
 
-    # A VM that does not answer at all, and one whose answer is cut off by its deadline.
+    # A VM that did not boot in this attempt: its QEMU is older than the attempt's prepare (it ran on
+    # from the last run). Nothing is asked of it. A VM and a gateway that did not come up as they should.
     ex = FakeExecutor()
-    _prepare(ex)
+    _prepare(ex, booted=tmp_path)
+    _fake_qemu(tmp_path, 900, 4900, started=400)
+
+    def not_up(host, params, reply):
+        if host == "10.4.0.11":  # sandbox-b
+            reply["cloud-init"].update(code=1, status="error", extended="error - done",
+                                       errors=["('scripts_user', RuntimeError('Runparts: 1 failures (alice-setup) in 1 attempted commands'))"])
+            reply["boot"].update(state="degraded", failed=["serial-getty@ttyS0.service", "ssh.service"])
+            reply["addresses"]["net0"] = "eth0 has 10.64.0.9/24, not 10.64.0.232/24"
+            reply["route"] = [False, "via 10.64.0.9 dev eth0"]
+            reply["sshd"] = [False, "nothing listens"]
+            reply["users"]["alice"] = False
+        elif host == "10.4.0.2":  # sandbox-gw: degraded by a unit nothing rests on, which passes
+            reply["boot"].update(state="degraded", failed=["serial-getty@ttyS0.service"], waited=12.4)
+            reply["nftables"]["inet sandbox_gw forward"] = "missing"
+            reply["sysctl"]["net.netfilter.nf_conntrack_max"] = "4096"
+            reply["route"] = [False, "via 10.4.0.1 dev eth2"]
+
+    ex.init_hooks.append(not_up)
+    result = handlers.check(ex, CFG, validation.validate("check", {"run_uuid": RUN}))
+    assert set(result["failures"]) == {
+        "vm:sandbox-a:start", "vm:sandbox-a:init", "vm:sandbox-a:probe", "vm:sandbox-b:init:cloud-init", "vm:sandbox-b:init:boot",
+        "vm:sandbox-b:init:addresses", "vm:sandbox-b:init:route", "vm:sandbox-b:init:sshd", "vm:sandbox-b:init:users",
+        "vm:sandbox-gw:init:route", "vm:sandbox-gw:init:nftables"}  # fmt: skip
+    detail = {c["check"]: c["detail"] for c in result["checks"]}
+    assert detail["vm:sandbox-a:start"] == ("running since 600 s before this attempt's prepare began: it did not boot in this attempt "
+                                            "and may hold the last run's state")  # fmt: skip
+    assert detail["vm:sandbox-a:init"] == "not checked: it did not start in this attempt (start)"
+    assert "10.4.0.10" not in ex.inits and "10.4.0.10" not in ex.probes
+    assert detail["vm:sandbox-b:init:cloud-init"] == "error: scripts_user failed (the job log on the host says what)"
+    assert any(note.startswith("check sandbox-b: cloud-init: ('scripts_user', ") and "alice-setup" in note for note in ex.notes)
+    assert detail["vm:sandbox-b:init:boot"] == "degraded: ssh.service failed; 1 other unit (the job log on the host names them)"
+    assert detail["vm:sandbox-b:init:addresses"] == "net0 not with the address its stack gives (the job log on the host says what it has)"
+    assert detail["vm:sandbox-gw:init:boot"] == ("degraded: 1 unit failed, none that its start rests on (the job log on the host names "
+                                                 "them), after 12 s")  # fmt: skip
+    assert detail["vm:sandbox-gw:init:route"] == "not as its stack has it: none (the job log on the host says what it has)"
+    assert detail["vm:sandbox-gw:init:nftables"] == "inet sandbox_gw forward: missing"
+    # The conntrack limit is capacity: said, not a failure (startup.SOFT_SYSCTLS); IP forwarding would fail.
+    assert detail["vm:sandbox-gw:init:sysctl"] == ("net.netfilter.nf_conntrack_max is 4096, not 262144 (a warning: the gateway "
+                                                   "still routes; under a busy worm its connections may run out)")  # fmt: skip
+    text = json.dumps(result)
+    assert "alice" not in text and "10.64.0.9" not in text and "10.64.0.232" not in text
+    assert {"check sandbox-b: user alice: missing", "check sandbox-gw: serial-getty@ttyS0.service failed"} <= set(ex.notes)
+    assert any(note.startswith("check sandbox-b: net0 (") and "eth0 has 10.64.0.9/24" in note for note in ex.notes)
+    assert "check sandbox-gw: default route: via 10.4.0.1 dev eth2; expected none" in ex.notes
+
+    # A run an older agent prepared, with no note of when prepare began: whether its VMs booted in this
+    # attempt is not known, so each fails its start (that attempt runs again).
+    ex = FakeExecutor()
+    _prepare(ex, booted=tmp_path)
+    saved = handlers._run_state_path({}, RUN)
+    state = json.loads(saved.read_text())
+    saved.write_text(json.dumps({key: value for key, value in state.items() if key != "began"}))
+    result = handlers.check(ex, CFG, validation.validate("check", {"run_uuid": RUN}))
+    assert {"vm:sandbox-a:start", "vm:sandbox-b:start", "vm:sandbox-gw:start"} <= set(result["failures"])
+    assert {c["detail"] for c in result["checks"] if c["check"].endswith(":start")} == {
+        "running, but prepare noted no start (an older agent's?): whether it booted in this attempt is not known"}
+    saved.write_text(json.dumps(state))
+    # A VM whose check cannot be planned (nor probed then), a gateway whose cloud-init snippet cannot be
+    # read, and a VM still starting after the wait, ssh's job and one of the gameplan's services' left.
+    ex.inits, ex.probes, ex.snippets = {}, {}, {}
+    plan_vm = startup.plan_vm
+    monkeypatch.setattr(startup, "plan_vm", lambda vm, macs: plan_vm({} if vm["name"] == "sandbox-a" else vm, macs))
+    ex.init_hooks.append(lambda host, params, reply: host == "10.4.0.11" and reply["boot"].update(
+        state="starting", jobs=3, pending=["cron.service", "multi-user.target", "ssh.service"], waited=90.2, late=True))
+    result = handlers.check(ex, CFG, validation.validate("check", {"run_uuid": RUN}))
+    assert set(result["failures"]) == {"vm:sandbox-a:init", "vm:sandbox-a:probe", "vm:sandbox-gw:init", "vm:sandbox-b:init:boot"}
+    detail = {c["check"]: c["detail"] for c in result["checks"]}
+    assert detail["vm:sandbox-a:init"] == detail["vm:sandbox-gw:init"] == "not checked: it could not be planned (the job log on the host says why)"
+    assert detail["vm:sandbox-a:probe"] == "not run: its start and initialisation check could not be planned (init)"
+    assert "10.4.0.10" not in ex.inits and "10.4.0.10" not in ex.probes and "10.4.0.2" not in ex.inits
+    assert ("check sandbox-gw: its start and initialisation check: RuntimeError: pvesm path local:snippets/sandbox-gw.yml: no such "
+            "volume") in ex.notes  # fmt: skip
+    assert detail["vm:sandbox-b:init:boot"] == ("still starting after 90 s: ssh.service not started yet; 1 of the gameplan's services "
+                                                "not started yet; 1 other job to go (the job log on the host names them)")  # fmt: skip
+    assert "cron" not in json.dumps(result) and "check sandbox-b: cron.service still starting after 90 s" in ex.notes
+    # A gateway whose Proxmox config names no snippet.
+    monkeypatch.setattr(startup, "plan_vm", plan_vm)
+    ex.snippets = FakeExecutor().snippets
+    ex.qm_config["950"] = "cores: 1\nname: sandbox-gw\n"
+    result = handlers.check(ex, CFG, validation.validate("check", {"run_uuid": RUN}))
+    assert "vm:sandbox-gw:init" in result["failures"] and "10.4.0.2" not in ex.inits
+    assert ("check sandbox-gw: its start and initialisation check: RuntimeError: its Proxmox config names no cloud-init snippet "
+            "(cicustom user=)") in ex.notes  # fmt: skip
+
+    # A VM that does not answer at all (it is not probed then), one whose probe's answer is cut off by
+    # its deadline, and a gateway Proxmox says runs but whose QEMU the host does not find.
+    ex = FakeExecutor()
+    _prepare(ex, booted=tmp_path)
+    (_host(tmp_path)["QEMU_PIDS"] / "950.pid").unlink()
     ex.unreachable.add("10.4.0.10")
     ex.probe_hooks = [lambda host, params, reply: (reply.update(deadline=True), reply.pop("apt"))]
     result = handlers.check(ex, CFG, validation.validate("check", {"run_uuid": RUN}))
     detail = {c["check"]: c["detail"] for c in result["checks"]}
-    assert {"vm:sandbox-a:probe", "vm:sandbox-b:probe", "vm:sandbox-b:apt"} <= set(result["failures"])
-    assert not any(name.startswith("vm:sandbox-a:") and name.split(":")[2] not in ("running", "no-kvm", "probe") for name in detail)
-    assert detail["vm:sandbox-a:probe"] == "no answer (the job log on the host says why)" and detail["vm:sandbox-b:apt"] == "no answer"
+    assert {"vm:sandbox-a:init", "vm:sandbox-a:probe", "vm:sandbox-b:probe", "vm:sandbox-b:apt", "vm:sandbox-gw:start"} <= set(result["failures"])
+    assert {name.split(":", 2)[2] for name in detail if name.startswith("vm:sandbox-a:")} == {"start", "no-kvm", "init", "probe"}
+    assert detail["vm:sandbox-a:init"] == "no answer (the job log on the host says why)" and detail["vm:sandbox-b:apt"] == "no answer"
+    assert detail["vm:sandbox-a:probe"] == "not run: the VM did not answer its start and initialisation check (init)"
+    assert detail["vm:sandbox-gw:start"] == "Proxmox says running, but the host finds no QEMU process of it"
     assert any("connection refused" in note for note in ex.notes)
+    # The host itself restarted after prepare began: every QEMU on it is younger than that.
+    (_host(tmp_path)["PROC"] / "sys" / "kernel" / "random" / "boot_id").write_text("another boot\n")
+    (_host(tmp_path)["PROC"] / "uptime").write_text("300.00 600.00\n")
+    _fake_qemu(tmp_path, 950, 4950, started=20)
+    detail = {c["check"]: c["detail"] for c in handlers.check(ex, CFG, validation.validate("check", {"run_uuid": RUN}))["checks"]}
+    assert detail["vm:sandbox-gw:start"] == "running, booted in this attempt (the host itself restarted after prepare began)"
     # No run on the host: the job fails, it does not pass without its probes.
     with pytest.raises(validation.Invalid, match="no state for run"):
         handlers.check(ex, CFG, validation.validate("check", {"run_uuid": "4" * 8 + RUN[8:]}))

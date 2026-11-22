@@ -321,7 +321,8 @@ worms-gui --tab teams      # start on a tab: platform, teams, jobs, rounds, serv
   scoring, logging, firewall (and the host's view when that is not on), the reasons, the team's
   devbox jobs, when it was checked.
   A sandbox VM's: what the newest `check` host job of the run that built the sandbox recorded (the
-  database); nothing is run for it. Team VMs and gateways are assumed rooted: worms-gui logs in to
+  database): `start`, `no-kvm`, `init` and its `init:<what>` (sandbox-gw has those too), then the
+  probes; nothing is run for it. Team VMs and gateways are assumed rooted: worms-gui logs in to
   none and runs nothing there; only `worms check` does what it does. What a VM printed is shown
   escaped, on one line, after `the VM says:`; no flag or secret is shown. `--demo` makes the
   checks up.

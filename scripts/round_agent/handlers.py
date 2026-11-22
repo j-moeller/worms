@@ -30,7 +30,7 @@ from gameplan import render as gameplan_render
 from gameplan import runtime as gameplan_runtime
 from gameplan.definition import SECRET_MARKER, GameplanError
 from generate_devbox import team_addressing
-from round_agent import host_state, probe, snapshots, validation
+from round_agent import host_state, probe, snapshots, startup, validation
 
 FLAG_PATH = "/etc/worms/flag"
 # The gameplan files, in the agent's workspace (synced from the controller's checkout).
@@ -88,10 +88,11 @@ OBSERVE_REREAD = 2
 NODE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$")
 
 
-def _has_team_vm_cpu(ex, vmid):
+def _has_team_vm_cpu(ex, vmid, config=None):
     """Read from the host, because what a hostile VM says about itself proves nothing. Anything
-    but exactly this CPU fails, including added flags and a config that could not be read."""
-    config = ex.run(["qm", "config", str(vmid)], check=False, timeout=60)
+    but exactly this CPU fails, including added flags and a config that could not be read.
+    `config`: the VM's `qm config`, if read already."""
+    config = ex.run(["qm", "config", str(vmid)], check=False, timeout=60) if config is None else config
     return any(line.strip() == f"cpu: {TEAM_VM_CPU}" for line in config.splitlines())
 
 
@@ -106,9 +107,10 @@ def _ansible_hosts(stack, outputs):
     return outputs.get("ansible_hosts") or {}
 
 
-def _sandbox_vms(ex):
-    """{name: {maintenance_ip, vmid, addresses}} from the sandbox stack state."""
-    hosts = ex.tofu_output("sandbox")
+def _sandbox_vms(ex, hosts=None):
+    """{name: {maintenance_ip, vmid, addresses}} from the sandbox stack state (its outputs, if
+    read already)."""
+    hosts = ex.tofu_output("sandbox") if hosts is None else hosts
     ansible_hosts = _ansible_hosts("sandbox", hosts)
     sandbox = (hosts.get("sandbox", {}) or {}).get("hosts", {}) or {}
     vms = {}
@@ -512,7 +514,10 @@ def prepare(ex, cfg, params):
     """The run's sandbox, from its gameplan, and everything of the run that comes before the
     worm. The runs of a round share one sandbox: the first builds and snapshots it, every later
     one rolls it back to that snapshot (a boot instead of a build, nothing left of the team
-    before). Then this run's keys, passwords and files, and a fresh flag on every VM."""
+    before). Then this run's keys, passwords and files, and a fresh flag on every VM. When it began
+    (the kernel's clock) is kept with the run: the check takes a VM whose QEMU is older for one
+    that did not boot in this attempt."""
+    began = host_state.clock()
     spec, loaded = _gameplan(ex, params["gameplan"], params["gameplan_sha256"])
     hcl = gameplan_build.hcl(spec, loaded.filename, loaded.sha256)
     built = _reusable_sandbox(ex, hcl)
@@ -534,7 +539,7 @@ def prepare(ex, cfg, params):
         if entry["at_reset"]:
             _write_gameplan_file(ex, vms[entry["vm"]]["maintenance_ip"], entry, values)
     released, _ = _place_flags(ex, vms, [vm["name"] for vm in spec["vms"]], strict=True)
-    _save_run_state(cfg, params["run_uuid"], {"gameplan": loaded.filename, "sha256": loaded.sha256, "secrets": values})
+    _save_run_state(cfg, params["run_uuid"], {"gameplan": loaded.filename, "sha256": loaded.sha256, "secrets": values, "began": began})
     _oom_priority(ex, cfg)  # every VM is up now, each with a QEMU of its own
 
     networks = gameplan_build.vm_networks(spec)
@@ -588,14 +593,9 @@ def _devbox_address(ex, addressing):
         return None
 
 
-def _probe_plans(ex, cfg, run_uuid, vms, record):
+def _probe_plans(ex, spec, addressing, vms):
     """{VM name: (probe parameters, the host's notes)} for every VM of the run's gameplan. As for
     the jobs that load a gameplan (_quiet): an error here may quote it, so it goes to the job log."""
-    state = _load_run_state(cfg, run_uuid)
-    spec, _ = _gameplan(ex, state["gameplan"], state["sha256"])
-    addressing = _addressing(ex)
-    record("host:inventory", bool(addressing), "" if addressing else
-           f"no {INVENTORY} in the workspace: the probes lack the platform's addresses (`worms step inventory`)")  # fmt: skip
     maintenance = {name: info["maintenance_ip"] for name, info in vms.items()}
     devbox = _devbox_address(ex, addressing)
     try:
@@ -605,13 +605,82 @@ def _probe_plans(ex, cfg, run_uuid, vms, record):
         raise RuntimeError("the check job could not plan its probes: its log on the host says why") from None
 
 
+def _started(name, vmid, resources, states, run, now):
+    """Whether a VM of the sandbox started as it should, as the host alone sees it: (ok, detail).
+    It is in the pool sandbox under its name; Proxmox says it runs, and so does QEMU's own run
+    state (not paused, not halted). With the run, its QEMU also started after this attempt's
+    prepare began (the kernel's clock, which prepare noted): a VM left running from before the
+    rollback would hold the last run's state. `resources`: {vmid: the cluster's entry}; `states`:
+    _live_states; `now`: host_state.clock()."""
+    vm = resources.get(int(vmid))
+    if vm is None:
+        return False, f"Proxmox has no VM {vmid}"
+    if vm.get("pool") != "sandbox" or vm.get("name") != name:
+        return False, f"VM {vmid} is {vm.get('name')} in the pool {vm.get('pool') or '(none)'}, not {name} in sandbox"
+    live = states.get(int(vmid)) or {"status": vm.get("status")}
+    if live.get("status") != "running":
+        return False, str(live.get("status") or "not running")
+    if live.get("qmpstatus") != "running":
+        what = "halted" if live.get("qmpstatus") in host_state.HALTED else "not running"
+        return False, f"Proxmox says running, but its QEMU is {live.get('qmpstatus') or 'in no state it says'} ({what})"
+    if run is None:
+        return True, "running"
+    began, started = run.get("began") or {}, host_state.qemu_started(vmid)
+    if started is None:
+        return False, "Proxmox says running, but the host finds no QEMU process of it"
+    if began.get("uptime") is None:
+        return False, "running, but prepare noted no start (an older agent's?): whether it booted in this attempt is not known"
+    if began.get("boot_id") and now.get("boot_id") and began["boot_id"] != now["boot_id"]:
+        return True, "running, booted in this attempt (the host itself restarted after prepare began)"
+    if started < began["uptime"]:
+        return False, (f"running since {began['uptime'] - started:.0f} s before this attempt's prepare began: it did not boot "
+                       "in this attempt and may hold the last run's state")  # fmt: skip
+    age = f", {now['uptime'] - started:.0f} s ago" if now.get("uptime") is not None else ""
+    return True, f"running, booted in this attempt (its QEMU started {started - began['uptime']:.0f} s into prepare{age})"
+
+
+def _gateway_snippet(ex, config):
+    """The cloud-init sandbox-gw was built with (startup.gateway_template reads it): the snippet its
+    Proxmox config names, which the sandbox stack rendered from sandbox-gw.tftpl in the apply that
+    built it. Only that apply writes it (_build_sandbox, on a destroyed stack), and the snapshot is
+    taken after it. Not the template in the workspace: a deploy during a round replaces that, and the
+    round's gateway, rolled back to its snapshot, keeps what it was built with. `config`: `qm config`."""
+    volume = startup.snippet(config)
+    if not volume:
+        raise RuntimeError("its Proxmox config names no cloud-init snippet (cicustom user=)")
+    path = ex.run(["pvesm", "path", volume], timeout=60).strip()
+    try:
+        return Path(path).read_text()
+    except (OSError, ValueError) as error:
+        raise RuntimeError(f"its cloud-init snippet ({volume}, {path or 'no path'}) could not be read: {error}") from None
+
+
+def _init_plan(ex, name, info, config, specs, stack, addressing):
+    """startup.INIT's parameters and the host's notes for a VM of the sandbox or for sandbox-gw."""
+    macs = startup.nic_macs(config)
+    if not info.get("gateway"):
+        return startup.plan_vm(specs[name], macs)
+    gateway = (stack.get("sandbox") or {}).get("gateway")
+    if not gateway:
+        raise RuntimeError("the sandbox stack's outputs have no sandbox.gateway")
+    init, notes = startup.plan_gateway(gateway, macs, addressing, _gateway_snippet(ex, config))
+    if not init["chains"] or "net.ipv4.ip_forward" not in notes["sysctl"]:
+        raise RuntimeError("its cloud-init snippet defines no nftables chain or does not turn IP forwarding on")
+    return init, notes
+
+
 def check(ex, cfg, params):
     """Sanity checks on the host and the sandbox, right before the worm. Returns {ok, failures,
-    checks}. With the run (`run_uuid`), every VM of its gameplan is also looked at from inside, all
-    at once, while no team code has reached them (probe.py): its flag, the platform's names,
-    scoring and logging over verified HTTPS, apt and PyPI through the private internet, its clock,
-    the infrastructure and the internet out of its reach, the gameplan's firewall both ways, its
-    files and services. The OOM priority of every team VM, as after any start."""
+    checks}. The host's units; for every VM of the sandbox and for sandbox-gw, that it started
+    (startup.py: in the pool, running, its QEMU too) and, for each but the gateway, its CPU. With
+    the run (`run_uuid`), all at once, while no team code has reached them: that each one booted
+    in this attempt and came up as it should, from inside (cloud-init done, the boot finished, its
+    addresses, route, sshd, users and services; the gateway's rules and sysctl settings), and then
+    the probes (probe.py) of every VM of its gameplan: its flag, the platform's names, scoring and
+    logging over verified HTTPS, apt and PyPI through the private internet, its clock, the
+    infrastructure and the internet out of its reach, the gameplan's firewall both ways, its
+    files. A VM that did not start, or did not answer, is not probed. The OOM priority of every
+    team VM, as after any start."""
     results = []
     record = _recorder(results)
     _host_units(ex, record)
@@ -619,16 +688,59 @@ def check(ex, cfg, params):
     mirror = ex.run(["/usr/local/sbin/worms-mirror", "status"], check=False, timeout=60)
     record("host:mirror-receive-only", "drop" in mirror, "")
 
-    vms = _sandbox_vms(ex)
+    stack = ex.tofu_output("sandbox")
+    vms = _sandbox_vms(ex, stack)
     record("sandbox:vms-registered", bool(vms), f"{len(vms)} VM(s)")
-    plans = _probe_plans(ex, cfg, params["run_uuid"], vms, record) if params.get("run_uuid") else {}
+    run = _load_run_state(cfg, params["run_uuid"]) if params.get("run_uuid") else None
+    specs, addressing, plans = {}, {}, {}
+    if run is not None:
+        spec, _ = _gameplan(ex, run["gameplan"], run["sha256"])
+        specs = {vm["name"]: vm for vm in spec["vms"]}
+        addressing = _addressing(ex)
+        record("host:inventory", bool(addressing), "" if addressing else
+               f"no {INVENTORY} in the workspace: the probes lack the platform's addresses (`worms step inventory`)")  # fmt: skip
+        plans = _probe_plans(ex, spec, addressing, vms)
+    targets = dict(vms)
+    gateway = _ansible_hosts("sandbox", stack).get("sandbox_gw")
+    if gateway:
+        targets[gateway["name"]] = {"maintenance_ip": gateway["management_ip"], "vmid": int(gateway["vm_id"]), "gateway": True}
+    resources = _resources(ex)
+    states = _live_states(ex, resources)
+    by_vmid, now = {int(vm["vmid"]): vm for vm in resources}, host_state.clock()
 
     def one(name):
-        info, out = vms[name], []
-        status = ex.run(["qm", "status", str(info["vmid"])], check=False, timeout=60).strip()
-        out.append((f"vm:{name}:running", status.endswith("running"), status))
-        out.append((f"vm:{name}:no-kvm", _has_team_vm_cpu(ex, info["vmid"]), f"its CPU must be {TEAM_VM_CPU}"))
-        if name in plans:
+        info, out = targets[name], []
+        config = ex.run(["qm", "config", str(info["vmid"])], check=False, timeout=60)
+        started, detail = _started(name, info["vmid"], by_vmid, states, run, now)
+        out.append((f"vm:{name}:start", started, detail))
+        # Not the gateway's: main.tf gives it no CPU type of the team VMs' (this would always fail), and it
+        # is rolled back to its snapshot before every attempt like the rest of the pool.
+        if not info.get("gateway"):
+            out.append((f"vm:{name}:no-kvm", _has_team_vm_cpu(ex, info["vmid"], config), f"its CPU must be {TEAM_VM_CPU}"))
+        if run is None:
+            return out
+        if not started:  # nothing of it is asked: it may be the last run's
+            out.append((f"vm:{name}:init", False, "not checked: it did not start in this attempt (start)"))
+            if name in plans:
+                out.append((f"vm:{name}:probe", False, "not run: it did not start in this attempt (start)"))
+            return out
+        reply, skipped = None, "the VM did not answer its start and initialisation check (init)"
+        try:
+            init, notes = _init_plan(ex, name, info, config, specs, stack, addressing)
+        except Exception as error:  # noqa: BLE001  (a spec or a stack it cannot read: that VM fails, by name only)
+            _note(ex, f"check {name}: its start and initialisation check: {type(error).__name__}: {error}")
+            out.append((f"vm:{name}:init", False, "not checked: it could not be planned (the job log on the host says why)"))
+            skipped = "its start and initialisation check could not be planned (init)"
+        else:
+            reply, _, why = probe.run(ex, info["maintenance_ip"], init, startup.INIT, startup.SSH_TIMEOUT)
+            try:
+                out += startup.records(name, init, notes, reply, lambda text: _note(ex, text), why)
+            except Exception as error:  # noqa: BLE001  (an answer it cannot read: that VM fails, by name only)
+                _note(ex, f"check {name}: its start and initialisation check's answer: {type(error).__name__}: {error}")
+                out.append((f"vm:{name}:init", False, "an answer that could not be read (the job log on the host says why)"))
+        if name in plans and reply is None:
+            out.append((f"vm:{name}:probe", False, f"not run: {skipped}"))
+        elif name in plans:
             params_, notes = plans[name]
             reply, sent, why = probe.run(ex, info["maintenance_ip"], params_)
             try:
@@ -638,14 +750,16 @@ def check(ex, cfg, params):
                 out.append((f"vm:{name}:probe", False, "an answer that could not be read (the job log on the host says why)"))
         return out
 
-    # One thread per VM: the probes take up to a few minutes each, and qm a second per call.
-    with ThreadPoolExecutor(max_workers=max(1, min(len(vms), 32))) as pool:
-        for rows in pool.map(one, sorted(vms)):
+    # One thread per VM, the gateway too (at most 33: a gameplan has up to 32 VMs): the start and
+    # initialisation check waits up to startup.WAIT for a VM's boot, the probes take up to a few
+    # minutes each, and qm a second per call. None waits for another.
+    with ThreadPoolExecutor(max_workers=max(1, len(targets))) as pool:
+        for rows in pool.map(one, sorted(targets)):
             for row in rows:
                 record(*row)
     for name in sorted(set(plans) - set(vms)):
         record(f"vm:{name}:probe", False, "the gameplan's VM is not in the sandbox")
-    _oom_priority(ex, cfg)
+    _oom_priority(ex, cfg, resources, states)
 
     failures = [r["check"] for r in results if not r["ok"]]
     return {"ok": not failures, "failures": failures, "checks": results}

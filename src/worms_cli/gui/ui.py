@@ -1,7 +1,11 @@
-"""worms-gui's screen (curses), htop-like: the host's meters and badges on top, seven tabs of tables,
+"""worms-gui's screen (curses), htop-like: the host's meters and badges on top, eight tabs of tables,
 a detail pane, the action menu and its dialogs, a status line and the keys at the bottom.
 
-    1 VMs  2 Jobs  3 Rounds  4 Services  5 Components  6 Tasks  7 Log
+    1 Platform  2 Teams  3 Jobs  4 Rounds  5 Services  6 Components  7 Tasks  8 Log
+
+Platform: the platform's own VMs (infrastructure, services, the private internet, the shared SSH
+gateway). Teams: every team's devbox VMs and NAT gateway, and the round's sandbox VMs, with what
+the devbox check (`worms check <team> --json`, gui/checks.py) and the round's own `check` job say.
 
 It reads the store's snapshot (state.py's docstring has its fields) and never waits on I/O: the
 collectors fill the store in their threads (collect.py), the commands run in theirs (actions.py), a
@@ -18,8 +22,11 @@ What it asks of its backend (app.py wires the live one, and a fake one for --dem
     start(action)                    a background action: a Task in the next snapshots (its id)
     foreground(actions) -> int       run them on the terminal, then wait for a key (curses is left)
     task_signal(task_id, what)       "cancel" | "pause" | "resume" a task: "" or why not
+    check(slugs, auto)               queue a devbox check of these teams ([] = every team): "" or why not
+                                     (an Action of mode "check" goes there; --dry-run runs it too); auto:
+                                     the cursor's rest asked for it, not a key (checks.Checks.want)
     read_argv(words), read_env()     a read-only `worms <words>` for a pane, and its environment
-    refresh(), say(text, level), dry_run, watchers
+    refresh(), say(text, level), dry_run, watchers, auto_checks (False: --no-auto-check)
 An Action has title, argv, mode ("foreground" | "background"), confirm (the question, "" for none),
 destructive, targets, typed (the word to type to run it), note, command. --dry-run is the backend's:
 it says what it would run; the screen then stays as it is.
@@ -46,6 +53,8 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from worms_cli.gui.checks import FRESH
+
 TICK_MS = 250  # getch's timeout: how soon a second's redraw comes; nothing is drawn when nothing changed
 SNAP_EVERY = 1.0  # s: a new snapshot at most this often (when the store changed), and a redraw with it
 HINT_SECONDS = 8.0  # how long a message stays in the status line
@@ -53,6 +62,8 @@ FETCH_SETTLE = 0.7  # s the pane's record stays under the cursor before its comm
 FETCH_AGAIN = 45.0  # s: a pane's command is run again when its record is still moving (a queued job)
 FETCHES_KEPT = 40  # the panes' readings kept (the newest)
 STEAL_WARN = 20.0  # % of one core: a VM's steal shown in its activity (the host gives it too little time)
+CHECK_SETTLE = 1.5  # s a devbox VM stays under the cursor before its team's check is started (when it has none fresh)
+CHECK_FRESH = FRESH  # s: a team's check younger than this is not run again by itself (5 min)
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[@-_]")
 CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
@@ -97,6 +108,16 @@ def clean(text) -> str:
     a progress meter rewrote with \\r, what a terminal would show last."""
     text = ANSI.sub("", str(text)).replace("\t", "    ").rstrip("\r")
     return CONTROL.sub("", text.rsplit("\r", 1)[-1])
+
+
+UNSEEN = re.compile(r"[\x80-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]")  # C1 controls, bidi marks and overrides
+
+
+def flat(text) -> str:
+    """Someone else's text (a VM's, a team's) on one line of a pane: its line breaks and tabs as spaces, no colour
+    codes, no control characters (C1 too) and no bidi overrides: it cannot start a pane line of its own, nor
+    move or reorder what is around it."""
+    return UNSEEN.sub("", clean(" ".join(ANSI.sub("", str(text)).split())))
 
 
 def size(n) -> str:
@@ -162,7 +183,8 @@ def pct(part, whole):
 # The menus are the backend's (actions.menu: an Entry per command, with its key); the screen only
 # knows which of their keys work on a tab without the menu, and the Tasks tab's own verbs.
 
-HOT_KEYS = {"vms": "l!L", "jobs": "cpPL", "rounds": "pPsc", "services": "L"}  # the contract's single keys (actions.find)
+# By the tab's menu (both VM tabs have the VMs' one): the contract's single keys (actions.find)
+HOT_KEYS = {"vms": "l!LcC", "jobs": "cpPL", "rounds": "pPsc", "services": "L"}
 ONE_KEYS = {"vms": "lL", "jobs": "L", "services": "L"}  # the cursor's record, not the marked ones: one login, one log
 
 
@@ -258,6 +280,7 @@ class Tab:
     name = ""
     title = ""
     short = ""
+    menu = ""  # the backend's menu for its records (actions.menu): its name when "" (both VM tabs: "vms")
     source = ""  # whose data (the snapshot's sources): dim when stale
     default_sort = ""
     default_reverse = False
@@ -292,6 +315,11 @@ class Tab:
     def row_style(self, record, ui) -> str | None:
         return None
 
+    @property
+    def menu_name(self) -> str:
+        """Its menu's name for the backend (actions.menu), and for its single keys."""
+        return self.menu or self.name
+
 
 def kv(label, value, style="normal", width=12) -> list:
     """A pane's line: a label, then its value."""
@@ -307,20 +335,23 @@ def stale(ui, source) -> bool:
     return bool(state and state.get("stale") and state.get("updated_at"))
 
 
+def vm_group(r) -> str:
+    """Which VM tab a VM is on: platform, team or sandbox (state.group)."""
+    if r.get("group"):
+        return r["group"]
+    from worms_cli.gui.state import group
+
+    return group(r.get("name") or "", r.get("pool") or "")
+
+
 class VmsTab(Tab):
-    name, title, short, source, default_sort = "vms", "VMs", "VMs", "proxmox", "kind"
-    quick = (
-        ("all", lambda r, ui: True),
-        ("platform", lambda r, ui: bool(r.get("trusted"))),
-        ("team VMs", lambda r, ui: not r.get("trusted")),
-        ("sandbox", lambda r, ui: r.get("pool") == "sandbox"),
-        ("devbox", lambda r, ui: r.get("pool") == "devbox"),
-        ("running", lambda r, ui: r.get("status") in ("running", "paused")),
-        ("stopped", lambda r, ui: r.get("status") not in ("running", "paused")),
-    )
+    """What both VM tabs share: the VMs' menu and keys, the columns, the detail of a VM as the host sees it."""
+
+    name, title, short, source, default_sort, menu = "vms", "VMs", "VMs", "proxmox", "kind", "vms"
+    groups: tuple = ("platform", "team", "sandbox")
 
     def items(self, snap):
-        return list((snap.get("vms") or {}).values())
+        return [vm for vm in (snap.get("vms") or {}).values() if vm_group(vm) in self.groups]
 
     def ident(self, record):
         # By name too: a vmid is given again after a destroy, and a mark must not move to the VM that gets it.
@@ -564,8 +595,9 @@ class VmsTab(Tab):
             out.append(kv("service", f"{name}: {units}", ServicesTab.state_style(service.get("state"))))
         out.append([])
         if not r.get("trusted"):
-            out.append([("A team's VM or a gateway, assumed rooted: only the host's view of it counts. No watcher, nothing run on it.",
-                         "dim")])  # fmt: skip
+            checked = " (but `worms check`, the CLI's read-only devbox check: c)" if vm_group(r) == "team" else ""
+            out.append([("A team's VM or a gateway, assumed rooted: only the host's view of it counts. No watcher; worms-gui runs "
+                         f"nothing on it{checked}.", "dim")])  # fmt: skip
         elif not r.get("watch"):
             out.append([("no watcher: it is not running" if not running else "no watcher yet (or --no-watchers)", "dim")])
         else:
@@ -608,6 +640,585 @@ class VmsTab(Tab):
         out.append([(f"worms show {r.get('name')}", "bold"), (fetch.note(ui.now), "dim")])
         out.extend([[(line, "normal")] for line in fetch.lines])
         return out
+
+
+class PlatformTab(VmsTab):
+    """The platform's own VMs: infrastructure, services, the private internet, the shared SSH gateway."""
+
+    name, title, short = "platform", "Platform", "Platf"
+    groups = ("platform",)
+    quick = (
+        ("all", lambda r, ui: True),
+        ("running", lambda r, ui: r.get("status") in ("running", "paused")),
+        ("stopped", lambda r, ui: r.get("status") not in ("running", "paused")),
+        ("infra", lambda r, ui: r.get("pool") == "persistent"),
+        ("services", lambda r, ui: r.get("pool") == "ephemeral"),
+        ("private internet", lambda r, ui: r.get("pool") == "private_internet"),
+        ("firewall not on", lambda r, ui: (r.get("firewall") or {}).get("summary") != "on"),
+    )
+
+
+# -- the Teams tab: the team VMs, and what the checks say of them ------------------------------------------
+
+# Its verdict columns: (the check, as `worms check --json` names it; the column's title; its width; its keep). "other":
+# the rest, a devbox VM's firewall as `worms check` read it and a sandbox VM's other records (TeamsTab.others).
+VERDICTS = (("login", "login", 5, 3), ("DNS", "DNS", 3, 3), ("apt", "apt", 3, 3), ("PyPI", "PyPI", 4, 3), ("flag", "flag", 4, 3),
+            ("scoring", "score", 5, 4), ("logging", "log", 3, 4), ("NAT", "NAT", 3, 3), ("other", "other", 5, 4))  # fmt: skip
+SANDBOX_PROBES = {"DNS": "dns", "apt": "apt", "PyPI": "pypi", "flag": "flag", "scoring": "scoring", "logging": "logging"}
+VERDICT_STYLE = {"ok": "ok", "warn": "warn", "error": "error"}
+VERDICT_ORDER = {"error": 0, "warn": 1, "unknown": 2, "stopped": 3, "ok": 4, "n/a": 5}
+ROLE_ORDER = {"a": 0, "b": 1, "c": 2, "gw": 3}
+RESTART_SLACK = 5.0  # s: a VM that started this long after its check began may not be the VM the check saw
+BOOT_GRACE = 60.0  # s a team VM is up before the cursor's rest checks its team (a booting VM's sshd and services are not up)
+# A devbox VM's pane: (label, the check, what ✓ means, what ✗ means). "gateway" and "keys" are the login check's.
+VM_ROWS = (
+    ("flag", "flag", "distributed: /etc/worms/flag is there and is FLAG{<32 hex>} (its content is never shown)", "NOT distributed"),
+    ("apt", "apt", "reachable: a fresh package index through the apt cache, then one package", "NOT reachable"),
+    ("PyPI", "PyPI", "reachable: one package from the devpi mirror, through the VM's pip.conf", "NOT reachable"),
+    ("DNS", "DNS", "reachable: the private DNS answers for scoring, logging, apt-cache, pypi", "NOT reachable"),
+    ("gateway", "gateway", "", ""),
+    ("SSH keys", "keys", "", ""),
+    ("scoring", "scoring", "reached over TLS (the internal CA); it knows the team by its gateway", "NOT reached"),
+    ("logging", "logging", "reached over TLS (the internal CA); it knows the team by its gateway", "NOT reached"),
+    ("firewall", "firewall", "", ""),
+)  # fmt: skip
+GW_ROWS = (
+    ("NAT", "NAT", "forwards: nftables rules loaded, IP forwarding on", "does NOT forward: its VMs reach nothing"),
+    ("DNS", "DNS", "reachable: the private DNS answers", "NOT reachable"),
+    ("apt", "apt", "the apt cache answers with its index", "NOT reachable"),
+    ("scoring", "scoring", "reached; it knows the team by this gateway's address", "NOT reached"),
+    ("logging", "logging", "reached; it knows the team by this gateway's address", "NOT reached"),
+    ("firewall", "firewall", "", ""),
+)  # fmt: skip
+FIREWALL_GOOD = "its options as `worms check` read them (the Proxmox API): on, inbound DROP, ipfilter, its security groups"
+FIREWALL_BAD = "its options as `worms check` read them are NOT as they must be"
+
+
+def team_check(ui, slug) -> dict | None:
+    """A team's newest devbox check (snap["checks"]), or None."""
+    return ((ui.snap.get("checks") or {}).get("teams") or {}).get(slug) if slug else None
+
+
+def check_state(ui, slug) -> tuple[str, str]:
+    """Whether a team's check runs or waits now: ("running", "checking… 12s"), ("queued", "queued"), ("", "")."""
+    checks = ui.snap.get("checks") or {}
+    running = checks.get("running")
+    if running and (not running.get("slugs") or slug in running["slugs"]):
+        return "running", f"checking{'' if ui.ascii else '…'} {span(ui.now - (running.get('started') or ui.now))}"
+    if any(not entry or slug in entry for entry in checks.get("queue") or []):
+        return "queued", "queued"
+    return "", ""
+
+
+def check_error(ui, slug) -> dict | None:
+    """The newest try that gave no answer for a team ({at, started, text}), when it is newer than its result."""
+    newest = last_try(ui, slug)
+    return newest if newest is not None and newest is not team_check(ui, slug) else None
+
+
+def last_try(ui, slug) -> dict | None:
+    """A team's newest check, answered (its result) or not (the error said): None when there was none."""
+    errors = (ui.snap.get("checks") or {}).get("errors") or {}
+    tries = [x for x in (team_check(ui, slug), errors.get(slug), errors.get("*")) if x]
+    return max(tries, key=lambda x: x.get("at") or 0, default=None)
+
+
+def began(entry) -> float:
+    """When a check (a result or a failed try) started."""
+    return entry.get("started") or ((entry.get("at") or 0) - (entry.get("took") or 0))
+
+
+def changed_since(ui, slug, since, result=None) -> str:
+    """The first of a team's VMs that started after `since` (a check's start: a restart, a reset, a rebuild, a VM
+    started), or that is not as `result` saw it (another vmid, stopped since); "" when none. Its start is the
+    Proxmox reading's time less its uptime: the reading's age does not count."""
+    cache = getattr(ui, "_changed", None)
+    if cache is None or cache[0] != ui.snap_serial:
+        cache = ui._changed = (ui.snap_serial, {})
+    key = (slug, since, id(result))
+    if key in cache[1]:
+        return cache[1][key]
+    read = ((ui.snap.get("sources") or {}).get("proxmox") or {}).get("updated_at") or ui.now
+    seen = (result or {}).get("vms") or {}
+    found = ""
+    for vm in (ui.snap.get("vms") or {}).values():
+        if vm.get("team_slug") != slug or vm_group(vm) != "team":
+            continue
+        up = vm.get("uptime")
+        if vm.get("status") in ("running", "paused") and up is not None and read - up > since + RESTART_SLACK:
+            found = vm.get("name") or "?"
+            break
+        was = seen.get(vm.get("role")) if isinstance(seen, dict) else None
+        if isinstance(was, dict) and ((was.get("vmid") is not None and str(was["vmid"]) != str(vm.get("vmid")))
+                                      or (was.get("status") == "running" and vm.get("status") != "running")):  # fmt: skip
+            found = vm.get("name") or "?"
+            break
+    cache[1][key] = found
+    return found
+
+
+def booting(ui, slug) -> str:
+    """A team VM that started less than BOOT_GRACE s ago, or "": a check now would find its sshd and services
+    not up yet, and say so of a VM that is only starting."""
+    for vm in (ui.snap.get("vms") or {}).values():
+        if vm.get("team_slug") == slug and vm_group(vm) == "team" and vm.get("status") == "running" \
+                and vm.get("uptime") is not None and vm["uptime"] < BOOT_GRACE:  # fmt: skip
+            return vm.get("name") or "?"
+    return ""
+
+
+def check_due(ui, slug) -> tuple[bool, tuple]:
+    """Whether the cursor's rest should check a team: no try in CHECK_FRESH s (a failed one counts: not tried
+    again and again), or one of its VMs changed since the newest try began; never while one of them boots.
+    And what that rests on (the newest try, the VM that changed, one booting): when it changes, it is asked again."""
+    newest = last_try(ui, slug)
+    result = team_check(ui, slug)
+    changed = changed_since(ui, slug, began(newest), result if newest is result else None) if newest else ""
+    boot = booting(ui, slug)
+    basis = ((newest or {}).get("at"), changed, boot)
+    if boot:
+        return False, basis
+    return newest is None or ui.now - (newest.get("at") or 0) > CHECK_FRESH or bool(changed), basis
+
+
+def sandbox_records(ui, name) -> list | None:
+    """A sandbox VM's records in the newest `check` job of the run that built the sandbox: [[probe, ok,
+    detail]], [] when it has none, None when there is no such job."""
+    check = (ui.snap.get("sandbox_check") or {}).get("check")
+    if not check:
+        return None
+    return list((check.get("vms") or {}).get(name) or [])
+
+
+def glyph(ui, state) -> str:
+    return {"ok": ui.g["ok"], "warn": "!", "error": ui.g["bad"], "unknown": "?", "n/a": ui.g["na"], "stopped": "off"}.get(state, "?")
+
+
+def worst(cells) -> str:
+    """The state that says most of these cells': an error, a warning, unknown, ok, stopped, else n/a."""
+    states = {(c or {}).get("state") for c in cells}
+    return next((state for state in ("error", "warn", "unknown", "ok", "stopped") if state in states), "n/a")
+
+
+class TeamsTab(VmsTab):
+    """Every team's devbox VMs (A, B, C) and NAT gateway, by team; the round's sandbox VMs under the round.
+    Assumed rooted: never logged in to from here. What the devbox check (`worms check <team> --json`, run
+    by checks.py) and the round's own `check` job say of each, with its age."""
+
+    name, title, short, default_sort = "teams", "Teams", "Teams", "order"
+    groups = ("team", "sandbox")
+    quick = (
+        ("all", lambda r, ui: True),
+        ("devboxes", lambda r, ui: vm_group(r) == "team"),
+        ("sandbox", lambda r, ui: vm_group(r) == "sandbox"),
+        ("problems", lambda r, ui: TeamsTab.problem(r, ui)),
+        ("no fresh check", lambda r, ui: vm_group(r) == "team" and not TeamsTab.fresh(r, ui)),
+        ("running", lambda r, ui: r.get("status") in ("running", "paused")),
+        ("stopped", lambda r, ui: r.get("status") not in ("running", "paused")),
+    )
+
+    def columns(self):
+        from dataclasses import replace
+
+        shared = {c.key: c for c in super().columns()}
+        cols = [
+            Col("order", "", 0, lambda r, ui: "", self._order, keep=9),
+            Col("team", "team", 18, self._team, lambda r, ui: self._order(r, ui)[:2], auto=True, keep=0),
+            Col("role", "role", 4, self._role, self._order, keep=1),
+            Col("name", "VM", 14, lambda r, ui: r.get("name", ""), auto=True, keep=7),
+            shared["state"], replace(shared["up"], keep=8), replace(shared["cpu"], keep=5), replace(shared["mem"], keep=6),
+            replace(shared["fw"], keep=2),
+        ]  # fmt: skip
+        for check, title, width, keep in VERDICTS:
+            cols.append(Col(f"v_{check}", title, width, self._verdict_text(check), self._verdict_order(check),
+                            self._verdict_style(check), keep=keep))  # fmt: skip
+        cols.append(Col("checked", "checked", 13, self._checked, self._checked_order, self._checked_style, flex=True, keep=2))
+        return cols
+
+    # -- the rows ----------------------------------------------------------------------------------------
+
+    @staticmethod
+    def _order(r, ui):
+        name = r.get("name") or ""
+        if vm_group(r) == "team":
+            return (0, (r.get("team") or r.get("team_slug") or "").casefold(), ROLE_ORDER.get(r.get("role"), 9), name)
+        return (1, "", 0 if name.endswith("-gw") else 1, name)
+
+    @staticmethod
+    def _team(r, ui):
+        """A devbox VM's team; a sandbox VM's own name (the round is the pane's: the column says which VM it is when
+        a narrow screen has no room for the VM column)."""
+        if vm_group(r) == "team":
+            return r.get("team") or r.get("team_slug") or "?"
+        return r.get("name") or "sandbox"
+
+    @staticmethod
+    def _role(r, ui):
+        if vm_group(r) == "team":
+            return (r.get("role") or "?").upper()
+        return "GW" if (r.get("name") or "").endswith("-gw") else "VM"
+
+    @staticmethod
+    def others(r, ui) -> list[tuple[str, dict]]:
+        """What the checks say of this VM that has no column of its own: a devbox VM's firewall as `worms check`
+        read it (its options and security groups); a sandbox VM's other records (running, no-kvm, isolated,
+        time, firewall, files, ...). [(name, cell)]."""
+        if vm_group(r) == "team":
+            result = team_check(ui, r.get("team_slug"))
+            named = {check for check, _, _, _ in VERDICTS}
+            return [(check, roles[r.get("role")]) for check, roles in ((result or {}).get("checks") or {}).items()
+                    if check not in named and isinstance(roles, dict) and roles.get(r.get("role"))]  # fmt: skip
+        shown = set(SANDBOX_PROBES.values())
+        return [(str(rec[0]), {"state": "ok" if rec[1] else "error", "text": "", "reason": str(rec[2] if len(rec) > 2 else ""),
+                               "from_vm": True})
+                for rec in sandbox_records(ui, r.get("name")) or [] if rec and str(rec[0]) not in shown]  # fmt: skip
+
+    @staticmethod
+    def cell(r, ui, check) -> dict | None:
+        """What the check says of this VM ({state, text, reason, from_vm, ...}), None when nothing does."""
+        if check == "other":
+            found = TeamsTab.others(r, ui)
+            if not found:
+                return None if TeamsTab.cell(r, ui, "DNS") is None else {"state": "n/a", "text": "", "reason": ""}
+            bad = sum(1 for _, c in found if c.get("state") in ("error", "warn"))
+            return {"state": worst(c for _, c in found), "text": str(bad) if bad > 1 else "", "reason": ""}
+        if vm_group(r) == "team":
+            result = team_check(ui, r.get("team_slug"))
+            return ((result.get("checks") or {}).get(check) or {}).get(r.get("role")) if result else None
+        records = sandbox_records(ui, r.get("name"))
+        if records is None:
+            return None
+        probe = SANDBOX_PROBES.get(check)
+        found = next((record for record in records if record and record[0] == probe), None) if probe else None
+        if found is None:
+            down = r.get("status") not in ("running", "paused") or any(rec and rec[0] == "running" and not rec[1] for rec in records)
+            return {"state": "stopped" if probe and down else "n/a", "text": "", "reason": ""}
+        return {"state": "ok" if found[1] else "error", "text": "", "reason": str(found[2] if len(found) > 2 else ""), "from_vm": True}
+
+    @staticmethod
+    def fresh(r, ui) -> bool:
+        """A devbox VM's verdicts describe it now: its team's check is younger than CHECK_FRESH and none of the
+        team's VMs restarted (reset, rebuilt, started, stopped) since it began."""
+        if vm_group(r) != "team":
+            return True
+        slug = r.get("team_slug")
+        result = team_check(ui, slug)
+        return bool(result) and ui.now - (result.get("at") or 0) <= CHECK_FRESH and not changed_since(ui, slug, began(result), result)
+
+    @staticmethod
+    def problem(r, ui) -> bool:
+        """Anything wrong with it: its firewall OFF as the host sees it, its team's check gave no answer, or a
+        cell of it (a column's or another: others) is an error or a warning."""
+        if (r.get("firewall") or {}).get("summary") == "OFF":
+            return True
+        if vm_group(r) == "team" and check_error(ui, r.get("team_slug")):
+            return True
+        return any((TeamsTab.cell(r, ui, check) or {}).get("state") in ("error", "warn") for check, _, _, _ in VERDICTS)
+
+    def _verdict_text(self, check):
+        def text(r, ui):
+            cell = self.cell(r, ui, check)
+            if not cell:
+                return ""
+            state = cell.get("state")
+            if check == "other":
+                return glyph(ui, state) + (cell.get("text") or "")
+            match = re.search(r"\d+/\d+", str(cell.get("text") or "")) if check == "login" else None
+            return glyph(ui, state) + (match.group(0) if match and state in ("ok", "error") else "")
+
+        return text
+
+    def _verdict_order(self, check):
+        return lambda r, ui: VERDICT_ORDER.get((self.cell(r, ui, check) or {}).get("state"))
+
+    def _verdict_style(self, check):
+        def style(r, ui):
+            cell = self.cell(r, ui, check)
+            if not cell:
+                return None
+            return verdict_style(cell.get("state"), not self.fresh(r, ui))
+
+        return style
+
+    @staticmethod
+    def _checked(r, ui):
+        now = ui.now
+        if vm_group(r) == "team":
+            slug = r.get("team_slug")
+            _state, said = check_state(ui, slug)
+            if said:
+                return said
+            error = check_error(ui, slug)
+            if error:
+                return f"failed {span(now - (error.get('at') or now))} ago"
+            result = team_check(ui, slug)
+            if result and changed_since(ui, slug, began(result), result):
+                return "VM restarted"
+            return f"{span(now - (result.get('at') or now))} ago" if result else "never"
+        check = (ui.snap.get("sandbox_check") or {}).get("check")
+        if not check:
+            return "no check job"
+        at = check.get("finished_at") or check.get("started_at")
+        return "job running" if check.get("state") == "running" else f"job {span(now - at)} ago" if at else "job"
+
+    @staticmethod
+    def _checked_order(r, ui):
+        if vm_group(r) == "team":
+            slug = r.get("team_slug")
+            state, _ = check_state(ui, slug)
+            if state:
+                return -2 if state == "running" else -1
+            newest = last_try(ui, slug)
+            return ui.now - newest["at"] if newest and newest.get("at") else None
+        check = (ui.snap.get("sandbox_check") or {}).get("check") or {}
+        at = check.get("finished_at") or check.get("started_at")
+        return ui.now - at if at else None
+
+    def _checked_style(self, r, ui):
+        if vm_group(r) != "team":
+            return "dim"
+        slug = r.get("team_slug")
+        if check_state(ui, slug)[0]:
+            return "paused"
+        if check_error(ui, slug):
+            return "error"
+        result = team_check(ui, slug)
+        if result and changed_since(ui, slug, began(result), result):
+            return "warn"
+        return None if self.fresh(r, ui) else "dim"
+
+    def attention(self, snap, items, ui):
+        return any(self.problem(r, ui) for r in items)
+
+    def empty(self, ui):
+        source = (ui.snap.get("sources") or {}).get("proxmox") or {}
+        if source.get("error"):
+            return f"(no VMs: the Proxmox API: {source['error']})"
+        return "(no team VM: no devbox built, no round's sandbox)" if ui.snap.get("vms") else "(no VMs yet: waiting for the Proxmox API)"
+
+    # -- the pane -------------------------------------------------------------------------------------------
+
+    def detail(self, r, ui):
+        """What the checks say first, then the VM as the host sees it (VmsTab's)."""
+        base = VmsTab.detail(self, r, ui)
+        body = self._devbox(r, ui) if vm_group(r) == "team" else self._sandbox(r, ui)
+        return base[:1] + body + [[], [("as the host sees it", "bold")]] + base[1:]
+
+    @staticmethod
+    def _reason(cell, style) -> list:
+        """A cell's reason under its line, on one line: labelled as the VM's when it holds what a VM printed
+        (escaped by the CLI; here its line breaks and control characters go too)."""
+        line = [(" " * 12, "label")]
+        if cell.get("from_vm"):
+            line.append(("the VM says: ", "label"))
+        return line + [(flat(cell.get("reason") or ""), style)]
+
+    def _line(self, ui, label, cell, good, bad, old) -> list:
+        state = cell.get("state") or "unknown"
+        words = {"ok": good, "error": bad, "warn": "reached, with a warning", "unknown": "not known",
+                 "stopped": "the VM is stopped (not checked)", "n/a": "not checked here"}.get(state, state)  # fmt: skip
+        style = verdict_style(state, old)
+        out = [kv(label, f"{glyph(ui, state)} {words}", style)]
+        if cell.get("reason"):
+            out.append(self._reason(cell, style))
+        return out
+
+    def _devbox(self, r, ui) -> list:
+        now, slug, role = ui.now, r.get("team_slug") or "", r.get("role") or ""
+        auto = getattr(ui.backend, "auto_checks", True)
+        result = team_check(ui, slug)
+        state, said = check_state(ui, slug)
+        title = [("devbox check", "bold"), (f"   worms check {slug} --json", "dim")]
+        if result:
+            age = now - (result.get("at") or now)
+            title.append((f"   checked {span(age)} ago, {when(result.get('at'), now)} UTC (took {span(result.get('took'))})",
+                          "warn" if age > CHECK_FRESH else "dim"))  # fmt: skip
+        else:
+            title.append(("   not checked yet", "dim"))
+        if said:
+            title.append((f"   {said}", "paused"))
+        out = [title]
+        error = check_error(ui, slug)
+        if error:
+            out.append(kv("last try", f"{when(error.get('at'), now)}: no answer: {flat(error.get('text') or '')}", "error"))
+        if state == "running":
+            out.append([("  Checking now (about a minute; the CLI's own read-only check): this pane follows.", "paused")])
+        elif state == "queued":
+            running = ((ui.snap.get("checks") or {}).get("running") or {}).get("slugs")
+            ahead = "every team's" if running == [] else ", ".join(running or []) or "another"
+            out.append([(f"  Queued: it runs once the check under way ({ahead}) has ended.", "paused")])
+        changed = changed_since(ui, slug, began(result), result) if result else ""
+        old = not self.fresh(r, ui)
+        boot = booting(ui, slug) if auto and not state and old else ""
+        if boot:
+            out.append([(f"  {boot} is starting: checked by itself once it is up a minute (c: now).", "dim")])
+        if not result:
+            if not state and not boot:
+                out.append([("  It starts once the cursor rests on one of the team's VMs; c starts it now, C every team's."
+                             if auto else "  c starts it, C every team's (--no-auto-check: never by itself).", "dim")])
+            return out
+        if changed and not state:
+            out.append([(f"  {changed} started or changed after this check began: what it says may be of the VM before. "
+                         "c checks again" + (" (as the cursor resting on the team's VMs does, once they are up a minute)"
+                                             if auto else "") + ".", "warn")])  # fmt: skip
+        elif old and not state:
+            out.append([("  Older than 5 min (dimmed): c checks it again" + (" (as coming back to one of the team's VMs does)"
+                                                                            if auto else "") + ".", "warn")])  # fmt: skip
+        cells = result.get("checks") or {}
+        login = (cells.get("login") or {}).get(role) or {}
+        mine = {check: (roles or {}).get(role) or {} for check, roles in cells.items() if isinstance(roles, dict)}
+        rows = GW_ROWS if role == "gw" else VM_ROWS
+        off = [check for _, check, _, _ in rows if check not in ("gateway", "keys", "firewall")
+               and (mine.get(check) or {}).get("state") == "stopped"]  # fmt: skip
+        if off:
+            held = " (held by a round)" if r.get("held") else ""
+            out.append(kv("checks", f"off   the VM was stopped{held} at the check: nothing was checked on it", "dim"))
+        for label, check, good, bad in rows:
+            if check == "firewall":
+                out += self._firewall(ui, r, mine.get("firewall") or {}, old)
+            elif off and check in ("gateway", "keys", *off):
+                continue
+            elif check == "gateway":
+                out += self._gateway(ui, login, old)
+            elif check == "keys":
+                out += self._keys(ui, login, result, role, old)
+            else:
+                out += self._line(ui, label, mine.get(check) or {}, good, bad, old)
+        for note in result.get("notes") or []:
+            out.append(kv("note", flat(note.get("text") or ""), verdict_style(note.get("state"), old)))
+        gateway = (ui.snap.get("checks") or {}).get("ssh_gateway") or {}
+        for line in gateway.get("lines") or []:
+            state_ = line.get("state")
+            out.append(kv("SSH gateway", f"{glyph(ui, state_)} {flat(line.get('text') or '')}   (shared by every team)",
+                          verdict_style(state_, old)))  # fmt: skip
+        jobs = [a for a in result.get("activity") or [] if a.get("kind") == "job"]
+        for job in jobs:
+            out.append(kv("job", flat(job.get("text") or ""), {"queued": "warn", "failed": "error"}.get(job.get("state"), "normal")))
+        if not jobs:
+            out.append(kv("jobs", "no devbox job of the team queued, running, or failed in the last 24 h", "dim"))
+        for upload in [a for a in result.get("activity") or [] if a.get("kind") == "upload"]:
+            out.append(kv("upload", flat(upload.get("text") or ""), "warn" if upload.get("state") in ("wait", "error") else "dim"))
+        out.append([])
+        out.append([("c checks the team again now, C every team. worms-gui logs in to no team VM: `worms check`, the CLI's read-only "
+                     "check, asks each sshd about the team's public keys and runs its checks on the VM; what a VM printed is "
+                     "shown escaped and labelled.", "dim")])  # fmt: skip
+        return out
+
+    def _firewall(self, ui, r, cell, old) -> list:
+        """Its firewall: `worms check`'s verdict (its options and security groups, the Proxmox API, when it was
+        checked), and the host's view now when that is not on (the FW column: every NIC's firewall=1 and the
+        host's guest rules too, which `worms check` does not read)."""
+        out = self._line(ui, "firewall", cell, FIREWALL_GOOD, FIREWALL_BAD, old)
+        fw = r.get("firewall") or {}
+        summary = fw.get("summary") or "?"
+        if summary != "on":
+            running = r.get("status") in ("running", "paused")
+            rules = fw.get("rules")
+            parts = [f"its option {onoff(fw.get('vm'))[0]}",
+                     f"the host's guest rules {'- (stopped)' if rules is None and not running else onoff(rules)[0]}"]  # fmt: skip
+            nics = fw.get("nics")
+            if nics:
+                parts.append(f"NICs with firewall=1: {nics[0]} of {nics[1]}")
+            state = "error" if summary == "OFF" else "unknown"
+            out.append(kv("", f"{glyph(ui, state)} the host sees it {summary} now: {', '.join(parts)}",
+                          "dim" if stale(ui, "host") else VERDICT_STYLE.get(state, "dim")))  # fmt: skip
+        return out
+
+    def _gateway(self, ui, login, old) -> list:
+        """Reachable from the SSH gateway: its sshd answered there (where a team's connection comes from)."""
+        reached, state = login.get("reached"), login.get("state")
+        if state == "stopped":
+            return self._line(ui, "gateway", login, "", "", old)
+        if reached is True:
+            return [kv("gateway", f"{glyph(ui, 'ok')} reachable from the SSH gateway: its sshd answered there (where a team's "
+                                  "connection comes from)", verdict_style("ok", old))]  # fmt: skip
+        if reached is False:
+            out = [kv("gateway", f"{glyph(ui, 'error')} NOT reachable from the SSH gateway: its sshd did not answer there",
+                      verdict_style("error", old))]  # fmt: skip
+        else:
+            out = [kv("gateway", f"{glyph(ui, 'unknown')} not asked", "dim")]
+        return out + ([self._reason(login, verdict_style("error", old))] if login.get("reason") else [])
+
+    def _keys(self, ui, login, result, role, old) -> list:
+        """The team's SSH keys on it: how many of those registered it takes as root, which not; on A the SSH
+        gateway's too, and whether it forwards the team to A."""
+        state, keys, taken, missing = login.get("state"), login.get("keys"), login.get("taken"), login.get("missing") or []
+        bad = verdict_style("error", old)
+        if state == "stopped":
+            return self._line(ui, "SSH keys", login, "", "", old)
+        if keys == 0:
+            out = [kv("SSH keys", f"{glyph(ui, 'error')} the team has no SSH key registered (its profile on the dashboard)", bad)]
+        elif taken is None:
+            why = "its sshd did not answer the SSH gateway" if login.get("reached") is False else "its sshd was not asked"
+            out = [kv("SSH keys", f"{glyph(ui, 'unknown')} not known: {why}", "dim")]
+        else:
+            ok = not missing
+            out = [kv("SSH keys", f"{glyph(ui, 'ok' if ok else 'error')} {len(taken)} of the team's {keys} registered key(s) "
+                                  "on it (taken as root)", verdict_style("ok" if ok else "error", old))]  # fmt: skip
+            if missing:
+                out.append(kv("", "missing: " + ", ".join(flat(name) for name in missing), bad))
+        if role == "a" and keys:
+            at, gone, forwarded = login.get("gateway_taken"), login.get("gateway_missing") or [], login.get("forwarded")
+            text = (f"the SSH gateway takes {len(at)} of {keys}" + (f" (missing: {', '.join(flat(n) for n in gone)})" if gone else "")
+                    if at is not None else "the SSH gateway was not asked")  # fmt: skip
+            text += {True: "; it forwards the team to A", False: "; it does NOT forward the team to A"}.get(forwarded, "")
+            out.append(kv("", text, verdict_style("ok" if at is not None and not gone and forwarded else "error", old)))
+        if login.get("reason") and login.get("reached") is True:
+            out.append(self._reason(login, bad))
+        names = (result.get("keys") or {}).get("names") or []
+        if names:
+            out.append(kv("", "registered: " + ", ".join(flat(name) for name in names), "dim"))
+        return out
+
+    def _sandbox(self, r, ui) -> list:
+        """The round's own `check` job's records of this VM (the database): nothing is run on it from here."""
+        now, name = ui.now, r.get("name") or ""
+        found = ui.snap.get("sandbox_check")
+        out = [[("the round's check", "bold"), ("   its `check` host job, from the database: nothing is run on a sandbox VM from here",
+                                               "dim")]]  # fmt: skip
+        if not found:
+            known = ((ui.snap.get("sources") or {}).get("db") or {}).get("updated_at")
+            out.append(kv("", "no run has prepared a sandbox yet (no `prepare` job)" if known else "(the database has not answered yet)",
+                          "dim"))  # fmt: skip
+            return out
+        prepare = found.get("prepare") or {}
+        built = (f"run #{found.get('run')} ({flat(found.get('round'))}, {flat(found.get('team'))}, attempt {found.get('attempt')}): "
+                 f"prepare #{prepare.get('id')} {prepare.get('state')}")  # fmt: skip
+        if prepare.get("finished_at"):
+            built += f", {when(prepare['finished_at'], now)} UTC"
+        out.append(kv("built by", built))
+        check = found.get("check")
+        if not check:
+            out.append(kv("check", f"no `check` job of run #{found.get('run')} has started yet", "dim"))
+            return out
+        at = check.get("finished_at") or check.get("started_at")
+        text = f"job #{check.get('id')} {check.get('state')}" + (f", {when(at, now)} UTC ({span(now - at)} ago)" if at else "")
+        verdict = check.get("ok")
+        text += {True: "   every check passed", False: "   some failed"}.get(verdict, "")
+        out.append(kv("check", text, {True: "ok", False: "error"}.get(verdict, "normal")))
+        if check.get("error"):
+            out.append(kv("", flat(check["error"]), "error"))
+        records = (check.get("vms") or {}).get(name) or []
+        if not records:
+            out.append(kv("", "no record of this VM in it (not in the gameplan, or not probed)", "dim"))
+            return out
+        out.append([("  the round agent's records of this VM; a detail may be what the VM answered (the VM says), escaped:", "dim")])
+        for record in records:
+            probe, ok, detail = (list(record) + ["", False, ""])[:3]
+            line = kv(f"  {flat(probe)}", glyph(ui, "ok" if ok else "error"), "ok" if ok else "error")
+            if detail:
+                line.append((f"  {flat(detail)}", "normal" if ok else "error"))
+            out.append(line)
+        return out
+
+
+def verdict_style(state, old=False) -> str:
+    """A verdict's style: green, yellow, red; when it is old (no fresh check), the same colour dimmed (an old
+    failure still stands out); dim for the rest."""
+    style = VERDICT_STYLE.get(state)
+    if style is None:
+        return "dim"
+    return f"dim_{style}" if old else style
 
 
 class JobsTab(Tab):
@@ -1034,8 +1645,9 @@ class LogTab(Tab):
         return out
 
 
-TABS = (VmsTab, JobsTab, RoundsTab, ServicesTab, ComponentsTab, TasksTab, LogTab)
+TABS = (PlatformTab, TeamsTab, JobsTab, RoundsTab, ServicesTab, ComponentsTab, TasksTab, LogTab)
 TAB_NAMES = tuple(t.name for t in TABS)
+TAB_ALIASES = {"vms": "platform"}  # --tab's old name (one VMs tab until both)
 
 
 # -- a pane's read-only command ----------------------------------------------------------------------
@@ -1140,6 +1752,7 @@ class Paint:
         spec = {  # name: (foreground, background, attributes with colours, without)
             "normal": (-1, -1, 0, 0), "bold": (-1, -1, B, B), "dim": (-1, -1, D, D),
             "ok": (g, -1, 0, 0), "warn": (y, -1, 0, B), "error": (r, -1, B, B | U), "paused": (c, -1, 0, 0),
+            "dim_ok": (g, -1, D, D), "dim_warn": (y, -1, D, D), "dim_error": (r, -1, D, D | U),  # an old verdict: its colour, dimmed
             "label": (c, -1, 0, 0), "title": (c, -1, B, B),
             "head": (k, g, 0, R), "head_sorted": (k, c, B, R | B | U),
             "cursor": (k, c, 0, R), "cursor_marked": (k, y, B, R | B), "marked": (y, -1, B, B | U),
@@ -1175,8 +1788,8 @@ class Paint:
         return self.attrs.get(name or "normal", 0)
 
 
-GLYPHS_UTF8 = {"up": "▲", "down": "▼", "more": "…", "sep": "│", "dot": "·", "mark": "*", "bar": "|"}
-GLYPHS_ASCII = {"up": "^", "down": "v", "more": "~", "sep": "|", "dot": "-", "mark": "*", "bar": "|"}
+GLYPHS_UTF8 = {"up": "▲", "down": "▼", "more": "…", "sep": "│", "dot": "·", "mark": "*", "bar": "|", "ok": "✓", "bad": "✗", "na": "—"}
+GLYPHS_ASCII = {"up": "^", "down": "v", "more": "~", "sep": "|", "dot": "-", "mark": "*", "bar": "|", "ok": "+", "bad": "x", "na": "-"}
 BOX_UTF8 = {"hline": "─", "vline": "│", "ulcorner": "┌", "urcorner": "┐", "llcorner": "└", "lrcorner": "┘"}
 BOX_ASCII = {"hline": "-", "vline": "|", "ulcorner": "+", "urcorner": "+", "llcorner": "+", "lrcorner": "+"}
 
@@ -1446,11 +2059,14 @@ class Prompt(Modal):
 
 
 class UI:
-    def __init__(self, scr, backend, tab="vms", ascii_only=False, colours=True):
+    def __init__(self, scr, backend, tab="platform", ascii_only=False, colours=True):
         self.scr, self.backend = scr, backend
         self.tabs = [cls() for cls in TABS]
         self.columns = {tab.name: tab.columns() for tab in self.tabs}
+        tab = TAB_ALIASES.get(tab, tab)
         self.current = TAB_NAMES.index(tab) if tab in TAB_NAMES else 0
+        self.check_rest = None  # [the Teams tab's cursor record, since when it rests there, its check asked, why not said]
+        self.dry_said = False  # --dry-run: that a check runs all the same, said with the first automatic one
         self.views = {t.name: View(sort=t.default_sort, reverse=t.default_reverse, follow=t.follow) for t in self.tabs}
         self.g = GLYPHS_ASCII if ascii_only else GLYPHS_UTF8
         self.ascii = ascii_only
@@ -1727,7 +2343,7 @@ class UI:
                 self.backend.say(said, "error")
             self.scr.erase()
             self.put(0, 0, said[: self.w], "error")
-            self.put(1, 0, "q quits; 1-7 another tab; the Log tab has it", "dim")
+            self.put(1, 0, f"q quits; 1-{len(self.tabs)} another tab; the Log tab has it", "dim")
             self.scr.refresh()
 
     def _mouse(self):
@@ -1767,14 +2383,14 @@ class UI:
         tab, view = self.tab, self.views[self.tab.name]
         everyone, records = self.shown(tab)
         self.sync_cursor(tab, records)
-        hot = HOT_KEYS.get(tab.name, "") + ("cpP" if tab.name == "tasks" else "")
+        hot = HOT_KEYS.get(tab.menu_name, "") + ("cpP" if tab.name == "tasks" else "")
         pane_full = self.pane and self._pane_full()
         page = max(1, self.hits.get("rows", (0, 10, 0))[1] - self.hits.get("rows", (0, 10, 0))[0])
         if k in ("q", curses.KEY_F10):
             self.ask_quit()
         elif k in ("?", "h", curses.KEY_F1):
             self.open(Message("worms-gui: the keys", help_lines(self)))
-        elif isinstance(k, str) and k in "1234567" and k:
+        elif isinstance(k, str) and len(k) == 1 and k in "123456789"[: len(self.tabs)]:
             self.switch(int(k) - 1)
         elif k in ("\t", curses.KEY_RIGHT):
             self.switch(self.current + 1)
@@ -1896,6 +2512,7 @@ class UI:
         self.current = index % len(self.tabs)
         self.pane = False
         self.filter_edit = None
+        self.check_rest = None  # back on the Teams tab: a new rest (its team checked again when its check is old)
 
     def move(self, records, delta):
         view = self.views[self.tab.name]
@@ -1984,7 +2601,7 @@ class UI:
         if tab.name == "log" and not platform:
             self.hint("the Log tab has no actions: i for the platform's (internet, the emergency stop)", "dim")
             return
-        name = "platform" if platform else tab.name
+        name = "platform" if platform else tab.menu_name
         items = [] if platform else self.targets(tab)
         hidden = [] if platform else self.hidden(tab)
         entries = self._menu(name, items)
@@ -2008,9 +2625,9 @@ class UI:
             self.task_verb(tab, verb)
             return
         items, hidden = self.targets(tab), self.hidden(tab)
-        if key in ONE_KEYS.get(tab.name, ""):
+        if key in ONE_KEYS.get(tab.menu_name, ""):
             items, hidden = self.targets(tab, one=True), []
-        entries = self._menu(tab.name, items)
+        entries = self._menu(tab.menu_name, items)
         if isinstance(entries, str):
             self.hint(entries, "error")
             return
@@ -2018,7 +2635,7 @@ class UI:
         if entry is None:
             self.hint(f"{key}: not a key of the {tab.title} tab (m: its menu)", "dim")
             return
-        self.choose(tab, tab.name, entry, items, hidden)
+        self.choose(tab, tab.menu_name, entry, items, hidden)
 
     def _names(self, tab, items, room=60) -> str:
         names = [tab.label(r) for r in items]
@@ -2033,7 +2650,7 @@ class UI:
         why = field_of(entry, "unavailable", "")
         label = field_of(entry, "label", "")
         if why:
-            self.hint(f"{label}: {why}", "warn")
+            self.hint(f"{label.split(' (', 1)[0]}: {why}", "warn")  # the label without its command: the why fits at 80 columns
             return
         own = field_of(entry, "scope", "items") == "items"
         hidden = [tab.label(r) for r in hidden] if own else []
@@ -2118,16 +2735,80 @@ class UI:
         snapshot is taken at once: the task is in the Tasks tab for the next key."""
         self.snap_at = 0.0
         terminal = [a for a in actions if field_of(a, "mode", "background") == "foreground"]
-        for action in [a for a in actions if field_of(a, "mode", "background") != "foreground"]:
+        for action in [a for a in actions if field_of(a, "mode", "background") == "check"]:
+            self.check(field_of(action, "targets", []) or [], command_line(action))
+        for action in [a for a in actions if field_of(a, "mode", "background") not in ("foreground", "check")]:
             try:
                 task = self.backend.start(action)
             except Exception as exc:  # noqa: BLE001
                 self.backend.say(f"could not start `{command_line(action)}`: {exc}", "error")
                 continue
             if task is not None:
-                self.hint(f"started #{task}: $ {command_line(action)}   (6: the Tasks tab)", "ok")
+                self.hint(f"started #{task}: $ {command_line(action)}   ({TAB_NAMES.index('tasks') + 1}: the Tasks tab)", "ok")
         if terminal:
             self.foreground(terminal)
+
+    def check(self, slugs, command="", auto=False) -> str:
+        """A devbox check of these teams ([] = every team) queued in the backend: "" or why not. It
+        changes nothing, so --dry-run runs it too."""
+        start = getattr(self.backend, "check", None)
+        why = start(list(slugs), auto=auto) if start is not None else "this backend runs no checks"
+        self.snap_at = 0.0  # the queue in the next frame
+        if why:
+            if not auto:
+                self.hint(f"not checked: {why}", "warn")
+        elif auto and self.backend.dry_run and not self.dry_said:
+            self.dry_said = True
+            self.hint(f"--dry-run, and the devbox check runs all the same (read-only; --no-auto-check: only on c): $ "
+                      f"{command or 'worms check'}", "warn")  # fmt: skip
+        else:
+            self.hint(f"checking in the background: $ {command or 'worms check'}   (read-only; the Teams tab shows it)",
+                      "dim" if auto else "ok")  # fmt: skip
+        return why
+
+    def auto_check(self, tab, record):
+        """The Teams tab: a devbox VM that rested CHECK_SETTLE s under the cursor gets its team checked when it
+        is due (check_due: no try in CHECK_FRESH s, a failed one too, or one of its VMs changed since; none
+        booting) and none runs or waits: as `c`. Once a rest (it ends when the cursor moves or the tab changes),
+        and again in it when what that rested on changes (a check ended, a VM restarted, one is up a minute):
+        a check that only grew old is not run again while the cursor stays. --no-auto-check: never."""
+        if not getattr(self.backend, "auto_checks", True) or record is None or vm_group(record) != "team" \
+                or not record.get("team_slug"):  # fmt: skip
+            self.check_rest = None
+            return
+        now, key = time.time(), tab.ident(record)
+        if self.check_rest is None or self.check_rest[0] != key:
+            self.check_rest = [key, now, None, ""]
+        rest = self.check_rest
+        if now - rest[1] < CHECK_SETTLE:
+            due = rest[1] + CHECK_SETTLE
+            self.wake_at = due if self.wake_at is None else min(self.wake_at, due)
+            return
+        slug = record["team_slug"]
+        due, basis = check_due(self, slug)
+        if rest[2] == basis:
+            return  # settled for what it rests on
+        if check_state(self, slug)[0] or not due:
+            rest[2] = basis
+            return
+        entries = self._menu(tab.menu_name, [record])
+        entry = find(entries, "c") if not isinstance(entries, str) else None
+        try:
+            if entry is None:
+                raise ValueError(entries if isinstance(entries, str) else "no `c` in the VMs' menu")
+            why = field_of(entry, "unavailable", "")
+            chosen = [] if why else entry.make("")
+        except Exception as exc:  # noqa: BLE001  (actions.Unavailable: the team map not known yet, a name that is another's slug)
+            why = str(exc)
+        if why:  # said once a rest; tried again at the next drawing (the team map comes, it costs nothing)
+            if rest[3] != why:
+                rest[3] = why
+                self.hint(f"no automatic check of {slug}: {why}", "dim")
+            return
+        rest[2] = basis
+        for action in chosen or []:
+            if field_of(action, "mode", "") == "check":
+                self.check(field_of(action, "targets", []) or [], command_line(action), auto=True)
 
     def foreground(self, actions):
         """Leave curses, the backend runs them on the terminal and waits for a key; back as it was.
@@ -2206,6 +2887,8 @@ class UI:
         tab = self.tab
         everyone, records = self.shown(tab)
         self.sync_cursor(tab, records)
+        if tab.name == "teams":
+            self.auto_check(tab, records[self.views[tab.name].index] if records else None)
         self.draw_info(y + 1, tab, everyone, records)
         self.draw_body(y + 2, self.h - 2, tab, records)
         self.draw_status(self.h - 2)
@@ -2658,7 +3341,8 @@ class UI:
     def draw_keys(self, y, tab):
         """The keys of this tab, and those of every tab: what a narrow screen cannot show goes from the end
         (F3-F6 first: the tab's own keys and Enter matter more there)."""
-        own = {"vms": [("l", "Login"), ("!", "Run"), ("L", "Log")],
+        own = {"platform": [("l", "Login"), ("!", "Run"), ("L", "Log")],
+               "teams": [("c", "Check"), ("C", "CheckAll"), ("l", "Login")],
                "jobs": [("c", "Cancel"), ("p", "PauseAgent"), ("P", "Resume"), ("L", "Log")],
                "rounds": [("p", "Pause"), ("P", "Resume"), ("s", "Start"), ("c", "Cancel")],
                "services": [("L", "Log")],
@@ -2683,7 +3367,7 @@ def help_lines(ui) -> list:
     H = "bold"
     lines = [
         ("Everywhere", H),
-        ("1-7, Tab, Shift-Tab, Left/Right   the tabs: VMs, Jobs, Rounds, Services, Components, Tasks, Log", "normal"),
+        (f"1-{len(ui.tabs)}, Tab, Shift-Tab, Left/Right   the tabs: {', '.join(t.title for t in ui.tabs)}", "normal"),
         ("Up/Down, j/k, PgUp/PgDn, Home/End   the cursor (g, G: the first, the last)", "normal"),
         ("Space   mark (and down)      a   mark all shown      u   unmark all   (marks stay across refreshes; marks the "
          "filters hide are acted on too, and the info line says how many)", "normal"),
@@ -2700,10 +3384,11 @@ def help_lines(ui) -> list:
          "normal"),
         ("mouse   click: a row, a tab, a column's head; double click: its pane; the wheel scrolls", "normal"),
     ]
-    one = {"vms": "l and L: the cursor's VM; ! and #: the marked ones (platform VMs only)", "jobs": "single keys c, p, P, L",
-           "rounds": "single keys p, P, s, c", "services": "single key L"}
-    for name, title in (("vms", "VMs"), ("jobs", "Jobs (the round agent's host jobs)"), ("rounds", "Rounds"), ("services", "Services"),
-                        ("components", "Components"), ("platform", "The platform (i, on every tab)")):  # fmt: skip
+    one = {"vms": "l and L: the cursor's VM; ! and #: the marked ones (platform VMs only); c: the marked ones' teams; C",
+           "jobs": "single keys c, p, P, L", "rounds": "single keys p, P, s, c", "services": "single key L"}  # fmt: skip
+    for name, title in (("vms", "VMs (the Platform and the Teams tab)"), ("jobs", "Jobs (the round agent's host jobs)"),
+                        ("rounds", "Rounds"), ("services", "Services"), ("components", "Components"),
+                        ("platform", "The platform (i, on every tab)")):  # fmt: skip
         lines += [("", "normal"), (title + (f"   ({one[name]})" if name in one else "   (m: its menu)"), H)]
         entries = ui._menu(name, [])
         for entry in entries if not isinstance(entries, str) else []:
@@ -2726,7 +3411,32 @@ def help_lines(ui) -> list:
          "its CPU pressure", "normal"),
         ("state: STOPPED (capitals) is a platform VM that should run; held / window: a devbox stopped by a round or by the "
          "internet window", "normal"),
-        ("quick filters: all, platform (trusted VMs), team VMs (and gateways), sandbox, devbox, running, stopped", "normal"),
+        ("Platform: the platform's own VMs (infrastructure, services, the private internet, the shared SSH gateway). Teams: "
+         "every team's devbox VMs A, B, C and its NAT gateway (GW), by team, and the round's sandbox VMs under the round", "normal"),
+        ("", "normal"),
+        ("The Teams tab", H),
+        ("login (the team's keys its sshd takes as root, n/m), DNS, apt, PyPI, flag (/etc/worms/flag there and well-formed: "
+         "never shown), score, log, NAT (a gateway's), other (the rest: a devbox VM's firewall as `worms check` reads it, its "
+         "options and security groups; a sandbox VM's other records: running, no-kvm, isolated, time, ...; a number: how many "
+         "failed): what `worms check <team> --json` said, the CLI's read-only check of a devbox; " + glyph(ui, "ok") + " ok, "
+         + glyph(ui, "error") + " failed, ! warning, ? not known, " + glyph(ui, "n/a") + " not checked there, off: the VM is "
+         f"stopped. checked: its age, `checking{'' if ui.ascii else '…'} 12s`, queued, failed (no answer), VM restarted (one "
+         "of the team's VMs started or changed after the check began). An old verdict (older than 5 min, or a VM restarted "
+         "since) keeps its colour, dimmed", "normal"),
+        ("A devbox VM that rests under the cursor (or its pane, Enter) gets its team checked when the team has no check younger "
+         "than 5 min (nor a failed try), or one of its VMs restarted since: one check at a time, the others queued (only the "
+         "newest the cursor asked for waits), each team's result kept; once a rest, again when you come back to it. c checks "
+         "the marked VMs' teams (or the cursor's) now, C every team in one run; their end is said in the status line. "
+         "--no-auto-check: only c and C. The pane: flag distributed, apt, PyPI, DNS reachable, reachable from the SSH "
+         "gateway, the team's SSH keys on it (and which are missing), scoring, logging, firewall (and the host's view when it "
+         "is not on), the reasons, the team's devbox jobs, when it was checked", "normal"),
+        ("worms-gui logs in to no team VM: `worms check` does what it does (it asks each sshd whether it takes the team's public "
+         "keys, and runs its read-only checks on the VM as root). What a VM printed is shown escaped, after `the VM says:`", "normal"),
+        ("A sandbox VM: what the round's own `check` host job recorded (the database), the newest of the run that built the "
+         "sandbox; nothing is run for it from here", "normal"),
+        ("quick filters, Platform: all, running, stopped, infra, services, private internet, firewall not on. Teams: all, "
+         "devboxes, sandbox, problems (a failed or warning verdict, its column's or another's, the firewall OFF, a check with "
+         "no answer), no fresh check, running, stopped", "normal"),
         ("", "normal"),
         ("Commands", H),
         ("Every command is the CLI's own (`worms ...`, src/manage.py) with its checks, lock and run log. What changes something "
@@ -2735,8 +3445,9 @@ def help_lines(ui) -> list:
          "login, run, log, show, apply, reset, rebuild, kill, status and internet run on the terminal: worms-gui comes back "
          "when they end (after a login at once, else after a key). The rest run in the background: the Tasks tab, their end "
          "in the status line.", "normal"),
-        ("--dry-run: no action runs, each is only shown (status line, Log tab); the panes' `worms show` and the watchers "
-         "still read.", "normal"),
+        ("--dry-run: no action runs, each is only shown (status line, Log tab); the panes' `worms show`, the watchers and "
+         "the devbox checks (`worms check`: they change nothing, but run as root on the team's VMs) still run, by themselves "
+         "too when the cursor rests on a team's VM (--no-auto-check: only on c, C).", "normal"),
         ("", "normal"),
         ("Colours", H),
         ("green ok, red an error or a VM down that should run, yellow a warning, cyan paused or held, dim stale or not known; "
@@ -2765,7 +3476,7 @@ def terminal_problem() -> str:
     return ""
 
 
-def run(backend, tab="vms", ascii_only=None) -> int:
+def run(backend, tab="platform", ascii_only=None) -> int:
     """The screen until `q`. The locale's encoding decides UTF-8 or ASCII glyphs (`ascii_only`, when app.py
     has set the locale already); NO_COLOR, colours."""
     if ascii_only is None:

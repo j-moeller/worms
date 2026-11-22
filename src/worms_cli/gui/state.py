@@ -30,7 +30,8 @@ Times are epoch seconds (float, this machine's clock), sizes bytes, rates bytes 
     snap["vms"]           {vmid: vm}, every VM on the host
         vmid, name, node, pool, kind (worms_cli.vms.KINDS' label), team (its label: `alpha (t2)`,
         `(every team)` for the shared SSH gateway, "" for a platform VM), team_slug, team_handle
-        (what `worms vm reset <team>` takes), role (a | b | c | gw | ""), status (running | paused
+        (what `worms vm reset <team>` takes), role (a | b | c | gw | ""), group (platform | team |
+        sandbox: the tab it is on, state.group), status (running | paused
         | stopped), qmpstatus, uptime, cpu_pct, maxcpu, mem, maxmem, net_in_bps, net_out_bps,
         disk_read_bps, disk_write_bps (None until two readings of the counters), psi_cpu, psi_io,
         psi_mem (its pressure as the host sees it, some avg10 %: a team VM's too), tags, lock
@@ -67,6 +68,16 @@ Times are epoch seconds (float, this machine's clock), sizes bytes, rates bytes 
         name, about, kind, deps, exists (bool | None), deployed_commit, deployed_at (the host's
         record of the last apply, worms_cli/changes.py; "" when none)
     snap["teams"]         {slug: {name, label, handle}}: the team map (the database's; {} until it answers)
+    snap["checks"]        the devbox checks (checks.py: `worms check <team> --json`, run in the background)
+        teams {slug: the team's entry of the JSON's `checks.teams` (worms_cli/validate.py), and at (when
+        it ended), took (s), command}, ssh_gateway (the newest one's, and its at), errors {slug ("*":
+        every team's): {at, started, text}} (a check that gave no answer for it), running ({slugs ([] =
+        every team), started} | None), queue [[slugs]]
+    snap["sandbox_check"] the round's sandbox as its own `check` host job saw it (the database): the run
+                          that built it (its newest `prepare`), {run, round, round_id, team, attempt,
+                          prepare {id, state, finished_at}, check {id, state, started_at, finished_at,
+                          ok, error, vms {vm name: [[probe, ok, detail]]}, host [[check, ok, detail]]}
+                          | None}, or None
     snap["tasks"]         the GUI's background commands, newest first (Task.view)
         id, title, command, argv, targets, locks (it takes the host's lock), state (waiting | running |
         paused | done | failed | cancelled), started, ended, rc, lines [str] (its output's last lines)
@@ -80,7 +91,8 @@ Times are epoch seconds (float, this machine's clock), sizes bytes, rates bytes 
 Writers (threads): `store.register(source, interval)` once; `store.update(source, **fields)` sets
 those fields and says the source answered (a field in MERGED is merged key by key instead: several
 sources fill `host`, one watcher per VM fills `watch`); `store.error(source, text)` says it did not
-(what it gave stays, and goes stale); `store.discard(field, key)` drops one key of a merged field.
+(what it gave stays, and goes stale); `store.discard(field, key)` drops one key of a merged field;
+`store.set(field, value)` a field no source answers for (the devbox checks: they run on demand).
 The runner keeps its tasks with add_task, task_line and task_state; anyone may `say` (status line
 and Log tab) or `log` (Log tab only).
 """
@@ -117,6 +129,24 @@ def gateway(name: str) -> bool:
     from worms_cli import teams
 
     return name == teams.SHARED_GATEWAY or name.endswith("-gw") or "gateway" in name
+
+
+PLATFORM_POOLS = ("persistent", "ephemeral", "private_internet")
+CHECKS = {"teams": {}, "ssh_gateway": None, "errors": {}, "running": None, "queue": []}
+
+
+def group(name: str, pool: str) -> str:
+    """Which VMs tab a VM is on: "platform" (the platform's own: infrastructure, services, the private
+    internet, the shared SSH gateway), "team" (a team's devbox VMs A, B, C and its NAT gateway) or
+    "sandbox" (the round's sandbox VMs and sandbox-gw; a VM in no platform pool, as a sandbox VM is
+    while it is built)."""
+    from worms_cli import teams
+
+    if name == teams.SHARED_GATEWAY:
+        return "platform"
+    if teams.of_vm(name) or pool == "devbox":
+        return "team"
+    return "platform" if (pool or "") in PLATFORM_POOLS and not name.startswith("sandbox") else "sandbox"
 
 
 def trusted(name: str, pool: str) -> bool:
@@ -197,6 +227,12 @@ class Store:
                 self._add_log("error", f"{source}: {text}")
                 self._version += 1
             state["error"] = text
+
+    def set(self, name: str, value) -> None:
+        """A field no source answers for (the devbox checks): set as given, no source's time moved."""
+        with self._lock:
+            self._data[name] = value
+            self._version += 1
 
     def discard(self, name: str, key) -> None:
         with self._lock:
@@ -352,8 +388,9 @@ def compose(data: dict, sources: dict) -> dict:
 
     pve_vms {vmid: vm}, pve_tasks {vmid: task}   the Proxmox collector
     host {...}, vm_history, vm_ctimes, vm_nics, deployed, components_built   the host collector
-    jobs, rounds, run, teams {slug: {name, label, handle}}   the database collector
+    jobs, rounds, run, teams {slug: {name, label, handle}}, sandbox_check   the database collector
     watch {vmid: {...}}   the watchers
+    checks   the devbox checks (checks.py), by store.set
     """
     host = {**_copy(HOST), **data.get("host", {})}
     host_known = bool(sources.get("host", {}).get("updated_at"))
@@ -365,6 +402,8 @@ def compose(data: dict, sources: dict) -> dict:
         "rounds": data.get("rounds", []),
         "run": data.get("run"),
         "teams": data.get("teams", {}),
+        "checks": {**_copy(CHECKS), **(data.get("checks") or {})},
+        "sandbox_check": data.get("sandbox_check"),
         "services": [],  # by snapshot(), once the watchers' and the host's ages are known
         "components": _components(data, vms, host),
         "sources": {name: {"interval": s["interval"], "updated_at": s["updated_at"], "error": s["error"]}
@@ -416,7 +455,7 @@ def _vms(data: dict, host: dict, host_known: bool) -> dict:
             "vmid": vmid, "name": name, "pool": pool, "kind": KINDS.get(pool, pool or "—"),
             "team": "(every team)" if name == teams.SHARED_GATEWAY else (team["label"] if team else ""),
             "team_slug": found[0] if found else "", "team_handle": team["handle"] if team else "", "role": found[1] if found else "",
-            "trusted": is_trusted,
+            "group": group(name, pool), "trusted": is_trusted,
             "firewall": {"vm": vm_fw, "rules": rules, "nics": list(nic) if nic else None, "summary": summary},
             "clean": (vmid in host["clean_snapshots"]) if host_known and pool in SERVICE_POOLS else None,
             "created": history.cell(created), "updated": history.cell(updated), "updated_at": str((updated or {}).get("time", "")),

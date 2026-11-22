@@ -1,14 +1,18 @@
 """worms-gui's start and stop: its options, the store, the collectors and the runner wired to the screen.
 
     worms-gui                      the live platform (the host this runs on, or WORMS_SSH's)
-    worms-gui --dry-run            every action is shown (status line, Log tab), none runs
+    worms-gui --dry-run            every action is shown (status line, Log tab), none runs; the devbox
+                                   checks (`worms check --json`) still run: they change nothing
+    worms-gui --no-auto-check      a devbox check only on c or C, never by itself when the cursor rests
     worms-gui --interval 5         the base refresh (the Proxmox API), in seconds
     worms-gui --no-watchers        no SSH watchers on the platform VMs: the host's view only
-    worms-gui --tab jobs           start on a tab: vms, jobs, rounds, services, components, tasks, log
+    worms-gui --tab teams          start on a tab: platform, teams, jobs, rounds, services, components,
+                                   tasks, log (vms: platform)
 
-A hidden --demo[=production] draws made-up records (some 40 VMs of every kind, jobs, rounds, tasks)
-with actions.py's own menus, whose commands run nothing (they change the made-up records): the screen
-and the menus without a platform, to try them and to check them.
+A hidden --demo[=production] draws made-up records (some 40 VMs of every kind, jobs, rounds, tasks,
+devbox checks and a round's check job) with actions.py's own menus, whose commands run nothing (they
+change the made-up records; a devbox check makes its results up): the screen and the menus without a
+platform, to try them and to check them.
 """
 
 from __future__ import annotations
@@ -26,8 +30,8 @@ import time
 from collections import deque
 from pathlib import Path
 
-from worms_cli.gui import actions, ui
-from worms_cli.gui.state import trusted
+from worms_cli.gui import actions, checks, ui
+from worms_cli.gui.state import CHECKS, group, trusted
 
 MANAGE = str(Path(__file__).resolve().parents[2] / "manage.py")  # this checkout's CLI: the GUI's own
 
@@ -36,10 +40,14 @@ def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="worms-gui", description="An htop-like, interactive dashboard of the WORMS platform: "
                                 "every VM, job, round, service and component, live; the CLI's commands on the marked "
                                 "ones. `?` in it lists the keys.")  # fmt: skip
-    p.add_argument("--dry-run", action="store_true", help="every action is shown, not run")
+    p.add_argument("--dry-run", action="store_true", help="every action is shown, not run; the devbox checks (`worms check "
+                   "--json`, read-only: they change nothing) still run, by themselves too (--no-auto-check: only on c, C)")  # fmt: skip
+    p.add_argument("--no-auto-check", action="store_true", help="the Teams tab checks a devbox only on c or C, not by itself "
+                   "when the cursor rests on a team's VM")  # fmt: skip
     p.add_argument("--interval", type=float, default=2.0, metavar="SECONDS", help="the base refresh (the Proxmox API), default 2")
     p.add_argument("--no-watchers", action="store_true", help="no SSH watchers on the platform VMs (the host's view only)")
-    p.add_argument("--tab", choices=ui.TAB_NAMES, default="vms", help="the tab to start on (default vms)")
+    p.add_argument("--tab", choices=(*ui.TAB_NAMES, *ui.TAB_ALIASES), default="platform",
+                   help="the tab to start on (default platform; vms: platform)")
     p.add_argument("--demo", nargs="?", const="development", choices=("development", "production"), help=argparse.SUPPRESS)
     return p
 
@@ -105,20 +113,26 @@ class Live:
 
     def __init__(self, args):
         from worms_cli.config import Config
-        from worms_cli.gui import actions, collect, state
+        from worms_cli.gui import actions, checks, collect, state
 
-        self.dry_run, self.watchers = args.dry_run, not args.no_watchers
+        self.dry_run, self.watchers, self.auto_checks = args.dry_run, not args.no_watchers, not args.no_auto_check
         self.state, self.actions = state, actions
         self.store = state.Store()
         # The runner first: its commands get the environment as it is now (main's locale in it), not the
         # database settings that the database collector's Django setup puts into this process's.
         self.runner = actions.Runner(self.store, dry_run=args.dry_run, env=dict(os.environ))
+        # The devbox checks: the CLI's, read-only; an every-team run's timeout grows with the teams.
+        self.checks = checks.Checks(self.store, checks.CliCheck(self.runner.env, lambda: len(self.store.get("teams") or {})))
         self.collectors = collect.Collectors(Config.load(), self.store, interval=args.interval, watchers=self.watchers)
 
     def begin(self):
-        self.store.log("worms-gui started" + (" with --dry-run: no action runs (the panes' `worms show` and the watchers "
-                                              "still read)" if self.dry_run else "")
-                       + ("" if self.watchers else "; --no-watchers"))  # fmt: skip
+        said = self.store.say if self.dry_run and self.auto_checks else self.store.log
+        said("worms-gui started" + (" with --dry-run: no action runs; the panes' `worms show`, the watchers and the devbox "
+                                    "checks still read (a check runs as root on a team's VMs when the cursor rests on one: "
+                                    "--no-auto-check for none)" if self.dry_run else "")
+             + ("" if self.watchers else "; --no-watchers") + ("" if self.auto_checks else "; --no-auto-check"),
+             "warn" if self.dry_run and self.auto_checks else "info")  # fmt: skip
+        self.checks.start()
         self.collectors.start()
 
     def stderr(self):
@@ -140,6 +154,11 @@ class Live:
 
     def foreground(self, actions) -> int:
         return self.runner.foreground(actions)
+
+    def check(self, slugs, auto=False) -> str:
+        """A devbox check of these teams ([] = every team), queued: `worms check --json` changes nothing, so it
+        runs with --dry-run too. auto: the cursor's, not asked for (checks.Checks.want)."""
+        return self.checks.want(slugs, auto=auto)
 
     def task_signal(self, task_id, what):
         """cancel (Ctrl-C, then SIGTERM), pause (SIGSTOP), resume (SIGCONT): the runner's."""
@@ -163,6 +182,7 @@ class Live:
 
     def stop(self):
         self.runner.shutdown()  # what runs or is paused: Ctrl-C (a paused one continued first)
+        self.checks.stop()  # a `worms check` under way: Ctrl-C, then SIGTERM, SIGKILL
         self.collectors.stop()
 
 
@@ -291,7 +311,8 @@ class DemoStore:
         self._log("error", "watchers: monitor: ssh: connect to host 10.10.0.13 port 22: Connection timed out")
         self._log("warn", "scoring: sandbox-api failed (its watcher)")
         known = {slug: {"name": team, "label": f"{team} ({slug})", "handle": team} for slug, team in TEAMS}
-        world = {"host": host, "vms": vms, "jobs": jobs, "rounds": rounds, "run": run, "components": comps, "teams": known}
+        world = {"host": host, "vms": vms, "jobs": jobs, "rounds": rounds, "run": run, "components": comps, "teams": known,
+                 "checks": copy.deepcopy(CHECKS), "sandbox_check": demo_sandbox_check(vms, now)}  # fmt: skip
         self._add_task("vm restart dns", ["vm", "restart", "dns"], ["dns"], "done", ["stopping dns (114)", "starting dns (114)",
                        "dns: running"], 0, now - 900, locks=True)  # fmt: skip
         self._add_task("service restart scoring", ["service", "restart", "scoring"], ["scoring"], "failed",
@@ -315,7 +336,8 @@ class DemoStore:
             "vmid": vmid, "name": name, "node": "worms-dev", "pool": pool, "kind": KINDS.get(pool, pool),
             "team": "(every team)" if name == "devbox-ssh-gateway" else label, "team_slug": slug,
             "team_handle": team[1] if team else "",
-            "role": role, "status": status, "qmpstatus": status, "uptime": rnd.randint(3600, 18 * 86400) if running else 0,
+            "role": role, "group": group(name, pool), "status": status, "qmpstatus": status,
+            "uptime": rnd.randint(3600, 18 * 86400) if running else 0,
             "cpu_pct": rnd.uniform(0.5, 30) if up else 0.0, "maxcpu": cores,
             "mem": int(mb * rnd.uniform(0.3, 0.98)) << 20 if running else 0, "maxmem": mb << 20,
             "net_in_bps": rnd.uniform(0, 4e4) if up else 0, "net_out_bps": rnd.uniform(0, 2e4) if up else 0,
@@ -437,10 +459,22 @@ class DemoStore:
     def _log(self, level, text):
         self.log.append({"at": time.time(), "level": level, "text": text})
 
+    def set(self, name, value):
+        """As Store.set: the devbox checks (checks.Checks) write theirs here."""
+        with self.lock:
+            self.world[name] = copy.deepcopy(value)
+            self.version += 1
+
     def say(self, text, level="info"):
         with self.lock:
             self._log(level, text)
             self.status = {"at": time.time(), "level": level, "text": text}
+            self.version += 1
+
+    def note(self, text, level="info"):
+        """As Store.log (its `log` here is the lines): the Log tab only."""
+        with self.lock:
+            self._log(level, text)
             self.version += 1
 
     def _add_task(self, title, words, targets, state="waiting", lines=(), rc=None, started=None, locks=False) -> dict:
@@ -470,21 +504,156 @@ except KeyboardInterrupt:
 """
 
 
+# -- the demo's checks: made up, in the shape of `worms check --json`'s `checks` (worms_cli/validate.py) -------------
+
+DEMO_KEYS = {"t1": ["micha-pc 0a1b2c3d4e5f6071"], "t2": ["laptop 1f2e3d4c5b6a7980", "jonas-laptop 2b3c4d5e6f708192"],
+             "t3": ["fabian 3c4d5e6f708192a3", "anna 4d5e6f708192a3b4"], "t4": ["delta-ci 5e6f708192a3b4c5"]}  # fmt: skip
+DEMO_CHECK_SECONDS = 4.0  # how long a made-up check "runs"
+
+
+def demo_check(world: dict, slugs: list) -> dict:
+    """What `worms check <slugs> --json` gives as `checks`, made up from the demo's VMs: most of it fine, a few
+    faults to see (alpha's B resolves nothing, bravo's C lacks a key, charlie's C has no flag, delta is held)."""
+    from worms_cli.validate import CHECKS as ALL, GW_CHECKS, VM_CHECKS
+
+    by_name = {vm["name"]: vm for vm in world["vms"].values()}
+    out, stopped = [], []
+    for slug in slugs or [slug for slug, _ in TEAMS]:
+        team = (world.get("teams") or {}).get(slug) or {"name": "", "label": slug}
+        names = DEMO_KEYS.get(slug, [])
+        vms = {role: by_name.get(f"devbox-{slug}-{role}") for role in ("a", "b", "c", "gw")}
+        cells: dict = {check: {} for check in ALL}
+        for role, vm in vms.items():
+            mine = (GW_CHECKS if role == "gw" else (*VM_CHECKS, "login")) + ("firewall",)
+            for check in ALL:
+                if vm is None or check not in mine:
+                    cell = {"state": "n/a", "text": "—"}
+                elif check == "firewall":  # the CLI's: the VM's options and groups, not its NICs or the host's rules
+                    off = (vm.get("firewall") or {}).get("vm") is False
+                    cell = ({"state": "error", "text": "fail", "reason": "the firewall is off (`worms vm rebuild <team>`)"} if off
+                            else {"state": "ok", "text": "✓"})
+                elif vm["status"] != "running":
+                    cell = {"state": "stopped", "text": "off"}
+                    stopped += [vm["name"]] if check == "login" else []
+                else:
+                    cell = {"state": "ok", "text": "✓", "from_vm": check != "login"}
+                cells[check][role] = {"reason": "", "from_vm": False, **cell}
+            login = cells["login"][role]
+            if login["state"] == "ok":
+                login.update(text=f"✓ {len(names)}/{len(names)}", keys=len(names), reached=True, taken=list(names), missing=[])
+                if role == "a":
+                    login.update(gateway_taken=list(names), gateway_missing=[], forwarded=True)
+
+        def fault(check, role, state, text, reason, from_vm=True):
+            if cells[check][role]["state"] == "ok":
+                cells[check][role].update(state=state, text=text, reason=reason, from_vm=from_vm)
+
+        notes, activity = [], []
+        if slug == "t2":
+            fault("DNS", "b", "error", "fail", "no answer for apt-cache pypi.worms.internal (the private DNS, via the gateway; "
+                  "/etc/resolv.conf: nameserver 10.20.2.1)")  # fmt: skip
+            fault("apt", "b", "error", "fail", "E: Failed to fetch http://apt-cache.worms.internal:3142/deb.debian.org/debian/dists/"
+                  "trixie/InRelease  Temporary failure resolving 'apt-cache.worms.internal'")  # fmt: skip
+            fault("PyPI", "b", "error", "fail", "index http://pypi.worms.internal/root/pypi/+simple/: ERROR: Could not find a "
+                  "version that satisfies the requirement requests (from versions: none)")  # fmt: skip
+            activity.append({"kind": "upload", "id": 17, "state": "ok", "text": "newest dev upload 17 (11-21 17:40): runs: ran "
+                             "2026-11-21 17:46:02 to 2026-11-21 18:46:02 (`worms trace alpha`)"})  # fmt: skip
+        if slug == "t3" and cells["login"]["c"]["state"] == "ok":
+            cells["login"]["c"].update(state="error", text=f"1/{len(names)}", taken=names[:1], missing=names[1:],
+                                       reason=f"takes 1 of the team's {len(names)} key(s) as root (`worms key sync`)")
+            activity.append({"kind": "job", "id": 833, "state": "queued", "text": "job #833 devbox_reconfigure queued for 9 min: a "
+                             "job runs ahead: #832 deploy (alpha (t2))"})  # fmt: skip
+        if slug == "t1":
+            fault("flag", "c", "error", "fail", "no /etc/worms/flag")
+            fault("scoring", "a", "warn", "warn", "429: reached, but the team is over its rate limit right now")
+            activity.append({"kind": "job", "id": 812, "state": "failed", "text": "job #812 devbox_rebuild failed 14:02: "
+                             "ansible-playbook SetupDevbox.yml: exit 2 (UNREACHABLE: devbox-t1-gw) (`worms log 812`)"})  # fmt: skip
+        gw = vms["gw"]
+        if gw is not None and gw["status"] != "running":
+            notes.append({"state": "error", "text": f"its NAT gateway {gw['name']} is {gw['status']}: its VMs reach no service"})
+        out.append({"slug": slug, "name": team.get("name", ""), "label": team.get("label", slug),
+                    "keys": {"registered": len(names), "invalid": 0, "names": list(names)},
+                    "vms": {role: ({"name": vm["name"], "vmid": vm["vmid"], "status": vm["status"]} if vm else None)
+                            for role, vm in vms.items()},
+                    "checks": cells, "notes": notes, "activity": activity})  # fmt: skip
+    gateway = {"name": "devbox-ssh-gateway", "status": "running",
+               "lines": [{"state": "ok", "text": "OpenSSH's per-source penalties spare the teams' address 10.7.0.1"}]}
+    problems = sum(1 for team in out for roles in team["checks"].values() for cell in roles.values() if cell["state"] == "error")
+    problems += sum(1 for team in out for note in team["notes"] if note["state"] == "error")
+    return {"at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()), "ssh_gateway": gateway, "teams": out,
+            "stopped": stopped, "problems": problems}  # fmt: skip
+
+
+def demo_sandbox_check(vms: dict, now: float) -> dict:
+    """The round's newest `check` job of the run that built the sandbox, as the database collector gives it: made up."""
+    records = {}
+    for vm in vms.values():
+        if vm["pool"] != "sandbox":
+            continue
+        name, up = vm["name"], vm["status"] != "stopped"
+        rows = [["running", up, f"status: {'running' if up else 'stopped'}"], ["no-kvm", True, "its CPU must be x86-64-v2-AES"]]
+        if not up:
+            rows.append(["probe", False, "no answer (the job log on the host says why)"])
+        elif not name.endswith("-gw"):
+            rows += [["probe", True, ""], ["flag", True, ""], ["dns", True, ""], ["scoring", True, ""], ["logging", True, ""],
+                     ["apt", True, ""], ["pypi", name != "sb-db-01", "" if name != "sb-db-01" else "ERROR: Could not find a "
+                      "version that satisfies the requirement requests (from versions: none)"],
+                     ["time", True, "synchronised"], ["isolated", True, "none of proxmox, orchestrator, internet answered"],
+                     ["firewall", True, "6 connections as its rules say"]]  # fmt: skip
+        records[name] = rows
+    return {"run": 33, "round": "Round 1", "round_id": 2, "team": "alpha (t2)", "attempt": 2,
+            "prepare": {"id": 829, "state": "done", "finished_at": now - 420},
+            "check": {"id": 830, "state": "done", "started_at": now - 400, "finished_at": now - 330, "ok": False, "error": "",
+                      "vms": records, "host": [["host:worms-round-agent", True, "active"], ["sandbox:vms-registered", True, "8 VM(s)"]]}}  # fmt: skip
+
+
+class DemoCheck:
+    """--demo's runner for checks.Checks: made-up results after DEMO_CHECK_SECONDS; nothing runs."""
+
+    def __init__(self, store):
+        self.store, self.stopped = store, threading.Event()
+
+    def command(self, slugs) -> str:
+        return "worms check " + " ".join([*slugs, "--json"]) + "   (demo: made up)"
+
+    def __call__(self, slugs):
+        if self.stopped.wait(DEMO_CHECK_SECONDS):
+            return None, "stopped"
+        with self.store.lock:
+            world = {"vms": copy.deepcopy(self.store.world["vms"]), "teams": copy.deepcopy(self.store.world["teams"])}
+        return demo_check(world, slugs), ""
+
+    def stop(self):
+        self.stopped.set()
+
+
 class Demo:
     """--demo's backend: DemoStore's records and actions.menu's own menus; their commands change those
-    records and run nothing (a shell stands in for a login, made-up lines for the rest)."""
+    records and run nothing (a shell stands in for a login, made-up lines for the rest; a devbox check
+    makes its results up)."""
 
     def __init__(self, system, args):
-        self.dry_run, self.watchers = args.dry_run, not args.no_watchers
+        self.dry_run, self.watchers, self.auto_checks = args.dry_run, not args.no_watchers, not args.no_auto_check
         self.store = DemoStore(system, args.interval)
+        self.checks = checks.Checks(self.store, DemoCheck(self.store))
 
     def begin(self):
         self.store.start()
+        self.checks.start()
+        now = time.time()
+        with self.store.lock:
+            world = {"vms": copy.deepcopy(self.store.world["vms"]), "teams": copy.deepcopy(self.store.world["teams"])}
+        self.checks.remember(demo_check(world, ["t1"]), now - 70, 48.0)  # charlie: a minute ago
+        self.checks.remember(demo_check(world, ["t3"]), now - 540, 52.0)  # bravo: 9 min ago, older than 5 min
+
+    def check(self, slugs, auto=False):
+        return self.checks.want(slugs, auto=auto)
 
     def stderr(self):
         return sys.stderr
 
     def stop(self):
+        self.checks.stop()
         self.store.stop()
 
     def snapshot(self):

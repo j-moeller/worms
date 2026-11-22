@@ -6,7 +6,8 @@ changes the platform itself.
 The UI's API, which stays as it is:
 
     entries = menu(tab, items, snap)
-        tab     "vms" | "jobs" | "rounds" | "services" | "components" | "platform"
+        tab     "vms" (the Platform and the Teams tab) | "jobs" | "rounds" | "services" | "components"
+                | "platform" (the `i` menu: the whole platform)
         items   the marked rows as the snapshot has them (dicts), else the one under the cursor
                 ([] for "platform", which acts on the whole platform)
         ->      [Entry]: key (unique in its menu), label, prompt ("" or what to ask first: the command
@@ -14,10 +15,14 @@ The UI's API, which stays as it is:
                 not chosen), scope ("items": it acts on them; "agent", "platform": on that, whatever
                 is marked, so a prompt does not name the items)
     find(entries, key)             the entry of a key, or None: the tables' single keys (VMs `l` login,
-                                   `!` run, `L` log; Jobs `c` cancel, `p` pause the agent, `P` resume)
+                                   `!` run, `L` log, `c` check the team's devbox, `C` every team's;
+                                   Jobs `c` cancel, `p` pause the agent, `P` resume)
     actions = entry.make(answer)   [Action], `answer` being what was typed for its prompt ("" without
                                    one); Unavailable (its text is for the status line) when it cannot
-    Action                         title, argv, mode ("foreground" | "background"), confirm ("" or
+    Action                         title, argv, mode ("foreground" | "background" | "check": a devbox
+                                   check, `worms check <slugs> --json`, which the UI gives to the
+                                   backend's check(targets): gui/checks.py queues it; its targets are
+                                   the teams' slugs, [] every team), confirm ("" or
                                    the question to ask first, naming the targets), destructive,
                                    targets [names], typed ("" or the word to type to confirm: "yes"
                                    for a destructive action on production, and for `vm kill`),
@@ -45,8 +50,10 @@ Modes. Foreground: what asks, takes long or is the operator's own terminal (logi
 show, apply, vm reset, vm rebuild, vm kill, internet on|off); the CLI asks its own questions there,
 so it gets no --yes (apply shows its plan first). Background: what is quick and asks nothing (vm
 start|stop|restart, jobs cancel|pause|resume, round pause|resume|start|cancel, service restart),
-with --yes where the command takes it, as the GUI has asked. The commands that take the host's lock
-(manage.py's LOCKED) run one at a time: a second one waits ("waiting") instead of being refused.
+with --yes where the command takes it, as the GUI has asked. Check: `worms check --json`, read-only
+(it changes nothing on a VM, so --dry-run runs it too), one at a time, its answer kept per team
+(checks.py). The commands that take the host's lock (manage.py's LOCKED) run one at a time: a
+second one waits ("waiting") instead of being refused.
 Several targets: one command when the CLI takes several (`vm stop a b c`), else one each.
 """
 
@@ -95,7 +102,7 @@ class Unavailable(Exception):
 class Action:
     title: str
     argv: list[str]
-    mode: str  # "foreground" | "background"
+    mode: str  # "foreground" | "background" | "check"
     confirm: str = ""  # the question; "" = it changes nothing, nothing to ask
     destructive: bool = False
     targets: list[str] = field(default_factory=list)
@@ -210,6 +217,10 @@ def _vm_menu(vms: list[dict], snap: dict) -> list[Entry]:
         _entry("d", "show everything about it (`worms show`)", lambda _: _shows(vms),
                none or ("" if any(not (_rooted(vm) and vm in running) for vm in vms) else
                         "`worms show` logs in to a running VM (ssh true): not from here for a team VM or a gateway")),
+        _entry("c", "check its team's devbox now (`worms check <team> --json`, read-only)",
+               lambda _: _check(vms, snap), none or ("" if devbox else "no team's devbox VM marked or under the cursor")),
+        _entry("C", "check every team's devbox (`worms check --json`: one run, read-only)", lambda _: _check_all(),
+               scope="platform"),
         _entry("K", "kill: hard-stop EVERY VM on the host (`worms vm kill`)", lambda _: _kill(), scope="platform"),
     ]  # fmt: skip
 
@@ -333,6 +344,18 @@ def _shows(vms: list[dict]) -> list[Action]:
     note = f"not {_names(left)}: it would log in to a team VM or a gateway (ssh true)" if left else ""
     return [Action(f"show {vm['name']}", worms("show", vm["name"]), "foreground", "", False, [vm["name"]], note=note)
             for vm in shown]  # fmt: skip
+
+
+def _check(vms: list[dict], snap: dict) -> list[Action]:
+    """`worms check <slug>... --json` for the teams whose devbox VMs these are (by slug, as reset and
+    rebuild: _teams_of). worms-gui itself logs in to none of them: the CLI's check does what it does."""
+    teams = _teams_of(vms, snap)
+    slugs, labels = [slug for slug, _ in teams], [label for _, label in teams]
+    return [Action(f"check {_names(labels)}", worms("check", *slugs, "--json"), "check", "", False, slugs)]
+
+
+def _check_all() -> list[Action]:
+    return [Action("check every team", worms("check", "--json"), "check", "", False, [])]
 
 
 def _kill() -> list[Action]:

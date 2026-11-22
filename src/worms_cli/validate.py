@@ -27,6 +27,18 @@ problem once it has.
 
 The VMs are assumed rooted by their team: of what they return only the known answers are read, and
 shown escaped; a team can only misreport its own devbox.
+
+With --json the document has `checks` beside its sections, the same results as data (worms-gui's
+Teams tab reads them): `at` (UTC), `ssh_gateway` {name, status, lines [{state, text}]}, `teams`
+[{slug, name, label, keys {registered, invalid, names}, vms {a, b, c, gw: {name, vmid, status} |
+null}, checks {check: {role: cell}}, notes, activity}], `stopped`, `problems`. A cell is {state
+(ok | warn | error | stopped | unknown | n/a), text (as in the table), reason ("" or the line said
+under it), from_vm (the reason holds what the VM printed, or what ssh said of it, escaped: not the
+CLI's own words)}; a login cell also has keys (the
+team's registered), reached (A, B, C: its sshd answered the SSH gateway; None: not asked), taken and
+missing (the keys it takes as root, by name and fingerprint, as `worms team` shows them), and on A
+gateway_taken, gateway_missing (the SSH gateway's) and forwarded (it forwards the team to A). The
+flag is never in it: only whether /etc/worms/flag is there and well-formed.
 """
 
 from __future__ import annotations
@@ -36,7 +48,8 @@ import re
 import shlex
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from worms_cli import output
 from worms_cli.build import BuildError
@@ -217,14 +230,26 @@ CHECK_LINE = re.compile(r"@check (flag|scoring|logging|apt|PyPI|DNS|NAT) (ok|war
 STATE = {"ok": "ok", "warn": "warn", "fail": "error"}
 
 
+KEY_LISTS = ("taken", "missing", "gateway_taken", "gateway_missing")  # a login cell's keys, by number: named in the JSON
+
+
 @dataclass
 class Cell:
     state: str  # an output.STATUS_STYLE key: ok, warn, error, stopped, unknown, n/a
     text: str
     why: str = ""  # said under the table
+    extra: dict = field(default_factory=dict)  # --json only: from_vm; a login cell's keys (_login)
 
     def render(self) -> str:
         return output.status_cell(self.state, self.text)
+
+    def data(self, named) -> dict:
+        """The cell in --json's `checks`; `named(numbers)`: the keys' names."""
+        out = {"state": self.state, "text": self.text, "reason": self.why, "from_vm": bool(self.extra.get("from_vm"))}
+        for key, value in self.extra.items():
+            if key != "from_vm":
+                out[key] = named(value) if key in KEY_LISTS and value is not None else value
+        return out
 
 
 @dataclass
@@ -278,7 +303,7 @@ def parse_checks(text: str) -> dict[str, Cell]:
         if match and match.group(1) not in cells:
             name, state, why = match.groups()
             label = {"ok": "✓", "warn": "warn", "fail": "fail"}[state]  # the dot is ✗ already
-            cells[name] = Cell(STATE[state], label, escape(why)[:220] if state != "ok" else "")
+            cells[name] = Cell(STATE[state], label, escape(why)[:220] if state != "ok" else "", {"from_vm": True})
     return cells
 
 
@@ -316,6 +341,7 @@ class Validator:
         self.config = config
         self.catalogue = catalogue or Catalogue(config)
         self.remote = Remote(config, self.catalogue)
+        self.own: set[tuple[int, str]] = set()  # run()'s answers in the CLI's own words, not the VM's (--json: from_vm)
 
     def run(self, target: Target, script: str, root: bool, timeout: int) -> tuple[int, str]:
         """(exit code, stdout) of `script`, given to sh on its stdin, on `target`; (255, why) when it could not run."""
@@ -323,8 +349,10 @@ class Validator:
             argv, env = self.remote.argv(target, "sh -s", root)
             proc = subprocess.run(argv, env=env, input=script.encode(), capture_output=True, timeout=timeout)
         except subprocess.TimeoutExpired:
+            self.own.add((124, f"no answer in {timeout} s"))
             return 124, f"no answer in {timeout} s"
         except Exception as exc:  # noqa: BLE001  (no address in the inventories, the host out of reach)
+            self.own.add((255, str(exc)))
             return 255, str(exc)
         out = proc.stdout[:MAX_BYTES].decode(errors="replace")
         if proc.returncode == 255 and not out.strip():
@@ -361,6 +389,7 @@ class Validator:
         chosen = self.teams(names)
         if not chosen:
             print("No team with a devbox (or no current competition).")
+            output.capture_field("checks", {"at": _now(), "ssh_gateway": None, "teams": [], "stopped": [], "problems": 0})
             return 0
         vms = {vm["name"]: vm for vm in self.catalogue.vms()}
         hosts = self.catalogue.hosts()
@@ -405,7 +434,8 @@ class Validator:
         if checked:
             script = FIREWALL_SCRIPT.replace("@IDS@", " ".join(str(int(vm["vmid"])) for vm in checked)).replace(
                 "@NODE@", shlex.quote(str(checked[0].get("node", ""))))
-            jobs["@firewalls"] = (Target("host", None), script, False, 120)
+            # Two pvesh calls a VM, one after the other (some 3.5 s each on a busy host): more VMs, longer.
+            jobs["@firewalls"] = (Target("host", None), script, False, max(120, 30 + 8 * len(checked)))
 
         print(f"checking the devboxes of {len(chosen)} team(s): {', '.join(CHECKS)} on A, B, C and the NAT gateway; "
               "the SSH gateway; their jobs and uploads (a minute or two) ...", flush=True)  # fmt: skip
@@ -419,9 +449,12 @@ class Validator:
         if host is not None and "gateway" not in host.reached:
             host.errors.setdefault("gateway", escape(results["host"][1].strip())[:160] or "no answer")
         gateway = parse_probes(results["gateway"][1]) if "gateway" in results else None
-        failed = self._gateway(gateway_vm, results.get("gateway"), gateway, host)
+        said: list[dict] = []  # the SSH gateway's lines, for --json
+        failed = self._gateway(gateway_vm, results.get("gateway"), gateway, host, said)
         targets = permitted(gateway_text) if gateway_text is not None else None
         firewalls = parse_firewalls(results["@firewalls"][1]) if "@firewalls" in results else {}
+        labels = self._key_labels(chosen) if output.capturing() else {}
+        found = []
         for team, team_keys, invalid in chosen:
             cells = self._team(team, team_keys, invalid, vms, fabric, numbers.get(team.slug, []), results, host, gateway, targets, gateway_problem)
             for role in COLUMNS:
@@ -429,46 +462,59 @@ class Validator:
                 if vm is not None:
                     options, rules = firewalls.get(int(vm["vmid"]), (None, []))
                     cells[("firewall", role)] = firewall_cell(options, rules, "gw" if role == "gw" else "vm")
-            failed += self._print(team, team_keys, cells, vms)
-            self._activity(team)
+            notes: list[dict] = []
+            failed += self._print(team, team_keys, cells, vms, notes)
+            activity = self._activity(team)
+            found.append((team, team_keys, invalid, cells, notes, activity))
         stopped = [n for t, _, _ in chosen for n in (vm_name(t.slug, r) for r in ROLES) if n in vms and not running(n)]
         if stopped:
             print(output.color(f"stopped, not checked: {', '.join(stopped)}", "dim"))
+        if output.capturing():
+            vm = gateway_vm or {}
+            output.capture_field("checks", {
+                "at": _now(), "ssh_gateway": {"name": GATEWAY, "status": vm.get("status") or "missing", "lines": said},
+                "teams": [self._team_data(*entry, vms, keys, labels) for entry in found], "stopped": stopped, "problems": failed,
+            })  # fmt: skip
         if failed:
             print(output.status_cell("error", f"{failed} problem(s), each said above"))
             return 1
         print(output.status_cell("ok", "every checked devbox works as its team needs it"))
         return 0
 
-    def _gateway(self, vm, result, gateway: Probes | None, host: Probes | None) -> int:
-        """The SSH gateway's own lines; the number of problems."""
+    def _gateway(self, vm, result, gateway: Probes | None, host: Probes | None, said: list) -> int:
+        """The SSH gateway's own lines (each also into `said`, as {state, text}); the number of problems."""
+
+        def say(state: str, text: str) -> None:
+            print(output.status_cell(state, text))
+            said.append({"state": state, "text": text})
+
         print(output.heading(f"SSH gateway ({GATEWAY})"))
         if vm is None or vm.get("status") != "running":
             state = "no such VM" if vm is None else vm.get("status")
-            print(output.status_cell("error", f"{state}: no team can log in (`worms vm start ssh-gateway`)"))
+            say("error", f"{state}: no team can log in (`worms vm start ssh-gateway`)")
             return 1
         problems = 0
         if host is not None and "gateway" not in host.reached:
-            print(output.status_cell("error", f"sshd does not answer the host: {host.errors.get('gateway', 'no answer')}"))
+            say("error", f"sshd does not answer the host: {host.errors.get('gateway', 'no answer')}")
             problems += 1
         if gateway is None or not gateway.penalties:
             why = escape(result[1].strip())[:160] if result and result[0] else "sshd -T said nothing"
-            print(output.status_cell("unknown", f"could not read its sshd's settings: {why}"))
+            say("unknown", f"could not read its sshd's settings: {why}")
             return problems + 1
         count, last = gateway.drops
         refused = f"; it refused {count} connection(s) for a penalty in the last 24 h, the last at {last}" if count else ""
         address = self.teams_address()
         if gateway.penalties == "no":
-            print(output.status_cell("ok", "OpenSSH's per-source penalties are off" + refused))
+            say("ok", "OpenSSH's per-source penalties are off" + refused)
         elif exempted(address, gateway.exempt):
-            print(output.status_cell("ok", f"OpenSSH's per-source penalties spare the teams' address {address}" + refused))
+            say("ok", f"OpenSSH's per-source penalties spare the teams' address {address}" + refused)
         else:
             # A risk until it has refused someone; then the teams felt it.
-            print(output.status_cell("error" if count else "warn",
-                                     f"OpenSSH's per-source penalties are on, and every team comes from one address, the "
-                                     f"host's ({address or 'host_ips.devbox_ssh'}): a few failed logins by anyone shut all "
-                                     f"teams out, for up to 10 minutes{refused}. Off: `PerSourcePenalties no`, or "
-                                     f"`PerSourcePenaltyExemptList {address or '<it>'}`, in its sshd"))  # fmt: skip
+            say("error" if count else "warn",
+                f"OpenSSH's per-source penalties are on, and every team comes from one address, the "
+                f"host's ({address or 'host_ips.devbox_ssh'}): a few failed logins by anyone shut all "
+                f"teams out, for up to 10 minutes{refused}. Off: `PerSourcePenalties no`, or "
+                f"`PerSourcePenaltyExemptList {address or '<it>'}`, in its sshd")  # fmt: skip
             problems += bool(count)
         return problems
 
@@ -507,8 +553,9 @@ class Validator:
             code, out = results.get(gw["name"], (255, "not run"))
             found = parse_checks(out)
             why = f"could not run the checks: {escape(out.strip())[:160]}" if not found else ""
+            said = bool(why) and gw["name"] in results and (code, out) not in self.own  # the VM's (or ssh's) words, not the CLI's
             for check in GW_CHECKS:
-                cells[(check, "gw")] = found.get(check) or Cell("unknown", "unknown", why)
+                cells[(check, "gw")] = found.get(check) or Cell("unknown", "unknown", why, {"from_vm": said and bool(why)})
                 why = ""
         for role in ROLES:
             cells[("NAT", role)] = Cell("n/a", "—")
@@ -527,8 +574,10 @@ class Validator:
             # A VM the checks could not run on: said once, under its first check.
             why = (f"could not run the checks: {escape(out.strip())[:160]}" if not found and code else
                    f"no answer (the checks stopped, exit {code})")  # fmt: skip
+            # Its output: what the VM (or ssh to it) printed; not the CLI's own words (no answer in 300 s, no address).
+            said = not found and bool(code) and name in results and (code, out) not in self.own
             for check in VM_CHECKS:
-                cells[(check, role)] = found.get(check) or Cell("unknown", "unknown", why)
+                cells[(check, role)] = found.get(check) or Cell("unknown", "unknown", why, {"from_vm": said and bool(why)})
                 if not found:
                     why = ""
             cells[("login", role)] = self._login(team, role, n, mine, fabric, host, gateway, targets, gateway_problem, vms)
@@ -539,6 +588,28 @@ class Validator:
         return cells
 
     def _login(self, team, role, n, mine, fabric, host, gateway, targets, gateway_problem, vms) -> Cell:
+        """A, B or C's login cell, its `extra` for --json: whether its sshd answered the SSH gateway, the
+        team's keys it takes as root and those it does not (by number); on A the SSH gateway's too, and
+        whether the gateway forwards the team to A."""
+        cell = self._login_cell(team, role, n, mine, fabric, host, gateway, targets, gateway_problem, vms)
+        tag, mine = f"{team.slug}-{role}", set(mine)
+        extra: dict = {"keys": n, "reached": None, "taken": None, "missing": []}
+        if gateway is not None and (team.slug, role) in fabric:
+            extra["reached"] = tag in gateway.reached
+            if extra["reached"]:
+                taken = gateway.accepts.get(tag, set()) & mine
+                extra["taken"], extra["missing"] = sorted(taken), sorted(mine - taken)
+        if role == "a":
+            extra.update(gateway_taken=None, gateway_missing=[], forwarded=None)
+            if host is not None and "gateway" in host.reached:
+                taken = host.accepts.get("gateway", set()) & mine
+                extra["gateway_taken"], extra["gateway_missing"] = sorted(taken), sorted(mine - taken)
+            if targets is not None and (team.slug, "a") in fabric:
+                extra["forwarded"] = targets.get(team.slug, set()) == {f"{fabric[(team.slug, 'a')]}:22"}
+        cell.extra.update(extra)
+        return cell
+
+    def _login_cell(self, team, role, n, mine, fabric, host, gateway, targets, gateway_problem, vms) -> Cell:
         if not n:
             return Cell("error", "no key", "the team has no SSH key registered (its profile on the dashboard)") if role == "a" else Cell("n/a", "—")
         tag = f"{team.slug}-{role}"
@@ -547,7 +618,9 @@ class Validator:
         if gateway is None:
             return Cell("unknown", "unknown", "the SSH gateway is not running: not asked")
         if tag not in gateway.reached:
-            return Cell("error", "no answer", f"sshd does not answer the SSH gateway: {gateway.errors.get(tag, 'no answer')}")
+            # ssh's error there may quote the VM's sshd (its disconnect message): what the VM says.
+            return Cell("error", "no answer", f"sshd does not answer the SSH gateway: {gateway.errors.get(tag, 'no answer')}",
+                        {"from_vm": tag in gateway.errors})
         taken = gateway.accepts.get(tag, set()) & set(mine)
         whys, sync = [], False  # sync: what `worms key sync` puts right
         if len(taken) < n:
@@ -577,8 +650,9 @@ class Validator:
             return Cell("ok", f"✓ {text}")
         return Cell("error", text, "; ".join(whys) + (" (`worms key sync`)" if sync else ""))
 
-    def _print(self, team, team_keys, cells, vms) -> int:
-        """One team's table and what is wrong; the number of problems."""
+    def _print(self, team, team_keys, cells, vms, notes: list) -> int:
+        """One team's table and what is wrong; the number of problems. What is said beside the cells'
+        reasons goes into `notes` too ({state, text}, for --json)."""
         print()
         rows = [[check] + [cells.get((check, role), Cell("n/a", "—")).render() for role in COLUMNS] for check in CHECKS]
         print(output.table(rows, headers=[f"{team.label}, {len(team_keys)} key(s)", "A", "B", "C", "GW"]))
@@ -594,13 +668,49 @@ class Validator:
                     print(output.color(f"  {role.upper()} {check}: {cell.why}", style))
         nat = vms.get(vm_name(team.slug, "gw"))
         if nat is not None and nat.get("status") != "running":
-            print(output.color(f"  its NAT gateway {nat['name']} is {nat.get('status')}: its VMs reach no service", "red"))
+            text = f"its NAT gateway {nat['name']} is {nat.get('status')}: its VMs reach no service"
+            print(output.color(f"  {text}", "red"))
+            notes.append({"state": "error", "text": text})
             problems += 1
         return problems
 
-    def _activity(self, team) -> None:
+    def _key_labels(self, chosen) -> dict[str, str]:
+        """{canonical key: `name fingerprint`} of these teams' keys, as `worms team` names them: the name the
+        team gave it (escaped, on one line), the first 16 hex digits of its fingerprint."""
+        from core.models.devbox import DevboxSSHKey
+
+        ids = [int(team.slug[1:]) for team, _, _ in chosen if team.slug[1:].isdigit()]
+        out = {}
+        for name, text in DevboxSSHKey.objects.filter(team_id__in=ids).order_by("id").values_list("name", "public_key"):
+            key = canonical(text)
+            if key and key not in out:
+                out[key] = f"{escape(' '.join(str(name).split()))[:40] or '(no name)'} {DevboxSSHKey.fingerprint(key)[:16]}"
+        return out
+
+    @staticmethod
+    def _team_data(team, team_keys, invalid, cells, notes, activity, vms, keys, labels) -> dict:
+        """One team in --json's `checks`."""
+
+        def named(numbers):
+            return [labels.get(keys[i - 1], f"key {i}") if 0 < i <= len(keys) else f"key {i}" for i in numbers]
+
+        machines = {}
+        for role in COLUMNS:
+            vm = vms.get(vm_name(team.slug, role))
+            machines[role] = {"name": vm["name"], "vmid": vm.get("vmid"), "status": vm.get("status")} if vm else None
+        return {
+            "slug": team.slug, "name": team.name, "label": team.label,
+            "keys": {"registered": len(team_keys), "invalid": invalid, "names": [labels.get(key, "?") for key in team_keys]},
+            "vms": machines,
+            "checks": {check: {role: cells.get((check, role), Cell("n/a", "—")).data(named) for role in COLUMNS} for check in CHECKS},
+            "notes": notes, "activity": activity,
+        }  # fmt: skip
+
+    def _activity(self, team) -> list[dict]:
         """Under a team's table: its devbox jobs now (queued: why), those failed in 24 h, and where its
-        newest dev upload is (worms_cli/trace.py)."""
+        newest dev upload is (worms_cli/trace.py). The same lines as data, for --json: [{kind (job |
+        upload), id, state (a job's: queued, running, failed; an upload's step: ok, run, todo, wait,
+        error), text}]."""
         from datetime import timedelta
 
         from core.models.rounds import HostJob
@@ -614,7 +724,13 @@ class Validator:
 
         db_team = DbTeam.objects.filter(id=int(team.slug[1:])).first() if team.slug[1:].isdigit() else None
         if db_team is None:
-            return
+            return []
+        lines: list[dict] = []
+
+        def say(kind: str, number: int, state: str, text: str, style: str) -> None:
+            print(output.color(f"  {text}", style))
+            lines.append({"kind": kind, "id": number, "state": state, "text": text})
+
         now = timezone.now()
         found = HostJob.objects.filter(params__team_uuid=str(db_team.uuid)).filter(
             Q(state__in=["queued", "running"]) | Q(state="failed", finished_at__gte=now - timedelta(hours=24))).order_by("id")
@@ -623,23 +739,29 @@ class Validator:
             if job.state == "queued":
                 host = host or host_jobs.host_state(self.remote.session)
                 why = "; ".join(host_jobs.queue_reasons(job, host)) or "about to start"
-                print(output.color(f"  job #{job.id} {job.kind} queued for "
-                                   f"{host_jobs._ago((now - job.requested_at).total_seconds())}: {why}", "yellow"))
+                say("job", job.id, job.state, f"job #{job.id} {job.kind} queued for "
+                    f"{host_jobs._ago((now - job.requested_at).total_seconds())}: {why}", "yellow")
             elif job.state == "running":
-                print(output.color(f"  job #{job.id} {job.kind} running for "
-                                   f"{host_jobs._ago((now - (job.started_at or job.requested_at)).total_seconds())} "
-                                   f"(`worms log {job.id} -f`)", "dim"))
+                say("job", job.id, job.state, f"job #{job.id} {job.kind} running for "
+                    f"{host_jobs._ago((now - (job.started_at or job.requested_at)).total_seconds())} "
+                    f"(`worms log {job.id} -f`)", "dim")
             else:
-                print(output.color(f"  job #{job.id} {job.kind} failed {job.finished_at:%H:%M}: {(job.error or '?')[:200]} "
-                                   f"(`worms log {job.id}`)", "yellow"))
+                say("job", job.id, job.state, f"job #{job.id} {job.kind} failed {job.finished_at:%H:%M}: {(job.error or '?')[:200]} "
+                    f"(`worms log {job.id}`)", "yellow")
         upload = (Upload.objects.select_related("devbox_run__rebuild_job", "devbox_run__deploy_job")
                   .filter(team=db_team, devbox=True).order_by("-created_at", "-id").first())  # fmt: skip
         if upload is not None:
             links = trace.chain(self.remote.session, upload)
             state, link, text = next((link for link in links if link[0] != "ok"), links[-1])
             style = {"ok": "dim", "run": "dim", "todo": "dim", "wait": "yellow", "error": "yellow"}[state]
-            print(output.color(f"  newest dev upload {upload.id} ({upload.created_at:%m-%d %H:%M}): {link}: {text} "
-                               f"(`worms trace {team.name or team.slug}`)", style))
+            say("upload", upload.id, state, f"newest dev upload {upload.id} ({upload.created_at:%m-%d %H:%M}): {link}: {text} "
+                f"(`worms trace {team.name or team.slug}`)", style)
+        return lines
+
+
+def _now() -> str:
+    """Now in UTC, as --json gives times: 2026-11-22T10:31:02+00:00."""
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def devbox(config, names) -> int:

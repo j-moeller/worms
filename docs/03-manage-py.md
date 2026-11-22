@@ -48,7 +48,7 @@ In both modes:
 - The grammar is git's: a few verbs to look (`status`, `show`, `log`, `check`, `trace`) and to reach a VM (`login`, `run`, `rsync`); `apply` and `destroy` for the platform as a whole; and a noun for each kind of thing that changes, with its verbs: `worms vm reset alpha`, `worms jobs pause`, `worms db backup`. A noun alone lists its things: `worms vm`, `worms jobs`, `worms round`, `worms team`, `worms key`, `worms user`, `worms db`, `worms service`, `worms secret` (`worms show <list>` too: `worms show jobs`).
 - Every command first prints `internet access: <state>` on stderr.
 - Results go to stdout; `error:`/`warning:` go to stderr.
-- <a id="json"></a>`--json` (on `status`, `show`, `check`, `trace`): what the command shows, as one JSON document on stdout instead: `{"command", "exit", "sections": [{"heading", "tables", "lines"}]}`, each table a list of rows keyed by its column headers (a table without headers: lists), colours and dots left out ([`output.py`](../src/worms_cli/output.py)). `worms show jobs --json | jq '.sections[0].tables[0][] | select(.State == "queued")'`; `worms trace alpha --json` gives each step as `{state, step, detail}`.
+- <a id="json"></a>`--json` (on `status`, `show`, `check`, `trace`): what the command shows, as one JSON document on stdout instead: `{"command", "exit", "sections": [{"heading", "tables", "lines"}]}`, each table a list of rows keyed by its column headers (a table without headers: lists), colours and dots left out ([`output.py`](../src/worms_cli/output.py)). `worms show jobs --json | jq '.sections[0].tables[0][] | select(.State == "queued")'`; `worms trace alpha --json` gives each step as `{state, step, detail}`. `worms check --json` adds a field `checks`, its results as data: per team, check and role (`a`, `b`, `c`, `gw`) each cell's `state` (ok, warn, error, stopped, unknown, n/a), `text` and `reason` (and `from_vm`: the reason holds what the VM, or ssh to it, printed, escaped; not the CLI's own words); a login cell also which of the team's keys the VM takes (by name and fingerprint) and whether it answered the SSH gateway; the team's jobs and upload; the SSH gateway's lines ([`validate.py`](../src/worms_cli/validate.py) has the shape). `worms check --json | jq '.checks.teams[] | {team: .label, flag: .checks.flag}'`.
 - Each tool call is echoed as `$ <cmd>  [locally | on root@host | in the agent's workspace]`.
 - <a id="lock"></a>**One change at a time.** A command that changes the platform (`apply`, `destroy`, `internet on|off`, `vm start|stop|restart|reset|rebuild`, `service restart`, `db restore|reset`, `key sync`, `step`) holds `/run/worms/worms.lock` on the host while it runs (from a laptop: `flock` on the host over SSH). A second one is refused, saying who holds it: pid, user, command, since when. Never `vm kill`, `jobs ...`, `round ...`: they work while a build runs. Not the round agent's own runs, and not a raw `ansible-playbook` or `tofu` ([`lock.py`](../src/worms_cli/lock.py)).
 - A command that changes something keeps its whole output, the tools' too, in a run log: `~/.worms/runs/<YYYYmmdd-HHMMSS>-<command>-<what>.log` on the machine it ran on (directory 0700, files 0600: Ansible's output can hold secrets; the newest 200 are kept, without colours). The log never stops or holds up a command: one that cannot be opened is a warning and the run goes on unlogged; one that cannot be written any more (a full disk) is closed, said once, and the output goes on to the terminal. It says where at its start, and again when it fails. `worms log run [N]` shows the newest (or N-th newest). Not in the round agent's workspace, whose jobs have their own logs; never for a command whose output is a secret (`user add`, `user password`) or a VM's (`run`, `login`) ([`runlog.py`](../src/worms_cli/runlog.py)).
@@ -287,23 +287,44 @@ curses, nothing to install). `?` in it lists every key.
 
 ```sh
 worms-gui                  # the platform this host (or WORMS_SSH's) runs
-worms-gui --dry-run        # every action is shown, none runs
+worms-gui --dry-run        # every action is shown, none runs (the devbox checks do: they change nothing)
+worms-gui --no-auto-check  # a devbox check only on c or C, never by itself
 worms-gui --no-watchers    # no SSH to the platform VMs: the host's view only
-worms-gui --tab jobs       # start on a tab: vms, jobs, rounds, services, components, tasks, log
+worms-gui --tab teams      # start on a tab: platform, teams, jobs, rounds, services, components, tasks, log
 ```
 
 - **Header:** the host's CPU, memory and memory pressure, the load, KSM and the ZFS ARC; the
   system (production in red), the internet window, the cluster and host firewalls, the watchdog's
   last run, the round agent (active, PAUSED), devboxes held, the round and the run under way.
-- **Tabs:** VMs, Jobs, Rounds, Services, Components, Tasks (its own commands' output), Log.
-  Sort (`<` `>`, F6, a click on a column's head), filter (`/`, `f` for quick filters), mark
-  (Space, `a` all shown, `u` none), Enter for a VM's or a job's details.
-- **VMs:** state, uptime, CPU, memory, network and disk rates (the Proxmox API), whether the
-  firewall is on (the VM's option, every NIC's `firewall=1` and the host's guest rules), the
-  `clean` snapshot, and what it is doing. A platform VM's activity comes from a watcher: one SSH
-  per VM running a small read-only loop (load, CPU, the busiest process, failed units, its
-  services). Team VMs and gateways are assumed rooted: never logged in to, only the host's view.
-  One GUI on a machine runs the watchers; a second one reads theirs.
+- **Tabs:** Platform, Teams, Jobs, Rounds, Services, Components, Tasks (its own commands'
+  output), Log. Sort (`<` `>`, F6, a click on a column's head), filter (`/`, `f` for quick
+  filters), mark (Space, `a` all shown, `u` none), Enter for a VM's or a job's details.
+- **Platform** (the platform's own VMs: infrastructure, services, the private internet, the
+  shared SSH gateway): state, uptime, CPU, memory, network and disk rates (the Proxmox API),
+  whether the firewall is on (the VM's option, every NIC's `firewall=1` and the host's guest
+  rules), the `clean` snapshot, and what it is doing. A platform VM's activity comes from a
+  watcher: one SSH per VM running a small read-only loop (load, CPU, the busiest process, failed
+  units, its services). One GUI on a machine runs the watchers; a second one reads theirs.
+- **Teams** (every team's devbox VMs A, B, C and its NAT gateway, by team; the round's sandbox
+  VMs after them, each by its name): state, uptime, CPU, memory, firewall, and what the checks
+  say: login (n/m of the team's keys), DNS, apt, PyPI, flag, scoring, logging, NAT, other (the
+  rest: `worms check`'s firewall verdict, a sandbox VM's other records), as ✓ ✗ ! ? —, with their
+  age; an old one (older than 5 minutes, or a VM of the team restarted since) keeps its colour,
+  dimmed. A devbox VM's are `worms check <team> --json`'s: when the cursor rests on one (or its
+  pane is open) and its team has no check younger than 5 minutes, or one of its VMs restarted
+  since (once it is up a minute), that runs in the background, one at a time, the others queued
+  (`checking… 12s`, `queued`; only the newest the cursor asked for waits); each team's result is
+  kept. `c` checks the marked VMs' teams now, `C` every team in one run; their end is said in the
+  status line. Even with `--dry-run` (they run as root on the team's VMs, and change nothing);
+  `--no-auto-check`: only on `c` and `C`. Its pane: the flag distributed, apt, PyPI and DNS
+  reachable, reachable from the SSH gateway, the team's SSH keys on it (which are missing),
+  scoring, logging, firewall (and the host's view when that is not on), the reasons, the team's
+  devbox jobs, when it was checked.
+  A sandbox VM's: what the newest `check` host job of the run that built the sandbox recorded (the
+  database); nothing is run for it. Team VMs and gateways are assumed rooted: worms-gui logs in to
+  none and runs nothing there; only `worms check` does what it does. What a VM printed is shown
+  escaped, on one line, after `the VM says:`; no flag or secret is shown. `--demo` makes the
+  checks up.
 - **Commands** are the CLI's own (`worms ...`), with its checks, lock and run log: `m` (F2) the
   menu for the marked VMs, jobs, rounds, services or components; `l` login and back, `!` run,
   `L` log; Jobs: cancel the marked queued ones, pause or resume the agent; Rounds: pause, resume,

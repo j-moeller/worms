@@ -4,7 +4,8 @@ output.
 
 With `--json` (capture_start, src/manage.py) nothing is drawn: what a command shows is gathered as
 it shows it, in sections (a heading starts one), each with its tables (rows keyed by the table's
-headers) and its other lines, and printed at the end as one JSON document (capture_result)."""
+headers) and its other lines, and printed at the end as one JSON document (capture_result). A
+command may add a field of its own beside them (capture_field: `worms check` gives `checks`)."""
 
 from __future__ import annotations
 
@@ -80,10 +81,17 @@ class Sink:
         return False
 
 
+def capture_field(name: str, value) -> None:
+    """--json: a field of the document beside its sections, the command's own structured results (plain
+    JSON values); nothing without --json. Never `command`, `exit` or `sections`."""
+    if _CAPTURE is not None and name not in ("command", "exit", "sections"):
+        _CAPTURE.setdefault("fields", {})[name] = value
+
+
 def capture_result(command: str, code: int) -> dict:
-    """The document: the command, its exit code, its sections (empty ones left out)."""
+    """The document: the command, its exit code, its sections (empty ones left out), its own fields."""
     sections = [s for s in _CAPTURE["sections"] if s["heading"] or s["tables"] or s["lines"]]
-    return {"command": command, "exit": code, "sections": sections}
+    return {"command": command, "exit": code, "sections": sections, **_CAPTURE.get("fields", {})}
 
 
 def _strip(text: str) -> str:

@@ -14,7 +14,8 @@ waiting longer each time (up to MAX_BACKOFF). Everything here only reads.
               the guest firewall rules, every VM's firewall option and NICs, the `clean` snapshots,
               the host's lock; every SLOW s also the VM history and the deployed record
     db        (1.5 x, 3 s)   the host jobs, the rounds, the run under way (Django, as the CLI reads
-              them); the team map every TEAMS_EVERY s
+              them); the team map every TEAMS_EVERY s; with the jobs, the sandbox's newest `check`
+              job (its per-VM records)
     watchers  (2 s)   one long-lived SSH per running trusted VM (state.trusted: never a team's, a
               sandbox's or a gateway): one python3 there (WATCH) reads /proc itself and prints a
               line every 3 s; it starts no process but systemctl, every 30 s (auditd logs every
@@ -564,8 +565,9 @@ class Database(Collector):
                 fields["teams"] = self._teams()
                 self.teams_at = time.monotonic()
             jobs = self._jobs()
-            if jobs is not None:
+            if jobs is not None:  # read again: a check job may have ended
                 fields["jobs"] = jobs
+                fields["sandbox_check"] = self._sandbox_check()
             fields.update(self._rounds())
             self.failures = 0
         except Exception:
@@ -632,6 +634,43 @@ class Database(Collector):
                         "requested_at": _epoch(job.requested_at), "started_at": _epoch(job.started_at),
                         "heartbeat_at": _epoch(job.heartbeat_at), "finished_at": _epoch(job.finished_at),
                         "error": (job.error or "").strip(), "reasons": reasons})  # fmt: skip
+        return out
+
+    @staticmethod
+    def _sandbox_check() -> dict | None:
+        """The round's sandbox as its own `check` job saw it: the run that built it (the newest `prepare`
+        that started: it built the sandbox or rolled it back, with that run's flags) and that run's newest
+        `check` that started, its records by VM ("vm:<name>:<probe>"). Two queries; nothing is run on a
+        sandbox VM from here. The details are the round agent's records, which carry what each VM answered
+        (the UI shows them escaped)."""
+        from core.models.rounds import HostJob
+
+        # Started: one cancelled while it waited (`worms jobs cancel`) is failed, but never built anything.
+        prepare = (HostJob.objects.filter(kind=HostJob.Kind.PREPARE, run__isnull=False, started_at__isnull=False)
+                   .select_related("run__round", "run__team").order_by("-id").first())  # fmt: skip
+        if prepare is None:
+            return None
+        run = prepare.run
+        out = {"run": run.id, "round": run.round.name, "round_id": run.round_id, "team": run.team.name, "attempt": run.attempt,
+               "prepare": {"id": prepare.id, "state": prepare.state, "finished_at": _epoch(prepare.finished_at)}, "check": None}
+        check = HostJob.objects.filter(kind=HostJob.Kind.CHECK, run=run, started_at__isnull=False).order_by("-id").first()
+        if check is None:
+            return out
+        result = check.result if isinstance(check.result, dict) else {}
+        vms: dict[str, list] = {}
+        host = []
+        for row in result.get("checks") or []:
+            if not isinstance(row, dict):
+                continue
+            name, ok, detail = str(row.get("check", ""))[:120], bool(row.get("ok")), str(row.get("detail") or "")[:300]
+            parts = name.split(":", 2)
+            if len(parts) == 3 and parts[0] == "vm":
+                vms.setdefault(parts[1], []).append([parts[2], ok, detail])
+            else:
+                host.append([name, ok, detail])
+        out["check"] = {"id": check.id, "state": check.state, "started_at": _epoch(check.started_at),
+                        "finished_at": _epoch(check.finished_at), "ok": result.get("ok") if isinstance(result.get("ok"), bool) else None,
+                        "error": (check.error or "").strip()[:300], "vms": vms, "host": host}  # fmt: skip
         return out
 
     def _rounds(self) -> dict:

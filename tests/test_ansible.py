@@ -774,12 +774,21 @@ def test_synchronize_tasks_use_the_connections_ssh_args():
     (IdentityAgent=$WORMS_SSH_AUTH_SOCK); without use_ssh_args rsync falls back
     to default keys and fails with "Permission denied (publickey)". Every
     synchronize task must opt in, so a sync against a jumped host keeps working.
+
+    And every free-form shell or command task must split: Ansible parses its text for quotes and
+    Jinja when it loads the task, which for an included role is in the middle of a run. An
+    apostrophe in a shell comment stopped every VM's configuration on 2026-11-22.
     """
+    from ansible.parsing.splitter import split_args
+
     found = 0
     for path in (ANSIBLE / "roles").rglob("*.yml"):
         for task in yaml.safe_load(path.read_text()) or []:
             if not isinstance(task, dict):
                 continue
+            for module in ("ansible.builtin.shell", "shell", "ansible.builtin.command", "command"):
+                if isinstance(task.get(module), str):
+                    split_args(task[module])  # raises on an unbalanced quote or Jinja block
             sync = task.get("ansible.posix.synchronize") or task.get("synchronize")
             if isinstance(sync, dict):
                 found += 1

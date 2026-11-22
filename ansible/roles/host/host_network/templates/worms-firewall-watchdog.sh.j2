@@ -9,18 +9,24 @@
 # sandbox, so an uncontained one is stopped too (docs/07-security.md).
 # The same while internet access is allowed and any of them runs.
 # Run every {{ host_fw_watchdog_interval }} by worms-firewall-watchdog.timer.
-set -u
+set -u -o pipefail
 
 GUEST_TABLE="{{ host_fw_guest_table }}"
+# A VM whose firewall configuration changed this recently is looked at on the next run instead:
+# proxmox-firewall compiles a change after a few seconds, and during a sandbox build every VM's
+# rules are written just before it joins the pool (the host's own tables apply meanwhile).
+FW_SETTLE=30
 
+# Fails (non-zero) when the VMs cannot be listed: a watchdog that sees no VM must not pass.
 running_untrusted_vms() {
-  pvesh get /cluster/resources --type vm --output-format json \
-    | python3 -c "import json,sys; print(*(r['vmid'] for r in json.load(sys.stdin) if r.get('pool') in ('sandbox', 'devbox') and r.get('status') == 'running'))"
+  local listing
+  listing=$(timeout 30 pvesh get /cluster/resources --type vm --output-format json) || return 1
+  python3 -c "import json,sys; print(*(r['vmid'] for r in json.load(sys.stdin) if r.get('pool') in ('sandbox', 'devbox') and r.get('status') == 'running'))" <<<"$listing"
 }
 
 fail() {
   local vms
-  vms=$(running_untrusted_vms)
+  vms=$(running_untrusted_vms) || vms=""
   logger -t worms-firewall-watchdog -p auth.crit "$1; stopping sandbox/devbox VMs: ${vms:-none}"
   for vmid in $vms; do
     qm stop "$vmid" --skiplock 1 &
@@ -36,10 +42,17 @@ fail() {
   exit 1
 }
 
+if ! untrusted=$(running_untrusted_vms); then
+  # Nothing can be stopped without the list either: say so loudly, and the unit fails
+  # (`systemctl --failed`, the round agent's preflight).
+  logger -t worms-firewall-watchdog -p auth.crit "cannot list the VMs (pvesh /cluster/resources): nothing was checked"
+  exit 1
+fi
+
 # No team VM runs while internet access is allowed: through DNS and the caches it would have a
 # way out. Internet.yml refuses to open the window then, and the build shuts the devboxes down
 # for it; this stops one that was started anyway.
-if [ -e "{{ host_internet_flag }}" ] && [ -n "$(running_untrusted_vms)" ]; then
+if [ -e "{{ host_internet_flag }}" ] && [ -n "$untrusted" ]; then
   fail "internet access is allowed ({{ host_internet_flag }}) while sandbox/devbox VMs run"
 fi
 
@@ -48,7 +61,12 @@ nft list table inet worms >/dev/null 2>&1 || fail "host table inet worms missing
 nft list table bridge worms_bridge >/dev/null 2>&1 || fail "host table bridge worms_bridge missing"
 ruleset=$(nft list table $GUEST_TABLE 2>/dev/null) || fail "guest firewall table ($GUEST_TABLE) missing"
 
-for vmid in $(running_untrusted_vms); do
+now=$(date +%s)
+for vmid in $untrusted; do
+  changed=$(stat -c %Y "{{ host_fw_config_dir }}/$vmid.fw" 2>/dev/null || echo 0)
+  if [ $((now - changed)) -lt "$FW_SETTLE" ]; then
+    continue
+  fi
   grep -q "tap${vmid}i" <<<"$ruleset" || fail "no firewall rules for sandbox/devbox VM $vmid"
 done
 exit 0

@@ -404,7 +404,9 @@ def test_the_watchdog_stops_team_vms_while_internet_access_is_allowed(render, tm
     audit = tmp_path / "worms-audit"
     audit.write_text(f'#!/bin/sh\necho "$@" >> {tmp_path}/audit.log\n')
     audit.chmod(0o755)
-    script.write_text(render("ansible/roles/host/host_network", "worms-firewall-watchdog.sh.j2",
+    fw_dir = tmp_path / "firewall"
+    fw_dir.mkdir()
+    script.write_text(render("ansible/roles/host/host_network", "worms-firewall-watchdog.sh.j2", host_fw_config_dir=str(fw_dir),
                              host_internet_flag=str(flag_file), host_audit_command=str(audit)))  # fmt: skip
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -425,6 +427,23 @@ def test_the_watchdog_stops_team_vms_while_internet_access_is_allowed(render, tm
     assert [line for line in stopped if line] == (["stop 116 --skiplock 1"] if flag else [])
     recorded = (tmp_path / "audit.log").read_text() if (tmp_path / "audit.log").exists() else ""
     assert recorded.startswith("event watchdog_stopped") if flag else recorded == ""
+    if flag:
+        return
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    # A VM without rules is stopped, unless its firewall configuration has only just been written
+    # (proxmox-firewall compiles it a few seconds later): then it is looked at on the next run.
+    (bin_dir / "nft").write_text("#!/bin/sh\necho 'no rules for any VM'\n")
+    (fw_dir / "116.fw").write_text("[OPTIONS]\nenable: 1\n")
+    assert subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True).returncode == 0
+    assert not (tmp_path / "qm.log").exists()
+    os.utime(fw_dir / "116.fw", (0, 0))
+    assert subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True).returncode == 1
+    assert (tmp_path / "qm.log").read_text().split() == ["stop", "116", "--skiplock", "1"]
+    # VMs that cannot be listed: nothing was checked, so the unit fails (and stops nothing).
+    (tmp_path / "qm.log").unlink()
+    (bin_dir / "pvesh").write_text("#!/bin/sh\nexit 2\n")
+    assert subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True).returncode == 1
+    assert not (tmp_path / "qm.log").exists()
 
 
 @pytest.mark.parametrize(

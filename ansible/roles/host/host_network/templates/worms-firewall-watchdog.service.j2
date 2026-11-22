@@ -5,4 +5,6 @@ After=pve-cluster.service
 
 [Service]
 Type=oneshot
+# A hung pvesh or qm must not leave it `activating`, the timer never firing again.
+TimeoutStartSec=60
 ExecStart=/usr/local/sbin/worms-firewall-watchdog

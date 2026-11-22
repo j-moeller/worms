@@ -70,6 +70,8 @@ host_syslog_limits:
 # Watchdog: if the Proxmox firewall is not enforcing, hard-stop all sandbox VMs.
 host_fw_watchdog_interval: 15s
 host_fw_guest_table: "bridge proxmox-firewall-guests"
+# Each VM's firewall configuration (the watchdog waits until a change is a little older).
+host_fw_config_dir: /etc/pve/firewall
 
 # Traffic mirror for the monitor VM (worms-mirror, see the script header):
 # copies every frame entering a sandbox bridge (and the bridges listed here,

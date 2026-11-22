@@ -35,6 +35,15 @@ write_files:
       net.ipv6.conf.all.disable_ipv6 = 1
       net.ipv4.conf.all.rp_filter = 1
       net.ipv4.conf.default.rp_filter = 1
+      # Every connection from the sandbox to the services is tracked and NATed here; the
+      # kernel's default for 512 MB is about 4000 entries (80 MB at this size).
+      net.netfilter.nf_conntrack_max = 262144
+      net.netfilter.nf_conntrack_tcp_timeout_time_wait = 30
+
+  # Loaded before systemd-sysctl on every later boot (the settings above need it).
+  - path: /etc/modules-load.d/nf_conntrack.conf
+    content: |
+      nf_conntrack
 
   - path: /etc/nftables.conf
     permissions: "0644"
@@ -106,6 +115,7 @@ write_files:
 # installs nftables and loads the file above (untrusted_gateway) can run.
 runcmd:
   - systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+  - modprobe nf_conntrack
   - sysctl --system
   - systemctl daemon-reload
   - systemctl enable --now worms-llm-route.service || true

@@ -35,6 +35,8 @@ def worms(cluster, *args, check=True, python=False):
         WORMS_DB_PASSWORD=PASSWORD,
         WORMS_DB_SSLMODE="disable",
         NO_COLOR="1",
+        # Its run logs (~/.worms/runs) go with the test cluster, not into the operator's.
+        HOME=str(cluster.dir),
     )
     proc = subprocess.run(
         [sys.executable, *([] if python else [str(MANAGE)]), *args],

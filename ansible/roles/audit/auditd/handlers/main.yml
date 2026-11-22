@@ -7,3 +7,13 @@
   ansible.builtin.service:
     name: rsyslog
     state: restarted
+
+# auditd reads its configuration again on SIGHUP (its unit refuses a manual restart).
+- name: Reload the auditd configuration
+  ansible.builtin.command: systemctl kill --signal=HUP auditd
+  changed_when: true
+
+# SIGUSR2: resume logging, if it had suspended itself before (a no-op otherwise).
+- name: Resume auditd logging
+  ansible.builtin.command: systemctl kill --signal=USR2 auditd
+  changed_when: true

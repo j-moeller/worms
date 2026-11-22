@@ -69,7 +69,7 @@ Devbox traffic is not mirrored, so it is not recorded.
 |---|---|---|
 | syslog | `rsyslog` (imtcp :514) | Writes each sender's lines to `/var/log/remote/<sender ip>/audit.log`. The directory comes from the TCP peer, not from the message. Rotated daily, kept 30 days |
 | syslog | `worms-reply-route` | oneshot: a policy route so replies leave by the siem bridge |
-| every infrastructure and private-internet VM | `auditd`, `rsyslog` | auditd rules (exec, identity, config, persistence, modules) are forwarded over plain TCP, with a disk queue of up to 1 GB ([`audit/*`](../ansible/roles/audit/)) |
+| every infrastructure and private-internet VM | `auditd`, `rsyslog` | auditd rules (exec, identity, config, persistence, modules) in `/var/log/audit/audit.log` (5 × 8 MB); a disk running low or full is a warning in syslog, never a suspended auditd. rsyslog forwards the file over plain TCP, with a disk queue of up to 1 GB ([`audit/*`](../ansible/roles/audit/)) |
 | every platform VM (not the team VMs or their gateways) | `chrony` | The host's clock through KVM's PTP clock (`refclock PHC /dev/ptp0`, module `ptp_kvm`): no network source and no route to the host. Steps whenever 1 s off, e.g. after a snapshot rollback ([`timesync`](../ansible/roles/system/timesync/)) |
 | every platform VM | `logrotate.timer` | Hourly, not daily: rsyslog's files rotate past 100 MB whatever the week ([`log_limits`](../ansible/roles/system/log_limits/)) |
 

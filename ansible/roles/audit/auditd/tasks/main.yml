@@ -17,6 +17,20 @@
     mode: "0640"
   notify: Load audit rules
 
+# Debian's auditd.conf suspends logging when the disk runs low, full or failing, and never resumes
+# by itself: dns logged nothing from 2026-11-14 (its disk filled with DNS query logs, S8) to
+# 2026-11-22, while `auditctl -s` said enabled, lost 0. A warning in syslog instead, and auditd
+# goes on writing as soon as there is room again.
+- name: Keep auditd logging when the disk runs low
+  ansible.builtin.lineinfile:
+    path: /etc/audit/auditd.conf
+    regexp: "^\\s*{{ item.key }}\\s*="
+    line: "{{ item.key }} = {{ item.value }}"
+  loop: "{{ auditd_disk_actions | dict2items }}"
+  notify:
+    - Reload the auditd configuration
+    - Resume auditd logging
+
 - name: Forward the audit log to the log server
   ansible.builtin.template:
     src: 60-audit-forward.conf.j2

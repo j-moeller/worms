@@ -3,3 +3,10 @@
 # route; the host forwards tcp 514 to it (role host_network).
 auditd_log_server: "{{ infrastructure_ips.syslog }}"
 auditd_log_server_port: 514
+
+# auditd.conf: what it does when its disk runs low, full or fails (tasks/main.yml). Never SUSPEND.
+auditd_disk_actions:
+  space_left_action: SYSLOG
+  admin_space_left_action: SYSLOG
+  disk_full_action: SYSLOG
+  disk_error_action: SYSLOG

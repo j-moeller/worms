@@ -101,6 +101,10 @@ class RoundOne(Gameplan):
         self.c1_3.set_ssh_port(2222)
 
         self._noise_i = 0
+        # The user the worm arrives as on each host: a password login's user, else debian (keys,
+        # and A). Every file a host carries is that user's, in that user's home: a home is 0700,
+        # so the worm could read no other.
+        self._arrives_as = {}
 
         # == layers 0-2: the fixed opening (the brief) =========================================
 
@@ -119,24 +123,24 @@ class RoundOne(Gameplan):
         key_b2 = self.generate_ssh_key("id_b2", passphrase=b2_passphrase)
         self.add_private_ssh_key([self.b2], key_b2)
         self.add_public_ssh_key([self.c2_1, self.c2_2], key_b2)
-        self.b2.write_file("~/note.txt", f"ssh passphrase: {b2_passphrase}\n")
+        self._file(self.b2, "note.txt", f"ssh passphrase: {b2_passphrase}\n")
 
         # C1.2 -> D1.2.1 : telnet, with a username and password D1.2.1 accepts. The creds sit in
         # a note on C1.2, among decoy notes.
         d1_login = self.generate_login("operator")
-        self.add_telnet_login(self.d1_2_1, d1_login)
-        self.c1_2.write_file("~/notes-git.txt",
-                             "git notes\n- git reset --soft HEAD~1 keeps the changes staged.\n"
-                             "- git reflog finds commits you thought you lost.\n")
-        self.c1_2.write_file("~/notes-python.txt",
-                             "python idioms\n- dict.get(k, default) over try/except KeyError.\n"
-                             "- enumerate(xs, start=1) instead of a manual counter.\n")
-        self.c1_2.write_file("~/notes-networking.txt",
-                             "networking basics\n- /24 is 256 addresses, .1 is usually the gateway.\n"
-                             "- telnet is cleartext; prefer SSH where you can.\n")
-        self.c1_2.write_file("~/notes-d1.txt",
-                             f"reminder: telnet box D1.2.1 on the far subnet\n"
-                             f"  username: {d1_login.user}\n  password: {d1_login.pwd}\n")
+        self._password_login(self.d1_2_1, d1_login, telnet=True)
+        self._file(self.c1_2, "notes-git.txt",
+                   "git notes\n- git reset --soft HEAD~1 keeps the changes staged.\n"
+                   "- git reflog finds commits you thought you lost.\n")
+        self._file(self.c1_2, "notes-python.txt",
+                   "python idioms\n- dict.get(k, default) over try/except KeyError.\n"
+                   "- enumerate(xs, start=1) instead of a manual counter.\n")
+        self._file(self.c1_2, "notes-networking.txt",
+                   "networking basics\n- /24 is 256 addresses, .1 is usually the gateway.\n"
+                   "- telnet is cleartext; prefer SSH where you can.\n")
+        self._file(self.c1_2, "notes-d1.txt",
+                   f"reminder: telnet box D1.2.1 on the far subnet\n"
+                   f"  username: {d1_login.user}\n  password: {d1_login.pwd}\n")
         self._noise(self.d1_2_1)   # D1.2.1 is layer 3, so it gets decoy files like the others
 
         # == layers 3-4: the remaining eleven, by method and carrier ===========================
@@ -157,15 +161,15 @@ class RoundOne(Gameplan):
         # D1.2.1 -> E1.2.1 : SSH password, but the login lives in a KeePass vault on D1.2.1; the
         # vault's master password is on a sticky-note file beside it.
         courier = self.generate_login("courier")
-        self.add_ssh_pwd_login([self.e1_2_1], courier)
+        self._password_login(self.e1_2_1, courier)
         vault_master = self.generate_password(length=10)
-        self.d1_2_1.write_file("~/secrets.kdbx", KeePass(vault_master, [
+        self._file(self.d1_2_1, "secrets.kdbx", KeePass(vault_master, [
             Entry("archive node (ssh)", courier.user, courier.pwd, url="ssh://archive-node",
                   notes="ssh login for the next box over"),
         ]))
-        self.d1_2_1.write_file("~/vault-master.txt",
-                               "KeePass master password for secrets.kdbx (yes, we know we should not keep it here)\n"
-                               f"master: {vault_master}\n")
+        self._file(self.d1_2_1, "vault-master.txt",
+                   "KeePass master password for secrets.kdbx (yes, we know we should not keep it here)\n"
+                   f"master: {vault_master}\n")
         self._hop(self.d1_2_1, self.e1_2_1, 22)
         self._noise(self.e1_2_1)
 
@@ -231,18 +235,28 @@ class RoundOne(Gameplan):
         self.register_fw_rule(parent, FirewallRule(Allow, port, Outgoing, peers=[child]))
         self.register_fw_rule(child, FirewallRule(Allow, port, Incoming, peers=[parent]))
 
+    def _password_login(self, vm, login, telnet=False):
+        """`login` on `vm`, over telnet (port 23) or SSH: the worm arrives there as its user."""
+        (self.add_telnet_login if telnet else self.add_ssh_pwd_login)([vm], login)
+        self._arrives_as[vm] = login.user
+
+    def _file(self, vm, name, content, mode=0o644):
+        """~/`name` on `vm`, of the user the worm arrives as there (debian unless a password login
+        says otherwise), so that the worm can read it."""
+        vm.write_file(f"~/{name}", content, mode=mode, owner=self._arrives_as.get(vm, "debian"))
+
     def _key_hop(self, parent, child, name, carrier="zip"):
         """parent reaches child over SSH as the default user with a key child authorises; the
         private key is delivered on parent inside `carrier` (a zip holding the key file)."""
         key = self.generate_ssh_key(name)
         self.add_public_ssh_key([child], key)
         if carrier == "zip":
-            parent.write_file(f"~/{name}.zip", Zip({
+            self._file(parent, f"{name}.zip", Zip({
                 name: key.private,
                 "README.txt": f"private key for the next box; `unzip`, chmod 600 {name}, then ssh -i {name}\n",
             }))
         else:
-            parent.write_file(f"~/{name}", key.private, mode=0o600)
+            self._file(parent, name, key.private, mode=0o600)
         self._hop(parent, child, 22)
         self._noise(child)
 
@@ -253,11 +267,11 @@ class RoundOne(Gameplan):
         them make the note one more thing to find."""
         key = self.generate_ssh_key(name, passphrase=passphrase)
         self.add_public_ssh_key([child], key)
-        parent.write_file(f"~/{name}.zip", Zip({
+        self._file(parent, f"{name}.zip", Zip({
             name: key.private,
             "README.txt": f"encrypted private key for the next box; it needs a passphrase (see {note_name})\n",
         }))
-        parent.write_file(f"~/{note_name}", note_body)
+        self._file(parent, note_name, note_body)
         self._hop(parent, child, 22)
         self._noise(child)
 
@@ -278,29 +292,30 @@ class RoundOne(Gameplan):
         """parent reaches child by password -- SSH, or telnet (port 23) if `telnet` -- as `user`;
         the login is carried on parent in a .txt, a .docx, or a .txt inside a .zip."""
         login = self.generate_login(user)
-        (self.add_telnet_login if telnet else self.add_ssh_pwd_login)([child], login)
+        self._password_login(child, login, telnet=telnet)
         how = "telnet" if telnet else "ssh"
         if carrier == "docx":
-            parent.write_file("~/handover.docx", Docx([
+            self._file(parent, "handover.docx", Docx([
                 "Operations handover",
                 f"{how} access to {host}:",
                 f"username: {login.user}",
                 f"password: {login.pwd}",
             ], title="Handover"))
         elif carrier == "zip":
-            parent.write_file(f"~/creds-{user}.zip", Zip({
+            self._file(parent, f"creds-{user}.zip", Zip({
                 "creds.txt": f"{host}\n{how}\nuser: {login.user}\npassword: {login.pwd}\n",
             }))
         else:
-            parent.write_file(f"~/creds-{user}.txt", f"{host} ({how})\nuser: {login.user}\npassword: {login.pwd}\n")
+            self._file(parent, f"creds-{user}.txt", f"{host} ({how})\nuser: {login.user}\npassword: {login.pwd}\n")
         self._hop(parent, child, 23 if telnet else 22)
         self._noise(child)
 
     def _noise(self, vm, k=2):
-        """A few decoy files in `vm`'s home directory (layer 3 and deeper)."""
+        """A few decoy files in the home directory of the user the worm arrives as on `vm` (layer
+        3 and deeper)."""
         for j in range(k):
             name, body = self._NOISE[(self._noise_i + j) % len(self._NOISE)]
-            vm.write_file(f"~/{name}", body)
+            self._file(vm, name, body)
         self._noise_i += k
 
     # -- the run -------------------------------------------------------------------------------

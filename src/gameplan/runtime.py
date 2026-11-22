@@ -103,6 +103,8 @@ class Runner:
         self.cut = False  # the run's time was up before execute() returned
         # The first RoundError: the attempt fails even if execute() caught it and went on.
         self.failure = None
+        # VM name -> the last power action that worked on it (FreezeState: did the gameplan stop it?).
+        self.last_power: dict[str, str] = {}
 
     # -- the run -----------------------------------------------------------------
 
@@ -148,6 +150,13 @@ class Runner:
             self.failure = self.failure or error
             raise
 
+    def fail(self, message):
+        """An infrastructure failure the framework finds itself: kept as a backend step's is, so
+        that the attempt fails whatever execute() does with it. Returns the RoundError to raise."""
+        error = RoundError(message)
+        self.failure = self.failure or error
+        return error
+
     @property
     def strict(self):
         return self.started is None
@@ -187,6 +196,7 @@ class Runner:
             raise GameplanError("shutdown(timeout): whole seconds in [1, 600]")
         self._guard()
         self._do(self.backend.power, vm.name, action, timeout=timeout)
+        self.last_power[vm.name] = action
         self.backend.event({"start": "vm_started", "stop": "vm_stopped", "shutdown": "vm_stopped",
                             "suspend": "vm_suspended", "resume": "vm_resumed"}[action], vm.name, how=action)  # fmt: skip
 
@@ -240,8 +250,18 @@ class FreezeState:
             self.vm0.shutdown()
 
     On leaving, every VM still suspended is resumed, and each must be running again, or the
-    attempt fails (RoundError). VMs stopped inside the block stay stopped. VMs that were not
-    running when the block began are left alone."""
+    attempt fails (RoundError). VMs the gameplan stopped inside the block stay stopped. VMs that
+    were not running when the block began are left alone, and so is one that powered off as its
+    suspend came: the worm may power its VM off, and that is a note, not an error.
+
+    A suspended VM cannot power itself off. One found stopped that the gameplan did not stop
+    was stopped by the host (an OOM kill or a crash of its QEMU, an operator): the attempt fails
+    (RoundError), whatever execute() does with the error.
+
+    unfreeze(vm) of one of the VMs that is not frozen (not running when the block began, powered
+    off as the suspend came, or unfrozen already), or that the gameplan stopped in the block,
+    leaves it as it is, with a note. unfreeze() of a VM not given to FreezeState is a
+    GameplanError."""
 
     def __init__(self, vms):
         self.vms = [vms] if isinstance(vms, BasicVM) else list(vms)
@@ -250,15 +270,35 @@ class FreezeState:
         self.frozen: list = []
 
     def __enter__(self):
-        self.frozen = [vm for vm in self.vms if vm.status() == "running"]
-        for vm in self.frozen:
+        self.frozen = []
+        for vm in [vm for vm in self.vms if vm.status() == "running"]:
             vm.suspend()
+            # A suspend that met the guest's own poweroff leaves the VM stopped (the backend lets
+            # that pass once the worm runs, if the host's records say the guest did it): it is not
+            # frozen. Looked at at once, so that only a VM suspended for certain counts as frozen
+            # and a stop of it later is the host's. In the moment between, the conductor's backend
+            # judges: it watches what each power action left.
+            if vm.status() == "stopped":
+                vm._runtime("FreezeState").note(f"FreezeState: {vm.name} powered off as it was suspended: left as it is")
+            else:
+                self.frozen.append(vm)
         return self
 
     def unfreeze(self, vm):
+        """Let one VM run again now."""
+        if vm not in self.vms:
+            raise GameplanError(f"unfreeze({vm!r}): it is not one of the VMs given to this FreezeState")
+        runner = vm._runtime("unfreeze")
         if vm not in self.frozen:
-            raise GameplanError(f"unfreeze({vm!r}): it is not frozen here")
+            runner.note(f"unfreeze({vm.name}): it is not frozen (it was not running when the freeze began, it "
+                        "powered off as it was suspended, or it was unfrozen already): left as it is")  # fmt: skip
+            return
         self.frozen.remove(vm)
+        if vm.status() == "stopped":
+            if not _stopped_by_gameplan(runner, vm):
+                raise runner.fail(f"unfreeze({vm.name}): {_lost(vm)}")
+            runner.note(f"unfreeze({vm.name}): the gameplan stopped it: left as it is")
+            return
         vm.resume()
 
     def __exit__(self, exc_type, exc, tb):
@@ -266,19 +306,35 @@ class FreezeState:
         failures = []
         for vm in frozen:
             try:
-                if vm.status() == "paused":
+                state = vm.status()
+                if state == "paused":
                     vm.resume()
+                elif state == "stopped" and not _stopped_by_gameplan(vm._runtime("FreezeState"), vm):
+                    failures.append(_lost(vm))
             except (RoundError, GameplanError) as error:
                 failures.append(f"{vm.name}: {error}")
-        if exc_type is not None:
-            return False  # the block's own error wins (the VMs were resumed as far as possible)
-        for vm in frozen:
-            state = vm.status()
-            if state not in ("running", "stopped"):
-                failures.append(f"{vm.name} is {state} after the freeze")
+        if exc_type is None:
+            for vm in frozen:
+                state = vm.status()
+                if state not in ("running", "stopped"):
+                    failures.append(f"{vm.name} is {state} after the freeze")
         if failures:
-            raise RoundError("FreezeState: could not resume every VM: " + "; ".join(failures))
-        return False
+            # Kept even when the block raised (the block's own error is what propagates): a VM
+            # the host stopped fails the attempt whatever execute() catches.
+            error = frozen[0]._runtime("FreezeState").fail("FreezeState: could not resume every VM: " + "; ".join(failures))
+            if exc_type is None:
+                raise error
+        return False  # the block's own error, if any, goes on (the VMs were resumed as far as possible)
+
+
+def _stopped_by_gameplan(runner, vm):
+    """Whether execute() stopped a VM that FreezeState suspended: its last power action since."""
+    return runner.last_power.get(vm.name) in ("stop", "shutdown")
+
+
+def _lost(vm):
+    return (f"{vm.name} was stopped while it was suspended, and not by the gameplan: a suspended VM cannot power "
+            "itself off, so the host stopped it (an OOM kill or a crash of its QEMU, an operator)")
 
 
 # ---------------------------------------------------------------------------

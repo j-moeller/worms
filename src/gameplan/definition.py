@@ -755,6 +755,7 @@ class _Plan:
                 "firewall": [],
             })  # fmt: skip
             errors += self._login_problems(vm)
+            errors += self._unreachable_files(vm)
         by_name = {vm["name"]: vm for vm in vms}
         for targets, rule in self.rules:
             for vm in targets:
@@ -856,16 +857,51 @@ class _Plan:
             "sudo": list(settings.get("sudo") or []),
         }
 
+    def _login_users(self, vm):
+        """The users something logs in as on the VM: with a key (also with a TOTP code), or with a
+        password (SSH, telnet, FTP, su)."""
+        users = {login.user for login in self.logins.get(vm.name, [])}
+        return users | {user for op, on, _, user in self.setup if op == "public_key" and on is vm}
+
     def _login_problems(self, vm):
         """A user that something logs in as needs a shell: login(1), sshd, su and vsftpd's PAM
         all refuse nologin."""
-        with_login = {login.user for login in self.logins.get(vm.name, [])}
-        with_login |= {user for op, on, _, user in self.setup if op == "public_key" and on is vm}
+        with_login = self._login_users(vm)
         return [
             f"{vm.name}: {user} has a login, so its shell cannot be {NOLOGIN}"
             for user in self.users.get(vm.name, [])
             if user in with_login and self._account(vm, user)["shell"] == NOLOGIN
         ]
+
+    def _unreachable_files(self, vm):
+        """A file (or private key) in the home of a user nothing logs in as on the VM: a home is
+        0700 on the image, so no worm could read it. Not on the entry point (the worm starts
+        there as debian, with sudo), nor where root logs in (a key: sshd lets root in without a
+        password) or a user that logs in can sudo: debian (the image's rule, without a password),
+        a sudo rule, or the group sudo with a password the worm has. Root's files, and files
+        outside /home, are the gameplan's business."""
+        if vm is self.entrypoint:
+            return []
+        logins = self._login_users(vm)
+        passwords = {login.user for login in self.logins.get(vm.name, [])}
+        for user in logins:
+            account = self._account(vm, user)
+            if user in ("root", DEFAULT_USER) or account["sudo"] or ("sudo" in account["groups"] and user in passwords):
+                return []
+        placed = [(handle.path, handle.owner) for handle in self.files if handle.vm is vm]
+        placed += [(f"{_home(user)}/.ssh/{key.name}", user)
+                   for op, on, key, user in self.setup if op == "private_key" and on is vm]  # fmt: skip
+        homes = {DEFAULT_USER, *self.users.get(vm.name, [])}
+        out = []
+        for path, owner in placed:
+            parts = path.split("/")
+            # Whose home it is in, not whose file: only that user passes the home's 0700.
+            home = parts[2] if len(parts) > 3 and parts[1] == "home" and parts[2] in homes else None
+            if owner != "root" and home is not None and home not in logins:
+                out.append(f"{vm.name}: no worm can read {path}: it is in {home}'s home (0700), and nothing logs in "
+                           f"there as {home}, nor as a user with sudo (the users that log in: "
+                           f"{', '.join(sorted(logins)) or 'none'})")  # fmt: skip
+        return out
 
     def _vm_problems(self, vm):
         out = []
@@ -1200,7 +1236,9 @@ class Gameplan:
 
     def write_file(self, vm, path=None, content=None, mode=0o644, owner=DEFAULT_USER, at_reset=True):
         """In __init__: declare a file, written into the VM at the start of every run (before the
-        worm), or with at_reset=False only when execute() writes it. `~` is the owner's home.
+        worm), or with at_reset=False only when execute() writes it. `~` is the owner's home,
+        which only the owner can enter (0700): give the file to the user the worm arrives as on
+        that VM (the spec refuses a file in a home no login reaches).
 
         `content` is text, or a document, archive or vault (gameplan/content.py: Doc, Docx, Ods,
         Zip, KeePass, TotpExport), made on the host. Either may hold the run's secrets

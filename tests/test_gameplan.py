@@ -91,7 +91,41 @@ def test_every_gameplan_in_the_repository_is_valid_and_its_packages_are_cached()
     names = loader.available(GAMEPLANS)
     assert names
     for name in names:
-        assert validate(loader.load(GAMEPLANS, name).cls, packages=seeded) == [], name
+        cls = loader.load(GAMEPLANS, name).cls
+        assert validate(cls, packages=seeded) == [], name
+        # A file (or private key) in a user's home is in the home of a user that logs in on its VM
+        # (a home is 0700), unless the worm starts there, or root or a user with sudo logs in
+        # there (debian has sudo by the image). Root's files and paths outside the homes are the
+        # gameplan's business. From the spec alone.
+        spec = spec_of(cls)
+        user_of = {s["id"]: s.get("user") for s in spec["secrets"]}
+        for vm in [vm for vm in spec["vms"] if vm["name"] != spec["entrypoint"]]:
+            setup = [s for s in spec["setup"] if s["vm"] == vm["name"]]
+            passwords = {user_of[s["secret"]] for s in setup if s["op"] == "password"}
+            logins = passwords | {s["user"] for s in setup if s["op"] == "public_key"}
+            accounts = {user: vm["accounts"].get(user, {"sudo": [], "groups": []}) for user in logins}
+            if logins & {"root", "debian"} or any(a["sudo"] or ("sudo" in a["groups"] and u in passwords)
+                                                  for u, a in accounts.items()):  # fmt: skip
+                continue
+            placed = [(f["path"], f["owner"]) for f in spec["files"] if f["vm"] == vm["name"]]
+            placed += [(f"/home/{s['user']}/.ssh/{s['name']}", s["user"]) for s in setup if s["op"] == "private_key"]
+            for path, owner in placed:
+                home = path.split("/")[2] if path.startswith("/home/") else None
+                if owner != "root" and home in {"debian", *vm["users"]}:
+                    assert home in logins, (name, vm["name"], path)
+
+    # round_one: the worm arrives by password as these users, so the files there are theirs; on
+    # the hosts it reaches by key, and on A, it is debian.
+    spec = spec_of(loader.load(GAMEPLANS, "round_one.py").cls)
+    owners = {}
+    for f in spec["files"]:
+        owners.setdefault(f["vm"], set()).add(f["owner"])
+        assert f["path"].startswith(f"/home/{f['owner']}/"), f
+    assert {vm: users for vm, users in owners.items() if users != {"debian"}} == {
+        "sandbox-d1-1-1": {"webops"}, "sandbox-d1-2-1": {"operator"}, "sandbox-d2-1-1": {"kiosk"},
+        "sandbox-d2-2-1": {"scanner"}, "sandbox-e1-2-1": {"courier"}, "sandbox-e1-3-1": {"relay"},
+        "sandbox-e2-1-1": {"telemetry"}, "sandbox-e2-2-2": {"printer"},
+    }  # fmt: skip
 
 
 # -- describing --------------------------------------------------------------------------
@@ -177,6 +211,33 @@ def test_api_misuse_is_refused_where_it_happens():
                           (reserved_user, "a gameplan can create"), (runtime_in_init, "call it in execute")]:  # fmt: skip
         with pytest.raises(GameplanError, match=message):
             instantiate(type("Plan", (Gameplan,), {"__init__": init}))
+
+    # A file in the home of a user nothing logs in as on its VM is out of every worm's reach (a
+    # home is 0700): the spec refuses it, unless the worm starts there, root logs in there, or a
+    # user that logs in can sudo (debian can, by the image).
+    def far(owner="debian", path="~/next.txt", on="b", sudo=None, groups=None, key=None, key_user="debian"):
+        def init(self):
+            self.a, self.b = BasicVM(), BasicVM()
+            self.add_ssh_pwd_login(self.b, self.generate_login("webops"))
+            if sudo or groups:
+                self.add_user(self.b, "webops", sudo=sudo, groups=groups)
+            if key:
+                getattr(self, key)(self.b, self.generate_ssh_key(), user=key_user)
+            self.write_file(getattr(self, on), path, "x", owner=owner)
+            self.register_network([self.a, self.b])
+            self.set_worm_entrypoint(self.a)
+
+        return problems_of(init, lambda self: self.deploy_worm())
+
+    assert far() == ["sandbox-b: no worm can read /home/debian/next.txt: it is in debian's home (0700), and nothing "
+                     "logs in there as debian, nor as a user with sudo (the users that log in: webops)"]  # fmt: skip
+    assert far(owner="webops", path="/home/debian/next.txt") == far()  # whose home, not whose file
+    assert any("no worm can read /home/debian/.ssh/id_ed25519" in p for p in far(owner="webops", key="add_private_ssh_key"))
+    for reachable in (far(owner="webops"), far(on="a"), far(sudo=True), far(sudo=["/usr/bin/find"]), far(groups=["sudo"]),
+                      far(key="add_public_ssh_key"), far(key="add_ssh_key_login", key_user="root"),
+                      far(owner="webops", path="/home/debian/x", key="add_public_ssh_key", key_user="root"),
+                      far(owner="root", path="/home/debian/x"), far(path="/srv/x")):  # fmt: skip
+        assert reachable == []
 
 
 def test_secrets_belong_in_run_files_not_in_the_build():
@@ -284,13 +345,33 @@ def test_the_run_ends_on_time_even_if_execute_does_not():
 
 
 class Power(DryRun):
-    def __init__(self, vms, stuck=()):
+    """Power as the host does it: a stop or shutdown of a stopped VM does nothing
+    (orchestrator/rounds/power.py). stuck: resumed, but still paused. gone: the guest powers itself
+    off once the worm runs. racing: it does so as the suspend comes, and the suspend returns, as
+    the conductor's AttemptBackend does once the host's records say the guest did it (the round
+    agent's observe job). killed: the host stops it while it is suspended (an OOM kill of its
+    QEMU), during the next wait."""
+
+    def __init__(self, vms, stuck=(), gone=(), racing=(), killed=()):
         super().__init__(vms)
-        self.stuck = set(stuck)
+        self.stuck, self.gone, self.racing, self.killed = set(stuck), set(gone), set(racing), set(killed)
+
+    def deploy_worm(self, vm):
+        self.state.update(dict.fromkeys(self.gone, "stopped"))
+        return super().deploy_worm(vm)
+
+    def sleep(self, seconds):
+        self.state.update({vm: "stopped" for vm in self.killed if self.state[vm] == "paused"})
+        super().sleep(seconds)
 
     def power(self, vm, action, timeout=None):
         if action == "resume" and vm in self.stuck:
             return  # the API said yes, the VM stayed paused
+        if action in ("stop", "shutdown") and self.state[vm] == "stopped":
+            return
+        if action == "suspend" and vm in self.racing:
+            self.state[vm] = "stopped"
+            return
         super().power(vm, action, timeout)
 
 
@@ -312,6 +393,65 @@ def test_freezing_suspends_everything_and_checks_it_runs_again():
 
     with pytest.raises(RoundError, match="sandbox-b is paused"):
         Runner(instantiate(Freeze), Power(["sandbox-a", "sandbox-b"], stuck=["sandbox-b"])).run()
+
+    # The worm powered A off before the freeze, or as it came: A is not frozen, unfreeze(A) leaves
+    # it be, with a note, A's shutdown does nothing, and the rest runs on. Not an error: the worm
+    # may do that.
+    for case, before in (({"gone": ["sandbox-a"]}, []), ({"racing": ["sandbox-a"]}, ["FreezeState: sandbox-a powered off"])):
+        backend = Power(["sandbox-a", "sandbox-b"], **case)
+        notes = Runner(instantiate(Freeze), backend).run()
+        assert backend.state == {"sandbox-a": "stopped", "sandbox-b": "running"}, case
+        expected = [*before, "unfreeze(sandbox-a): it is not frozen"]
+        assert len(notes) == len(expected) and all(n.startswith(p) for n, p in zip(notes, expected)), notes
+        assert [s[1:] for s in backend.steps if s[1] in ("suspend", "resume", "shutdown")] == [
+            ("suspend", "sandbox-b"), ("resume", "sandbox-b")], case  # fmt: skip
+
+    # The gameplan stopped A in the block itself: a note, and the rest is resumed.
+    class StopFirst(Chain):
+        def execute(self):
+            self.deploy_worm()
+            with FreezeState(self.vms) as freeze:
+                self.a.stop()
+                freeze.unfreeze(self.a)
+
+    backend = Power(["sandbox-a", "sandbox-b"])
+    notes = Runner(instantiate(StopFirst), backend).run()
+    assert notes == ["unfreeze(sandbox-a): the gameplan stopped it: left as it is"]
+    assert backend.state == {"sandbox-a": "stopped", "sandbox-b": "running"}
+
+    # A suspended VM cannot power itself off: the host stopped A (an OOM kill). The attempt fails,
+    # at unfreeze() or on leaving the block, even though execute() swallows the error.
+    class Held(Chain):
+        unfreeze_a = True
+
+        def execute(self):
+            self.deploy_worm()
+            try:
+                with FreezeState(self.vms) as freeze:
+                    self.wait(30)
+                    if self.unfreeze_a:
+                        freeze.unfreeze(self.a)
+            except Exception:  # noqa: BLE001  (a gameplan cannot catch an error on our side)
+                pass
+            self.a.shutdown()
+
+    for plan in (Held, type("Left", (Held,), {"unfreeze_a": False})):
+        backend = Power(["sandbox-a", "sandbox-b"], killed=["sandbox-a"])
+        with pytest.raises(RoundError, match="sandbox-a was stopped while it was suspended, and not by the gameplan"):
+            Runner(instantiate(plan), backend).run()
+        assert ("shutdown", "sandbox-a") not in [s[1:] for s in backend.steps], plan
+
+    # A VM that was not given to the FreezeState is the gameplan's mistake.
+    class Elsewhere(Chain):
+        def execute(self):
+            self.deploy_worm()
+            with FreezeState(self.b) as freeze:
+                freeze.unfreeze(self.a)
+
+    backend = Power(["sandbox-a", "sandbox-b"])
+    with pytest.raises(GameplanError, match="not one of the VMs given"):
+        Runner(instantiate(Elsewhere), backend).run()
+    assert backend.state == {"sandbox-a": "running", "sandbox-b": "running"}  # resumed on the way out
 
 
 def test_files_are_written_by_handle_only():

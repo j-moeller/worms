@@ -234,6 +234,8 @@ IDs are cited in code comments. S = team VMs, D = dashboard, C = cross-cutting. 
 | — | Medium | SMT on (L1TF/MDS between hyperthreads); nesting off only after a reboot |
 | S13 | Medium | apt-cacher-ng's report page and cve-search's UI need no login. cve-search runs `cpu: host` with `/dev/kvm` and team VMs reach its :5000 |
 | S17 | Medium | A new team VM runs before its firewall options apply (the host's rules still apply) |
+| S31 | Medium | Under memory pressure Proxmox's autoballoon can shrink platform VMs to their floors, below what monitor (Zeek), devpi or cve-search use; scoring and logging go to 256 MB. The preflight warns when the VMs that run could outgrow the host; the floors are unchanged |
+| S32 | Low | A QEMU that aborts (SIGABRT) reads as the guest's own power-off: the host has no `systemd-coredump`, so an attempt whose VM crashed that way counts |
 | S20 | Medium | Team disks share the ZFS pool with the database disk, with no reservation |
 | S21 | Low–Medium | The SSH gateway's shared login slots (`MaxStartups`) can be exhausted from the internet. The host's rate rule limits only logging |
 | S22 | Medium | The host's SSH and 8006 accept any source unless the operator rules have `--source` |
@@ -267,6 +269,9 @@ IDs are cited in code comments. S = team VMs, D = dashboard, C = cross-cutting. 
   - F14/G8: gateways without nftables.
   - G5: Zeek stopped at log rotation.
   - S27 (2026-11-08): a failing gameplan job could copy gameplan content into the database.
+  - S29 (2026-11-22): a sandbox VM that died during a run (an OOM kill, a crash) went unnoticed and the attempt counted; every QEMU had `oom_score_adj` 0, so an OOM kill took the biggest VM (the database, cve-search). Now the conductor watches every sandbox VM and the gateway through the Proxmox API and asks the host why one stopped: only the guest's own power-off is the worm's doing, anything else fails the attempt. Team VMs' QEMUs get `oom_score_adj` 1000, and a preflight refuses a sandbox whose ceilings the host cannot hold ([5](05-live-environment.md#an-attempt)).
+  - S30 (2026-11-22): the firewall watchdog passed without checking anything when it could not list the VMs, had no timeout, and stopped every team VM during sandbox builds before proxmox-firewall had compiled their rules (2026-11-12, -13). Now it fails loudly, ends after 60 s, and checks a VM whose firewall configuration just changed on its next run.
+  - The sandbox gateway tracked every sandbox-to-services connection with the kernel's default for 512 MB (about 4000 entries); now 262 144.
   - S28 (2026-11-18): no VM's clock was synced. timesyncd asked Debian's fallback pool, which the private resolver refuses, and UDP 123 is not forwarded, so the private NTP server never synced either. After two weeks the platform VMs ran 39 s ahead of the host, whose clock stamps a worm's start. Now:
     - every platform VM's chrony reads the host's clock through KVM's PTP clock (`ptp_kvm`), a hypercall every KVM guest has. No VM gets a network path to the host for it;
     - the NTP VM does the same and serves the services network;

@@ -19,7 +19,7 @@ There is no part called a gameplanner or a VM resetter: planning is the conducto
 - **The dashboard** reaches the orchestrator over its API (a bearer token, compared in constant time; POST only) and never the host. The CLI does neither: it calls the same functions through Django on the controller (`worms vm reset alpha` is the dashboard's reset).
 - **Files on the host** that the agent keeps: the operator's pause (`/var/lib/worms/agent-paused`), the devboxes a round holds off (`held-devboxes.json`), a run's secrets (`/var/lib/worms/runs/<run>.json`).
 
-Job kinds ([`core/models/rounds.py`](../projects/dashboard/core/models/rounds.py)): `prepare`, `check`, `deploy`, `place_flags`, `remove_flags`, `write_file`, `read_file`, `teardown` (an attempt); `gameplans` (the host's view of the gameplan files); `hold_devboxes`, `release_devboxes` (a round that wants the devboxes off); `devbox_provision`, `devbox_rebuild`, `devbox_reconfigure`, `devbox_deploy` (the devboxes).
+Job kinds ([`core/models/rounds.py`](../projects/dashboard/core/models/rounds.py)): `prepare`, `check`, `deploy`, `place_flags`, `remove_flags`, `write_file`, `read_file`, `teardown` (an attempt); `preflight` (before an attempt), `observe` (while one runs: the host's view of its VMs); `gameplans` (the host's view of the gameplan files); `hold_devboxes`, `release_devboxes` (a round that wants the devboxes off); `devbox_provision`, `devbox_rebuild`, `devbox_reconfigure`, `devbox_deploy` (the devboxes).
 
 ## The conductor
 
@@ -31,7 +31,7 @@ Job kinds ([`core/models/rounds.py`](../projects/dashboard/core/models/rounds.py
 4. **Releasing the devboxes** of a round that is over (`release_devboxes`).
 5. **The next attempt**: the round already under way first, else the next round by its start; a round on hold (`worms round pause`) is passed over.
 6. **Pinning** the round on its first attempt: its gameplan must be chosen, valid on both copies (the orchestrator's and the host's, by SHA-256), and its check must pass at the round's per-team duration. The SHA-256, the version and the duration are written into the round's runs; the round asks for its devboxes off (`devboxes_off`). Otherwise the round waits, and is looked at again a minute later.
-7. A run without an upload is **skipped**; the devboxes are held off when the round wants it (`hold_devboxes`); then **the attempt**.
+7. A run without an upload is **skipped**. Otherwise, before the attempt: the devboxes held off again when the round wants it (`hold_devboxes`, every attempt), then a `preflight` job (the host, the services, memory for the sandbox, the gameplan's packages cached: [5](05-live-environment.md#an-attempt)). A failed hold or preflight starts nothing: it is tried again after 60 s, and after 5 in a row the round is put on hold. Then **the attempt**.
 8. A sandbox kept for a next run nobody has is destroyed.
 
 **Planning** ([`planner.py`](../projects/dashboard/orchestrator/rounds/planner.py)): one run per team (attempt 0), each with the team's latest upload made before the round's start (dev uploads do not count), in an order shuffled by the round's seed, with the round's per-team duration.
@@ -46,11 +46,11 @@ any of them ─▶ FAILED ─▶ the same team again, attempt + 1 (at most 4 att
 ```
 
 - **Preparing:** the gameplan loaded by its pinned SHA-256 (a mismatch fails the attempt); a `prepare` job: the sandbox built or rolled back (below), the run's secrets, files and flags; its topology, VMs and flag hashes recorded.
-- **Checking:** a `check` job; a failed check fails the attempt.
-- **Running:** the gameplan's `execute()` ([`src/gameplan/runtime.py`](../src/gameplan/runtime.py)) with the conductor as its back end: a `deploy` job puts the worm on its entry VM (the zip fetched from the dashboard, its hash checked) and arms it; the worm starts 15 s after (`worm_start_at`); then the gameplan's flag, file and power steps (power through the Proxmox API). The attempt ends at `worm_start_at` + the duration.
+- **Checking:** a `check` job: the host's firewall units and every VM's CPU, then from inside every sandbox VM before the worm: the flag, DNS, scoring and logging, apt, pypi, the clock, forbidden destinations unreachable, the gameplan's connections allowed and refused, the files ([5](05-live-environment.md#an-attempt)). A failed check fails the attempt.
+- **Running:** the gameplan's `execute()` ([`src/gameplan/runtime.py`](../src/gameplan/runtime.py)) with the conductor as its back end: a `deploy` job puts the worm on its entry VM (the zip fetched from the dashboard, its hash checked) and arms it; the worm starts 15 s after (`worm_start_at`); then the gameplan's flag, file and power steps (power through the Proxmox API). The attempt ends at `worm_start_at` + the duration. **The watch:** every 10 s each sandbox VM's and the gateway's state from the Proxmox API against what the gameplan left; a VM off that should run makes an `observe` job ask the host why. The guest's own power-off is the worm's doing (an event); an OOM kill, a crash, a Proxmox task, an unknown cause or the gateway down fail the attempt. Every 60 s an `observe` job for every VM logs the host's memory and holds off a devbox found running.
 - **Ending:** the sandbox VMs stopped, the monitor's capture drained for 120 s.
 - **Tearing down:** a `teardown` job: the sandbox kept (powered off) when another run of the round still has an upload, else destroyed.
-- **A failure** (a job that failed, or one silent for `job_timeout`, 30 min, measured from its last heartbeat): the run fails, its VMs stop, a teardown is queued, and the same team runs again while attempts are left (3 retries). A teardown that fails holds the queue: nothing starts on a sandbox in an unknown state.
+- **A failure** (a job that failed, or one silent for `job_timeout`, 30 min, measured from its last heartbeat): the run fails, its VMs stop, a teardown is queued, and the same team runs again while attempts are left (3 retries). A teardown that fails holds the queue: nothing starts on a sandbox in an unknown state. Two attempts in a row that fail before their deploy put the round on hold (a fault of ours that another try does not mend).
 - **On SIGTERM** (a restart) the conductor stops when idle; an attempt under way fails at its next wait, and the next conductor recovers it (step 2). Hence: no deploy during a round ([6](06-background-processes.md)).
 
 **Holds:** `worms round pause` and `worms round resume` set the round's `on_hold`; `worms round start` and `worms round cancel` move its start to now or skip its remaining attempts ([`control.py`](../src/worms_cli/control.py)); `worms jobs pause` stops the agent from taking jobs, rounds' too.
@@ -96,7 +96,7 @@ A queued or running rebuild of the same team is reused, not doubled. What a rese
 
 [`agent.py`](../scripts/round_agent/agent.py), [`handlers.py`](../scripts/round_agent/handlers.py):
 
-- **One job at a time**, taken with one `UPDATE … FOR UPDATE SKIP LOCKED`: devbox jobs after the others; none while the operator's pause file exists; no `devbox_*` job while a round holds the devboxes off (`hold_devboxes` and `release_devboxes` are named so that they are not caught by this).
+- **One job at a time**, taken with one `UPDATE … FOR UPDATE SKIP LOCKED`: `observe` before everything else (the conductor waits for it), devbox jobs after the others; none while the operator's pause file exists; no `devbox_*` job while a round holds the devboxes off (`hold_devboxes` and `release_devboxes` are named so that they are not caught by this).
 - A heartbeat every 30 s while a job runs; its whole output in `/var/log/worms/jobs/<uuid>.log` (and `latest.log`), kept 30 days.
 - Its Ansible runs in its own workspace, `/opt/worms`, with the host's Ansible ([9](09-vm-configuration.md)).
 - **New code:** between jobs, when a module it loaded changed on disk, it exits and systemd starts it again on the new code; the gameplan files are read afresh for every job.
@@ -110,6 +110,8 @@ A queued or running rebuild of the same team is reused, not doubled. What a rese
 | a job silent for | 1800 s, then the attempt fails | `ROUND_JOB_TIMEOUT` |
 | retries of a team's attempt | 3 | `ROUND_MAX_RETRIES` |
 | a waiting round looked at again | 60 s | `ROUND_GAMEPLAN_POLL` |
+| a failed preflight or devbox hold tried again; after so many the round on hold | 60 s; 5 | `ROUND_CONDUCTOR["preflight_retry"]`, `["preflight_attempts"]` |
+| the watch: the Proxmox API; an observe job; its answer within | 10 s; 60 s; 120 s | `ROUND_CONDUCTOR["watch_interval"]`, `["observe_interval"]`, `["observe_timeout"]` |
 | the gameplans checked again | 600 s | `ROUND_CONDUCTOR["gameplan_check_interval"]` |
 | captures' grace around a run | 120 s | `ROUND_CAPTURE_GRACE`, `--grace` |
 | the worm's fuse, the drain after | 15 s, 120 s | `ROUND_TIMING` ([`config/settings/base.py`](../projects/dashboard/config/settings/base.py)) |

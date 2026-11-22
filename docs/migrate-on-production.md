@@ -241,6 +241,33 @@ worms log conductor -f
 worms vm kill         # hard-stop every VM, destroy nothing: the only hard stop
 ```
 
+## Before the first round: checks (2026-11-22)
+
+The round's own checks run before every attempt now: a `preflight` job (the host, the services,
+memory, the gameplan's packages) and the `check` from inside every sandbox VM, and a run is watched
+while it lasts ([5](05-live-environment.md#an-attempt)). A failed preflight puts the round on hold
+and uses up no attempt. Still, look before the round starts, with the code that has them deployed
+(`worms apply --yes orchestrator dashboard round-agent gameplans host-network`, after the
+[Site.yml upgrade](03-manage-py.md#site-upgrade) if production does not run it yet):
+
+```sh
+worms status          # internet ● denied, firewall enabled, every host service active, no failed host job
+worms show gameplans  # round_one.py valid on the host and the orchestrator (a new version since 2026-11-22)
+worms run apt-cache --root -- "find /var/cache/apt-cacher-ng -name 'inetutils-telnetd_*.deb' -o -name 'inetutils-inetd_*.deb'"
+                      # both listed: round_one's telnet hosts install them
+free -m               # available, plus the ZFS ARC above its floor (below), at least 12 616 MB once the devboxes are off
+awk '/^(size|c_min) / {print $1, int($3 / 1048576), "MB"}' /proc/spl/kstat/zfs/arcstats
+pvesm status          # local-zfs-sandbox: at least 105 GB available (20 VMs and the gateway, thick disks)
+```
+
+- **The round's devboxes:** "Shut down every devbox while its attempts run" is on by default, and
+  migration `0023` set it on every round that had not begun.
+- **Memory:** round_one needs its 20 × 512 MB, the gateway's 512 MB, 40 MB per QEMU and 1024 MB to
+  spare: 12 616 MB. Each devbox VM a round holds frees about 0.5 GB. If an OOM kill happens anyway,
+  it takes a team VM (that attempt runs again), never the database.
+- **Following it:** `worms log conductor -f` shows the preflight, the watch (a VM the worm powered
+  off, one the host stopped) and the host's memory every minute.
+
 ## Rollback
 
 - **The code:** check out `9d1382a` (the last commit before the CLI merge), then

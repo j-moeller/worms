@@ -99,11 +99,16 @@ PENDING → PREPARING → CHECKING → RUNNING → ENDING → TEARING_DOWN → F
                  └──────────────── any failure ────────────────→ FAILED (+ retry)       SKIPPED
 ```
 
+**Before an attempt** (it is still PENDING; [`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py), `_ready`):
+1. A round that holds the devboxes: job `hold_devboxes` again, before every attempt (it shuts down any devbox that runs). If it fails, the attempt does not start.
+2. Job `preflight` ([`handlers.py`](../scripts/round_agent/handlers.py)), which changes nothing: the internet window closed; the host's firewall units and the cluster firewall; every service VM running and the scoring and logging APIs active; the devboxes off (when held); no sandbox VM running; **memory**: MemAvailable plus what the ZFS ARC gives back must hold every ceiling of the gameplan's VMs and the gateway, 40 MB per QEMU and a 1024 MB reserve (a rooted guest can touch all of its memory; `round_one` needs 12 616 MB); every package the gameplan installs cached in apt-cacher-ng. Warnings only: service VMs without a `clean` snapshot, and how far the VMs that run could still grow.
+3. A failed hold or preflight is logged as an error with every failed check, and tried again after 60 s. After 5 failures in a row the round is **put on hold** (`worms round resume <r>` once fixed). No attempt is used up.
+
 | State | What happens |
 |---|---|
 | PREPARING | Job `prepare` (below). The conductor stores the topology and the entry VM, creates the attempt's `virtual_machines` rows and records the flag hashes |
-| CHECKING | Job `check`: `proxmox-firewall`, `worms-host-firewall`, the watchdog timer and `worms-mirror` are active; the mirror drops; every VM is registered, running and has exactly `cpu: x86-64-v3` |
-| RUNNING | The gameplan's `execute()` runs against the real backend; then the rest of the duration is waited out |
+| CHECKING | Job `check`: `proxmox-firewall`, `worms-host-firewall`, the watchdog timer and `worms-mirror` are active; the mirror drops; every VM is registered, running and has exactly `cpu: x86-64-v3`. Then, from inside every sandbox VM at once, before the worm (the VMs are still ours; [`probe.py`](../scripts/round_agent/probe.py)): the flag is there; DNS; scoring and logging over HTTPS verified by the internal CA (a GET, never a submission); `apt-get update` through the cache; pypi; the clock synced; the internet, the dashboard, the database, the orchestrator and the devboxes unreachable; every connection the gameplan allows works and the ones it does not are refused; every file has its owner and mode. Every sandbox and devbox QEMU gets `oom_score_adj` 1000: an OOM kill takes a team VM, never the database |
+| RUNNING | The gameplan's `execute()` runs against the real backend; then the rest of the duration is waited out. The run is watched (below) |
 | ENDING | Every sandbox VM is hard-stopped; 120 s drain for late submissions |
 | TEARING_DOWN | Job `teardown`: clears the current-team file, deletes the run's secrets. If another attempt of the round follows, the sandbox is stopped and kept; otherwise it is destroyed |
 
@@ -131,7 +136,12 @@ The run's clock starts at `armed_at + 15 s` and ends after the round's duration 
 
 - **Before `deploy_worm()`.** Every guest step (flags, files) must succeed; any failure fails the attempt.
 - **After it.** A guest step that fails is recorded (staff only) and skipped: the worm is root on the VM and may have caused it.
-- **Always fatal.** Power and API failures fail the attempt, and so does a `RoundError` that `execute()` catches.
+- **Always fatal.** Power and API failures fail the attempt (API calls are tried 3 times first), and so does a `RoundError` that `execute()` catches.
+- **The watch.** Only the host's view of a sandbox VM counts once the worm is there: every VM is assumed rooted. Every sandbox VM and the gateway have an expected state (running after the check, then what each power action of the gameplan left). Every 10 s the conductor reads every VM's state from the Proxmox API. A VM not in its expected state: job `observe` asks the host why ([`host_state.py`](../scripts/round_agent/host_state.py): the kernel's and systemd's lines of that VM's QEMU, Proxmox's tasks).
+  - Stopped by its guest after the deploy (a power-off from inside, a guest that halted its QEMU): the worm's doing. An event (`vm_stopped`, how: guest), not an error; the VM stays stopped.
+  - Anything else fails the attempt, which runs again: an OOM kill, a crashed QEMU, a Proxmox task that stopped it (an operator, the firewall watchdog), a cause the host cannot tell, a VM running or paused that should not be, the gateway not running, an observe job not answered within 120 s. Raised so that `execute()` cannot catch it.
+  - Every 60 s, and after every start, an observe job for every VM: the host's memory goes to the orchestrator's journal (a warning below 2048 MB available), team VMs' QEMUs get their OOM priority again, and a devbox found running while the round holds them is logged as an error and held again.
+- **Twice in a row before the deploy.** An attempt that fails before its deploy job, right after another attempt of the round that did too, puts the round on hold: a fault of ours that trying again does not mend stops after two attempts, not after every team's four. A team's upload cannot trigger it (a zip that does not unpack fails at the deploy), nor can a conductor restart.
 - **What a failure does** ([`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py), `fail`):
   - The attempt becomes FAILED and its VMs stop.
   - If `attempt < max_retries` (3), attempt + 1 is created with the same upload, gameplan and duration. That makes **at most 4 attempts**, and only the failed team's run repeats.
@@ -167,6 +177,11 @@ Flags released late are credited for submissions up to 900 s earlier. The round 
 | `max_retries` | 3 | `ROUND_MAX_RETRIES` |
 | `gameplan_check_interval` | 600 s | — |
 | `gameplan_poll` (a round waiting for its gameplan) | 60 s | `ROUND_GAMEPLAN_POLL` |
+| `preflight_retry`, `preflight_attempts` (then the round on hold) | 60 s, 5 | — |
+| `watch_interval` (the Proxmox API), `observe_interval` (an observe job) | 10 s, 60 s | — |
+| `observe_timeout` (not answered: the attempt fails) | 120 s | — |
+| `memory_warn_mb` (the journal warns below it) | 2048 MB | — |
+| The round agent's `memory_reserve_mb` (preflight) | 1024 MB | — |
 
 ## Writing a gameplan
 
@@ -285,6 +300,7 @@ class RoundOne(Gameplan):                       # gameplans/round_one.py
 
 - **`vm.write_file(path, content, mode=0o644, owner="debian", at_reset=True)`** (or `self.write_file(vm, path, …)`) returns a `FileHandle`.
   - `~` is the owner's home. The owner is root, debian, or a user of that VM.
+  - **Give a file to the user the worm arrives as on that VM.** A home is 0700 on the image, so only its owner can read what is in it. The spec refuses a file or private key in the home of a user nothing logs in as, on a VM that is not the entry point, unless root, debian or a user with sudo logs in there. Root's files and paths outside `/home` are not checked.
   - With `at_reset=False` the file is written only when `execute()` calls `self.write_file(handle)`.
   - `content` is text or one of these ([`content.py`](../src/gameplan/content.py)). Any text in them, a zip's password and a vault's password can be secrets. The host makes the file when it writes it ([`render.py`](../src/gameplan/render.py)); it never passes the database.
 
@@ -338,7 +354,7 @@ self.files.write_file("~/backup.zip", Zip({"ops/id_ops": ops_key.private,
 | `write_file(handle)` | Writes a file declared with `at_reset=False` |
 | `vm.read_file(path)` → `FileState` | Whether the file is there (`exists`), its `size` and `sha256`, never its content (that would reach the database). Compare two reads to see a change. After the worm, a VM that cannot be read gives `error`. Readable: the files written with `write_file`, and paths declared in `__init__` with `vm.watch_file(path)`. The job names the file by number, so no path reaches the database |
 | `vm.start()`, `stop()`, `shutdown(timeout=60)`, `suspend()`, `resume()`, `status()` | Proxmox power, awaited |
-| `with FreezeState(vms) as fs: fs.unfreeze(vm)` | Suspends the running VMs, resumes them on exit |
+| `with FreezeState(vms) as fs: fs.unfreeze(vm)` | Suspends the running VMs, resumes them on exit. A VM the worm powered off is left as it is, with a note: not running when the block begins, powering off as its suspend comes, or stopped by the gameplan in the block (`unfreeze` of it does nothing). A suspended VM found stopped that the gameplan did not stop was stopped by the host: the attempt fails. Only `unfreeze` of a VM not given to it is a `GameplanError` |
 | `log(msg)`, `elapsed`, `remaining` | The orchestrator's journal; time |
 
 - **Starting state.** Every VM starts with a flag.
@@ -380,10 +396,10 @@ PYTHONPATH=src python3 -c "from gameplan import loader, runtime; print(runtime.v
 
 ### Devboxes during a round
 
-A round can run with every devbox shut down, for the host's memory: the switch **Shut down every devbox while its attempts run** (`rounds.devboxes_off`).
+A round runs with every devbox shut down, for the host's memory, unless staff turn it off: the switch **Shut down every devbox while its attempts run** (`rounds.devboxes_off`, on by default since migration `0023`, which also set it on every round that had not begun).
 - **Until the round's start** staff can set it, on creating the round or on its page. After the start it is no longer on the form.
 - **When the round begins** (its gameplan pinned, [`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py), `_pin`), the conductor records it once, in `rounds.devbox_hold`: `no`, or `wanted`. From then on only the record counts, whatever the switch says. The round's page shows it.
-- **Before its first attempt** the conductor asks the round agent (`hold_devboxes`): every devbox VM and gateway that runs (the Proxmox pool `devbox`) is shut down, each one recorded on the host first (`/var/lib/worms/held-devboxes.json`); the round is `held`. A failure is logged and the attempts go ahead.
+- **Before each of its attempts** the conductor asks the round agent (`hold_devboxes`): every devbox VM and gateway that runs (the Proxmox pool `devbox`) is shut down, each one recorded on the host first (`/var/lib/worms/held-devboxes.json`); the round is `held`. If that fails, the attempt does not start: tried again after 60 s, and after 5 failures (with the preflight's) the round goes on hold. While an attempt runs, a devbox found running is shut down again.
 - **Meanwhile** the agent takes no `devbox_*` job (resets, key updates, dev uploads wait in the queue) and dev uploads wait to start.
 - **Once no round that holds them has a run to come or under way** (after the last run's teardown), the agent starts again exactly the VMs it recorded (`release_devboxes`) and the round is `released`. A failed release (the internet window open, ...) is tried again every minute; a next round that holds them too keeps them off until it is over.
 - **By hand**, if the conductor is gone: `qm start` the VMs listed in that file on the host, then delete the file (the agent takes devbox jobs again).
@@ -422,7 +438,9 @@ colour of the most severe.
 
 As of 2026-11-08. The gameplan rework is uncommitted and not yet deployed.
 
-- **Testing.** No round has run on a real host yet. The conductor's tests run it against a fake Proxmox and a fake round agent ([`tests/test_rounds.py`](../tests/test_rounds.py)).
+- **Testing.** Rounds with `round_one` ran on worms-dev from 2026-11-12. The preflight, the in-VM check and the watch (2026-11-22) are tested against a fake Proxmox and a fake round agent ([`tests/test_rounds.py`](../tests/test_rounds.py), [`tests/test_round_agent.py`](../tests/test_round_agent.py)), and the host side read-only on worms-dev; no round has run with them yet.
+- **A QEMU that aborts** (SIGABRT, an assertion) reads as the guest's own power-off: the host has no `systemd-coredump`, so nothing records it. An OOM kill, a segfault and a Proxmox task are told apart.
+- **Memory.** The preflight counts the sandbox at its ceilings; the service and devbox VMs that run can still grow towards theirs (a warning). If the host still runs out, the OOM killer takes a team VM and that attempt runs again.
 - **Shared services.** The service VMs are rolled back only when a sandbox is built, i.e. the first attempt of a round. What one team's worm does to them stays for later attempts.
 - **Operations.**
   - Nothing clears a failed-teardown hold.

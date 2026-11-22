@@ -176,6 +176,9 @@ Without them the platform has to be rebuilt. Nothing backs up the database ([6](
 | `root on this host does not accept the WORMS key`, or tofu fails to authenticate over SSH | `worms init` |
 | `the vault lacks ...`, `there is no vault` | `worms secret` |
 | `proxmox-token: MISSING` | `worms secret issue <name>` |
+| `worms round` shows a round `(ON HOLD)`; the orchestrator's journal (`worms log conductor`) says `preflight failed: …` | Each failed check is named. `memory:admission`: the host lacks memory for the sandbox's ceilings: the devboxes off (`devboxes_off`), other VMs stopped. `packages:in-cache`: fill the apt cache in the internet window (`worms apply apt-cache --packages`). `devboxes:held`: a devbox runs that should not. Fix it, then `worms round resume <r>`. No attempt was used up |
+| An attempt failed: `… is stopped, not running: oom` (or `crash`, `host`, `unknown`) | The host stopped a sandbox VM: an OOM kill, a crashed QEMU, a Proxmox task (an operator, the firewall watchdog: `worms log firewall`). The team's worm runs again. Repeated OOM kills: the host needs more free memory |
+| A round on hold after two attempts that failed before their worm | A fault of ours that another try does not mend (`prepare` or `check`): `worms log <job>` of the failed job, fix, `worms round resume <r>` |
 | `... overrides the vault's token for OpenTofu` | Delete that `*.auto.tfvars` |
 | `PROXMOX_VE_SSH_... is set in your environment` | `unset` it |
 | tofu cannot find a `.qcow2`; errors about `snippets`, `import`, `local-zfs-sandbox` | §2.5, §2.3 |

@@ -8,6 +8,7 @@
 const fs = require("fs");
 const path = require("path");
 const { chromium } = require("playwright");
+const csp = require("./csp");
 
 const [pagePath, fixtures, work] = process.argv.slice(2);
 const read = (name) => fs.readFileSync(path.join(fixtures, name), "utf8");
@@ -17,13 +18,16 @@ const out = { errors, checks: {} };
 
 async function openPage(browser, offline, counters) {
     const context = await browser.newContext({ viewport: { width: 1600, height: 1000 }, acceptDownloads: true });
+    await csp.watch(context);
     const page = await context.newPage();
     page.on("pageerror", (err) => errors.push(`pageerror: ${err.message}`));
+    page.on("console", (msg) => { if (msg.type() === "error" && msg.text().startsWith("CSP violation")) errors.push(`console: ${msg.text()}`); });
     page.on("dialog", async (dialog) => { errors.push(`dialog: ${dialog.message()}`); await dialog.dismiss(); });
     await page.route(`${ORIGIN}/**`, async (route) => {
         const url = new URL(route.request().url());
         const json = (body, status = 200) => route.fulfill({ status, contentType: "application/json", body });
-        if (url.pathname === "/page") return route.fulfill({ status: 200, contentType: "text/html", body: fs.readFileSync(pagePath, "utf8") });
+        if (url.pathname.startsWith("/static/") && csp.staticFile(url.pathname)) return route.fulfill({ path: csp.staticFile(url.pathname) });
+        if (url.pathname === "/page") return route.fulfill({ status: 200, contentType: "text/html", headers: csp.HEADERS, body: fs.readFileSync(pagePath, "utf8") });
         counters.requests.push(url.pathname);
         if (offline) return json(JSON.stringify({ error: "server unavailable" }), 503);
         if (url.pathname === "/model") return json(read("model.json"));

@@ -6,6 +6,7 @@
 const fs = require("fs");
 const path = require("path");
 const { chromium } = require("playwright");
+const csp = require("./csp");
 
 const [pagePath, docPath, logPath, shots] = process.argv.slice(2);
 const ORIGIN = "http://worms.test";
@@ -17,6 +18,7 @@ const out = { errors, requests, checks: {} };
 (async () => {
     const browser = await chromium.launch();
     const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
+    await csp.watch(context);
     const page = await context.newPage();
     page.on("console", (msg) => { if (msg.type() === "error") errors.push(`console: ${msg.text()}`); });
     page.on("pageerror", (err) => errors.push(`pageerror: ${err.message}`));
@@ -24,7 +26,8 @@ const out = { errors, requests, checks: {} };
     await context.route(`${ORIGIN}/**`, (route) => {
         const url = new URL(route.request().url());
         const json = (file) => route.fulfill({ contentType: "application/json", body: fs.readFileSync(file, "utf8") });
-        if (url.pathname === "/page") return route.fulfill({ contentType: "text/html", body: fs.readFileSync(pagePath, "utf8") });
+        if (url.pathname.startsWith("/static/") && csp.staticFile(url.pathname)) return route.fulfill({ path: csp.staticFile(url.pathname) });
+        if (url.pathname === "/page") return route.fulfill({ contentType: "text/html", headers: csp.HEADERS, body: fs.readFileSync(pagePath, "utf8") });
         requests.push(url.pathname);
         if (url.pathname === "/progression/devbox/") return json(docPath);
         if (url.pathname.startsWith("/progression/devbox/logs/")) return json(logPath);

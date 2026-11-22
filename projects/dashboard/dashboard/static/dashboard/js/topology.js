@@ -97,6 +97,8 @@
             if (value === null || value === undefined || value === false) continue;
             if (key === "class") node.setAttribute("class", value);
             else if (key === "text") node.textContent = String(value);
+            // Through the CSSOM: the Content-Security-Policy refuses a style attribute.
+            else if (key === "style") node.style.cssText = String(value);
             else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
             else node.setAttribute(key, value === true ? "" : String(value));
         }

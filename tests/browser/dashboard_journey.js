@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const assert = require('assert/strict');
 const engines = require('playwright');
+const csp = require('./csp');
 const input = JSON.parse(fs.readFileSync(0, 'utf8'));
 
 (async () => {
@@ -27,8 +28,12 @@ const input = JSON.parse(fs.readFileSync(0, 'utf8'));
             await flowsReleased;
             await route.continue();
         });
+        await csp.watch(context);  // what the dashboard's policy blocks is an error
         const page = await context.newPage();
         page.on('pageerror', error => errors.push(error.message));
+        page.on('console', message => {
+            if (message.type() === 'error' && message.text().startsWith('CSP violation')) errors.push(message.text());
+        });
         page.on('response', response => {
             if (response.status() >= 400 && !response.url().endsWith('/favicon.ico')) {
                 errors.push(`${response.status()} ${response.url()}`);

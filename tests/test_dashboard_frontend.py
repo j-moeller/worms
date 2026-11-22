@@ -1,5 +1,6 @@
 """The redesigned dashboard front end: the templates carry no inline
-JavaScript or CSS (everything is in static/), the files they reference exist,
+JavaScript or CSS (everything is in static/), so a strict Content-Security-Policy
+holds, the files they reference exist,
 the state-changing endpoints are POST-only, and the core actions work WITHOUT
 JavaScript (a plain multipart upload, a themed cookie from a form post).
 """
@@ -23,6 +24,10 @@ STATIC = REPO / "projects" / "dashboard" / "dashboard" / "static"
 
 SCRIPT_OPEN = re.compile(r"<script\b([^>]*)>")
 HANDLER = re.compile(r"\son[a-z]+\s*=")
+# What the policy would block in the JS: inline styles and handlers by attribute, HTML
+# parsed into the page, code from strings.
+JS_BLOCKED = re.compile(r"""setAttribute\(\s*["'](style|on[a-z]+)["']|\.(inner|outer)HTML\b|insertAdjacentHTML|document\.write"""
+                        r"""|\beval\(|new Function\(|set(Timeout|Interval)\(\s*["'`]""")
 STATIC_REF = re.compile(r"{%\s*static\s*'([^']+)'\s*%}")
 
 
@@ -30,9 +35,11 @@ def _templates():
     return sorted(TEMPLATES.rglob("*.html"))
 
 
-def test_templates_have_no_inline_javascript_or_css():
+def test_templates_have_no_inline_javascript_or_css(site):  # noqa: F811
     """No <style>, no inline event handlers, no style="" attributes, and every
-    <script> is an external src (the JS lives in static/)."""
+    <script> is an external src (the JS lives in static/); the JS sets no style or
+    handler attribute and evaluates no strings. So the policy every page carries
+    allows this origin's files and nothing inline."""
     for path in _templates():
         text = path.read_text()
         where = path.relative_to(TEMPLATES)
@@ -41,6 +48,19 @@ def test_templates_have_no_inline_javascript_or_css():
         assert not HANDLER.search(text), f"{where}: inline on* handler"
         for attrs in SCRIPT_OPEN.findall(text):
             assert "src=" in attrs, f"{where}: inline <script> (no src)"
+    for path in sorted(STATIC.rglob("*.js")):
+        for number, line in enumerate(path.read_text().splitlines(), 1):
+            assert not JS_BLOCKED.search(line), f"{path.relative_to(STATIC)}:{number}: {line.strip()}"
+    # A page, a view's refusal, a middleware's refusal (CSRF): the same policy.
+    for response in (site.get("/login/", **proxied(HOST)), site.get("/logout/", **proxied(HOST)),
+                     site.post("/login/", {"username": "admin"}, **proxied(HOST))):
+        policy = dict(part.strip().split(" ", 1) for part in response["Content-Security-Policy"].split(";"))
+        assert policy == {"default-src": "'none'", "script-src": "'self'", "style-src": "'self'", "img-src": "'self'",
+                          "connect-src": "'self'", "form-action": "'self'", "frame-ancestors": "'none'",
+                          "base-uri": "'none'"}, (response.status_code, policy)
+    # The browser tests serve their pages with it as well (tests/browser/csp.js).
+    js = (REPO / "tests/browser/csp.js").read_text().split("const POLICY =", 1)[1].split(";\n", 1)[0]
+    assert "".join(re.findall(r'"([^"]*)"', js)) == response["Content-Security-Policy"]
 
 
 def test_referenced_static_files_exist():

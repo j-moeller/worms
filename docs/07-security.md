@@ -199,7 +199,7 @@ The database is the one place where the trusted zone meets the rest. Nothing on 
 - **Authorization.**
   - Every team view is scoped server-side to `request.team`, and the API to the token's team.
   - Staff pages need `is_staff`. Staff manage students; only the superuser manages staff.
-- **Headers** (in production): HSTS; `X-Frame-Options: DENY`; `nosniff`; Secure CSRF cookies. CSRF protection is on everywhere except the GET-only token API. Templates autoescape, and the JavaScript builds the DOM with `textContent`.
+- **Headers** (in production): HSTS; `X-Frame-Options: DENY`; `nosniff`; Secure CSRF cookies. On every dashboard response (also in development), a Content-Security-Policy ([`config/settings/dashboard.py`](../projects/dashboard/config/settings/dashboard.py)): `default-src 'none'`; scripts, styles, images and fetches from its own origin only, nothing inline or evaluated; forms post there only; no frames, plugins or `<base>`. The browser tests serve their pages with it and fail on any violation. CSRF protection is on everywhere except the GET-only token API. Templates autoescape, and the JavaScript builds the DOM with `textContent`.
 - **Uploads.**
   - At most 100 MiB, 30 per hour, and 2 GiB per team.
   - Must be a zip with a top-level `main.sh`.
@@ -244,7 +244,6 @@ IDs are cited in code comments. S = team VMs, D = dashboard, C = cross-cutting. 
 | D3 | Partly | Sign-in is rate-limited per address only; no per-account lockout |
 | D4 | Partly | Joining a team needs no consent of its members |
 | D5 | Open | Changing one's password does not ask for the current one |
-| D8 | Open | No Content-Security-Policy (no XSS sink found) |
 | D10 | Design | Staff pages are on the public dashboard. The DB role cannot mint staff, but a stolen staff session can create rounds and accounts |
 | D13 | Low | Team API tokens never expire and survive their creator leaving the team |
 | C1 | Accepted | The Proxmox provider uses `insecure = true` |
@@ -262,6 +261,7 @@ IDs are cited in code comments. S = team VMs, D = dashboard, C = cross-cutting. 
   - S7: a run could start before the last teardown.
   - S8: unbounded DNS query log. Reopened and fixed again on 2026-11-18: only the `queries` category was bounded. The failed lookups (`query-errors`) and the rest of named's log still went to syslog, which rotates weekly with no size limit. The devboxes' NTP pool lookups, about 30 000 failures an hour, filled the DNS VM's 4.8 GB disk in a week. Every BIND category now goes to a bounded file under `/var/log/named/`.
   - S15: a replaced VM lost its firewall.
+  - D8 (2026-11-22): no Content-Security-Policy. Now a strict one; it found the topology page setting `style` attributes (now through the CSSOM).
   - D12 (2026-11-20): `/admin/login/` signed staff in without nginx's rate limit and without `login_events`. Django's admin is no longer served.
   - S16: a team login got a shell on the SSH gateway.
   - F14/G8: gateways without nftables.

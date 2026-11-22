@@ -55,6 +55,7 @@ def site(db_clean, monkeypatch, tmp_path):
     with override_settings(
         ROOT_URLCONF="dashboard.urls",
         MIDDLEWARE=dashboard_settings.MIDDLEWARE,
+        SECURE_CSP=dashboard_settings.SECURE_CSP,
         TEMPLATES=templates,
         ALLOWED_HOSTS=[HOST, "10.10.0.18"],
         CSRF_TRUSTED_ORIGINS=[f"https://{HOST}"],  # what base.py derives from ALLOWED_HOSTS

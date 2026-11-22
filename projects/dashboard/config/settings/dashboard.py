@@ -1,7 +1,9 @@
 import ssl
 
+from django.utils.csp import CSP
+
 from config.settings.base import *  # noqa: F401,F403
-from config.settings.base import DEBUG, LOG_LEVEL, LOGGING, env, postgres_database
+from config.settings.base import DEBUG, LOG_LEVEL, LOGGING, MIDDLEWARE, env, postgres_database
 
 # Application definition
 
@@ -43,6 +45,26 @@ LOGGING["loggers"]["dashboard"] = {
     "propagate": False,
 }
 
+
+# Content-Security-Policy, on every response (Django's middleware, right after
+# SecurityMiddleware: the responses of the middleware further in, CSRF's 403 and the
+# redirects, get it too). Only this origin, and nothing inline or evaluated: the
+# templates hold no <script> without src, no <style>, no style="" and no on*= handler,
+# and the JS builds the page with createElement and textContent
+# (tests/test_dashboard_frontend.py). nginx serves static/ on this origin. No frames,
+# plugins, workers or fonts at all; forms post here only; no <base>.
+SECURE_CSP = {
+    "default-src": [CSP.NONE],
+    "script-src": [CSP.SELF],
+    "style-src": [CSP.SELF],
+    "img-src": [CSP.SELF],
+    "connect-src": [CSP.SELF],
+    "form-action": [CSP.SELF],
+    "frame-ancestors": [CSP.NONE],
+    "base-uri": [CSP.NONE],
+}
+_security = MIDDLEWARE.index("django.middleware.security.SecurityMiddleware") + 1
+MIDDLEWARE = [*MIDDLEWARE[:_security], "django.middleware.csp.ContentSecurityPolicyMiddleware", *MIDDLEWARE[_security:]]
 
 MIDDLEWARE += [
     # First: everything after it sees the user being viewed as request.user.

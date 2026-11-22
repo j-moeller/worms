@@ -5,6 +5,7 @@
 const fs = require("fs");
 const path = require("path");
 const { chromium } = require("playwright");
+const csp = require("./csp");
 
 const [pagePath, profilePath, staticDir, shots] = process.argv.slice(2);
 const ORIGIN = "https://worms.test"; // https: the clipboard needs a secure page
@@ -52,14 +53,15 @@ function measure() {
     await context.route("**/*", (route) => {
         const url = new URL(route.request().url());
         if (url.origin !== ORIGIN) return route.abort();
-        if (url.pathname === "/page") return route.fulfill({ contentType: "text/html", body: fs.readFileSync(pagePath, "utf8") });
-        if (url.pathname === "/profile-page") return route.fulfill({ contentType: "text/html", body: fs.readFileSync(profilePath, "utf8") });
+        if (url.pathname === "/page") return route.fulfill({ contentType: "text/html", headers: csp.HEADERS, body: fs.readFileSync(pagePath, "utf8") });
+        if (url.pathname === "/profile-page") return route.fulfill({ contentType: "text/html", headers: csp.HEADERS, body: fs.readFileSync(profilePath, "utf8") });
         const file = path.join(staticDir, url.pathname.replace(/^\/static\//, ""));
         if (url.pathname.startsWith("/static/") && fs.existsSync(file)) {
             return route.fulfill({ contentType: TYPES[path.extname(file)] || "application/octet-stream", body: fs.readFileSync(file) });
         }
         return route.fulfill({ status: 404, body: "" });
     });
+    await csp.watch(context);
     const page = await context.newPage();
     page.on("console", (msg) => { if (msg.type() === "error") errors.push(`console: ${msg.text()}`); });
     page.on("pageerror", (err) => errors.push(`pageerror: ${err.message}`));

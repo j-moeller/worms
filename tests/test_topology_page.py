@@ -59,16 +59,15 @@ TEAM_DATA = (
 def page_html(data=STAFF_DATA) -> str:
     # What templates/topology.html (or progression.html) serves: the
     # markup-only player partial, the topology stylesheet and script from
-    # static/, endpoints pointing at the fixtures.
+    # static/ (the drivers serve it, under the dashboard's policy: tests/browser/csp.js),
+    # endpoints pointing at the fixtures.
     player = (TEMPLATES / "topology" / "player.html").read_text()
-    css = (STATIC / "css" / "topology.css").read_text()
-    app = (STATIC / "js" / "topology.js").read_text()
     return (
         "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'><title>topology</title>"
-        f"<style>{css}</style></head><body>"
+        "<link rel='stylesheet' href='/static/dashboard/css/topology.css'></head><body>"
         "<nav data-progression-tabs>server-rendered round links</nav><section data-progression-summary>summary</section>"
         f"<div class='topo' id='topo' {data}>"
-        f"{player}</div><script>{app}</script></body></html>"
+        f"{player}</div><script src='/static/dashboard/js/topology.js'></script></body></html>"
     )
 
 

@@ -7,6 +7,7 @@
 const fs = require("fs");
 const path = require("path");
 const { chromium } = require("playwright");
+const csp = require("./csp");
 
 const [pagePath, fixtures, shots] = process.argv.slice(2);
 const read = (name) => fs.readFileSync(path.join(fixtures, name), "utf8");
@@ -22,6 +23,7 @@ const requests = [];
 (async () => {
     const browser = await chromium.launch();
     const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
+    await csp.watch(context);
     const page = await context.newPage();
     page.on("console", (msg) => { if (msg.type() === "error") errors.push(`console: ${msg.text()}`); });
     page.on("pageerror", (err) => errors.push(`pageerror: ${err.message}`));
@@ -30,10 +32,11 @@ const requests = [];
     await context.route(`${ORIGIN}/**`, async (route) => {
         const url = new URL(route.request().url());
         const json = (body, status = 200) => route.fulfill({ status, contentType: "application/json", body });
-        if (url.pathname === "/page") return route.fulfill({ status: 200, contentType: "text/html", body: fs.readFileSync(pagePath, "utf8") });
+        if (url.pathname.startsWith("/static/") && csp.staticFile(url.pathname)) return route.fulfill({ path: csp.staticFile(url.pathname) });
+        if (url.pathname === "/page") return route.fulfill({ status: 200, contentType: "text/html", headers: csp.HEADERS, body: fs.readFileSync(pagePath, "utf8") });
         if (url.pathname === "/page-fast") {
             const html = fs.readFileSync(pagePath, "utf8").replace("data-refresh-ms='600000'", "data-refresh-ms='600'");
-            return route.fulfill({ status: 200, contentType: "text/html", body: html });
+            return route.fulfill({ status: 200, contentType: "text/html", headers: csp.HEADERS, body: html });
         }
         requests.push(url.pathname);
         if (url.pathname === "/progression/rounds/") return json(read("team_rounds.json"));

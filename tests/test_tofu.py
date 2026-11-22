@@ -121,6 +121,11 @@ def test_a_devbox_reset_keeps_the_operators_memory_floor():
     assert re.search(r"ram_min\s+= 512", vms)
     gateways = devbox.split('module "devbox_gw" {', 1)[1]
     assert "ram_min" not in gateways.split("\n}\n", 1)[0]
+    # The round's preflight counts sandbox-gw's ceiling with the gameplan's VMs (round_agent/handlers.py).
+    sandbox = (OPENTOFU / "stacks" / "sandbox" / "main.tf").read_text()
+    gw = sandbox.split('resource "proxmox_virtual_environment_vm" "gw" {', 1)[1].split("\n}\n", 1)[0]
+    agent = (REPO / "scripts" / "round_agent" / "handlers.py").read_text()
+    assert re.search(r"memory \{\s+dedicated = (\d+)", gw).group(1) == re.search(r"^SANDBOX_GW_MEMORY_MB = (\d+)", agent, re.M).group(1)
 
 
 def test_no_team_vm_is_offered_hardware_virtualisation():

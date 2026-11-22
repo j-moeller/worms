@@ -79,6 +79,63 @@ def prepare(params):
     }
 
 
+def preflight(params):
+    hold = params.get("hold_devboxes", False)
+    if not isinstance(hold, bool):
+        raise Invalid("hold_devboxes must be true or false")
+    return {
+        "gameplan": gameplan_file(params.get("gameplan")),
+        "gameplan_sha256": sha256(params.get("gameplan_sha256"), "gameplan_sha256"),
+        "hold_devboxes": hold,
+    }
+
+
+def check(params):
+    """Without the run only the host is checked; with it its VMs are probed too."""
+    run = params.get("run_uuid")
+    return {"run_uuid": None if run is None else team_uuid(run, "run_uuid")}
+
+
+# A VMID as Proxmox allows it.
+VMID = (100, 999_999_999)
+# How far back a `since` may reach: a run lasts at most a week (gameplan LIMITS round_duration).
+SINCE_DAYS = 8
+
+
+def iso_time(value, field):
+    """An ISO 8601 time with its zone, in the last SINCE_DAYS days, as seconds since the epoch."""
+    import time
+    from datetime import datetime
+
+    if not isinstance(value, str) or len(value) > 40:
+        raise Invalid(f"{field} is not an ISO time")
+    try:
+        when = datetime.fromisoformat(value)
+    except ValueError:
+        raise Invalid(f"{field} is not an ISO time: {value!r}") from None
+    if when.tzinfo is None:
+        raise Invalid(f"{field} has no time zone: {value!r}")
+    now = time.time()
+    if not now - SINCE_DAYS * 86400 <= when.timestamp() <= now + 300:
+        raise Invalid(f"{field} is not within the last {SINCE_DAYS} days: {value!r}")
+    return when.timestamp()
+
+
+def observe(params):
+    """The VMs to look at (the handler refuses any outside the sandbox pool), and since when the
+    host's records are read."""
+    vmids = params.get("vmids")
+    if not isinstance(vmids, list) or not vmids:
+        raise Invalid("vmids must be a non-empty list")
+    if len(vmids) > 64:
+        raise Invalid("vmids has too many entries")
+    since = params.get("since")
+    return {
+        "vmids": sorted({integer(vmid, "vmids", *VMID) for vmid in vmids}),
+        "since": None if since is None else iso_time(since, "since"),
+    }
+
+
 def team_uuid(value, field="team_uuid"):
     if not isinstance(value, str) or not UUID.fullmatch(value):
         raise Invalid(f"{field} is not a uuid: {value!r}")
@@ -259,11 +316,13 @@ def devbox_hold(params):
     return {"round_uuid": team_uuid(params.get("round_uuid"), "round_uuid")}
 
 
-# Job kind -> validator. CHECK takes no parameters.
+# Job kind -> validator.
 VALIDATORS = {
     "gameplans": lambda params: {},
+    "preflight": preflight,
     "prepare": prepare,
-    "check": lambda params: {},
+    "check": check,
+    "observe": observe,
     "deploy": deploy,
     "remove_flags": flags,
     "place_flags": flags,

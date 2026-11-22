@@ -116,23 +116,29 @@ class JobLog:
         self._lock = threading.Lock()
 
     @classmethod
-    def open(cls, directory, job_uuid, kind):
+    def open(cls, directory, job_uuid, kind, latest=True):
+        """`latest`: latest.log points at it. Not for the observer's jobs (agent.py), every
+        minute of a round, which would pull `tail -F latest.log` away from a build."""
         directory = Path(directory)
         try:
             directory.mkdir(parents=True, exist_ok=True)
             directory.chmod(0o700)
             cutoff = time.time() - JOB_LOG_KEEP_DAYS * 86400
             for old in directory.glob("*.log"):
-                if not old.is_symlink() and old.stat().st_mtime < cutoff:
-                    old.unlink()
+                try:
+                    if not old.is_symlink() and old.stat().st_mtime < cutoff:
+                        old.unlink(missing_ok=True)
+                except FileNotFoundError:  # the agent's other worker removed it first
+                    pass
             path = directory / f"{job_uuid}.log"
             flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
             handle = os.fdopen(os.open(path, flags, 0o600), "a", buffering=1, errors="replace")
-            # Replaced in one step, so `tail -F latest.log` moves on to the next job.
-            pointer = directory / ".latest.tmp"
-            pointer.unlink(missing_ok=True)
-            pointer.symlink_to(path.name)
-            pointer.replace(directory / "latest.log")
+            if latest:
+                # Replaced in one step, so `tail -F latest.log` moves on to the next job.
+                pointer = directory / ".latest.tmp"
+                pointer.unlink(missing_ok=True)
+                pointer.symlink_to(path.name)
+                pointer.replace(directory / "latest.log")
         except OSError as exc:
             log.warning("job %s: no output log: %s", job_uuid, exc)
             return cls()
@@ -164,27 +170,33 @@ class JobLog:
 
 
 class Executor:
-    def __init__(self, repo_root, ssh_user="debian", log_dir=DEFAULT_JOB_LOG_DIR):
+    def __init__(self, repo_root, ssh_user="debian", log_dir=DEFAULT_JOB_LOG_DIR, latest=True):
         self.repo_root = Path(repo_root)
         self.ssh_user = ssh_user
         self.log_dir = log_dir
+        self.latest = latest  # its jobs' logs become latest.log (JobLog.open)
         self._log = JobLog()
         self.job = ""  # what the VM history says did it: "round agent: <kind> #<id>"
 
     @contextmanager
     def job_log(self, job_uuid, kind, job_id=None):
         """Everything run inside this block is logged for that job. The VM history names it as
-        what did it, here and in the worms CLI it runs (WORMS_HISTORY_BY, worms_cli/history.py)."""
-        self._log = JobLog.open(self.log_dir, job_uuid, kind)
+        what did it, here and in the worms CLI it runs (WORMS_HISTORY_BY, worms_cli/history.py,
+        in each command's environment: the agent's two workers run a job each, agent.py)."""
+        self._log = JobLog.open(self.log_dir, job_uuid, kind, latest=self.latest)
         self.job = f"round agent: {kind}" + (f" #{job_id}" if job_id is not None else "")
-        os.environ["WORMS_HISTORY_BY"] = self.job
         try:
             yield self._log
         finally:
             self._log.close()
             self._log = JobLog()
             self.job = ""
-            os.environ.pop("WORMS_HISTORY_BY", None)
+
+    def _environment(self, **extra):
+        """A command's environment: the agent's, with the job that runs it (or None: the agent's)."""
+        if not self.job and not extra:
+            return None
+        return {**os.environ, **extra, **({"WORMS_HISTORY_BY": self.job} if self.job else {})}
 
     def history(self, vms, event, detail=""):
         """Append to the host's VM history (worms_cli/history.py; the workspace's src is on the
@@ -225,6 +237,7 @@ class Executor:
                     capture_output=True,
                     text=True,
                     timeout=timeout,
+                    env=self._environment(),
                 )
                 returncode, stdout, stderr = proc.returncode, proc.stdout, proc.stderr
         except subprocess.TimeoutExpired:
@@ -245,7 +258,7 @@ class Executor:
             stderr=subprocess.PIPE,
             text=True,
             errors="replace",
-            env={**os.environ, "PYTHONUNBUFFERED": "1"},  # the CLI and Ansible are Python
+            env=self._environment(PYTHONUNBUFFERED="1"),  # the CLI and Ansible are Python
         )
         captured = {proc.stdout: [], proc.stderr: []}
 

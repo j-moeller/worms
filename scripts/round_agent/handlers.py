@@ -12,11 +12,15 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import ipaddress
 import json
 import os
+import re
 import secrets
 import shlex
 import tempfile
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -26,7 +30,7 @@ from gameplan import render as gameplan_render
 from gameplan import runtime as gameplan_runtime
 from gameplan.definition import SECRET_MARKER, GameplanError
 from generate_devbox import team_addressing
-from round_agent import snapshots, validation
+from round_agent import host_state, probe, snapshots, validation
 
 FLAG_PATH = "/etc/worms/flag"
 # The gameplan files, in the agent's workspace (synced from the controller's checkout).
@@ -62,6 +66,26 @@ STATE_DIR = "/var/lib/worms"
 # so no /dev/kvm and no way to drive the host's nested-KVM code (docs/07-security.md). The
 # sandbox and devbox stacks set it. These checks refuse anything else, such as a VM changed by hand.
 TEAM_VM_CPU = "x86-64-v3"
+# What has to run on the host for any team VM to run (check, preflight).
+HOST_UNITS = ("proxmox-firewall", "worms-host-firewall", "worms-firewall-watchdog.timer", "worms-mirror")
+# The scoring and logging APIs on their VMs (role sandbox_api): nginx in front of the app.
+SANDBOX_API_UNITS = ("sandbox-api", "nginx")
+# sandbox-gw's memory ceiling (opentofu/stacks/sandbox/main.tf, its `dedicated`).
+SANDBOX_GW_MEMORY_MB = 512
+# What a QEMU holds beyond its VM's ceiling (its code, device emulation, page tables): about 20 MB
+# for a 512 MB VM touched in full, more while it starts (worms-dev, 2026-11-22).
+QEMU_OVERHEAD_MB = 64
+# What the host keeps free beyond every ceiling of a round's sandbox (preflight; MEMORY_RESERVE_MB).
+MEMORY_RESERVE_MB = 1024
+# The platform's addresses (all.vars: infrastructure_ips, services_ips, ...): `worms step
+# inventory` writes it into the workspace (scripts/generate_inventory.py).
+INVENTORY = "ansible/inventory.generated.yml"
+APT_CACHE_DIR = "/var/cache/apt-cacher-ng"  # role apt_cache, apt_cache_cache_dir
+OBSERVE_WINDOW = 6 * 3600  # how far back observe reads the host's records without a `since`
+# Proxmox can see a QEMU gone before systemd's line of its end can be read: observe reads the
+# records once more after this (seconds) before it says it does not know why a VM stopped.
+OBSERVE_REREAD = 2
+NODE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$")
 
 
 def _has_team_vm_cpu(ex, vmid):
@@ -97,6 +121,71 @@ def _sandbox_vms(ex):
             "addresses": sandbox.get(key, {}).get("addresses", []),
         }
     return vms
+
+
+def _resources(ex):
+    """Every VM of the cluster, with its pool: [{vmid, name, node, status, pool}]. Its status is
+    pvestatd's, up to 10 s old: _live_states has the present one."""
+    out = ex.run(["pvesh", "get", "/cluster/resources", "--type", "vm", "--output-format", "json"], timeout=60)
+    return json.loads(out or "[]")
+
+
+def _live_states(ex, resources):
+    """{vmid: what Proxmox reports of the VM now} (status, qmpstatus: QEMU's own run state), from
+    each node that holds one of `resources`: one call per node, for all of its VMs."""
+    states = {}
+    for node in sorted({str(vm.get("node")) for vm in resources if vm.get("node")}):
+        if NODE_NAME.fullmatch(node):
+            out = ex.run(["pvesh", "get", f"/nodes/{node}/qemu", "--full", "1", "--output-format", "json"], timeout=60)
+            states.update({int(vm["vmid"]): vm for vm in json.loads(out or "[]")})
+    return states
+
+
+def _status(vm, states):
+    """running, paused or stopped: the live state if there is one, else the resource list's."""
+    return host_state.state(states.get(int(vm["vmid"])) or {"status": vm.get("status")})
+
+
+def _qemu_up(vm, states):
+    """Whether the VM has a QEMU, so holds memory (paused, or its guest halted, too)."""
+    return (states.get(int(vm["vmid"])) or vm).get("status") != "stopped"
+
+
+def _addressing(ex):
+    """The platform's addresses (the generated inventory's all.vars), {} without it. The workspace
+    sync leaves the inventory out (the agent's own stacks make it): a workspace that has none yet,
+    as no sandbox has been built or destroyed there, gets it here (`worms step inventory`, which
+    writes that file alone)."""
+    import yaml
+
+    if not (ex.repo_root / INVENTORY).exists():
+        try:
+            ex.worms("inventory", timeout=300)
+        except Exception as error:  # noqa: BLE001  (the checks that need it fail, saying so)
+            _note(ex, f"the inventory could not be generated: {type(error).__name__}: {error}")
+    try:
+        data = yaml.safe_load((ex.repo_root / INVENTORY).read_text()) or {}
+        return (data.get("all") or {}).get("vars") or {}
+    except (OSError, yaml.YAMLError, AttributeError):
+        return {}
+
+
+def _note(ex, text):
+    note = getattr(ex, "note", None)
+    if note is not None:
+        note(text)
+
+
+def _oom_priority(ex, cfg, resources=None, states=None):
+    """The OOM killer's first choice is a team VM (host_state.lower_oom_priority): every sandbox and
+    devbox VM with a QEMU, a paused or halted one too (it holds its memory). Its pid file decides:
+    the resource list's status can be 10 s old, and right after a start says stopped. Returns the
+    vmids done."""
+    resources = _resources(ex) if resources is None else resources
+    team = [vm for vm in resources if vm.get("pool") in ("sandbox", "devbox")]
+    up = [int(vm["vmid"]) for vm in team if _qemu_up(vm, states or {})]  # a missing QEMU of these is a line in the job log
+    return host_state.lower_oom_priority([int(vm["vmid"]) for vm in team], cfg.get("state_dir", STATE_DIR),
+                                         lambda text: _note(ex, text), up=up)  # fmt: skip
 
 
 class Refused(RuntimeError):
@@ -446,13 +535,16 @@ def prepare(ex, cfg, params):
             _write_gameplan_file(ex, vms[entry["vm"]]["maintenance_ip"], entry, values)
     released, _ = _place_flags(ex, vms, [vm["name"] for vm in spec["vms"]], strict=True)
     _save_run_state(cfg, params["run_uuid"], {"gameplan": loaded.filename, "sha256": loaded.sha256, "secrets": values})
+    _oom_priority(ex, cfg)  # every VM is up now, each with a QEMU of its own
 
     networks = gameplan_build.vm_networks(spec)
+    gateway = _ansible_hosts("sandbox", ex.tofu_output("sandbox")).get("sandbox_gw")
     return {
         "sandbox": "rolled back to its snapshot" if built else "built and snapshotted",
         "services": services,
         "topology": gameplan_build.topology(spec),
         "entrypoint": spec["entrypoint"],
+        "gateway": {"name": gateway["name"], "vmid": int(gateway["vm_id"])} if gateway else None,
         "released": released,
         "vms": [
             {
@@ -467,29 +559,277 @@ def prepare(ex, cfg, params):
     }
 
 
-def check(ex, cfg, params):
-    """Sanity checks on the host and the sandbox. Returns {ok, checks}."""
-    results = []
-
+def _recorder(results):
     def record(name, ok, detail=""):
         results.append({"check": name, "ok": bool(ok), "detail": str(detail)[:200]})
 
-    for unit in ("proxmox-firewall", "worms-host-firewall", "worms-firewall-watchdog.timer", "worms-mirror"):
+    return record
+
+
+def _host_units(ex, record):
+    for unit in HOST_UNITS:
         out = ex.run(["systemctl", "is-active", unit], check=False).strip()
         record(f"host:{unit}", out == "active", out)
+
+
+def _devbox_address(ex, addressing):
+    """A devbox gateway's address on the services bridge, the one bridge sandbox and devbox share:
+    the devbox stack's, else the first of the block kept for them."""
+    try:
+        devbox = ex.tofu_output("devbox").get("devbox") or {}
+        found = sorted(str(d["services_source_ip"]) for d in devbox.values() if isinstance(d, dict) and d.get("services_source_ip"))
+        if found:
+            return found[0]
+    except Exception:  # noqa: BLE001  (no devbox stack: the block's address will do)
+        pass
+    try:
+        return str(next(ipaddress.ip_network(addressing["devbox_services_block"]).hosts()))
+    except (KeyError, TypeError, ValueError, StopIteration):
+        return None
+
+
+def _probe_plans(ex, cfg, run_uuid, vms, record):
+    """{VM name: (probe parameters, the host's notes)} for every VM of the run's gameplan. As for
+    the jobs that load a gameplan (_quiet): an error here may quote it, so it goes to the job log."""
+    state = _load_run_state(cfg, run_uuid)
+    spec, _ = _gameplan(ex, state["gameplan"], state["sha256"])
+    addressing = _addressing(ex)
+    record("host:inventory", bool(addressing), "" if addressing else
+           f"no {INVENTORY} in the workspace: the probes lack the platform's addresses (`worms step inventory`)")  # fmt: skip
+    maintenance = {name: info["maintenance_ip"] for name, info in vms.items()}
+    devbox = _devbox_address(ex, addressing)
+    try:
+        return {vm["name"]: probe.plan(spec, vm["name"], addressing, maintenance, devbox) for vm in spec["vms"]}
+    except Exception as error:  # noqa: BLE001
+        _note(ex, f"check: the probes of the run's gameplan: {type(error).__name__}: {error}")
+        raise RuntimeError("the check job could not plan its probes: its log on the host says why") from None
+
+
+def check(ex, cfg, params):
+    """Sanity checks on the host and the sandbox, right before the worm. Returns {ok, failures,
+    checks}. With the run (`run_uuid`), every VM of its gameplan is also looked at from inside, all
+    at once, while no team code has reached them (probe.py): its flag, the platform's names,
+    scoring and logging over verified HTTPS, apt and PyPI through the private internet, its clock,
+    the infrastructure and the internet out of its reach, the gameplan's firewall both ways, its
+    files and services. The OOM priority of every team VM, as after any start."""
+    results = []
+    record = _recorder(results)
+    _host_units(ex, record)
 
     mirror = ex.run(["/usr/local/sbin/worms-mirror", "status"], check=False, timeout=60)
     record("host:mirror-receive-only", "drop" in mirror, "")
 
     vms = _sandbox_vms(ex)
     record("sandbox:vms-registered", bool(vms), f"{len(vms)} VM(s)")
-    for name, info in sorted(vms.items()):
+    plans = _probe_plans(ex, cfg, params["run_uuid"], vms, record) if params.get("run_uuid") else {}
+
+    def one(name):
+        info, out = vms[name], []
         status = ex.run(["qm", "status", str(info["vmid"])], check=False, timeout=60).strip()
-        record(f"vm:{name}:running", status.endswith("running"), status)
-        record(f"vm:{name}:no-kvm", _has_team_vm_cpu(ex, info["vmid"]), f"its CPU must be {TEAM_VM_CPU}")
+        out.append((f"vm:{name}:running", status.endswith("running"), status))
+        out.append((f"vm:{name}:no-kvm", _has_team_vm_cpu(ex, info["vmid"]), f"its CPU must be {TEAM_VM_CPU}"))
+        if name in plans:
+            params_, notes = plans[name]
+            reply, sent, why = probe.run(ex, info["maintenance_ip"], params_)
+            try:
+                out += probe.records(name, params_, notes, reply, sent, lambda text: _note(ex, text), why)
+            except Exception as error:  # noqa: BLE001  (an answer it cannot read: that VM fails, by name only)
+                _note(ex, f"check {name}: its probe's answer: {type(error).__name__}: {error}")
+                out.append((f"vm:{name}:probe", False, "an answer that could not be read (the job log on the host says why)"))
+        return out
+
+    # One thread per VM: the probes take up to a few minutes each, and qm a second per call.
+    with ThreadPoolExecutor(max_workers=max(1, min(len(vms), 32))) as pool:
+        for rows in pool.map(one, sorted(vms)):
+            for row in rows:
+                record(*row)
+    for name in sorted(set(plans) - set(vms)):
+        record(f"vm:{name}:probe", False, "the gameplan's VM is not in the sandbox")
+    _oom_priority(ex, cfg)
 
     failures = [r["check"] for r in results if not r["ok"]]
     return {"ok": not failures, "failures": failures, "checks": results}
+
+
+def _packages_in_cache(ex, spec, addressing, record):
+    """Every package the gameplan installs has a .deb in apt-cacher-ng's cache: a build installs
+    from there, offline. One listing of the cache; which packages lack one goes to the job log
+    (what a gameplan installs is its content). Any version counts, and its dependencies are not
+    looked at: a cache whose index now wants a newer .deb than it holds passes, and the build
+    fails then."""
+    wanted = sorted({package for vm in spec["vms"] for package in vm["install"]})
+    if not wanted:
+        record("packages:in-cache", True, "the gameplan installs nothing")
+        return
+    host = ((addressing.get("private_internet_ips") or {}).get("apt_cache") or {}).get("maintenance")
+    if not host:
+        record("packages:in-cache", False, f"no address of apt-cache ({INVENTORY})")
+        return
+    try:
+        listing = ex.ssh(host, ["sudo", "find", APT_CACHE_DIR, "-type", "f", "-name", "*.deb", "-printf", "%f\\n"], timeout=120)
+    except Exception as error:  # noqa: BLE001
+        _note(ex, f"preflight: the apt cache's listing: {type(error).__name__}: {error}")
+        record("packages:in-cache", False, "apt-cache did not list its cache (the job log on the host says why)")
+        return
+    cached = {name.split("_", 1)[0] for name in listing.split() if name.endswith(".deb")}  # <package>_<version>_<arch>.deb
+    missing = [package for package in wanted if package not in cached]
+    for package in missing:
+        _note(ex, f"preflight: no .deb of {package} in the apt cache")
+    record("packages:in-cache", not missing, f"{len(missing)} of {len(wanted)} packages not in the apt cache (the job log on the host "
+           "names them)" if missing else f"{len(wanted)} packages there")  # fmt: skip
+
+
+def _growth_mb(vms, states):
+    """{name: MB} for each of these VMs with a QEMU: how much more of the host's memory that QEMU
+    can take, its ceiling (and QEMU_OVERHEAD_MB) less what it holds now (Proxmox's memhost, else
+    its QEMU's RSS). A VM whose ceiling Proxmox does not give is left out."""
+    out = {}
+    for vm in vms:
+        if not _qemu_up(vm, states) or not vm.get("maxmem"):
+            continue
+        held = int(vm["memhost"]) // 2**20 if vm.get("memhost") else host_state.qemu_rss_mb(vm["vmid"])
+        held = int(vm.get("mem") or 0) // 2**20 if held is None else held
+        out[str(vm.get("name"))] = max(0, int(vm["maxmem"]) // 2**20 + QEMU_OVERHEAD_MB - held)
+    return out
+
+
+@_quiet
+def preflight(ex, cfg, params):
+    """Before each attempt of a round, before anything is built, rolled back or started: can the
+    host run the gameplan's sandbox, and is everything around it as it must be? Changes nothing.
+    Returns {ok, failures, checks, warnings, memory: {available_mb, needed_mb, reserve_mb,
+    total_mb}}. Memory: a rooted guest can touch all of its RAM and defeat KSM and ballooning,
+    so each VM counts with its ceiling, and each QEMU with its own overhead; MemAvailable leaves
+    out the ZFS ARC, the safe side. The VMs a worm reaches (the service VMs) and the devbox VMs
+    that run can grow towards their ceilings too: a warning when that would not fit as well."""
+    spec, _ = _gameplan(ex, params["gameplan"], params["gameplan_sha256"])
+    results, warnings = [], []
+    record = _recorder(results)
+    window = Path(cfg.get("internet_flag", INTERNET_FLAG)).exists()
+    record("host:internet-window-closed", not window,
+           f"{INTERNET_FLAG} exists: internet access is allowed (`worms internet off`)" if window else "")  # fmt: skip
+    _host_units(ex, record)
+    options = ex.run(["pvesh", "get", "/cluster/firewall/options", "--output-format", "json"], check=False, timeout=60)
+    try:
+        options = json.loads(options or "{}")
+    except ValueError:
+        options = {}
+    record("host:cluster-firewall-enabled", str(options.get("enable")) == "1", f"enable: {options.get('enable')}")
+
+    resources = _resources(ex)
+    states = _live_states(ex, resources)
+    services = sorted((vm for vm in resources if vm.get("pool") in SERVICE_POOLS), key=lambda vm: vm["name"])
+    for vm in services:
+        status = _status(vm, states)
+        record(f"services:{vm['name']}:running", status == "running", status)
+    for kind in ("scoring", "logging"):
+        host = cfg.get(f"{kind}_host")
+        command = ["sh", "-c", f"systemctl is-active {' '.join(SANDBOX_API_UNITS)} || true"]
+        try:
+            out = ex.ssh(host, command, timeout=60).split() if host else []
+        except Exception as error:  # noqa: BLE001  (the VM does not answer)
+            _note(ex, f"preflight: {kind} ({host}): {type(error).__name__}: {error}")
+            out = []
+        for unit, state in zip(SANDBOX_API_UNITS, out + ["no answer"] * len(SANDBOX_API_UNITS)):
+            record(f"services:{kind}:{unit}", state == "active", state if host else f"no {kind}_host configured")
+    # Off is no QEMU: a paused VM, or one whose guest halted, still holds its memory.
+    if params["hold_devboxes"]:
+        running = sorted(vm["name"] for vm in resources if vm.get("pool") == "devbox" and _qemu_up(vm, states))
+        record("devboxes:held", not running, f"not off: {', '.join(running)}" if running else "every devbox VM is off")
+    running = sorted(vm["name"] for vm in resources if vm.get("pool") == "sandbox" and _qemu_up(vm, states))
+    record("sandbox:not-running", not running, f"not off: {', '.join(running)}" if running else "")
+
+    memory = host_state.memory()
+    qemus = len(spec["vms"]) + 1  # and the gateway
+    overhead = qemus * QEMU_OVERHEAD_MB
+    needed = sum(int(vm["memory"]) for vm in spec["vms"]) + SANDBOX_GW_MEMORY_MB + overhead
+    reserve = int(cfg.get("memory_reserve_mb", MEMORY_RESERVE_MB))
+    available = memory["available_mb"]
+    admitted = available is not None and available >= needed + reserve
+    record("memory:admission", admitted, f"{available} MB available; {needed} MB for the sandbox (the ceilings of its "
+           f"{qemus - 1} VMs and the gateway, and {overhead} MB for their QEMUs) and {reserve} MB to spare")  # fmt: skip
+    growth = _growth_mb([vm for vm in resources if vm.get("pool") in (*SERVICE_POOLS, "devbox")], states)
+    if admitted and available < needed + reserve + sum(growth.values()):
+        # Not a failure: a host with every VM at its ceiling may not exist (worms-dev, 32 GB, cannot
+        # run round_one so). Only the operator can weigh that: an OOM kill of a team VM then fails
+        # that attempt (observe), the services' QEMUs are killed last (_oom_priority).
+        biggest = ", ".join(f"{name} {mb} MB" for name, mb in sorted(growth.items(), key=lambda item: -item[1])[:4])
+        warnings.append(f"memory: the service and devbox VMs that run can still grow by {sum(growth.values())} MB towards their "
+                        f"ceilings (most: {biggest}); with that, {needed + reserve + sum(growth.values()) - available} MB would "
+                        "be missing and the host's OOM killer would kill a team VM, failing that attempt")  # fmt: skip
+    _packages_in_cache(ex, spec, _addressing(ex), record)
+
+    # The services are rolled back to their clean snapshot before a new sandbox is built on them.
+    def clean(vm):
+        try:
+            return snapshots.has_clean(ex, vm)
+        except Exception:  # noqa: BLE001
+            return None
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for vm, has in zip(services, pool.map(clean, services)):
+            if has is None:
+                warnings.append(f"{vm['name']}: its snapshots could not be read")
+            elif not has:
+                warnings.append(f"{vm['name']} has no clean snapshot: a new round's sandbox is built on it as it is "
+                                "(`worms vm rebuild services`)")  # fmt: skip
+    failures = [r["check"] for r in results if not r["ok"]]
+    return {
+        "ok": not failures, "failures": failures, "checks": results, "warnings": warnings,
+        "memory": {"available_mb": available, "needed_mb": needed, "reserve_mb": reserve, "total_mb": memory["total_mb"]},
+    }  # fmt: skip
+
+
+def _host_records(ex, cfg, since, vmids):
+    """The host's own records since `since` (host_state.Records): the log lines of the kernel,
+    systemd (of these VMs' scopes only: the rest of PID 1's lines, some 26000 a day, would push
+    a long run's out of JOURNAL_LINES), qmeventd, Proxmox's task loggers and systemd-coredump,
+    its task list, and the QEMU processes recorded."""
+    matches = ["_TRANSPORT=kernel", "+", "_PID=1", *(f"UNIT={int(vmid)}.scope" for vmid in sorted(set(vmids))),
+               "+", "SYSLOG_IDENTIFIER=qmeventd"]  # fmt: skip
+    for logger in (*host_state.TASK_LOGGERS, host_state.COREDUMP_LOGGER):
+        matches += ["+", f"SYSLOG_IDENTIFIER={logger}"]
+    try:
+        journal = ex.run(["journalctl", f"--since=@{int(since)}", "--no-pager", "-q", "-o", "short-unix",
+                          "-n", str(host_state.JOURNAL_LINES), *matches], timeout=60)  # fmt: skip
+        task_list = host_state.tasks()
+    except Exception as error:  # noqa: BLE001
+        return host_state.Records(since, error=f"{type(error).__name__}: {error}")
+    return host_state.Records(since, journal, task_list, host_state.read_record(cfg.get("state_dir", STATE_DIR)))
+
+
+def observe(ex, cfg, params):
+    """What the host sees of a run's VMs now, in seconds, asking none of them (after the worm they
+    are rooted): each one's state and, if it is not running, why (host_state: oom, crash, host,
+    guest, unknown, from the host's records since `since`; a guest halted for good is stopped);
+    the host's memory; the devbox VMs that have a QEMU; and the OOM priority of every team VM,
+    set again (a VM started since has a new QEMU). Only VMs of the sandbox pool. Returns {vms:
+    [{vmid, name, status, cause, detail}], memory, devboxes_running, oom_adjusted}. The agent
+    runs it beside any other job (agent.py, observer)."""
+    resources = _resources(ex)
+    pool = {int(vm["vmid"]): vm for vm in resources if vm.get("pool") == "sandbox"}
+    outside = [vmid for vmid in params["vmids"] if vmid not in pool]
+    if outside:
+        raise validation.Invalid(f"not VMs of the sandbox pool: {', '.join(map(str, outside))}")
+    states = _live_states(ex, resources)
+    since = params["since"] if params.get("since") is not None else time.time() - OBSERVE_WINDOW
+    entries = {vmid: states.get(vmid) or {"status": pool[vmid].get("status")} for vmid in params["vmids"]}
+    status = {vmid: host_state.state(entry) for vmid, entry in entries.items()}
+    down = [vmid for vmid in params["vmids"] if status[vmid] != "running"]
+    causes = {}
+    if down:  # the records are read before the record of QEMUs changes (_oom_priority)
+        records = _host_records(ex, cfg, since, down)
+        causes = {vmid: records.cause(vmid, status[vmid], entries[vmid].get("qmpstatus")) for vmid in down}
+        late = [vmid for vmid in down if causes[vmid][0] == "unknown" and not records.error and status[vmid] == "stopped"]
+        if late:  # stopped, and no line of it yet
+            time.sleep(OBSERVE_REREAD)
+            records = _host_records(ex, cfg, since, late)
+            causes.update({vmid: records.cause(vmid, status[vmid], entries[vmid].get("qmpstatus")) for vmid in late})
+    vms = [{"vmid": vmid, "name": pool[vmid].get("name"), "status": status[vmid], "cause": causes.get(vmid, (None, ""))[0],
+            "detail": causes.get(vmid, (None, ""))[1]} for vmid in params["vmids"]]  # fmt: skip
+    devboxes = sorted(vm["name"] for vm in resources if vm.get("pool") == "devbox" and _qemu_up(vm, states))
+    adjusted = _oom_priority(ex, cfg, resources, states)
+    return {"vms": vms, "memory": host_state.memory(), "devboxes_running": devboxes, "oom_adjusted": adjusted}
 
 
 def deploy(ex, cfg, params):
@@ -1076,8 +1416,10 @@ def release_devboxes(ex, cfg, params):
 
 HANDLERS = {
     "gameplans": gameplans,
+    "preflight": preflight,
     "prepare": prepare,
     "check": check,
+    "observe": observe,
     "deploy": deploy,
     "remove_flags": remove_flags,
     "place_flags": place_flags,

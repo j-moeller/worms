@@ -24,16 +24,49 @@ from conftest import REPO, require
 sys.path.insert(0, str(REPO / "scripts"))
 sys.path.insert(0, str(REPO / "src"))  # the gameplan framework, as the agent's PYTHONPATH has it
 
-from round_agent import handlers, validation  # noqa: E402
+from round_agent import handlers, host_state, probe, validation  # noqa: E402
 from round_agent.agent import Agent  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
 def _agent_state(monkeypatch, tmp_path):
-    """A test's own agent records and internet flag, never this machine's: the tests may
-    run on the host itself."""
+    """A test's own agent records, internet flag, /proc, /sys, QEMU pid files and task list,
+    never this machine's: the tests may run on the host itself, whose VMs have the vmids the
+    fakes use (a test once set a real devbox QEMU's OOM priority)."""
     monkeypatch.setattr(handlers, "STATE_DIR", str(tmp_path / "agent-state"))
     monkeypatch.setattr(handlers, "INTERNET_FLAG", str(tmp_path / "internet-allowed"))
+    for name in ("PROC", "SYS", "QEMU_PIDS", "TASKS"):
+        (tmp_path / "host" / name).mkdir(parents=True)
+        monkeypatch.setattr(host_state, name, str(tmp_path / "host" / name))
+
+
+def _host(tmp_path):
+    return {name: tmp_path / "host" / name for name in ("PROC", "SYS", "QEMU_PIDS", "TASKS")}
+
+
+def _fake_qemu(tmp_path, vmid, pid, threads=()):
+    """A running VM's QEMU in the test's /proc: its pid file, command line, OOM priority, threads."""
+    host = _host(tmp_path)
+    (host["QEMU_PIDS"] / f"{vmid}.pid").write_text(f"{pid}\n")
+    proc = host["PROC"] / str(pid)
+    (proc / "task").mkdir(parents=True)
+    (proc / "cmdline").write_bytes(b"\0".join([b"/usr/bin/kvm", b"-id", str(vmid).encode(), b"-name", b"vm", b""]))
+    (proc / "oom_score_adj").write_text("0\n")
+    for tid in (pid, *threads):
+        (proc / "task" / str(tid)).mkdir()
+    return proc / "oom_score_adj"
+
+
+def _fake_memory(tmp_path, available_mb, total_mb=32000):
+    host = _host(tmp_path)
+    (host["PROC"] / "meminfo").write_text(f"MemTotal: {total_mb * 1024} kB\nMemFree: 1 kB\nMemAvailable: {available_mb * 1024} kB\n")
+    (host["PROC"] / "pressure").mkdir(exist_ok=True)
+    (host["PROC"] / "pressure" / "memory").write_text("some avg10=1.50 avg60=0.01 avg300=0.00 total=1\n"
+                                                      "full avg10=0.25 avg60=0.01 avg300=0.00 total=1\n")  # fmt: skip
+    (host["SYS"] / "kernel" / "mm" / "ksm").mkdir(parents=True, exist_ok=True)
+    (host["SYS"] / "kernel" / "mm" / "ksm" / "pages_sharing").write_text("25600\n")  # 100 MB of 4 KiB pages
+    (host["PROC"] / "spl" / "kstat" / "zfs").mkdir(parents=True, exist_ok=True)
+    (host["PROC"] / "spl" / "kstat" / "zfs" / "arcstats").write_text(f"name type data\nsize 4 {2048 * 2**20}\nc_max 4 1\n")
 
 
 def _load_varfile_text(text):
@@ -193,6 +226,30 @@ def test_validate_prepare():
     assert clean == {"gameplan": "round_one.py", "gameplan_sha256": "a" * 64, "run_uuid": RUN}
     with pytest.raises(validation.Invalid):
         validation.validate("prepare", {"gameplan": "round_one.py", "gameplan_sha256": "nothex", "run_uuid": RUN})
+    # The jobs around it: preflight names the gameplan too, check the run (or nothing: the host only).
+    flight = {"gameplan": "round_one.py", "gameplan_sha256": "a" * 64}
+    assert validation.validate("preflight", flight) == {**flight, "hold_devboxes": False}
+    assert validation.validate("preflight", {**flight, "hold_devboxes": True})["hold_devboxes"] is True
+    for bad in ({**flight, "hold_devboxes": "yes"}, {**flight, "hold_devboxes": 1}, {**flight, "gameplan": "../x.py"}):
+        with pytest.raises(validation.Invalid):
+            validation.validate("preflight", bad)
+    assert validation.validate("check", {}) == {"run_uuid": None} and validation.validate("check", {"run_uuid": RUN}) == {"run_uuid": RUN}
+    with pytest.raises(validation.Invalid):
+        validation.validate("check", {"run_uuid": "../etc"})
+    # observe: Proxmox VM numbers, and since when (a zoned ISO time of the last days).
+    from datetime import datetime, timedelta, timezone
+
+    since = datetime.now(timezone.utc) - timedelta(minutes=30)
+    clean = validation.validate("observe", {"vmids": [901, 900, 901], "since": since.isoformat()})
+    assert clean == {"vmids": [900, 901], "since": since.timestamp()}
+    assert validation.validate("observe", {"vmids": [900]})["since"] is None
+    for bad in ({}, {"vmids": []}, {"vmids": "900"}, {"vmids": ["900"]}, {"vmids": [True]}, {"vmids": [99]},
+                {"vmids": list(range(100, 200))}, {"vmids": [900], "since": "an hour ago"},
+                {"vmids": [900], "since": since.replace(tzinfo=None).isoformat()},
+                {"vmids": [900], "since": (since - timedelta(days=9)).isoformat()},
+                {"vmids": [900], "since": (since + timedelta(days=1)).isoformat()}):  # fmt: skip
+        with pytest.raises(validation.Invalid):
+            validation.validate("observe", bad)
 
 
 def test_validate_flags_and_files_are_strict_unless_told_otherwise():
@@ -211,7 +268,7 @@ def test_validate_flags_and_files_are_strict_unless_told_otherwise():
 
 # The gameplan the agent's tests build: two VMs on one network (src/gameplan).
 PAIR = """
-from gameplan import Allow, BasicVM, FirewallRule, Gameplan, Incoming
+from gameplan import Allow, BasicVM, FirewallRule, Gameplan, Incoming, Outgoing
 
 
 class Pair(Gameplan):
@@ -226,7 +283,9 @@ class Pair(Gameplan):
         self.add_ssh_pwd_login(self.b, self.login)
         self.note = self.write_file(self.b, "~/note", f"{self.login.user} {self.login.pwd}")
         self.later = self.write_file(self.a, "/root/later", f"{self.key.public}", owner="root", at_reset=False)
+        self.b.add_service("cron")
         self.register_network([self.a, self.b])
+        self.register_fw_rule(self.a, FirewallRule(Allow, 22, Outgoing, peers=[self.b]))
         self.register_fw_rule(self.b, FirewallRule(Allow, 22, Incoming))
         self.set_worm_entrypoint(self.a)
 
@@ -237,6 +296,18 @@ GAMEPLAN_ROOT = Path(tempfile.mkdtemp(prefix="agent-gameplans-"))
 (GAMEPLAN_ROOT / "gameplans").mkdir()
 (GAMEPLAN_ROOT / "gameplans" / "pair.py").write_text(PAIR)
 PAIR_SHA = hashlib.sha256(PAIR.encode()).hexdigest()
+# The platform's addresses, as `worms step inventory` leaves them in the agent's workspace.
+(GAMEPLAN_ROOT / "ansible").mkdir()
+(GAMEPLAN_ROOT / "ansible" / "inventory.generated.yml").write_text(
+    json.dumps({"all": {"vars": {
+        "infrastructure_ips": {"dashboard": "10.10.0.18", "database": "10.11.0.16", "orchestrator": "10.11.0.19"},
+        "services_ips": {"dns": "10.2.0.11", "scoring": "10.2.0.14", "logging": "10.2.0.15", "sandbox_gw": "10.2.0.2"},
+        "private_internet_ips": {"apt_cache": {"network": "10.2.0.20", "maintenance": "10.5.0.20"},
+                                 "devpi": {"network": "10.2.0.21", "maintenance": "10.5.0.21"}},
+        "host_ips": {"mgmt_sandbox": "10.4.0.1"},
+        "devbox_services_block": "10.2.0.32/27",
+    }}})  # JSON is YAML
+)  # fmt: skip
 
 
 def _pair_hcl():
@@ -275,6 +346,30 @@ class FakeExecutor:
         self.clean = set()
         self.descriptions = {}  # vmid -> its clean snapshot's description
         self.fail_on = None
+        # What the host reports now: vmid -> (status, qmpstatus), else running (or the pool's).
+        self.states = {}
+        self.cluster_firewall = 1
+        self.journal = ""
+        self.api_units = {"10.5.0.14": "active\nactive\n", "10.5.0.15": "active\nactive\n"}
+        self.apt_cache = "jq_1.7.1-6_amd64.deb\ncurl_8.14.1-2_amd64.deb\n"
+        # The probes: each one's parameters by VM address, and changes to the answer of a VM
+        # that has everything right (probe_answer).
+        self.probes = {}
+        self.probe_hooks = []
+
+    def probe_answer(self, host, params):
+        """What a VM where everything is as its gameplan says answers the probe."""
+        reply = {
+            "started": time.time(), "flag": [True, ""], "dns": [True, ""], "scoring": [True, "HTTP 403"],
+            "logging": [True, "HTTP 403"], "apt": [True, ""], "pypi": [True, "HTTP 200"], "time": [True, ""],
+            "connect": {key: {"open": "open", "reachable": "refused", "blocked": "timeout"}[want] for key, _, _, want in params["connect"]},
+            "forbidden": {label: "timeout" for label, _, _ in params["forbidden"]},
+            "files": {key: "" for key, *_ in params["files"]},
+            "services": {unit: "active" for unit in params["services"]},
+        }  # fmt: skip
+        for hook in self.probe_hooks:
+            hook(host, params, reply)
+        return reply
 
     def sandbox_pool(self):
         if not self.sandbox_built:
@@ -298,6 +393,9 @@ class FakeExecutor:
     def worms(self, component, timeout=3600, args=None):
         self.calls.append(("worms", component))
         self.worms_args = args
+        if component == "inventory" and not (self.repo_root / handlers.INVENTORY).exists():  # a workspace without one
+            (self.repo_root / handlers.INVENTORY).parent.mkdir(parents=True, exist_ok=True)
+            (self.repo_root / handlers.INVENTORY).write_text((GAMEPLAN_ROOT / handlers.INVENTORY).read_text())
 
     def tofu(self, stack, *args, timeout=3600):
         self.calls.append(("tofu", stack, *args))
@@ -339,6 +437,17 @@ class FakeExecutor:
             return ""
         if argv[:3] == ["pvesh", "get", "/cluster/resources"]:
             return json.dumps(self.sandbox_pool() + [vm for vms in self.pools.values() for vm in vms])
+        if argv[:2] == ["pvesh", "get"] and argv[2] == "/nodes/n/qemu":
+            listed = self.sandbox_pool() + [vm for vms in self.pools.values() for vm in vms]
+            return json.dumps([
+                {"vmid": vm["vmid"], "name": vm["name"], "status": self.states.get(vm["vmid"], (vm["status"], None))[0],
+                 "qmpstatus": self.states.get(vm["vmid"], (vm["status"], vm["status"] if vm["status"] == "running" else None))[1]}
+                for vm in listed
+            ])  # fmt: skip
+        if argv[:3] == ["pvesh", "get", "/cluster/firewall/options"]:
+            return json.dumps({"enable": self.cluster_firewall, "policy_in": "DROP"})
+        if argv[0] == "journalctl":
+            return self.journal
         if argv[:2] == ["pvesh", "get"] and argv[2].endswith("/snapshot"):
             vmid = int(argv[2].split("/")[4])
             return json.dumps([{"name": "clean", "description": self.descriptions.get(vmid, "")}] if vmid in self.clean else [] + [{"name": "current"}])
@@ -366,6 +475,14 @@ class FakeExecutor:
         if argv == ["sudo", "sha256sum", handlers.FLAG_PATH]:
             flag = self.flags.get(host)
             return f"{hashlib.sha256(flag.encode()).hexdigest()}  {handlers.FLAG_PATH}\n" if flag else ""
+        if argv == ["sudo", "python3", "-I", "-B", "-"]:
+            params = probe.params_of(input)
+            self.probes[host] = params
+            return "debian@vm: some login banner\n" + probe.MARK + json.dumps(self.probe_answer(host, params)) + "\n"
+        if argv[:2] == ["sh", "-c"] and "sandbox-api nginx" in argv[2]:
+            return self.api_units.get(host, "")
+        if argv[:2] == ["sudo", "find"] and handlers.APT_CACHE_DIR in argv:
+            return self.apt_cache
         if argv[:2] == ["sh", "-c"] and "is-active" in argv[2]:
             return "active\ninactive\n"
         return ""
@@ -377,8 +494,12 @@ CFG = {"dashboard_host": "10.5.0.18", "dashboard_media_root": "/opt/dashboard/me
 
 PREPARE = {"gameplan": "pair.py", "gameplan_sha256": PAIR_SHA, "run_uuid": RUN}
 SANDBOX_VMIDS = {900, 901, 950}  # the two VMs and the gateway
-SERVICE_VMS = [{"vmid": 111, "name": "scoring", "node": "n", "status": "running", "pool": "ephemeral"},
-               {"vmid": 100, "name": "apt-cache", "node": "n", "status": "running", "pool": "private_internet"}]  # fmt: skip
+MB = 2**20
+# Their ceilings (maxmem) and what their QEMUs hold now (memhost), as Proxmox lists them.
+SERVICE_VMS = [{"vmid": 111, "name": "scoring", "node": "n", "status": "running", "pool": "ephemeral",
+                "maxmem": 512 * MB, "memhost": 239 * MB},
+               {"vmid": 100, "name": "apt-cache", "node": "n", "status": "running", "pool": "private_internet",
+                "maxmem": 1024 * MB, "memhost": 469 * MB}]  # fmt: skip
 DEVBOX_VMS = [{"vmid": 116, "name": "devbox-t1-a", "node": "n", "status": "running", "pool": "devbox"},
               {"vmid": 117, "name": "devbox-t1-b", "node": "n", "status": "stopped", "pool": "devbox"}]  # fmt: skip
 
@@ -391,10 +512,28 @@ def _first_index(steps, prefix):
     return next(i for i, step in enumerate(steps) if step.startswith(prefix))
 
 
-def test_prepare_builds_the_gameplans_sandbox_and_reports_its_topology():
+def test_prepare_builds_the_gameplans_sandbox_and_reports_its_topology(tmp_path):
     ex = FakeExecutor()
     ex.sandbox_built = False
+    third = {"vmid": 118, "name": "devbox-t1-c", "node": "n", "status": "running", "pool": "devbox"}
+    fourth = {"vmid": 119, "name": "devbox-t1-gw", "node": "n", "status": "stopped", "pool": "devbox"}
+    ex.pools.update(ephemeral=[SERVICE_VMS[0]], devbox=[*DEVBOX_VMS, third, fourth])
+    adjust = {vmid: _fake_qemu(tmp_path, vmid, 4000 + vmid, threads=[5000 + vmid]) for vmid in (900, 901, 950, 116, 117, 111)}
+    # A pid file left behind, naming a process that is not this VM's QEMU (any more).
+    other = _fake_qemu(tmp_path, 199, 4700)
+    (_host(tmp_path)["QEMU_PIDS"] / "118.pid").write_text("4700\n")
     result = _prepare(ex)
+    # The OOM killer's first choice is a team VM: every sandbox VM (the gateway too) and devbox VM
+    # with a QEMU, not a service VM, and nothing but the QEMU its pid file names, if it is that VM's.
+    # 117: the resource list (up to 10 s old) says stopped, but it has a QEMU, which decides.
+    assert {vmid: path.read_text().strip() for vmid, path in adjust.items()} == {
+        900: "1000", 901: "1000", 950: "1000", 116: "1000", 117: "1000", 111: "0"}  # fmt: skip
+    assert other.read_text() == "0\n" and any("no QEMU of VM 118" in note for note in ex.notes)
+    assert not any("VM 119" in note for note in ex.notes)  # stopped, so no QEMU is expected: nothing to say
+    record = json.loads((Path(handlers.STATE_DIR) / host_state.RECORD).read_text())
+    assert record["900"]["pid"] == 4900 and record["900"]["tids"] == [4900, 5900] and "111" not in record
+    assert oct((Path(handlers.STATE_DIR) / host_state.RECORD).stat().st_mode & 0o777) == "0o600"
+    assert result["gateway"] == {"name": "sandbox-gw", "vmid": 950}  # the conductor watches it too
     assert any(c[:2] == ("tofu", "sandbox") and "apply" in c for c in ex.calls)
     assert ("worms", "round-configure-sandbox") in ex.calls  # inventory, the CA, the gameplan's packages
     assert f'gameplan_sha256 = "{PAIR_SHA}"' in ex.installed_hcl and '"sandbox-b" = {' in ex.installed_hcl
@@ -482,6 +621,9 @@ def test_the_node_runs_only_the_gameplan_the_orchestrator_validated():
     with pytest.raises(Exception, match="no gameplan"):
         handlers.prepare(ex, CFG, validation.validate("prepare", {**PREPARE, "gameplan": "other.py"}))
     assert not any(c[0] == "tofu" for c in ex.calls)
+    # The preflight of another version proves nothing about this one.
+    with pytest.raises(handlers.Refused, match="not the version expected"):
+        handlers.preflight(ex, CFG, validation.validate("preflight", {**PREPARE, "gameplan_sha256": "0" * 64, "hold_devboxes": False}))
 
 
 def test_the_gameplans_job_lists_files_hashes_and_validity_but_no_reasons(tmp_path):
@@ -609,14 +751,164 @@ def test_no_sandbox_is_started_while_internet_access_is_allowed(tmp_path, built)
     assert ex.qm_steps() == [] and not any(c[0] == "tofu" and "output" not in c for c in ex.calls)
 
 
-def test_check_reports_ok_when_everything_is_up():
+PREFLIGHT = {"gameplan": "pair.py", "gameplan_sha256": PAIR_SHA, "hold_devboxes": True}
+
+
+def _stand_ins(tmp_path):
+    """A VM's commands for the probe, on this machine: apt, the clock and systemd answer, and
+    change nothing."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name, body in {
+        "apt-get": 'echo "Hit:1 http://apt-cache trixie InRelease"\n'
+                   'if [ -n "$WORMS_TEST_SLOW" ]; then sleep 30 & echo $! > "$WORMS_TEST_PIDS/sleep"; wait; fi',
+        # A VM whose gameplan took its time service away (WORMS_TEST_NO_NTP) has no NTP to ask.
+        "timedatectl": 'printf "NTP=%s\\nNTPSynchronized=%s\\nCanNTP=yes\\n" "${WORMS_TEST_NO_NTP:-yes}" "${WORMS_TEST_NO_NTP:-yes}"',
+        "systemctl": 'case "$2" in cron) echo active ;; *) echo inactive; exit 3 ;; esac',
+    }.items():  # fmt: skip
+        (bin_dir / name).write_text(f"#!/bin/sh\n{body}\n")
+        (bin_dir / name).chmod(0o755)
+    return bin_dir
+
+
+def test_check_reports_ok_when_everything_is_up(tmp_path):
+    import http.server
+    import pwd
+    import socket
+    import threading
+
     ex = FakeExecutor()
-    result = handlers.check(ex, CFG, {})
+    result = handlers.check(ex, CFG, validation.validate("check", {}))
     assert result["ok"] is True and result["failures"] == []
     assert any(c["check"] == "vm:sandbox-a:running" and c["ok"] for c in result["checks"])
+    assert ex.probes == {}  # without the run, the host alone
+
+    # Before an attempt: the host can take the gameplan's sandbox, and everything around it is up.
+    _fake_memory(tmp_path, available_mb=20000)
+    ex.pools.update(ephemeral=[SERVICE_VMS[0]], private_internet=[SERVICE_VMS[1]])
+    ex.clean = {100, 111}
+    ex.states = {vmid: ("stopped", None) for vmid in SANDBOX_VMIDS}  # the round's sandbox, kept powered off
+    # A workspace the sync left without the platform's addresses (no sandbox was built or destroyed
+    # there yet): the inventory is made first, as a build would.
+    workspace = tmp_path / "workspace"
+    (workspace / "gameplans").mkdir(parents=True)
+    (workspace / "gameplans" / "pair.py").write_text(PAIR)
+    ex.repo_root = workspace
+    flight = handlers.preflight(ex, CFG, validation.validate("preflight", PREFLIGHT))
+    assert ("worms", "inventory") in ex.calls and (workspace / handlers.INVENTORY).is_file()
+    ex.repo_root = GAMEPLAN_ROOT
+    assert flight["ok"] is True and flight["failures"] == [] and flight["warnings"] == []
+    # Each VM at its ceiling, the gateway too, and what each of their QEMUs holds beyond it.
+    needed = 512 + 512 + handlers.SANDBOX_GW_MEMORY_MB + 3 * handlers.QEMU_OVERHEAD_MB
+    assert flight["memory"] == {"available_mb": 20000, "needed_mb": needed, "reserve_mb": 1024, "total_mb": 32000}
+    assert {c["check"] for c in flight["checks"]} == {
+        "host:internet-window-closed", *(f"host:{unit}" for unit in handlers.HOST_UNITS), "host:cluster-firewall-enabled",
+        "services:scoring:running", "services:apt-cache:running", "services:scoring:sandbox-api", "services:scoring:nginx",
+        "services:logging:sandbox-api", "services:logging:nginx", "devboxes:held", "sandbox:not-running", "memory:admission",
+        "packages:in-cache",
+    }  # fmt: skip
+    assert next(c["detail"] for c in flight["checks"] if c["check"] == "host:internet-window-closed") == ""
+    assert next(c for c in ex.ssh_calls if c["argv"][:2] == ["sudo", "find"])["host"] == "10.5.0.20"  # apt-cache, by the inventory
+    assert "jq" not in json.dumps(flight)  # what a gameplan installs is its content
+    # Room for the sandbox, but not for the service VMs growing to their ceilings as well (a worm
+    # reaches them): a warning, not a failure. scoring can take 512 + 64 - 239 MB more, apt-cache 619.
+    _fake_memory(tmp_path, available_mb=3300)
+    flight = handlers.preflight(ex, CFG, validation.validate("preflight", PREFLIGHT))
+    assert flight["ok"] is True and len(flight["warnings"]) == 1, flight["warnings"]
+    assert "grow by 956 MB" in flight["warnings"][0] and "apt-cache 619 MB, scoring 337 MB" in flight["warnings"][0]
+    assert "with that, 408 MB would be missing" in flight["warnings"][0]  # 1728 + 1024 + 956 - 3300
+
+    # Right before the worm, with the run: every VM of its gameplan looked at from inside, all at once.
+    ex.states = {}
+    _prepare(ex)
+    result = handlers.check(ex, CFG, validation.validate("check", {"run_uuid": RUN}))
+    assert result["ok"] is True, result["failures"]
+    names = {c["check"] for c in result["checks"]}
+    for vm in ("sandbox-a", "sandbox-b"):
+        assert {f"vm:{vm}:{p}" for p in ("probe", "flag", "dns", "scoring", "logging", "apt", "pypi", "time", "isolated", "firewall")} <= names
+    assert {"vm:sandbox-b:files", "vm:sandbox-b:services", "host:inventory"} <= names
+    assert "vm:sandbox-a:files" not in names  # its one file is written later, not at the reset
+    assert next(c for c in ex.ssh_calls if c["argv"][:2] == ["sudo", "python3"])["argv"] == ["sudo", "python3", "-I", "-B", "-"]
+    spec = handlers._gameplan(ex, "pair.py", PAIR_SHA)[0]
+    address = {vm["name"]: vm["nics"][0]["address"].split("/")[0] for vm in spec["vms"]}
+    a, b = ex.probes["10.4.0.10"], ex.probes["10.4.0.11"]
+    # The gameplan's firewall: a may reach b's SSH (both sides allow it), b may not reach a's.
+    assert a["connect"] == [["0", address["sandbox-b"], 22, "open"]] and b["connect"] == [["0", address["sandbox-a"], 22, "blocked"]]
+    assert a["forbidden"] == [["dashboard", "10.10.0.18", 443], ["database", "10.11.0.16", 5432], ["orchestrator", "10.11.0.19", 443],
+                              ["host", "10.4.0.1", 8006], ["internet", "1.1.1.1", 80], ["devbox", "10.2.0.33", 80],
+                              ["maintenance", "10.4.0.11", 22]]  # fmt: skip
+    assert a["dns"] == {"scoring.worms.internal": "10.2.0.14", "logging.worms.internal": "10.2.0.15",
+                        "apt-cache.worms.internal": "10.2.0.20", "pypi.worms.internal": "10.2.0.21"}  # fmt: skip
+    assert b["files"] == [["0", "/home/debian/note", "debian", "0644"]] and a["files"] == [] and b["services"] == ["cron"]
+    assert a["pypi"] == ["pypi.worms.internal", 3141, "/root/pypi/+simple/requests/"]
+    # The database (which the dashboard reads) gets none of the gameplan: no path, user, unit or rule.
+    text = json.dumps(result)
+    assert "/home/debian/note" not in text and "alice" not in text and "cron" not in text and address["sandbox-b"] not in text
+
+    # The probe itself, run here as on a VM, against stand-ins on this machine: a port that answers,
+    # one that refuses, a page, and commands of its own on PATH. Nothing reaches out, nothing changes.
+    listening = socket.create_server(("127.0.0.1", 0))
+    closed = socket.create_server(("127.0.0.1", 0))
+    open_port, closed_port = listening.getsockname()[1], closed.getsockname()[1]
+    closed.close()
+
+    class Page(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200 if self.path == "/root/pypi/+simple/requests/" else 404)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    page = http.server.HTTPServer(("127.0.0.1", 0), Page)
+    threading.Thread(target=page.serve_forever, daemon=True).start()
+    (tmp_path / "flag").write_text("FLAG{0123}")
+    (tmp_path / "note").write_text("n")
+    (tmp_path / "note").chmod(0o644)
+    me = pwd.getpwuid(os.getuid()).pw_name
+    (tmp_path / "pids").mkdir()
+    params = {
+        "deadline": 40, "apt_timeout": 20, "time_wait": 1, "connect_timeout": 1, "flag": str(tmp_path / "flag"), "tmp": str(tmp_path),
+        "dns": {"localhost": "127.0.0.1"}, "https": {"scoring": ["127.0.0.1", closed_port], "logging": ["127.0.0.1", closed_port]},
+        "pypi": ["127.0.0.1", page.server_address[1], "/root/pypi/+simple/requests/"],
+        "connect": [["0", "127.0.0.1", open_port, "open"], ["1", "127.0.0.1", closed_port, "reachable"], ["2", "127.0.0.1", closed_port, "open"]],
+        "forbidden": [["internet", "127.0.0.1", open_port]],
+        "files": [["0", str(tmp_path / "note"), me, "0644"], ["1", str(tmp_path / "gone"), me, "0644"],
+                  ["2", str(tmp_path / "note"), "nobody", "0600"]],
+        "services": ["cron", "other"],
+    }  # fmt: skip
+    env = {"PATH": f"{_stand_ins(tmp_path)}:/usr/bin:/bin", "WORMS_TEST_PIDS": str(tmp_path / "pids")}
+    try:
+        ran = subprocess.run(["python3", "-I", "-B", "-"], input=probe.script(params), capture_output=True, text=True, timeout=60, env=env)
+        reply = probe.answer(ran.stdout)
+        assert reply is not None, ran.stderr
+        assert [reply[key] for key in ("flag", "dns", "pypi", "apt", "time")] == [[True, ""], [True, ""], [True, "HTTP 200"], [True, ""], [True, ""]]
+        assert reply["scoring"][0] is False and "Refused" in reply["scoring"][1]
+        assert reply["connect"] == {"0": "open", "1": "refused", "2": "refused"} and reply["forbidden"] == {"internet": "open"}
+        assert reply["files"] == {"0": "", "1": "missing", "2": f"owner {me}, mode 0644"} and reply["services"] == {"cron": "active", "other": "inactive"}
+        assert "deadline" not in reply and not list(tmp_path.glob("worms-check-*"))  # apt's directory is gone again
+        # Its own deadline: it says what it has, and leaves no command running and nothing behind. What
+        # it cut off stays absent (apt's step, its command killed, would say "exit -9"). And a VM whose
+        # time service the gameplan took away: its clock as the host sees it (records) decides.
+        started = time.monotonic()
+        ran = subprocess.run(["python3", "-I", "-B", "-"], input=probe.script({**params, "deadline": 3}), capture_output=True, text=True,
+                             timeout=60, env={**env, "WORMS_TEST_SLOW": "1", "WORMS_TEST_NO_NTP": "no"})  # fmt: skip
+        reply = probe.answer(ran.stdout)
+        assert time.monotonic() - started < 10 and reply["deadline"] is True and "apt" not in reply and reply["flag"] == [True, ""]
+        assert reply["time"] == [True, "no time service: its clock as the host sees it"]
+        assert not list(tmp_path.glob("worms-check-*"))
+        left = Path("/proc") / (tmp_path / "pids" / "sleep").read_text().strip() / "cmdline"  # apt's own child, killed with it
+        for _ in range(20):
+            if not left.exists() or not left.read_bytes():  # gone, or a zombie on its way out
+                break
+            time.sleep(0.1)
+        assert not left.exists() or not left.read_bytes()
+    finally:
+        page.shutdown()
+        listening.close()
 
 
-def test_check_flags_a_down_vm_and_dead_service():
+def test_check_flags_a_down_vm_and_dead_service(tmp_path):
     ex = FakeExecutor()
     ex.systemctl["worms-mirror"] = "inactive"
     ex.qm["900"] = "status: stopped"
@@ -624,6 +916,79 @@ def test_check_flags_a_down_vm_and_dead_service():
     assert result["ok"] is False
     assert "host:worms-mirror" in result["failures"]
     assert "vm:sandbox-a:running" in result["failures"]
+
+    # Before an attempt: each thing the host lacks for it fails the preflight, and says so.
+    (tmp_path / "internet-allowed").write_text("allowed\n")
+    _fake_memory(tmp_path, available_mb=1800)  # the sandbox takes 1728 MB (its ceilings, its QEMUs), and 1024 more are kept free
+    stopped_service = {**SERVICE_VMS[1], "status": "stopped"}
+    halted = {"vmid": 118, "name": "devbox-t1-c", "node": "n", "status": "running", "pool": "devbox"}
+    ex.pools.update(ephemeral=[SERVICE_VMS[0]], private_internet=[stopped_service], devbox=[*DEVBOX_VMS, halted])
+    ex.states = {118: ("running", "internal-error")}  # its guest halted it: its QEMU still holds its memory, so it is not off
+    ex.cluster_firewall = 0
+    ex.api_units["10.5.0.14"] = "inactive\nactive\n"
+    ex.apt_cache = "curl_8.14.1-2_amd64.deb\n"  # no jq
+    flight = handlers.preflight(ex, CFG, validation.validate("preflight", PREFLIGHT))
+    assert flight["ok"] is False and set(flight["failures"]) == {
+        "host:internet-window-closed", "host:worms-mirror", "host:cluster-firewall-enabled", "services:apt-cache:running",
+        "services:scoring:sandbox-api", "devboxes:held", "sandbox:not-running", "memory:admission", "packages:in-cache",
+    }  # fmt: skip
+    detail = {c["check"]: c["detail"] for c in flight["checks"]}
+    assert detail["devboxes:held"] == "not off: devbox-t1-a, devbox-t1-c"
+    assert detail["sandbox:not-running"].startswith("not off: sandbox-a")
+    assert detail["host:internet-window-closed"].endswith("exists: internet access is allowed (`worms internet off`)")
+    assert flight["memory"]["available_mb"] == 1800 and flight["memory"]["needed_mb"] == 1728
+    assert detail["memory:admission"] == ("1800 MB available; 1728 MB for the sandbox (the ceilings of its 2 VMs and the gateway, "
+                                          "and 192 MB for their QEMUs) and 1024 MB to spare")  # fmt: skip
+    assert "jq" not in json.dumps(flight) and any("no .deb of jq" in note for note in ex.notes)  # names: in the job log only
+    assert len(flight["warnings"]) == 2 and all("no clean snapshot" in w for w in flight["warnings"])
+    # Without the hold, devboxes may run; a later state (the sandbox powered off) passes.
+    ex.states = {vmid: ("stopped", None) for vmid in SANDBOX_VMIDS}
+    flight = handlers.preflight(ex, CFG, validation.validate("preflight", {**PREFLIGHT, "hold_devboxes": False}))
+    assert "devboxes:held" not in {c["check"] for c in flight["checks"]} and "sandbox:not-running" not in flight["failures"]
+
+    # Right before the worm: a VM that is not as its gameplan says fails its probe's records.
+    (tmp_path / "internet-allowed").unlink()
+    ex = FakeExecutor()
+    _prepare(ex)
+
+    def broken(host, params, reply):
+        if host == "10.4.0.11":  # sandbox-b
+            reply["files"]["0"] = "owner root, mode 0600"
+            reply["services"]["cron"] = "failed"
+            reply["forbidden"]["database"] = "refused"  # an answer: it got there
+            reply["apt"] = [False, "E: Failed to fetch http://apt-cache.worms.internal:3142/... 503"]
+            reply["started"] -= 600  # its clock
+        else:  # sandbox-a: b's SSH does not answer where the gameplan lets it in
+            reply["connect"] = {key: "refused" for key in reply["connect"]}
+
+    ex.probe_hooks.append(broken)
+    result = handlers.check(ex, CFG, validation.validate("check", {"run_uuid": RUN}))
+    assert set(result["failures"]) == {"vm:sandbox-a:firewall", "vm:sandbox-b:files", "vm:sandbox-b:services", "vm:sandbox-b:isolated",
+                                       "vm:sandbox-b:apt", "vm:sandbox-b:time"}  # fmt: skip
+    detail = {c["check"]: c["detail"] for c in result["checks"]}
+    assert detail["vm:sandbox-b:isolated"] == "got to: database" and "-600 s" in detail["vm:sandbox-b:time"]
+    assert detail["vm:sandbox-a:firewall"].startswith("1 of 1 connections not as the gameplan's firewall says")
+    # What is wrong, in the job log; the database gets numbers and the platform's names only.
+    text = json.dumps(result)
+    assert "/home/debian/note" not in text and "cron" not in text
+    assert any("file 0 (/home/debian/note, debian 0644): owner root, mode 0600" in note for note in ex.notes)
+    assert any("service cron: failed" in note for note in ex.notes)
+    assert any("sandbox-b port 22" in note and "open expected, got refused" in note for note in ex.notes)
+
+    # A VM that does not answer at all, and one whose answer is cut off by its deadline.
+    ex = FakeExecutor()
+    _prepare(ex)
+    ex.unreachable.add("10.4.0.10")
+    ex.probe_hooks = [lambda host, params, reply: (reply.update(deadline=True), reply.pop("apt"))]
+    result = handlers.check(ex, CFG, validation.validate("check", {"run_uuid": RUN}))
+    detail = {c["check"]: c["detail"] for c in result["checks"]}
+    assert {"vm:sandbox-a:probe", "vm:sandbox-b:probe", "vm:sandbox-b:apt"} <= set(result["failures"])
+    assert not any(name.startswith("vm:sandbox-a:") and name.split(":")[2] not in ("running", "no-kvm", "probe") for name in detail)
+    assert detail["vm:sandbox-a:probe"] == "no answer (the job log on the host says why)" and detail["vm:sandbox-b:apt"] == "no answer"
+    assert any("connection refused" in note for note in ex.notes)
+    # No run on the host: the job fails, it does not pass without its probes.
+    with pytest.raises(validation.Invalid, match="no state for run"):
+        handlers.check(ex, CFG, validation.validate("check", {"run_uuid": "4" * 8 + RUN[8:]}))
 
 
 @pytest.mark.parametrize(
@@ -663,7 +1028,14 @@ def test_a_flag_that_does_not_read_back_is_not_released():
     assert result["released"] == [] and "reads back differently" in result["failed"][0]["error"]
 
 
-def test_after_the_worm_a_vm_it_broke_is_reported_not_failed():
+CONDUCTOR = "orchestrator@pam!orchestrator-prov"  # the orchestrator's API token
+
+
+def _upid(start, kind, vmid, user="root@pam"):
+    return f"UPID:n:0001E240:0A1B2C3D:{int(start):08X}:{kind}:{vmid}:{user}:"
+
+
+def test_after_the_worm_a_vm_it_broke_is_reported_not_failed(tmp_path, monkeypatch):
     ex = FakeExecutor()
     ex.unreachable.add("10.4.0.11")
     with pytest.raises(RuntimeError):
@@ -672,6 +1044,121 @@ def test_after_the_worm_a_vm_it_broke_is_reported_not_failed():
     assert result["removed"] == ["sandbox-a"] and result["failed"][0]["vm"] == "sandbox-b"
     remove = next(c for c in ex.ssh_calls if c["host"] == "10.4.0.10")
     assert remove["argv"] == ["sudo", "sh", "-c", "rm -f /etc/worms/flag && test ! -e /etc/worms/flag"]
+
+    # After the worm a VM is asked nothing: the host's own records say why one is not running.
+    from datetime import datetime, timedelta, timezone
+
+    names = ("a", "b", "c", "d", "e", "f", "g", "h", "i")
+    ex = FakeExecutor({f"sandbox-{n}": {"maintenance_ip": f"10.4.0.{10 + i}", "vmid": 900 + i, "addresses": []} for i, n in enumerate(names)})
+    ex.pools.update(devbox=list(DEVBOX_VMS))
+    now = time.time()
+    ex.states = {900: ("stopped", None), 901: ("stopped", None), 902: ("stopped", None), 903: ("running", "paused"),
+                 904: ("stopped", None), 906: ("running", "internal-error"), 907: ("stopped", None), 908: ("stopped", None),
+                 950: ("stopped", None)}  # fmt: skip
+    ex.journal = "\n".join(f"{at:.6f} worms-dev {line}" for at, line in sorted([
+        # a: it powered itself off; nothing of the host's then.
+        (now - 1000, "systemd[1]: Started 900.scope."), (now - 100, "systemd[1]: 900.scope: Deactivated successfully."),
+        (now - 97, "qmeventd[4]: Starting cleanup for 900"),
+        # b: the OOM killer.
+        (now - 50.2, "kernel: oom-kill:constraint=CONSTRAINT_NONE,nodemask=(null),cpuset=qemu.slice,mems_allowed=0,global_oom,"
+                     "task_memcg=/qemu.slice/901.scope,task=kvm,pid=7901,uid=0"),
+        (now - 50, "systemd[1]: 901.scope: Failed with result 'oom-kill'."),
+        # c: one of its QEMU's threads crashed (by the threads the agent recorded).
+        (now - 20, "kernel: CPU 0/KVM[7910]: segfault at 0 ip 00005555 sp 00007ffd error 4 in qemu-system-x86_64[5555,1000+2000]"),
+        (now - 19, "systemd[1]: 902.scope: Deactivated successfully."),
+        # d: paused by the conductor; that task is in the journal alone (the task list rotated).
+        (now - 10, f"pvedaemon[9]: <{CONDUCTOR}> starting task {_upid(now - 10, 'qmpause', 903, CONDUCTOR)}"),
+        # e: shut down by the conductor, started again, then off from inside: the earlier stop is not why.
+        (now - 900, f"qm[5]: <root@pam> starting task {_upid(now - 900, 'qmshutdown', 904)}"),
+        (now - 891, "systemd[1]: 904.scope: Deactivated successfully."),
+        (now - 890, f"qm[5]: <root@pam> end task {_upid(now - 900, 'qmshutdown', 904)} OK"),
+        (now - 800, "systemd[1]: Started 904.scope."), (now - 60, "systemd[1]: 904.scope: Deactivated successfully."),
+        # the gateway: stopped by a task of the host (in the task list).
+        (now - 29, "systemd[1]: 950.scope: Deactivated successfully."),
+        # Not a QEMU, not a VM of the run.
+        (now - 21, "kernel: soffice.bin[1489511]: segfault at 34 ip 00007feb21b01e55 sp 00007ffe661c29c0 error 4"),
+        # h: this run began with the conductor's rollback (and its start, in the same second); the
+        # journal no longer has systemd's line of the start. Off from inside much later: the
+        # rollback had ended long before, it is not why.
+        (now - 700, f"pvedaemon[9]: <{CONDUCTOR}> starting task {_upid(now - 700, 'qmrollback', 907, CONDUCTOR)}"),
+        (now - 699.5, f"pvedaemon[9]: <{CONDUCTOR}> starting task {_upid(now - 700, 'qmstart', 907, CONDUCTOR)}"),
+        (now - 698, "pvedaemon[9]: VM 907 started with PID 6907 using pve-qemu-kvm_10.1.2-4."),
+        (now - 697, f"pvedaemon[9]: <{CONDUCTOR}> end task {_upid(now - 700, 'qmstart', 907, CONDUCTOR)} OK"),
+        (now - 696, f"pvedaemon[9]: <{CONDUCTOR}> end task {_upid(now - 700, 'qmrollback', 907, CONDUCTOR)} OK"),
+        (now - 40, "systemd[1]: 907.scope: Deactivated successfully."),
+        # i: its QEMU dumped core (an abort, which the kernel does not log); its pid from Proxmox's line.
+        (now - 500, "systemd[1]: Started 908.scope."), (now - 500, "qm[5]: VM 908 started with PID 6908 using pve-qemu-kvm_10.1.2-4."),
+        (now - 15, "systemd-coredump[77]: Process 6908 (kvm) of user 0 dumped core."),
+        (now - 14, "systemd[1]: 908.scope: Deactivated successfully."),
+    ]))  # fmt: skip
+    (_host(tmp_path)["TASKS"] / "index").write_text(f"{_upid(now - 801, 'qmstart', 904)} {int(now - 799):08X} OK\n"
+                                                    f"{_upid(now - 30, 'qmstop', 950)} {int(now - 28):08X} OK\n")  # fmt: skip
+    state = Path(handlers.STATE_DIR)
+    state.mkdir(parents=True)
+    (state / host_state.RECORD).write_text(json.dumps({"902": {"pid": 7902, "tids": [7902, 7910], "at": now - 100}}))
+    _fake_memory(tmp_path, available_mb=9000)
+    devbox_qemu, running_qemu = _fake_qemu(tmp_path, 116, 6116), _fake_qemu(tmp_path, 905, 6905)
+    halted_qemu = _fake_qemu(tmp_path, 906, 6906)  # g: its guest made KVM fail; QEMU holds it, and its memory
+    since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    vmids = [900, 901, 902, 903, 904, 905, 906, 907, 908, 950]
+    seen = handlers.observe(ex, CFG, validation.validate("observe", {"vmids": vmids, "since": since}))
+    causes = {vm["name"]: (vm["status"], vm["cause"]) for vm in seen["vms"]}
+    assert causes == {
+        "sandbox-a": ("stopped", "guest"), "sandbox-b": ("stopped", "oom"), "sandbox-c": ("stopped", "crash"),
+        "sandbox-d": ("paused", "host"), "sandbox-e": ("stopped", "guest"), "sandbox-f": ("running", None),
+        # A guest halted for good is stopped, by the guest: the worm's doing, as a power-off is.
+        "sandbox-g": ("stopped", "guest"), "sandbox-h": ("stopped", "guest"), "sandbox-i": ("stopped", "crash"),
+        "sandbox-gw": ("stopped", "host"),
+    }  # fmt: skip
+    detail = {vm["name"]: vm["detail"] for vm in seen["vms"]}
+    assert detail["sandbox-d"].startswith(f"qmpause by {CONDUCTOR}") and detail["sandbox-gw"].startswith("qmstop by root@pam")
+    assert detail["sandbox-g"].startswith("KVM could not run its code (QEMU internal-error)")
+    assert detail["sandbox-g"].endswith("Its QEMU holds it until it is stopped")
+    assert detail["sandbox-i"].startswith("its QEMU dumped core") and detail["sandbox-h"].startswith("powered off from inside")
+    assert seen["memory"] == {"available_mb": 9000, "total_mb": 32000, "psi_some_avg10": 1.5, "psi_full_avg10": 0.25, "ksm_sharing_mb": 100,
+                              "arc_mb": 2048}  # fmt: skip
+    assert seen["devboxes_running"] == ["devbox-t1-a"] and seen["oom_adjusted"] == [116, 905, 906]
+    assert devbox_qemu.read_text().strip() == running_qemu.read_text().strip() == halted_qemu.read_text().strip() == "1000"
+    # The journal read for the VMs not running: systemd's lines of their scopes alone (PID 1 writes some
+    # 26000 a day), the kernel's, qmeventd's, Proxmox's task loggers' and systemd-coredump's.
+    read = next(c for c in ex.calls if c[:2] == ("run", "journalctl"))
+    assert {f"UNIT={vmid}.scope" for vmid in (900, 901, 902, 903, 904, 906, 907, 908, 950)} < set(read)
+    assert "UNIT=905.scope" not in read
+    assert "SYSLOG_IDENTIFIER=systemd-coredump" in read
+    # The worm's own power-off is all a guest can cause: no record of the host's is the guest's to write.
+    ex.journal = ex.journal.replace("Failed with result 'oom-kill'", "Deactivated successfully")
+    assert {vm["name"]: vm["cause"] for vm in handlers.observe(ex, CFG, validation.validate("observe", {"vmids": [901]}))["vms"]} == {
+        "sandbox-b": "oom"}  # the kernel's line alone says it  # fmt: skip
+    # Records it cannot read: unknown (the conductor fails the attempt, our side), never guest.
+
+    class Blind(type(ex)):
+        def run(self, argv, check=False, timeout=60):
+            if argv[0] == "journalctl":
+                raise RuntimeError("journalctl exited 1")
+            return super().run(argv, check, timeout)
+
+    blind = Blind(ex._vms)
+    blind.states = ex.states
+    assert [vm["cause"] for vm in handlers.observe(blind, CFG, validation.validate("observe", {"vmids": [900]}))["vms"]] == ["unknown"]
+
+    # Proxmox can report a QEMU gone before systemd's line of it can be read (qmeventd's trails by
+    # seconds): no record of a stop yet is read once more, a moment later, before it is unknown.
+    class Late(type(ex)):
+        def run(self, argv, check=False, timeout=60):
+            if argv[0] == "journalctl":
+                self.reads.append(argv)
+                if len(self.reads) == 1 or self.never:  # without 900's end
+                    ends = ("900.scope: Deactivated successfully.", "Starting cleanup for 900")
+                    return "\n".join(line for line in self.journal.splitlines() if not line.endswith(ends))
+            return super().run(argv, check, timeout)
+
+    monkeypatch.setattr(handlers, "OBSERVE_REREAD", 0)
+    for never, cause in ((False, "guest"), (True, "unknown")):
+        late = Late(ex._vms)
+        late.states, late.journal, late.reads, late.never = ex.states, ex.journal, [], never
+        seen = handlers.observe(late, CFG, validation.validate("observe", {"vmids": [900, 904, 905]}))
+        assert [vm["cause"] for vm in seen["vms"]] == [cause, "guest", None] and len(late.reads) == 2
+        assert "UNIT=900.scope" in late.reads[1] and "UNIT=904.scope" not in late.reads[1]  # the VM without a record alone
 
 
 def test_a_declared_file_is_written_later_from_the_hosts_copy():
@@ -691,6 +1178,12 @@ def test_release_unknown_vm_fails():
     ex = FakeExecutor()
     with pytest.raises(validation.Invalid):
         handlers.place_flags(ex, CFG, {"vms": ["not-in-sandbox"], "strict": True})
+    # observe looks at the sandbox pool's VMs alone: not the database's, not a devbox's.
+    ex.pools.update(ephemeral=[SERVICE_VMS[0]], devbox=list(DEVBOX_VMS))
+    for vmid in (111, 116, 4242):
+        with pytest.raises(validation.Invalid, match="not VMs of the sandbox pool"):
+            handlers.observe(ex, CFG, validation.validate("observe", {"vmids": [900, vmid]}))
+    assert not any(c[0] == "run" and c[1] == "journalctl" for c in ex.calls)
 
 
 def test_deploy_fetches_verifies_copies_and_arms():
@@ -1127,6 +1620,19 @@ def test_loop_runs_a_job_and_writes_the_result(agent_db):
         cur.execute("SELECT state, result FROM host_jobs WHERE id = %s", (job_id,))
         state, result = cur.fetchone()
     assert state == "done" and result["ok"] is True
+    job_id = _queue(conn, "observe", {"vmids": [950, 900]})
+    assert agent.tick() is True
+    with conn.cursor() as cur:
+        cur.execute("SELECT state, result FROM host_jobs WHERE id = %s", (job_id,))
+        state, result = cur.fetchone()
+    assert state == "done" and [(vm["vmid"], vm["status"]) for vm in result["vms"]] == [(900, "running"), (950, "running")]
+    assert set(result) == {"vms", "memory", "devboxes_running", "oom_adjusted"} and agent.cfg["memory_reserve_mb"] == 1024
+    # Observe jobs have a worker of their own (run_forever starts it), with its own connection and
+    # executor: each keeps its job's log, and a job's VM history names that job.
+    observer = agent.observer()
+    assert observer.observe_only and not agent.observe_only and observer._conn is None
+    assert observer.executor is not agent.executor and observer.executor.latest is False  # latest.log stays the loop's
+    agent.serve(stop=lambda: "the test's stop")  # asked between jobs, before the first: it ends at once
 
 
 def test_loop_fails_an_invalid_job_without_crashing(agent_db):
@@ -1137,6 +1643,12 @@ def test_loop_fails_an_invalid_job_without_crashing(agent_db):
         cur.execute("SELECT state, error FROM host_jobs WHERE id = %s", (job_id,))
         state, error = cur.fetchone()
     assert state == "failed" and "invalid" in error
+    job_id = _queue(conn, "observe", {"vmids": [111]})  # not a VM of the sandbox pool
+    agent.tick()
+    with conn.cursor() as cur:
+        cur.execute("SELECT state, error FROM host_jobs WHERE id = %s", (job_id,))
+        state, error = cur.fetchone()
+    assert state == "failed" and error.startswith("invalid: not VMs of the sandbox pool")
 
 
 def test_loop_claims_each_job_once(agent_db):
@@ -1161,6 +1673,21 @@ def test_a_rounds_jobs_go_before_a_devboxs(agent_db):
     assert agent.claim()[2] == "devbox_deploy"
     assert agent.claim()[2] == "devbox_rebuild"
     assert agent.claim() is None
+    # An observe first of all: seconds, and the conductor waits for it with a short timeout.
+    _queue(conn, "check", {})
+    _queue(conn, "devbox_rebuild", {})
+    observe = _queue(conn, "observe", {"vmids": [900]})
+    assert [agent.claim()[0], agent.claim()[2], agent.claim()[2]] == [observe, "check", "devbox_rebuild"]
+    # The observer takes observe jobs alone, while the loop runs a build or a team's reset; the
+    # operator's pause holds it too.
+    observer = Agent(env=agent.env, executor=FakeExecutor(), connection=conn, observe_only=True)
+    build = _queue(conn, "check", {})
+    observe = _queue(conn, "observe", {"vmids": [900]})
+    handlers.paused_path(agent.cfg).parent.mkdir(parents=True, exist_ok=True)
+    handlers.paused_path(agent.cfg).write_text("paused by the test")
+    assert observer.claim() is None
+    handlers.paused_path(agent.cfg).unlink()
+    assert observer.claim()[0] == observe and observer.claim() is None and agent.claim()[0] == build
 
 
 def test_a_devbox_rebuild_gives_opentofu_addresses_it_accepts(tmp_path):
@@ -1355,6 +1882,11 @@ def test_a_build_goes_to_a_root_only_log_and_stdout_stays_the_callers(logged, tm
     assert "exit 0 after" in text
     assert (job_log.path.stat().st_mode & 0o777) == 0o600
     assert ((tmp_path / "jobs").stat().st_mode & 0o777) == 0o700
+    # The VM history's name for what did it goes with each command, the agent's own environment
+    # stays as it is: the agent's other worker runs an observe job at the same time (agent.py).
+    assert ex.run(["sh", "-c", 'echo "$WORMS_HISTORY_BY"']) == "round agent: devbox_provision\n"
+    assert ex.run(["sh", "-c", 'echo "$WORMS_HISTORY_BY $PYTHONUNBUFFERED"'], stream=True) == "round agent: devbox_provision 1\n"
+    assert "WORMS_HISTORY_BY" not in os.environ
     assert (tmp_path / "jobs" / "latest.log").resolve() == job_log.path.resolve()
 
 
@@ -1494,6 +2026,11 @@ def test_old_logs_go_and_new_ones_stay(tmp_path):
             pass
     assert not old.exists() and recent.exists()
     assert (jobs / "latest.log").is_symlink() and (jobs / f"{JOB_UUID}.log").exists()
+    # The observer's jobs (one a minute in a round) have their logs, and leave latest.log to the
+    # build someone follows.
+    with Executor(tmp_path, log_dir=jobs, latest=False).job_log("6" * 8 + JOB_UUID[8:], "observe"):
+        pass
+    assert (jobs / ("6" * 8 + JOB_UUID[8:] + ".log")).exists() and os.readlink(jobs / "latest.log") == f"{JOB_UUID}.log"
 
 
 def test_a_job_logs_its_commands_and_how_it_ended(agent_db, tmp_path, monkeypatch):

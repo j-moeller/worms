@@ -9,6 +9,12 @@ runs the agent heartbeats; the conductor fails a job whose heartbeat goes
 stale. Every parameter is validated (validation.py) before a handler runs,
 and a handler that raises fails only that job -- the loop keeps going.
 
+A second worker in the same process, with its own connection and executor, takes
+observe jobs alone (Agent.observer): they take seconds and the conductor fails the
+attempt when one is not answered within a couple of minutes, so they must not wait
+behind a build or a team's devbox reset. observe changes nothing but the OOM priority
+of team VMs, so it can run beside any other job.
+
 Connection settings come from the environment (a root-only file, like the
 other services):
 
@@ -46,6 +52,7 @@ REQUIRED_ENV = (
 )
 HEARTBEAT_SECONDS = 30
 IDLE_POLL_SECONDS = 5
+OBSERVER_STOP_SECONDS = 60  # how long the loop waits for the observer's job when it exits
 
 
 def connect(env):
@@ -75,11 +82,13 @@ def config(env):
         # The service VMs' management addresses, waited for after they are rolled back.
         "service_hosts": [host for host in env.get("SERVICE_HOSTS", "").split(",") if host],
         "apply_timeout": int(env.get("APPLY_TIMEOUT", "5400")),
+        # What preflight keeps free beyond every ceiling of a round's sandbox (MB).
+        "memory_reserve_mb": int(env.get("MEMORY_RESERVE_MB", str(handlers.MEMORY_RESERVE_MB))),
     }
 
 
 class Agent:
-    def __init__(self, env=None, executor=None, connection=None):
+    def __init__(self, env=None, executor=None, connection=None, observe_only=False):
         self.env = env or dict(os.environ)
         self.cfg = config(self.env)
         self.executor = executor or Executor(
@@ -87,7 +96,16 @@ class Agent:
         )
         self._conn = connection
         self.running = True
+        self.observe_only = observe_only  # the observer: observe jobs alone
         self._paused_said = False  # it has said it is paused (claim)
+
+    def observer(self):
+        """The second worker, for observe jobs alone: its own connection (one connection serves
+        one thread's queries in order) and its own executor (each keeps its job's log; the
+        observer's, one a minute in a round, leave latest.log to the loop's)."""
+        executor = Executor(self.env.get("REPO_ROOT", os.getcwd()), log_dir=self.env.get("JOB_LOG_DIR", DEFAULT_JOB_LOG_DIR),
+                            latest=False)  # fmt: skip
+        return Agent(env=self.env, executor=executor, observe_only=True)
 
     def conn(self):
         if self._conn is None or self._conn.closed:
@@ -99,27 +117,30 @@ class Agent:
 
     def claim(self):
         """Claim the oldest queued job, a round's before a devbox's: a round's jobs are timed, and
-        a team's test must not hold them up. While a round holds the devboxes shut down
-        (handlers.hold_devboxes), no devbox job: it would start one (a reset) or need it running;
-        it waits, queued, for the release. Returns (id, uuid, kind, params) or None."""
+        a team's test must not hold them up. An observe goes first of all: it takes seconds, and
+        the conductor fails the attempt when one is not answered in time. While a round holds the
+        devboxes shut down (handlers.hold_devboxes), no devbox job: it would start one (a reset)
+        or need it running; it waits, queued, for the release. The observer claims observe jobs
+        alone. Returns (id, uuid, kind, params) or None."""
         paused = handlers.paused_path(self.cfg)
         if paused.exists():
-            # `worms jobs pause`: the operator's; the job under way (if any) has ended already.
-            if not self._paused_said:
+            # `worms jobs pause`: the operator's, for both workers; the job under way (if any) has ended already.
+            if not self._paused_said and not self.observe_only:
                 log.warning("paused (%s): no job is taken until `worms jobs resume`", paused)
-                self._paused_said = True
+            self._paused_said = True
             return None
-        if self._paused_said:
+        if self._paused_said and not self.observe_only:
             log.info("resumed: taking jobs again")
-            self._paused_said = False
+        self._paused_said = False
         held = handlers.held_devboxes_path(self.cfg).exists()
         conn = self.conn()
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE host_jobs SET state = 'running', started_at = now(), heartbeat_at = now() "
                 "WHERE id = (SELECT id FROM host_jobs WHERE state = 'queued' "
+                + ("AND kind = 'observe' " if self.observe_only else "")
                 + ("AND kind NOT LIKE 'devbox%%' " if held else "")
-                + "ORDER BY kind LIKE 'devbox%%', id FOR UPDATE SKIP LOCKED LIMIT 1) "
+                + "ORDER BY kind <> 'observe', kind LIKE 'devbox%%', id FOR UPDATE SKIP LOCKED LIMIT 1) "
                 "RETURNING id, uuid, kind, params"
             )
             row = cur.fetchone()
@@ -195,20 +216,39 @@ class Agent:
         return True
 
     def run_forever(self):
-        self._listen()
         code = LoadedCode(self.env.get("REPO_ROOT", os.getcwd()))
+        observer = self.observer()
+        watching = threading.Thread(target=observer.serve, name="observer", daemon=True)
+        watching.start()
         log.info("round agent started")
-        while self.running:
+
+        def changed():
+            path = code.changed()
+            return path and f"my code changed on disk ({path}): exiting for systemd to start the new code"
+
+        try:
             # Between jobs only: a job runs to its end on the code it started with.
-            changed = code.changed()
-            if changed:
-                log.info("my code changed on disk (%s): exiting for systemd to start the new code", changed)
+            self.serve(stop=changed)
+        finally:
+            # Its job (seconds) ends first: one cut off would stay running until the conductor
+            # gives up on it, and fail that attempt.
+            observer.running = False
+            watching.join(OBSERVER_STOP_SECONDS)
+
+    def serve(self, stop=lambda: None):
+        """Claim and run jobs until `running` is cleared, or `stop()` (asked between jobs) says
+        why to stop."""
+        self._listen()
+        while self.running:
+            why = stop()
+            if why:
+                log.info("%s", why)
                 return
             try:
                 if self.tick():
                     continue
             except Exception:  # noqa: BLE001  (connection hiccup: reconnect and retry)
-                log.exception("agent loop error; reconnecting")
+                log.exception("agent loop error%s; reconnecting", " (observer)" if self.observe_only else "")
                 self._conn = None
                 time.sleep(IDLE_POLL_SECONDS)
                 continue
@@ -223,8 +263,8 @@ class Agent:
 
     def _wait_for_work(self):
         """Block until a NOTIFY arrives or the poll interval passes."""
-        conn = self.conn()
         try:
+            conn = self.conn()  # a failed reconnect is tick()'s to report: the observer's thread must not end
             if select.select([conn], [], [], IDLE_POLL_SECONDS) != ([], [], []):
                 conn.poll()
                 conn.notifies.clear()

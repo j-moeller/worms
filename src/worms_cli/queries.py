@@ -311,13 +311,19 @@ def round_rows() -> list[list[str]]:
 
 
 def job_rows(limit: int = 30) -> list[list[str]]:
-    """The newest host jobs (the round agent's work), newest first."""
+    """The newest host jobs (the round agent's work), newest first. Of the observe jobs that went
+    well (one a minute while an attempt runs: conductor.py, AttemptBackend) only the newest."""
     from core.models.rounds import HostJob
+    from django.db.models import Q
 
+    routine = HostJob.objects.filter(kind=HostJob.Kind.OBSERVE, state=HostJob.State.DONE)
+    newest = routine.order_by("-id").values_list("id", flat=True).first()
+    jobs = HostJob.objects.select_related("run__team").exclude(Q(kind=HostJob.Kind.OBSERVE, state=HostJob.State.DONE) & ~Q(id=newest))
     rows = []
-    for job in HostJob.objects.select_related("run__team").order_by("-id")[:limit]:
+    for job in jobs.order_by("-id")[:limit]:
         who = job.run.team.name if job.run else (job.params or {}).get("team_uuid", "")[:8]
-        rows.append([str(job.id), job.kind, job.state, who, _when(job.requested_at), _when(job.finished_at),
+        kind = f"{job.kind} (the newest of {routine.count()} done)" if job.id == newest else job.kind
+        rows.append([str(job.id), kind, job.state, who, _when(job.requested_at), _when(job.finished_at),
                      (job.error or "").replace("\n", " ")[:80]])  # fmt: skip
     return rows
 

@@ -252,7 +252,10 @@ def round_detail(request: HttpRequest, round_uuid):
         "timing": schedule.timing_defaults(),
         "max_retries": _max_retries(),
         "estimate": _estimate(round_obj, teams),
-        "jobs": HostJob.objects.filter(run__round=round_obj).select_related("run__team").order_by("-id")[:50],
+        # Not the observe jobs that went well: one a minute while an attempt runs, they say
+        # nothing staff need (the host's memory is in the orchestrator's journal).
+        "jobs": HostJob.objects.filter(run__round=round_obj).exclude(kind=HostJob.Kind.OBSERVE, state=HostJob.State.DONE)
+        .select_related("run__team").order_by("-id")[:50],
         "version": round_gameplan(round_obj),
         "progress": round_progress.progress(round_obj),
     })  # fmt: skip

@@ -121,6 +121,16 @@ def test_an_existing_database_upgrades_and_keeps_its_data(cluster):
             "false, 'kept', false, true, now(), '', '', '', false, now())"
         )
 
+    # Two rounds from before devboxes_off was on by default (0023): one to come, one begun.
+    proc = django(cluster, "upgrade", "migrate", "core", "0022", "--no-input", "--database=migrator")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO competitions (name, created_at, is_dev_competition) VALUES ('c', now(), false) RETURNING id")
+        competition = cur.fetchone()[0]
+        for name, hold in (("to come", ""), ("begun", "no")):
+            cur.execute("INSERT INTO rounds (uuid, seed, name, competition_id, created_at, devbox_hold) "
+                        "VALUES (gen_random_uuid(), 1, %s, %s, now(), %s)", (name, competition, hold))  # fmt: skip
+
     proc = django(cluster, "upgrade", "migrate", "--no-input", "--database=migrator")
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
@@ -129,6 +139,12 @@ def test_an_existing_database_upgrades_and_keeps_its_data(cluster):
         assert cur.fetchall() == [("kept",)]
         cur.execute("SELECT count(*) FROM password_resets")
         assert cur.fetchone() == (0,)
+        # The round to come shuts the devboxes down now; the begun one keeps what it recorded.
+        cur.execute("SELECT name, devboxes_off FROM rounds ORDER BY name")
+        assert cur.fetchall() == [("begun", False), ("to come", True)]
+        cur.execute("INSERT INTO rounds (uuid, seed, name, competition_id, created_at) "
+                    "VALUES (gen_random_uuid(), 1, 'raw', %s, now()) RETURNING devboxes_off", (competition,))  # fmt: skip
+        assert cur.fetchone() == (True,)  # the database's default too
     conn.close()
 
 

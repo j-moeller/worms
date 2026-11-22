@@ -160,8 +160,9 @@ def team(config, name: str, lines: int = 20, since: str = "2 days ago") -> int:
     catalogue = Catalogue(config)
     print(output.heading(f"{found.name}: its devbox's address towards the services {address or '(none)'}"))
 
+    # Not the observe jobs that went well (one a minute while its attempt runs: they say nothing here).
     jobs = list(HostJob.objects.select_related("run__team").filter(Q(params__team_uuid=str(found.uuid)) | Q(run__team=found))
-                .order_by("-id")[:10])  # fmt: skip
+                .exclude(kind=HostJob.Kind.OBSERVE, state=HostJob.State.DONE).order_by("-id")[:10])  # fmt: skip
     print(output.heading("host jobs, newest first (`worms show job <n>`, `worms log <n> [-f]`)"))
     if jobs:
         print(output.table([[str(j.id), j.kind, j.state, f"{j.requested_at:%m-%d %H:%M}", f"{j.finished_at:%H:%M}" if j.finished_at else "",

@@ -196,10 +196,10 @@ class RoundForm(StyledForm):
         help_text="Empty: random. The order the teams run in derives from it.",
     )  # fmt: skip
     devboxes_off = forms.BooleanField(
-        required=False, label="Shut down every devbox while its attempts run",
-        help_text="For the host's memory: every team's devbox VMs and gateway are shut down before the round's "
-                  "first attempt and started again after its last run; meanwhile devbox resets and dev uploads wait. "
-                  "Until the round's start; the conductor records it when the round begins.",
+        required=False, initial=True, label="Shut down every devbox while its attempts run",
+        help_text="On by default, for the host's memory: every team's devbox VMs and gateway are shut down before "
+                  "each of the round's attempts and started again after its last run; meanwhile devbox resets and dev "
+                  "uploads wait. Until the round's start; the conductor records it when the round begins.",
     )  # fmt: skip
 
     # A round that has begun: its end, and its gameplan until the first attempt starts. Not

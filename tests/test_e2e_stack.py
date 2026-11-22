@@ -16,8 +16,9 @@ dashboard->orchestrator devbox-reset HTTP hop (the orchestrator view is called
 in-process with its real token check).
 
 What is faked -- exactly as tests/test_rounds.py fakes it, because there is no
-Proxmox host here -- is the host side: VM power (FakePower) and the round agent
-(Agent answers each host job the way the real agent would). The live SSH
+Proxmox host here -- is the host side: the Proxmox API, under the real power
+control (FakeProxmox), and the round agent (Agent answers each host job the
+way the real agent would). The live SSH
 jump onto a devbox and the real tofu/ansible build are the human protocol's job
 (docs/archive/e2e_test_protocol.md, in the git history); this asserts that every piece of code those steps
 drive is present and wired.

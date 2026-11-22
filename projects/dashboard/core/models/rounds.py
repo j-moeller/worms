@@ -238,13 +238,21 @@ class HostJob(models.Model):
 
     class Kind(models.TextChoices):
         GAMEPLANS = "gameplans"  # the host's gameplan files: name, SHA-256, valid
+        # Before each attempt, nothing changed: the host's services and firewalls, the devboxes
+        # held, no sandbox VM running, the memory the gameplan's VMs need, its packages cached.
+        # Not ok: the attempt does not start (no attempt is used up).
+        PREFLIGHT = "preflight"
         PREPARE = "prepare"  # the round's sandbox (built or rolled back), the run's secrets, files, flags
-        CHECK = "check"  # sanity checks (firewalls, VMs, services)
+        CHECK = "check"  # sanity checks (firewalls, VMs, services; with run_uuid, probes inside the VMs)
         DEPLOY = "deploy"  # worm artifact to the start VM + start timer
         REMOVE_FLAGS = "remove_flags"  # the gameplan's execute(): flags out, checked
         PLACE_FLAGS = "place_flags"  # new flags in, hashes back
         WRITE_FILE = "write_file"  # a file the gameplan declared, by its number
         READ_FILE = "read_file"  # whether a file on a VM changed: its size and SHA-256, never its content
+        # While an attempt runs: the sandbox VMs as the host sees them (state; why one is not
+        # running, from the host's own records), its memory, devboxes running. Read only, but
+        # for the OOM priority of the VMs' QEMU processes.
+        OBSERVE = "observe"
         TEARDOWN = "teardown"  # destroy the sandbox, or keep it powered off for the round's next run
         # Devbox (docs/04-dev-environment.md): provision/rebuild a team's devbox VMs and
         # (re)write their tokens; run is null (a devbox job is team-scoped,
@@ -258,8 +266,8 @@ class HostJob(models.Model):
         # Put a team's dev upload on its devbox VM A and arm the fuse: `deploy` for
         # the devbox (orchestrator/rounds/devbox_runs.py).
         DEVBOX_DEPLOY = "devbox_deploy"
-        # A round with devboxes_off: every devbox VM and gateway shut down before its first
-        # attempt, started again after its last run. Not named devbox_*: the agent takes no
+        # A round with devboxes_off: every devbox VM and gateway shut down before each of its
+        # attempts, started again after its last run. Not named devbox_*: the agent takes no
         # devbox_* job while the devboxes are held (round_agent/agent.py, claim).
         HOLD_DEVBOXES = "hold_devboxes"
         RELEASE_DEVBOXES = "release_devboxes"

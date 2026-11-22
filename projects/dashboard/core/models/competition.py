@@ -109,15 +109,18 @@ class Round(models.Model):
     gameplan_checked_at = models.DateTimeField(null=True, blank=True)
     # Staff's choice, until the round's start: every devbox VM and gateway is shut down while the
     # round's attempts run (the host's memory), and started again once the round's last run is
-    # over. The conductor acts only on what it records when the round begins (devbox_hold).
-    devboxes_off = models.BooleanField(default=False, db_default=False)
+    # over. On unless staff turn it off. The conductor acts only on what it records when the
+    # round begins (devbox_hold).
+    devboxes_off = models.BooleanField(default=True, db_default=True)
     # The conductor's record (docs/05-live-environment.md): "" before the round begins; then
     # "no" (devboxes_off was not set), "wanted" (set: shut them down before the next attempt),
     # "held" (shut down) and "released" (started again after the round's last run).
     devbox_hold = models.TextField(blank=True, default="", db_default="")
     # The operator's (`worms round pause`, `worms round resume`): while set, the conductor starts no
     # attempt of this round (one under way ends as usual), and the devboxes a round holds are
-    # started again meanwhile (conductor.py, _next and _release_devboxes).
+    # started again meanwhile (conductor.py, _next and _release_devboxes). The conductor sets it
+    # too, for a fault on our side that trying again does not mend: preflight_attempts failed
+    # preflights in a row, or two attempts in a row that failed before their worm started.
     on_hold = models.BooleanField(default=False, db_default=False)
 
     class Meta:

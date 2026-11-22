@@ -360,6 +360,8 @@ def _attempt(run, states, flags, now, timing):
         data = event.data or {}
         text = EVENT_TEXT.get(event.kind, event.kind).format(vm=event.vm.vm_identifier if event.vm else "a VM",
                                                              message=str(data.get("message", ""))[:200])  # fmt: skip
+        if event.kind == RunEvent.Kind.VM_STOPPED and data.get("how") == "guest":
+            text += " from inside: the worm's doing (the host says)"  # the watch's, conductor.py
         log.append({"ts": event.ts, "kind": event.kind, "text": text})
         ticks.append(axis.mark(event.ts, cls=f"ev ev-{event.kind}", title=f"{event.ts:%H:%M:%S} {text}"))
     waiting_on = None

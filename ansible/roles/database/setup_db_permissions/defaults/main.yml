@@ -122,8 +122,9 @@ postgresql_table_privileges:
       tables: [gameplan_versions]
     - privs: INSERT (filename, sha256)
       tables: [gameplan_changes]
-    # Its check of a round's gameplan, and what it did about the round's devboxes (devbox_hold).
-    - privs: UPDATE (gameplan_status, gameplan_checked_at, devbox_hold)
+    # Its check of a round's gameplan, what it did about the round's devboxes (devbox_hold), and
+    # a round it put on hold (on_hold: a fault on our side that trying again does not mend).
+    - privs: UPDATE (gameplan_status, gameplan_checked_at, devbox_hold, on_hold)
       tables: [rounds]
     - privs: INSERT
       tables: [host_jobs, run_events]

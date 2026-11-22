@@ -346,11 +346,15 @@ def test_create_a_round(staff_site):
 
     for name in ("a", "b", "c"):
         Team.objects.create(name=name, competition=competition())
+    # The devboxes are shut down while a round's attempts run unless staff untick it.
+    checkbox = re.search(r'<input[^>]*name="devboxes_off"[^>]*>', get(staff_site, "/staff/rounds/").content.decode())
+    assert checkbox and re.search(r"\schecked\b", checkbox.group(0)), checkbox
     response = post(staff_site, "/staff/rounds/", round_data(), page="/staff/rounds/")
     assert response.status_code == 302, text(response)[:2000]
     created = Round.objects.get(name="R1")
     assert created.competition == competition() and created.seed >= 0
     assert (created.gameplan, created.team_duration) == ("", 3600)
+    assert created.devboxes_off is False  # unticked: round_data() sends no devboxes_off
     page = text(get(staff_site, f"/staff/rounds/{created.uuid}/"))
     assert "Nothing is built until it starts" in page and f"seed {created.seed}" in page
     assert "Choose its gameplan before then" in page and "none yet" in page
@@ -359,9 +363,9 @@ def test_create_a_round(staff_site):
     valid_gameplan()
     valid_gameplan("broken.py", valid=False)
     later = clock_window(days=2)
-    assert post(staff_site, "/staff/rounds/", round_data(name="R2", gameplan="round_one.py", **later),
+    assert post(staff_site, "/staff/rounds/", round_data(name="R2", gameplan="round_one.py", devboxes_off="on", **later),
                 page="/staff/rounds/").status_code == 302  # fmt: skip
-    assert Round.objects.get(name="R2").gameplan == "round_one.py"
+    assert (Round.objects.get(name="R2").gameplan, Round.objects.get(name="R2").devboxes_off) == ("round_one.py", True)
     refused = post(staff_site, "/staff/rounds/", round_data(name="R3", gameplan="broken.py", **clock_window(days=3)),
                    page="/staff/rounds/")  # fmt: skip
     assert refused.status_code == 200 and "Select a valid choice" in text(refused)

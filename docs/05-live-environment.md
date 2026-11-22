@@ -439,7 +439,7 @@ colour of the most severe.
 As of 2026-11-08. The gameplan rework is uncommitted and not yet deployed.
 
 - **Testing.** Rounds with `round_one` ran on worms-dev from 2026-11-12. The preflight, the in-VM check and the watch (2026-11-22) are tested against a fake Proxmox and a fake round agent ([`tests/test_rounds.py`](../tests/test_rounds.py), [`tests/test_round_agent.py`](../tests/test_round_agent.py)), and the host side read-only on worms-dev; no round has run with them yet.
-- **A QEMU that aborts** (SIGABRT, an assertion) reads as the guest's own power-off: the host has no `systemd-coredump`, so nothing records it. An OOM kill, a segfault and a Proxmox task are told apart.
+- **Why a VM stopped** is read from the host: an OOM kill, a crashed or killed QEMU (the kernel takes its network devices down), a Proxmox task, or none of these: the guest's own power-off. Tried on worms-dev with each, except the OOM kill.
 - **Memory.** The preflight counts the sandbox at its ceilings; the service and devbox VMs that run can still grow towards theirs (a warning). If the host still runs out, the OOM killer takes a team VM and that attempt runs again.
 - **Shared services.** The service VMs are rolled back only when a sandbox is built, i.e. the first attempt of a round. What one team's worm does to them stays for later attempts.
 - **Operations.**

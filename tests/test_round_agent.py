@@ -614,7 +614,7 @@ def test_every_run_gets_new_secrets():
     assert next(c for c in ex.ssh_calls if c["argv"] == ["sudo", "chpasswd"])["input"] != first
 
 
-def test_the_node_runs_only_the_gameplan_the_orchestrator_validated():
+def test_the_host_runs_only_the_gameplan_the_orchestrator_validated():
     ex = FakeExecutor()
     with pytest.raises(Exception, match="not the version expected"):
         handlers.prepare(ex, CFG, validation.validate("prepare", {**PREPARE, "gameplan_sha256": "0" * 64}))
@@ -1049,16 +1049,17 @@ def test_after_the_worm_a_vm_it_broke_is_reported_not_failed(tmp_path, monkeypat
     # After the worm a VM is asked nothing: the host's own records say why one is not running.
     from datetime import datetime, timedelta, timezone
 
-    names = ("a", "b", "c", "d", "e", "f", "g", "h", "i")
+    names = ("a", "b", "c", "d", "e", "f", "g", "h", "i", "j")
     ex = FakeExecutor({f"sandbox-{n}": {"maintenance_ip": f"10.4.0.{10 + i}", "vmid": 900 + i, "addresses": []} for i, n in enumerate(names)})
     ex.pools.update(devbox=list(DEVBOX_VMS))
     now = time.time()
     ex.states = {900: ("stopped", None), 901: ("stopped", None), 902: ("stopped", None), 903: ("running", "paused"),
                  904: ("stopped", None), 906: ("running", "internal-error"), 907: ("stopped", None), 908: ("stopped", None),
-                 950: ("stopped", None)}  # fmt: skip
+                 909: ("stopped", None), 950: ("stopped", None)}  # fmt: skip
     ex.journal = "\n".join(f"{at:.6f} worms-dev {line}" for at, line in sorted([
-        # a: it powered itself off; nothing of the host's then.
-        (now - 1000, "systemd[1]: Started 900.scope."), (now - 100, "systemd[1]: 900.scope: Deactivated successfully."),
+        # a: it powered itself off; nothing of the host's then (QEMU exits: its taps close first).
+        (now - 1000, "systemd[1]: Started 900.scope."), (now - 100.2, "kernel: tap900i0: left allmulticast mode"),
+        (now - 100, "systemd[1]: 900.scope: Deactivated successfully."),
         (now - 97, "qmeventd[4]: Starting cleanup for 900"),
         # b: the OOM killer.
         (now - 50.2, "kernel: oom-kill:constraint=CONSTRAINT_NONE,nodemask=(null),cpuset=qemu.slice,mems_allowed=0,global_oom,"
@@ -1091,6 +1092,9 @@ def test_after_the_worm_a_vm_it_broke_is_reported_not_failed(tmp_path, monkeypat
         (now - 500, "systemd[1]: Started 908.scope."), (now - 500, "qm[5]: VM 908 started with PID 6908 using pve-qemu-kvm_10.1.2-4."),
         (now - 15, "systemd-coredump[77]: Process 6908 (kvm) of user 0 dumped core."),
         (now - 14, "systemd[1]: 908.scope: Deactivated successfully."),
+        # j: its QEMU killed by a signal (no core dump, no kernel crash line): the kernel took its taps down.
+        (now - 300, "systemd[1]: Started 909.scope."), (now - 8.1, "kernel: tap909i0 (unregistering): left allmulticast mode"),
+        (now - 8, "systemd[1]: 909.scope: Deactivated successfully."),
     ]))  # fmt: skip
     (_host(tmp_path)["TASKS"] / "index").write_text(f"{_upid(now - 801, 'qmstart', 904)} {int(now - 799):08X} OK\n"
                                                     f"{_upid(now - 30, 'qmstop', 950)} {int(now - 28):08X} OK\n")  # fmt: skip
@@ -1101,7 +1105,7 @@ def test_after_the_worm_a_vm_it_broke_is_reported_not_failed(tmp_path, monkeypat
     devbox_qemu, running_qemu = _fake_qemu(tmp_path, 116, 6116), _fake_qemu(tmp_path, 905, 6905)
     halted_qemu = _fake_qemu(tmp_path, 906, 6906)  # g: its guest made KVM fail; QEMU holds it, and its memory
     since = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-    vmids = [900, 901, 902, 903, 904, 905, 906, 907, 908, 950]
+    vmids = [900, 901, 902, 903, 904, 905, 906, 907, 908, 909, 950]
     seen = handlers.observe(ex, CFG, validation.validate("observe", {"vmids": vmids, "since": since}))
     causes = {vm["name"]: (vm["status"], vm["cause"]) for vm in seen["vms"]}
     assert causes == {
@@ -1109,6 +1113,7 @@ def test_after_the_worm_a_vm_it_broke_is_reported_not_failed(tmp_path, monkeypat
         "sandbox-d": ("paused", "host"), "sandbox-e": ("stopped", "guest"), "sandbox-f": ("running", None),
         # A guest halted for good is stopped, by the guest: the worm's doing, as a power-off is.
         "sandbox-g": ("stopped", "guest"), "sandbox-h": ("stopped", "guest"), "sandbox-i": ("stopped", "crash"),
+        "sandbox-j": ("stopped", "crash"),
         "sandbox-gw": ("stopped", "host"),
     }  # fmt: skip
     detail = {vm["name"]: vm["detail"] for vm in seen["vms"]}
@@ -1116,6 +1121,7 @@ def test_after_the_worm_a_vm_it_broke_is_reported_not_failed(tmp_path, monkeypat
     assert detail["sandbox-g"].startswith("KVM could not run its code (QEMU internal-error)")
     assert detail["sandbox-g"].endswith("Its QEMU holds it until it is stopped")
     assert detail["sandbox-i"].startswith("its QEMU dumped core") and detail["sandbox-h"].startswith("powered off from inside")
+    assert detail["sandbox-j"].startswith("its QEMU ended without a clean exit")
     assert seen["memory"] == {"available_mb": 9000, "total_mb": 32000, "psi_some_avg10": 1.5, "psi_full_avg10": 0.25, "ksm_sharing_mb": 100,
                               "arc_mb": 2048, "arc_reclaimable_mb": 1024}  # fmt: skip
     assert seen["devboxes_running"] == ["devbox-t1-a"] and seen["oom_adjusted"] == [116, 905, 906]
@@ -1762,7 +1768,7 @@ def test_round_agent_env_renders(render):
     assert "REPO_ROOT=/opt/worms" in env and "DB_SSLROOTCERT=/opt/worms/ansible/pki/worms/ca.crt" in env
 
 
-def test_the_agent_is_the_node_whatever_roots_worms_config_says(render, tmp_path, monkeypatch):
+def test_the_agent_is_the_host_whatever_roots_worms_config_says(render, tmp_path, monkeypatch):
     """A /root/.worms/config with WORMS_SSH on the host (laptop mode) made the
     agent's `worms step devbox-apply` fail with "no ansible/inventory.generated.yml"
     (2026-11-06, production). The agent's environment empties it."""

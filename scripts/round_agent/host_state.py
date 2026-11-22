@@ -76,6 +76,11 @@ COREDUMP = re.compile(r"^Process (?P<pid>\d+) \((?P<comm>.{1,32}?)\) of user \d+
 OOM_SCOPE = re.compile(r"\boom-kill:.*\btask_memcg=/qemu\.slice/(\d+)\.scope\b")
 OOM_PID = re.compile(r"^(?:Out of memory|Memory cgroup out of memory): Killed process (\d+) ")
 SCOPE_OOM = re.compile(r"^(\d+)\.scope: (?:A process of this unit has been killed by the OOM killer|Failed with result 'oom-kill')")
+# A QEMU that died without exiting (a signal: SIGKILL, SIGSEGV, SIGABRT; not the OOM killer's, which
+# the kernel names): the kernel takes its taps down while it unregisters them. A QEMU that exits,
+# after the guest's own power-off as after a shutdown of the host's, closes them first: "tap<id>i0:
+# left allmulticast mode" (worms-dev, 2026-11-22: kill -KILL, an ACPI power-off, qm shutdown).
+TORN = re.compile(r"^tap(\d+)i\d+ \(unregistering\): left allmulticast mode")
 CRASH = re.compile(r"^(?:traps: )?(?P<comm>.{1,32}?)\[(?P<tid>\d+)\]:? (?:segfault at|general protection|trap )")
 
 
@@ -277,7 +282,8 @@ def tasks():
 def journal_events(text):
     """From journalctl's short-unix lines (kernel, systemd, qmeventd, Proxmox's task loggers,
     systemd-coredump): [(kind, key, time)]. kind: start, stop, cleanup (key: vmid; a QEMU's
-    scope began or ended, qmeventd saw it end), qemu ((vmid, pid): a QEMU started), oom (vmid),
+    scope began or ended, qmeventd saw it end), torn (vmid: its QEMU died without exiting),
+    qemu ((vmid, pid): a QEMU started), oom (vmid),
     oom-pid (pid), crash ((comm, tid)), core ((comm, pid)), task (its dict)."""
     events = []
     for line in text.splitlines():
@@ -310,6 +316,8 @@ def journal_events(text):
             elif CRASH.match(message):
                 found = CRASH.match(message)
                 events.append(("crash", (found["comm"], int(found["tid"])), at))
+            elif TORN.match(message):
+                events.append(("torn", int(TORN.match(message).group(1)), at))
         elif ident == "systemd":
             for kind, pattern in (("oom", SCOPE_OOM), ("start", SCOPE_START), ("stop", SCOPE_END)):
                 found = pattern.match(message)
@@ -411,6 +419,10 @@ class Records:
                 ran = task["start"] - 1 <= stop and stop - lag <= (task["end"] if task["end"] is not None else self.now) + TASK_LAG
             if ran:
                 return "host", f"{task['type']} by {task['user']} at {_when(task['start'])}"
+        for kind, key, at in self.events:
+            if kind == "torn" and key == vmid and low <= at <= high:
+                return "crash", (f"its QEMU ended without a clean exit at {_when(at)}: killed by a signal or crashed (the kernel "
+                                 "took its network devices down; a guest's own power-off lets QEMU close them)")  # fmt: skip
         if stop is None:
             return "unknown", f"the host has no record of it stopping since {_when(self.since)}"
         return "guest", f"powered off from inside at {_when(stop)}: no host task, OOM kill or crash then"

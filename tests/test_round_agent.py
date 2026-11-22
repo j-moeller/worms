@@ -66,7 +66,7 @@ def _fake_memory(tmp_path, available_mb, total_mb=32000):
     (host["SYS"] / "kernel" / "mm" / "ksm").mkdir(parents=True, exist_ok=True)
     (host["SYS"] / "kernel" / "mm" / "ksm" / "pages_sharing").write_text("25600\n")  # 100 MB of 4 KiB pages
     (host["PROC"] / "spl" / "kstat" / "zfs").mkdir(parents=True, exist_ok=True)
-    (host["PROC"] / "spl" / "kstat" / "zfs" / "arcstats").write_text(f"name type data\nsize 4 {2048 * 2**20}\nc_max 4 1\n")
+    (host["PROC"] / "spl" / "kstat" / "zfs" / "arcstats").write_text(f"name type data\nsize 4 {2048 * 2**20}\nc_min 4 {1024 * 2**20}\nc_max 4 1\n")
 
 
 def _load_varfile_text(text):
@@ -800,7 +800,7 @@ def test_check_reports_ok_when_everything_is_up(tmp_path):
     assert flight["ok"] is True and flight["failures"] == [] and flight["warnings"] == []
     # Each VM at its ceiling, the gateway too, and what each of their QEMUs holds beyond it.
     needed = 512 + 512 + handlers.SANDBOX_GW_MEMORY_MB + 3 * handlers.QEMU_OVERHEAD_MB
-    assert flight["memory"] == {"available_mb": 20000, "needed_mb": needed, "reserve_mb": 1024, "total_mb": 32000}
+    assert flight["memory"] == {"available_mb": 20000 + 1024, "needed_mb": needed, "reserve_mb": 1024, "total_mb": 32000}
     assert {c["check"] for c in flight["checks"]} == {
         "host:internet-window-closed", *(f"host:{unit}" for unit in handlers.HOST_UNITS), "host:cluster-firewall-enabled",
         "services:scoring:running", "services:apt-cache:running", "services:scoring:sandbox-api", "services:scoring:nginx",
@@ -811,12 +811,12 @@ def test_check_reports_ok_when_everything_is_up(tmp_path):
     assert next(c for c in ex.ssh_calls if c["argv"][:2] == ["sudo", "find"])["host"] == "10.5.0.20"  # apt-cache, by the inventory
     assert "jq" not in json.dumps(flight)  # what a gameplan installs is its content
     # Room for the sandbox, but not for the service VMs growing to their ceilings as well (a worm
-    # reaches them): a warning, not a failure. scoring can take 512 + 64 - 239 MB more, apt-cache 619.
-    _fake_memory(tmp_path, available_mb=3300)
+    # reaches them): a warning, not a failure. scoring can take 512 + 40 - 239 MB more, apt-cache 595.
+    _fake_memory(tmp_path, available_mb=2300)  # and 1024 MB of the ARC
     flight = handlers.preflight(ex, CFG, validation.validate("preflight", PREFLIGHT))
     assert flight["ok"] is True and len(flight["warnings"]) == 1, flight["warnings"]
-    assert "grow by 956 MB" in flight["warnings"][0] and "apt-cache 619 MB, scoring 337 MB" in flight["warnings"][0]
-    assert "with that, 408 MB would be missing" in flight["warnings"][0]  # 1728 + 1024 + 956 - 3300
+    assert "grow by 908 MB" in flight["warnings"][0] and "apt-cache 595 MB, scoring 313 MB" in flight["warnings"][0]
+    assert "with that, 264 MB would be missing" in flight["warnings"][0]  # 1656 + 1024 + 908 - 3324
 
     # Right before the worm, with the run: every VM of its gameplan looked at from inside, all at once.
     ex.states = {}
@@ -919,7 +919,7 @@ def test_check_flags_a_down_vm_and_dead_service(tmp_path):
 
     # Before an attempt: each thing the host lacks for it fails the preflight, and says so.
     (tmp_path / "internet-allowed").write_text("allowed\n")
-    _fake_memory(tmp_path, available_mb=1800)  # the sandbox takes 1728 MB (its ceilings, its QEMUs), and 1024 more are kept free
+    _fake_memory(tmp_path, available_mb=600)  # and 1024 MB of the ARC: the sandbox takes 1656 MB (its ceilings, its QEMUs), 1024 more kept free
     stopped_service = {**SERVICE_VMS[1], "status": "stopped"}
     halted = {"vmid": 118, "name": "devbox-t1-c", "node": "n", "status": "running", "pool": "devbox"}
     ex.pools.update(ephemeral=[SERVICE_VMS[0]], private_internet=[stopped_service], devbox=[*DEVBOX_VMS, halted])
@@ -936,9 +936,10 @@ def test_check_flags_a_down_vm_and_dead_service(tmp_path):
     assert detail["devboxes:held"] == "not off: devbox-t1-a, devbox-t1-c"
     assert detail["sandbox:not-running"].startswith("not off: sandbox-a")
     assert detail["host:internet-window-closed"].endswith("exists: internet access is allowed (`worms internet off`)")
-    assert flight["memory"]["available_mb"] == 1800 and flight["memory"]["needed_mb"] == 1728
-    assert detail["memory:admission"] == ("1800 MB available; 1728 MB for the sandbox (the ceilings of its 2 VMs and the gateway, "
-                                          "and 192 MB for their QEMUs) and 1024 MB to spare")  # fmt: skip
+    assert flight["memory"]["available_mb"] == 1624 and flight["memory"]["needed_mb"] == 1656
+    assert detail["memory:admission"] == ("1624 MB available (600 MB free and 1024 MB the ZFS ARC gives back); 1656 MB for the "
+                                          "sandbox (the ceilings of its 2 VMs and the gateway, and 120 MB for their QEMUs) and "
+                                          "1024 MB to spare")  # fmt: skip
     assert "jq" not in json.dumps(flight) and any("no .deb of jq" in note for note in ex.notes)  # names: in the job log only
     assert len(flight["warnings"]) == 2 and all("no clean snapshot" in w for w in flight["warnings"])
     # Without the hold, devboxes may run; a later state (the sandbox powered off) passes.
@@ -1116,7 +1117,7 @@ def test_after_the_worm_a_vm_it_broke_is_reported_not_failed(tmp_path, monkeypat
     assert detail["sandbox-g"].endswith("Its QEMU holds it until it is stopped")
     assert detail["sandbox-i"].startswith("its QEMU dumped core") and detail["sandbox-h"].startswith("powered off from inside")
     assert seen["memory"] == {"available_mb": 9000, "total_mb": 32000, "psi_some_avg10": 1.5, "psi_full_avg10": 0.25, "ksm_sharing_mb": 100,
-                              "arc_mb": 2048}  # fmt: skip
+                              "arc_mb": 2048, "arc_reclaimable_mb": 1024}  # fmt: skip
     assert seen["devboxes_running"] == ["devbox-t1-a"] and seen["oom_adjusted"] == [116, 905, 906]
     assert devbox_qemu.read_text().strip() == running_qemu.read_text().strip() == halted_qemu.read_text().strip() == "1000"
     # The journal read for the VMs not running: systemd's lines of their scopes alone (PID 1 writes some

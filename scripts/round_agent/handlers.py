@@ -72,9 +72,9 @@ HOST_UNITS = ("proxmox-firewall", "worms-host-firewall", "worms-firewall-watchdo
 SANDBOX_API_UNITS = ("sandbox-api", "nginx")
 # sandbox-gw's memory ceiling (opentofu/stacks/sandbox/main.tf, its `dedicated`).
 SANDBOX_GW_MEMORY_MB = 512
-# What a QEMU holds beyond its VM's ceiling (its code, device emulation, page tables): about 20 MB
-# for a 512 MB VM touched in full, more while it starts (worms-dev, 2026-11-22).
-QEMU_OVERHEAD_MB = 64
+# What a QEMU holds beyond its VM's ceiling (its code, device emulation, page tables): 18-38 MB
+# at the peak for a 512 MB VM touched in full (worms-dev, 2026-11-22: scope peaks of 530-550 MB).
+QEMU_OVERHEAD_MB = 40
 # What the host keeps free beyond every ceiling of a round's sandbox (preflight; MEMORY_RESERVE_MB).
 MEMORY_RESERVE_MB = 1024
 # The platform's addresses (all.vars: infrastructure_ips, services_ips, ...): `worms step
@@ -699,8 +699,9 @@ def preflight(ex, cfg, params):
     host run the gameplan's sandbox, and is everything around it as it must be? Changes nothing.
     Returns {ok, failures, checks, warnings, memory: {available_mb, needed_mb, reserve_mb,
     total_mb}}. Memory: a rooted guest can touch all of its RAM and defeat KSM and ballooning,
-    so each VM counts with its ceiling, and each QEMU with its own overhead; MemAvailable leaves
-    out the ZFS ARC, the safe side. The VMs a worm reaches (the service VMs) and the devbox VMs
+    so each VM counts with its ceiling, and each QEMU with its own overhead. Available is
+    MemAvailable and what the ZFS ARC gives back under pressure (down to its floor, c_min): the
+    kernel takes that before it kills anything. The VMs a worm reaches (the service VMs) and the devbox VMs
     that run can grow towards their ceilings too: a warning when that would not fit as well."""
     spec, _ = _gameplan(ex, params["gameplan"], params["gameplan_sha256"])
     results, warnings = [], []
@@ -744,10 +745,12 @@ def preflight(ex, cfg, params):
     overhead = qemus * QEMU_OVERHEAD_MB
     needed = sum(int(vm["memory"]) for vm in spec["vms"]) + SANDBOX_GW_MEMORY_MB + overhead
     reserve = int(cfg.get("memory_reserve_mb", MEMORY_RESERVE_MB))
-    available = memory["available_mb"]
+    arc = memory.get("arc_reclaimable_mb") or 0
+    available = None if memory["available_mb"] is None else memory["available_mb"] + arc
     admitted = available is not None and available >= needed + reserve
-    record("memory:admission", admitted, f"{available} MB available; {needed} MB for the sandbox (the ceilings of its "
-           f"{qemus - 1} VMs and the gateway, and {overhead} MB for their QEMUs) and {reserve} MB to spare")  # fmt: skip
+    record("memory:admission", admitted, f"{available} MB available ({memory['available_mb']} MB free and {arc} MB the "
+           f"ZFS ARC gives back); {needed} MB for the sandbox (the ceilings of its {qemus - 1} VMs and the gateway, and "
+           f"{overhead} MB for their QEMUs) and {reserve} MB to spare")  # fmt: skip
     growth = _growth_mb([vm for vm in resources if vm.get("pool") in (*SERVICE_POOLS, "devbox")], states)
     if admitted and available < needed + reserve + sum(growth.values()):
         # Not a failure: a host with every VM at its ceiling may not exist (worms-dev, 32 GB, cannot

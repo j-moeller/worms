@@ -186,7 +186,8 @@ def _number(path, field=None, unit=None):
 
 def memory():
     """The host's memory now (MB, None where the kernel does not say). MemAvailable leaves out
-    the ZFS ARC (arc_mb), which gives memory back under pressure. PSI: the share of the last 10 s
+    the ZFS ARC (arc_mb), which gives memory back under pressure down to its floor
+    (arc_reclaimable_mb). PSI: the share of the last 10 s
     in which some (or every) task waited for memory."""
     info = {}
     try:
@@ -206,6 +207,7 @@ def memory():
         pass
     sharing = _number(Path(SYS, "kernel", "mm", "ksm", "pages_sharing"))
     arc = _number(Path(PROC, "spl", "kstat", "zfs", "arcstats"), "size")
+    arc_min = _number(Path(PROC, "spl", "kstat", "zfs", "arcstats"), "c_min")
     return {
         "available_mb": info.get("MemAvailable"),
         "total_mb": info.get("MemTotal"),
@@ -213,6 +215,8 @@ def memory():
         "psi_full_avg10": psi.get("full"),
         "ksm_sharing_mb": None if sharing is None else sharing * os.sysconf("SC_PAGE_SIZE") // 2**20,
         "arc_mb": None if arc is None else arc // 2**20,
+        # What the ARC gives back under pressure: down to its floor (c_min), not below.
+        "arc_reclaimable_mb": None if arc is None else max(0, arc - (arc_min or 0)) // 2**20,
     }
 
 

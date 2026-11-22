@@ -20,6 +20,10 @@
       systemctl mask "$unit" || exit 1
       changed=1
     done
+    # A unit masked after it had failed keeps showing as failed (`systemctl --failed`, worms-gui's
+    # `fail` column): only what still fails should.
+    systemctl reset-failed apt-daily.timer apt-daily-upgrade.timer apt-daily.service apt-daily-upgrade.service \
+      apt-listchanges.timer apt-listchanges.service 2>/dev/null || true
     echo "changed=$changed"
   register: apt_updates_masked
   changed_when: "'changed=1' in apt_updates_masked.stdout"

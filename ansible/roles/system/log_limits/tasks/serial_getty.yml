@@ -16,3 +16,10 @@
     name: serial-getty@ttyS0.service
     state: stopped
     masked: true
+
+# Its failures before the mask would still be listed (`systemctl --failed`, worms-gui's `fail`).
+- name: Forget the failures of the masked getty
+  when: log_limits_ttys0.rc != 0
+  ansible.builtin.command: systemctl reset-failed serial-getty@ttyS0.service
+  changed_when: false
+  failed_when: false

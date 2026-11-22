@@ -32,6 +32,21 @@ KINDS = {
 }
 
 
+def attached(argv: list, env: dict) -> int:
+    """`argv` (ssh) on this terminal as a child, not in place of this process: its exit code. With
+    os.exec* the CLI's atexit never ran, and its ssh-agent stayed behind with the WORMS key loaded
+    (docs/07-security.md, C3). Ctrl-C is the child's (the terminal sends it to both): ignored here
+    while it runs, by a handler, which the child does not inherit as SIG_IGN would be."""
+    import signal
+    import subprocess
+
+    previous = signal.signal(signal.SIGINT, lambda *_: None)
+    try:
+        return subprocess.Popen(argv, env=env).wait()
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
 def aliases(name: str) -> list[str]:
     """The names `worms login` accepts for a VM besides its own and `<team>/<role>`. The old
     `ssh-gateway-t<n>` is the team's NAT gateway devbox-t<n>-gw, not the shared SSH gateway:
@@ -228,7 +243,7 @@ class Catalogue:
             if not self.runner.session.laptop:
                 output.error("this is the host")
                 return 1
-            os.execvpe("ssh", ["ssh", "-t", self.config.ssh], os.environ)
+            return attached(["ssh", "-t", self.config.ssh], dict(os.environ))
         vm = self.resolve(name)
         if vm.get("status") != "running":
             raise BuildError(f"{vm['name']} is {vm.get('status')}: start it first (`qm start {vm['vmid']}` on the host)")
@@ -236,8 +251,7 @@ class Catalogue:
             output.warn(f"{vm['name']} is a team VM, assumed rooted by the team: type nothing secret there")
         argv, env = self.ssh_argv(vm)
         print(output.color(f"$ {shlex.join(argv)}   (sudo -i for root)", "dim"), flush=True)
-        os.execvpe("ssh", argv, env)
-        return 0  # not reached
+        return attached(argv, env)
 
     def reachable(self, vm: dict) -> str:
         try:

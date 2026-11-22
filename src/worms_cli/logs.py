@@ -46,12 +46,13 @@ class Logs:
 
     def _on_host(self, command: str) -> int:
         """Run `command` on the host, its output straight to this terminal (here: no SSH)."""
+        from worms_cli.vms import attached
+
         if self.session.laptop:
             argv, env = self.session.ssh_argv(command), self.session.env()
         else:
             argv, env = ["sh", "-c", command], dict(os.environ)
-        os.execvpe(argv[0], argv, env)
-        return 0  # not reached
+        return attached(argv, env)  # a child: the CLI's atexit stops its ssh-agent afterwards
 
     def _on_vm(self, name: str, command: str) -> int:
         vm = self.catalogue.resolve(name)
@@ -59,9 +60,10 @@ class Logs:
             raise BuildError(f"{vm['name']} is a team VM: its journal is the team's (`worms login {name}` to look anyway)")
         if vm.get("status") != "running":
             raise BuildError(f"{vm['name']} is {vm.get('status')}: start it first (`qm start {vm['vmid']}` on the host)")
+        from worms_cli.vms import attached
+
         argv, env = self.catalogue.ssh_argv(vm, command, interactive=False)
-        os.execvpe(argv[0], argv, env)
-        return 0  # not reached
+        return attached(argv, env)  # a child: the CLI's atexit stops its ssh-agent afterwards
 
     def job(self, number: int, lines: int, follow: bool) -> int:
         from core.models.rounds import HostJob

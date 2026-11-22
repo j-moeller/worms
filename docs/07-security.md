@@ -250,6 +250,7 @@ IDs are cited in code comments. S = team VMs, D = dashboard, C = cross-cutting. 
 | D13 | Low | Team API tokens never expire and survive their creator leaving the team |
 | C1 | Accepted | The Proxmox provider uses `insecure = true` |
 | C2 | Open | VM host keys are not checked (`StrictHostKeyChecking no`) |
+| C3 | Partly | **The WORMS key's ssh-agent outlives a CLI run that is killed** (live, 2026-11-22). A run ended by a signal (its terminal closed, SIGTERM) never reaches its `atexit`, so its agent stays with the WORMS key loaded. `worms login` and `worms log <VM>` left one at every run, since they `exec`ed ssh: fixed (below). worms-dev had 53 such agents, up to 18 days old; they are not cleaned up by the fix. worms-gui stops its own agent on SIGHUP and SIGTERM too |
 | S11 | Partly | Audit forwarding is plain TCP, sorted by source address |
 | S1 | Open | One shared database disk (100 GB): no database backup, no retention for `network_flows` |
 
@@ -287,3 +288,5 @@ IDs are cited in code comments. S = team VMs, D = dashboard, C = cross-cutting. 
   - D9: joins failed under the real grants.
   - D11: uploads without quota.
   - D14 (2026-11-08): a team could fetch a log of an attempt that had not finished, by its uuid; the progression also named the attempt's entry VM.
+- **C** (cross-cutting):
+  - C3, in part (2026-11-22): `worms login` and `worms log <VM>` replaced themselves with ssh (`exec`), so the CLI's `atexit` never stopped its ssh-agent, and one agent with the WORMS key stayed behind per login (worms-gui's `l` and `L` made that frequent). ssh now runs as the CLI's child (`vms.attached`), and the agent ends with the CLI.

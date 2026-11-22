@@ -31,6 +31,7 @@ On the host (details: [2 Installation](docs/02-installation.md)):
 
 ```sh
 worms() { /root/app/.venv-test/bin/python /root/app/src/manage.py "$@"; }
+worms-gui() { /root/app/.venv-test/bin/python /root/app/src/worms_gui.py "$@"; }   # an htop-like dashboard
 worms secret issue proxmox-token          # OpenTofu and the round agent
 worms secret issue orchestrator-token     # sandbox VM power, for rounds
 worms secret issue topology-token         # the topology page and `worms status`

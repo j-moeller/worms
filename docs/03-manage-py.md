@@ -11,6 +11,7 @@ There are two `manage.py` files:
 
 ```sh
 worms() { /root/app/.venv-test/bin/python /root/app/src/manage.py "$@"; }
+worms-gui() { /root/app/.venv-test/bin/python /root/app/src/worms_gui.py "$@"; }   # the dashboard below
 eval "$(worms completion bash)"   # tab completion; or once: worms completion bash > /etc/bash_completion.d/worms
 worms --help              # the commands, grouped by purpose
 worms apply --help        # the components, what each needs
@@ -276,6 +277,39 @@ A failed step ends the build. Before exiting, it still closes the window, switch
   - the firewall watchdog stops any team VM that runs.
 
 **Arguments after `--`** go to every playbook: `worms apply orchestrator -- -vvv`.
+
+<a id="worms-gui"></a>
+## worms-gui
+
+An htop-like dashboard of the whole platform in the terminal, live, with the CLI's commands on what
+you mark ([`src/worms_cli/gui/`](../src/worms_cli/gui/), started by [`src/worms_gui.py`](../src/worms_gui.py);
+curses, nothing to install). `?` in it lists every key.
+
+```sh
+worms-gui                  # the platform this host (or WORMS_SSH's) runs
+worms-gui --dry-run        # every action is shown, none runs
+worms-gui --no-watchers    # no SSH to the platform VMs: the host's view only
+worms-gui --tab jobs       # start on a tab: vms, jobs, rounds, services, components, tasks, log
+```
+
+- **Header:** the host's CPU, memory and memory pressure, the load, KSM and the ZFS ARC; the
+  system (production in red), the internet window, the cluster and host firewalls, the watchdog's
+  last run, the round agent (active, PAUSED), devboxes held, the round and the run under way.
+- **Tabs:** VMs, Jobs, Rounds, Services, Components, Tasks (its own commands' output), Log.
+  Sort (`<` `>`, F6, a click on a column's head), filter (`/`, `f` for quick filters), mark
+  (Space, `a` all shown, `u` none), Enter for a VM's or a job's details.
+- **VMs:** state, uptime, CPU, memory, network and disk rates (the Proxmox API), whether the
+  firewall is on (the VM's option, every NIC's `firewall=1` and the host's guest rules), the
+  `clean` snapshot, and what it is doing. A platform VM's activity comes from a watcher: one SSH
+  per VM running a small read-only loop (load, CPU, the busiest process, failed units, its
+  services). Team VMs and gateways are assumed rooted: never logged in to, only the host's view.
+  One GUI on a machine runs the watchers; a second one reads theirs.
+- **Commands** are the CLI's own (`worms ...`), with its checks, lock and run log: `m` (F2) the
+  menu for the marked VMs, jobs, rounds, services or components; `l` login and back, `!` run,
+  `L` log; Jobs: cancel the marked queued ones, pause or resume the agent; Rounds: pause, resume,
+  start, cancel; Components: apply or plan; `i` the internet window. What changes something asks
+  first, naming its targets; on production the destructive ones want a typed `yes`. Login, apply,
+  reset and rebuild run on the terminal and come back to the GUI; the rest run in the background.
 
 ## Django's management commands
 

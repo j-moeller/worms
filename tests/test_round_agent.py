@@ -231,9 +231,13 @@ def test_a_gameplan_is_named_by_a_plain_file_name_only(name):
 
 def test_validate_prepare():
     clean = validation.validate("prepare", {"gameplan": "round_one.py", "gameplan_sha256": "a" * 64, "run_uuid": RUN})
-    assert clean == {"gameplan": "round_one.py", "gameplan_sha256": "a" * 64, "run_uuid": RUN}
+    assert clean == {"gameplan": "round_one.py", "gameplan_sha256": "a" * 64, "run_uuid": RUN, "resume_build": False}
     with pytest.raises(validation.Invalid):
         validation.validate("prepare", {"gameplan": "round_one.py", "gameplan_sha256": "nothex", "run_uuid": RUN})
+    # An unfinished sandbox build continued: the operator's yes, a boolean (worms_cli/rounds.py).
+    assert validation.validate("prepare", {**clean, "resume_build": True})["resume_build"] is True
+    with pytest.raises(validation.Invalid):
+        validation.validate("prepare", {**clean, "resume_build": "yes"})
     # The jobs around it: preflight names the gameplan too, check the run (or nothing: the host only).
     flight = {"gameplan": "round_one.py", "gameplan_sha256": "a" * 64}
     assert validation.validate("preflight", flight) == {**flight, "hold_devboxes": False}

@@ -508,6 +508,9 @@ class Conductor:
         self.jobs = jobs
         self.on_watch = on_watch
         self.stopping = False  # Ctrl-C: the attempt under way fails at its next wait
+        # The operator's yes to continuing an unfinished sandbox build (worms_cli/rounds.py): the
+        # next prepare does (scripts/round_agent/handlers.py, _build_sandbox), once.
+        self.resume_build = False
         gameplans.framework()  # the framework's modules, for what follows
 
     def now(self):
@@ -679,8 +682,9 @@ class Conductor:
         try:
             loaded = gameplans.load(run.gameplan, run.gameplan_sha256)
             self.set_state(run, S.PREPARING)
-            prepared = self.jobs.run(run, HostJob.Kind.PREPARE, gameplan=run.gameplan,
-                                     gameplan_sha256=run.gameplan_sha256, run_uuid=str(run.uuid))  # fmt: skip
+            resume, self.resume_build = self.resume_build, False
+            prepared = self.jobs.run(run, HostJob.Kind.PREPARE, gameplan=run.gameplan, gameplan_sha256=run.gameplan_sha256,
+                                     run_uuid=str(run.uuid), **({"resume_build": True} if resume else {}))  # fmt: skip
             self._register(run, prepared)
             self.set_state(run, S.CHECKING)
             # With the run, the host probes inside every VM too: they are ours until the worm.

@@ -72,10 +72,14 @@ def gameplan_file(value):
 
 
 def prepare(params):
+    resume = params.get("resume_build", False)
+    if not isinstance(resume, bool):
+        raise Invalid("resume_build must be true or false")
     return {
         "gameplan": gameplan_file(params.get("gameplan")),
         "gameplan_sha256": sha256(params.get("gameplan_sha256"), "gameplan_sha256"),
         "run_uuid": team_uuid(params.get("run_uuid"), "run_uuid"),
+        "resume_build": resume,
     }
 
 

@@ -277,14 +277,52 @@ def _sandbox_hosts(ex):
 
 def _reusable_sandbox(ex, hcl):
     """The VMs of the sandbox the stack holds, if it is the one `hcl` defines and every VM
-    of it has its clean snapshot; else None."""
+    of it has its clean snapshot; else None (an apply that did not finish too: _build_sandbox
+    continues it or builds anew)."""
     if ex.sandbox_definition() != hcl:
         return None
-    built = {int(host["vm_id"]) for host in _ansible_hosts("sandbox", ex.tofu_output("sandbox")).values()}
+    outputs = ex.tofu_output("sandbox")
+    if outputs and "ansible_hosts" not in outputs:
+        return None
+    built = {int(host["vm_id"]) for host in _ansible_hosts("sandbox", outputs).values()}
     pool = snapshots.pool_vms(ex, "sandbox")
     if not built or {vm["vmid"] for vm in pool} != built:
         return None
     return pool if all(snapshots.has_clean(ex, vm) for vm in pool) else None
+
+
+# A sandbox build begun and not finished (state dir): written before the build changes any VM,
+# removed once every VM has its clean snapshot or the sandbox is destroyed. While it is there no
+# worm has run on that sandbox (a worm runs only after a whole prepare), so the operator may have
+# the next prepare continue the build on its VMs (resume_build) instead of building anew.
+SANDBOX_BUILD = "sandbox-build.json"
+
+
+def _build_record_path(cfg):
+    return Path(cfg.get("state_dir", STATE_DIR)) / SANDBOX_BUILD
+
+
+def unfinished_build(cfg):
+    """{definition (the HCL's SHA-256), gameplan, began, run_uuid} of the build left unfinished, or None."""
+    try:
+        record = json.loads(_build_record_path(cfg).read_text())
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) and record.get("definition") else None
+
+
+def _record_build(cfg, hcl, params):
+    path = _build_record_path(cfg)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {"definition": hashlib.sha256(hcl.encode()).hexdigest(), "gameplan": params.get("gameplan"),
+              "began": datetime.now(timezone.utc).isoformat(timespec="seconds"), "run_uuid": params.get("run_uuid")}  # fmt: skip
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        json.dump(record, handle)
+
+
+def _build_finished(cfg):
+    _build_record_path(cfg).unlink(missing_ok=True)
 
 
 def _destroy_sandbox(ex, cfg):
@@ -292,6 +330,7 @@ def _destroy_sandbox(ex, cfg):
     # Proxmox gives up on then blocks whichever new VM gets that ID.
     before = snapshots.listed(ex, lambda: snapshots.pool_vms(ex, "sandbox"))  # for the VM history only
     ex.tofu("sandbox", "destroy", "-auto-approve", "-input=false", "-parallelism=1", timeout=cfg.get("apply_timeout", 5400))
+    _build_finished(cfg)  # nothing left to continue
     snapshots.record(ex, lambda: [vm for vm in before if vm["vmid"] not in {v["vmid"] for v in snapshots.pool_vms(ex, "sandbox")}],
                      "destroyed", "the round's sandbox")  # fmt: skip
     ex.worms("inventory", timeout=300)
@@ -320,17 +359,31 @@ def _unsafe_tree(value):
     return _Unsafe(value) if isinstance(value, str) else value
 
 
-def _build_sandbox(ex, cfg, hcl, config):
+def _build_sandbox(ex, cfg, hcl, config, params, resume=False):
     """A new sandbox, snapshotted before any team's code reaches it. While it is built the
     devbox VMs are shut down and the service VMs it installs from are back to their snapshot,
-    so nothing in it comes from team code: every later run of the round rolls back to it."""
+    so nothing in it comes from team code: every later run of the round rolls back to it.
+    `resume` (the operator's choice, `worms round start --resume`): a build of this same
+    definition left unfinished (unfinished_build) is continued on its VMs, OpenTofu's apply and
+    the configuration run again; any other sandbox is destroyed first."""
     _refuse_while_internet(cfg, "build a sandbox")
-    if ex.tofu_output("sandbox"):
-        _destroy_sandbox(ex, cfg)  # another round's, or one left half built: it may hold team code
+    unfinished = unfinished_build(cfg)
+    continued = (resume and unfinished is not None and ex.sandbox_definition() == hcl
+                 and unfinished["definition"] == hashlib.sha256(hcl.encode()).hexdigest())  # fmt: skip
+    if continued:
+        ex.note(f"continuing the sandbox build begun {unfinished['began']}: its VMs kept, OpenTofu's apply and "
+                "the configuration run again")  # fmt: skip
+    else:
+        if resume:
+            ex.note("no unfinished build of this gameplan's sandbox to continue: it is built anew")
+        if ex.tofu_output("sandbox") or unfinished is not None:
+            _destroy_sandbox(ex, cfg)  # another round's, one a worm ran on, or a build not to continue
     devboxes = snapshots.shut_down(ex, snapshots.pool_vms(ex, "devbox"))
     try:
         services = _reset_services(ex, cfg)
         ex.install_sandbox_definition(hcl)
+        if not continued:
+            _record_build(cfg, hcl, params)
         ex.tofu("sandbox", "init", "-input=false", timeout=600)
         ex.tofu("sandbox", "apply", "-auto-approve", "-input=false", "-parallelism=1", timeout=cfg.get("apply_timeout", 5400))
         snapshots.record(ex, lambda: snapshots.pool_vms(ex, "sandbox"), "created", "the round's sandbox")
@@ -341,6 +394,7 @@ def _build_sandbox(ex, cfg, hcl, config):
             varfile.write_text(_unsafe_yaml(_unsafe_tree(config)))
             ex.worms("round-configure-sandbox", timeout=cfg.get("configure_timeout", 1800), args=f"-e @{varfile}")
         snapshots.take(ex, snapshots.pool_vms(ex, "sandbox"), f"worms round sandbox {hashlib.sha256(hcl.encode()).hexdigest()[:12]}")
+        _build_finished(cfg)
     finally:
         if devboxes:
             _refuse_while_internet(cfg, "start the devbox VMs again")
@@ -526,7 +580,7 @@ def prepare(ex, cfg, params):
         snapshots.roll_back(ex, built)
         services = "not reset: a later run of the round (the first one reset them)"
     else:
-        services = _build_sandbox(ex, cfg, hcl, gameplan_build.ansible_vars(spec))
+        services = _build_sandbox(ex, cfg, hcl, gameplan_build.ansible_vars(spec), params, resume=params.get("resume_build", False))
     snapshots.wait_for_ssh(ex, _sandbox_hosts(ex))
 
     vms = _sandbox_vms(ex)

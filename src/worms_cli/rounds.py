@@ -257,6 +257,7 @@ class Session:
         self.conductor = None
         self.jobs = None
         self.interrupts = 0
+        self.stopped_on_prepare = False  # a prepare failed: the round stopped there (_after_failed_prepare)
 
     # The folder an attempt's steps go to; the session's own steps (gameplans, preflight) in the session's.
     def folder(self, run=None) -> Path:
@@ -520,7 +521,7 @@ def _run(session, runs) -> list:
         if problem:
             print(output.status_cell("error", f"before {run.team.name}'s attempt: {problem}"))
             print("The round stops here: no attempt was used up. Mend it, then `worms round start "
-                  f"{session.round.id}` runs the teams still to come.")  # fmt: skip
+                  f"{session.round.id} --resume` runs the teams still to come.")  # fmt: skip
             break
         began = time.monotonic()
         run = conductor.attempt(run)
@@ -532,7 +533,41 @@ def _run(session, runs) -> list:
             print(output.status_cell("error", f"{run.team.name}: {run.state} after {took}: {run.error}"))
             print(output.color(f"    its steps: {session.folder(run)}", "dim"))
         ended.append(run)
+        if run.state == S.FAILED and _prepare_failed(run):
+            _after_failed_prepare(session, run)
+            break
     return ended
+
+
+def _prepare_failed(run) -> bool:
+    from core.models.rounds import HostJob
+
+    return run.jobs.filter(kind=HostJob.Kind.PREPARE).exclude(state=HostJob.State.DONE).exists()
+
+
+def _after_failed_prepare(session, run):
+    """A prepare that failed stops the round: the next team's would fail the same way. A sandbox
+    build it left unfinished is kept, asked, for `--resume` to continue once the cause is mended."""
+    record = session.jobs.handlers.unfinished_build(session.jobs.cfg)
+    print(output.heading("the prepare failed: the round stops here"))
+    if record:
+        print(f"  The sandbox build begun {record['began']} stopped before its end; no worm has run on it. Its VMs "
+              "are kept, powered off. Kept, `--resume` continues the build on them: OpenTofu's apply and the "
+              "configuration run again, not the whole build.")  # fmt: skip
+        if ask("Keep them, to continue the build once the cause is mended?", True, session.yes):
+            print(output.color("    later: worms round start {0} --resume (continues it); worms round teardown (destroys it)"
+                               .format(session.round.id), "dim"))  # fmt: skip
+        else:
+            try:
+                session.conductor.destroy_sandbox()
+                print(output.status_cell("ok", "the unfinished sandbox is destroyed: the next attempt builds it anew"))
+            except Exception as exc:  # noqa: BLE001
+                output.error(f"not destroyed: {exc}; later: `worms round teardown`")
+    else:
+        print("  The sandbox is whole (every VM has its clean snapshot): `--resume` rolls it back.")
+    print(f"  Mend the cause (its steps: {session.folder(run)}). A change to Ansible, the gameplans or the host's code "
+          f"goes to the host with `worms apply round-agent`. Then: `worms round start {session.round.id} --resume`.")  # fmt: skip
+    session.stopped_on_prepare = True
 
 
 def _summary(session):
@@ -617,7 +652,12 @@ def _afterwards(session):
 
     yes = session.yes
     sandbox = [vm["name"] for vm in power.Power(session.config).runner.vms() if vm.get("pool") == "sandbox"]
-    if sandbox:
+    record = session.jobs.handlers.unfinished_build(session.jobs.cfg) if session.jobs else None
+    if record:
+        print(output.heading("the round's sandbox"))
+        print(f"  an unfinished build (begun {record['began']}), kept: `worms round start {session.round.id} --resume` "
+              "continues it, `worms round teardown` destroys it")  # fmt: skip
+    elif sandbox:
         print(output.heading("the round's sandbox"))
         print(f"  kept, powered off, for another attempt: {len(sandbox)} VM(s). Another `worms round start` of the "
               "same gameplan rolls it back instead of building it (minutes instead of an hour).")  # fmt: skip
@@ -723,6 +763,14 @@ def start(config, args) -> int:
             return 1
         pinned = RoundRun.objects.filter(round=round_).exclude(gameplan_sha256="").values_list("gameplan_sha256", flat=True).first()
         print(output.status_cell("ok", f"{round_.gameplan}, version {pinned[:12]}: valid at {round_.team_duration} s per team"))
+        record = session.jobs.handlers.unfinished_build(session.jobs.cfg)
+        if record:
+            print(output.heading("an unfinished sandbox build"))
+            print(f"  begun {record['began']} for {record['gameplan']}; no worm has run on it. Continued: its VMs are kept, "
+                  "OpenTofu's apply and the configuration run again (minutes, not the whole build). Not: it is "
+                  "destroyed and built anew.")  # fmt: skip
+            if ask("Continue that build?", True, args.yes):
+                session.conductor.resume_build = True
 
         if not _stop_everything(session) or not _verified(session):
             return 1
@@ -743,7 +791,7 @@ def start(config, args) -> int:
         _interrupt(session)
         ended = _run(session, runs)
         failed = [run for run in ended if run.state == RoundRun.State.FAILED]
-        if failed and not session.conductor.stopping:
+        if failed and not session.conductor.stopping and not session.stopped_on_prepare:
             print(f"failed: {', '.join(run.team.name for run in failed)} (each attempt's steps: {session.dir})")
             says(f"worms round start {round_.id} --resume")
             if ask("Run a new attempt of each of them now (the sandbox is kept: a rollback, not a build)?", False, False):
@@ -818,7 +866,9 @@ def _host_steps(config, folder):
 
 
 def teardown(config, yes=False) -> int:
-    """`worms round teardown`: the sandbox a session kept (powered off, for another attempt) destroyed."""
+    """`worms round teardown`: the round's sandbox destroyed: one a session kept (powered off, for
+    another attempt), one whose build stopped half-way, or what OpenTofu still holds of one whose
+    VMs were deleted by hand."""
     from django.conf import settings
 
     from orchestrator.rounds.conductor import Conductor
@@ -828,19 +878,27 @@ def teardown(config, yes=False) -> int:
     if os.geteuid() != 0:
         raise BuildError("on the host itself, as root")
     sandbox = sorted(vm["name"] for vm in power.Power(config).runner.vms() if vm.get("pool") == "sandbox")
-    if not sandbox:
-        print("No sandbox VM: nothing to destroy.")
-        return 0
-    print(f"the round's sandbox: {', '.join(sandbox)}")
-    print("  Destroyed, the next `worms round start` builds it again (about an hour) instead of rolling it back.")
-    if not ask(f"Destroy these {len(sandbox)} VM(s)?", False, yes):
-        return 1
     folder = directory() / f"teardown-{datetime.now():%Y%m%d-%H%M%S}"
     folder.mkdir(mode=0o700, parents=True, exist_ok=True)
     _repo_root, jobs, key = _host_steps(config, lambda run=None: folder)
     try:
+        record = jobs.handlers.unfinished_build(jobs.cfg)
+        try:
+            held = bool(jobs.executor.tofu_output("sandbox"))
+        except Exception:  # noqa: BLE001  (unreadable: destroying is the safe side)
+            held = True
+        if not (sandbox or held or record):
+            print("No sandbox: nothing to destroy.")
+            return 0
+        print(f"the round's sandbox: {', '.join(sandbox) or 'no VM, but OpenTofu still holds it'}"
+              + (f" (an unfinished build, begun {record['began']})" if record else ""))  # fmt: skip
+        print("  Destroyed, the next `worms round start` builds it again (about an hour) instead of rolling it back.")
+        if not ask(f"Destroy it{f' ({len(sandbox)} VMs)' if sandbox else ''}?", False, yes):
+            return 1
         settings.PROXMOX["node"] = config.proxmox_node()
         Conductor(jobs=jobs, power=ProxmoxPower(api=Pvesh())).destroy_sandbox()
+    except BuildError:
+        raise
     except Exception as exc:  # noqa: BLE001  (its step's file says more)
         raise BuildError(f"not destroyed: {exc} (its steps: {folder})") from None
     finally:

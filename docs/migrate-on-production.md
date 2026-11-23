@@ -241,32 +241,100 @@ worms log conductor -f
 worms vm kill         # hard-stop every VM, destroy nothing: the only hard stop
 ```
 
-## Before the first round: checks (2026-11-22)
+## Before the gameplan is assigned (2026-11-23)
 
-The round's own checks run before every attempt now: a `preflight` job (the host, the services,
-memory, the gameplan's packages) and the `check` from inside every sandbox VM, and a run is watched
-while it lasts ([5](05-live-environment.md#an-attempt)). A failed preflight puts the round on hold
-and uses up no attempt. Still, look before the round starts, with the code that has them deployed
-(`worms apply --yes orchestrator dashboard round-agent gameplans host-network`, after the
-[Site.yml upgrade](03-manage-py.md#site-upgrade) if production does not run it yet):
+Production runs `f11b1a5` (2026-11-20). Everything since then comes with this update: `Site.yml`
+with role stamps, the round's preflight, check and watch (migrations `0021`-`0023`), the sandbox
+gateway's memory fix. Checked against the code by hand and by three independent reviews; the
+round itself was rehearsed on worms-dev (round 13). Plan about 1 h before the round's start.
+
+**0. Before the update** (production's CLI is still `f11b1a5`: no `jobs` or `round` yet):
 
 ```sh
-worms status          # internet ● denied, firewall enabled, every host service active, no failed host job
-worms show gameplans  # round_one.py valid on the host and the orchestrator (a new version since 2026-11-22)
-worms run apt-cache --root -- "find /var/cache/apt-cacher-ng -name 'inetutils-telnetd_*.deb' -o -name 'inetutils-inetd_*.deb'"
-                      # both listed: round_one's telnet hosts install them
-free -m               # available, plus the ZFS ARC above its floor (below), at least 12 616 MB once the devboxes are off
-awk '/^(size|c_min) / {print $1, int($3 / 1048576), "MB"}' /proc/spl/kstat/zfs/arcstats
-pvesm status          # local-zfs-sandbox: at least 105 GB available (20 VMs and the gateway, thick disks)
+git log --oneline -1                     # f11b1a5: note it, the way back
+pgrep -af 'manage.py|ansible-playbook'   # nothing
+# f11b1a5's CLI (indented here: the docs' test checks today's CLI):
+ worms status jobs                       # nothing running or queued
+ worms status rounds                     # the round: no gameplan yet; Start (UTC, compare `date -u`) at least ~1 h ahead
 ```
 
-- **The round's devboxes:** "Shut down every devbox while its attempts run" is on by default, and
-  migration `0023` set it on every round that had not begun.
-- **Memory:** round_one needs its 20 × 512 MB, the gateway's 512 MB, 40 MB per QEMU and 1024 MB to
-  spare: 12 616 MB. Each devbox VM a round holds frees about 0.5 GB. If an OOM kill happens anyway,
-  it takes a team VM (that attempt runs again), never the database.
-- **Following it:** `worms log conductor -f` shows the preflight, the watch (a VM the worm powered
-  off, one the host stopped) and the host's memory every minute.
+The round's window: end − start ≥ the first sandbox build (~1 h) + teams × (minutes per team + 17¼ min)
++ room for retries. Move start or end on Staff → Rounds now if needed (the start is the teams' upload
+deadline: tell them). Tell the teams that their devboxes are off and the dashboard restarts for ~40 min.
+
+Only if a sandbox is left over (`worms status`: a sandbox VM), with the wrapper's old name:
+`/usr/local/sbin/worms-node-run opentofu/stacks/sandbox 'tofu destroy -auto-approve -parallelism=1'`.
+
+**1. The code** (no egress: a bundle, made on worms-dev with `git bundle create /root/worms-update.bundle main`,
+copied to production outside the checkout):
+
+```sh
+git bundle verify /root/worms-update.bundle
+git pull --ff-only /root/worms-update.bundle main
+git log --oneline -1                     # the bundle's head (c8457d4 or later)
+git status --short                       # nothing
+worms status                             # new CLI: attention 'migrations: the database lacks 3'; internet ● denied; no sandbox VM
+worms jobs                               # nothing running or queued
+worms db backup                          # ● ... ~/.worms/backups/worms-mydb-<time>.dump
+```
+
+**2. Deploy (offline).** apt-cache first, by name: its seed list grew since `f11b1a5`, and `worms apply`
+without names refuses a component whose package names changed (they need the internet window). By
+name it is configured offline; the new seed packages (devbox tooling, not needed by `round_one`) wait
+for the next egress window (`worms apply apt-cache --packages`).
+
+```sh
+worms apply --plan apt-cache             # apt-cache: configure again; internet window: closed
+worms apply apt-cache                    # rolled back to clean, configured, snapshotted again
+worms apply --plan                       # no packages error now; 'internet window: closed'; OpenTofu: in place only,
+                                         # 0 replaced, 0 destroyed; every VM configured again (Site.yml is new here)
+worms apply                              # y; a dump first; devboxes off while the service VMs are rolled back,
+                                         # configured (every role: no stamps yet) and snapshotted again;
+                                         # migrations 0021-0023 and the grants; ~25-40 min. Ends with
+                                         # '● agent: restarted, active', '● conductor: restarted, active', '● applied: ...'
+```
+
+If the agent was not restarted (a host job ran over 900 s): once `worms jobs` shows nothing running,
+`worms service restart agent conductor`. If `worms apply` fails: `worms log run 1 <vm>`, fix, run the same
+command again (finished roles are skipped). Do not assign the gameplan to a half-deployed platform.
+
+**3. Verify:**
+
+```sh
+worms apply --plan                       # nothing to apply: the platform runs this checkout
+worms status                             # no 'migrations', 'host services', 'internet window', 'devbox VMs' rows;
+                                         # 'snapshots' is a warning (the services are then not reset at the round)
+worms jobs                               # devbox_reconfigure done; nothing running or queued
+worms round                              # the round, no gameplan, not ON HOLD
+worms show table rounds --limit 3        # devboxes_off true, devbox_hold empty
+worms show gameplans                     # round_one.py valid on the host and the orchestrator: 3858cca4c905
+cat /opt/worms/.worms-commit             # the bundle's head (the agent's code, the framework, the sandbox stack)
+grep -n 'floating = 512' /opt/worms/opentofu/stacks/sandbox/main.tf   # the sandbox gateway's memory fix
+systemctl show -p ExecStart worms-round-agent | grep -c worms-host-run   # 1 (the wrapper's new name)
+worms run apt-cache --root -- "find /var/cache/apt-cacher-ng -name 'inetutils-telnetd_*.deb' -o -name 'inetutils-inetd_*.deb' -o -name 'nftables_*.deb'"
+                                         # three .debs (round_one's telnet hosts, the sandbox gateway)
+worms run dns --root -- 'date; ls -l /var/log/audit/audit.log; df -h /'   # audit.log within a minute of date; / not full
+free -m; awk '/^(size|c_min) / {print $1, int($3 / 1048576), "MB"}' /proc/spl/kstat/zfs/arcstats
+                                         # available + (size - c_min) + ~0.5 GB per devbox VM >= 12 616 MB
+pvesm status --storage local-zfs-sandbox # Available (KiB) >= 110100480 (105 GiB)
+worms check                              # every team's A, B, C: every cell ✓ (minutes; it changes nothing)
+```
+
+**4. The dashboard, in this order:** Staff → Notifications: "when the round begins, every devbox is shut
+down until it is over". Staff → Simulations: `round_one.py` at the round's minutes per team → ok. Then
+Staff → Rounds → the round, one save: gameplan `round_one.py · 3858cca4c905`, minutes per team ≥ 24,
+"Shut down every devbox" left on. Then `worms log conductor -f`: at the start, "round … begins", the
+devboxes shut down, the preflight, the prepare (the first build: about 1 h).
+
+**From then until the round is over:** no `worms apply` of any kind, no `worms service restart`, no
+`worms vm reset` or `worms vm rebuild`, no `worms jobs pause`, no `worms round start` (it moves the upload
+deadline), no `worms internet on`. If a round goes ON HOLD, `worms log conductor` says why;
+`worms round resume <r>` once fixed.
+
+**The way back** (last resort, before the round): `git checkout f11b1a5`, then that CLI's
+deploy command, `deploy dashboard orchestrator round-agent` (the agent, then the conductor restart); migrations
+`0021`-`0023` stay (their defaults suit the old code); `worms db restore` only if a migration damaged data.
+The old sandbox stack brings the gateway's balloon back (worms-dev, round 13).
 
 ## Rollback
 

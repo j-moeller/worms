@@ -265,6 +265,8 @@ worms db backup
 ```sh
 worms apply --plan dashboard orchestrator round-agent   # migration 0024 (results_published_at); the conductor's unit removed
 worms apply dashboard orchestrator round-agent          # y; ends with '● agent: restarted, active', 'gameplans checked on the host: ...'
+                                                        # refused while a sandbox VM exists (one the aborted attempt kept):
+                                                        # no round runs, so: worms apply --during-round dashboard orchestrator round-agent
 worms jobs resume                                       # the pause from step 0 (the agent was restarted with it)
 ```
 

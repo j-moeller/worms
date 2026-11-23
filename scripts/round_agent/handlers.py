@@ -386,6 +386,9 @@ def _build_sandbox(ex, cfg, hcl, config, params, resume=False):
             _record_build(cfg, hcl, params)
         ex.tofu("sandbox", "init", "-input=false", timeout=600)
         ex.tofu("sandbox", "apply", "-auto-approve", "-input=false", "-parallelism=1", timeout=cfg.get("apply_timeout", 5400))
+        if continued:
+            # Kept powered off by the failed attempt's teardown: up again for the configuration.
+            snapshots.start(ex, [vm for vm in snapshots.pool_vms(ex, "sandbox") if vm.get("status") != "running"])
         snapshots.record(ex, lambda: snapshots.pool_vms(ex, "sandbox"), "created", "the round's sandbox")
         # Refresh the inventory and configure the sandbox: the internal CA (a worm reaches scoring
         # and logging over verified HTTPS) and what the gameplan installs on each VM.

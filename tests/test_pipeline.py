@@ -413,7 +413,7 @@ def test_a_rebuild_is_refused_during_a_round_before_it_destroys_anything(host, m
     """The window is refused while a sandbox exists. It used to be asked for only after the
     destroys, which left the services gone."""
     monkeypatch.setattr(Recorder, "host_vms", [*SERVICES, SANDBOX])
-    with pytest.raises(BuildError, match="Refusing to open the internet window.*sandbox-1"):
+    with pytest.raises(BuildError, match="Refusing to .*a round's sandbox exists.*sandbox-1"):
         build(host, ["services"], rebuild=True)
     assert steps(host) == []
 

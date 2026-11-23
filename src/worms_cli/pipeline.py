@@ -494,10 +494,12 @@ class Pipeline:
         if failed:
             raise BuildError(f"no new snapshot of {', '.join(failed)}: `qm listsnapshot <vmid>` on the host")
 
-    def refuse_during_round(self) -> None:
-        """A sandbox VM exists only during a round (kept, off, between its attempts): the
-        internet window stays shut then."""
-        self._refuse_vms_in(("sandbox",), "Refusing to open the internet window: sandbox VMs exist (a round is on)")
+    def refuse_during_round(self, what: str = "open the internet window") -> None:
+        """A sandbox VM exists only during a round, or kept, powered off, after a session for
+        another attempt: the internet window stays shut then, and the service VMs as they are
+        (a round's sandbox build rolls them back to their snapshot)."""
+        self._refuse_vms_in(("sandbox",), f"Refusing to {what}: a round's sandbox exists (under way, or kept after "
+                                          "`worms round start`: `worms round teardown` destroys a kept one)")
 
     def running_devboxes(self) -> list[dict]:
         """The devbox VMs Internet.yml refuses the window for: every one that is not stopped."""
@@ -509,7 +511,7 @@ class Pipeline:
         is refused while a sandbox exists, and the devbox VMs that run are shut
         down meanwhile and started again once it is closed. Teams lose their
         devbox for that long."""
-        self.refuse_during_round()
+        self.refuse_during_round("shut the devboxes down for this (the internet window, the service VMs)")
         running = self.running_devboxes()
         if running:
             print(output.color(f"shutting down {len(running)} devbox VM(s) while internet access is allowed", "dim"))

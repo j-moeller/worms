@@ -12,3 +12,13 @@ sandbox_api_kind: logging
 sandbox_api_db_user: dbuser_logging
 sandbox_api_db_password: "{{ vault_dbuser_logging_password }}"
 sandbox_api_max_body_bytes: 16384
+
+# A team's rate (files/app.py, TeamLimiter). Higher than scoring's (30 a minute, a ban after 100
+# refused within a minute, for 5 minutes: it keeps a team from guessing flags): teams log as they
+# would print, and the old limits locked them out for 5 minutes (2026-11-23). 10 a second, bursts of
+# 120; only a flood is banned (6000 refused within a minute; a VM opens at most 20 new connections a
+# second to the services, host_sandbox_limits), and only for a minute.
+sandbox_api_team_rate_per_minute: 600
+sandbox_api_team_burst: 120
+sandbox_api_team_ban_after: 6000
+sandbox_api_team_ban_seconds: 60

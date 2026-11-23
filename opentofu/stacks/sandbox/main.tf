@@ -172,7 +172,10 @@ resource "proxmox_virtual_environment_vm" "gw" {
   }
   memory {
     dedicated = 512
-    floating  = 256 # ballooning: nftables router, reclaimable (docs/01-components.md)
+    # No ballooning: under memory pressure (a sandbox being built) Proxmox's autoballoon took it to
+    # 256 MB, and with 208 MB the guest thrashed at its first apt update and stopped answering SSH:
+    # every attempt's build hung until its timeout (worms-dev, 2026-11-23). As the sandbox VMs.
+    floating = 512
   }
 
   # Only SSH is used: no guest agent (the host never parses guest-controlled

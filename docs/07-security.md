@@ -234,7 +234,7 @@ IDs are cited in code comments. S = team VMs, D = dashboard, C = cross-cutting. 
 | — | Medium | SMT on (L1TF/MDS between hyperthreads); nesting off only after a reboot |
 | S13 | Medium | apt-cacher-ng's report page and cve-search's UI need no login. cve-search runs `cpu: host` with `/dev/kvm` and team VMs reach its :5000 |
 | S17 | Medium | A new team VM runs before its firewall options apply (the host's rules still apply) |
-| S31 | Medium | Under memory pressure Proxmox's autoballoon can shrink platform VMs to their floors, below what monitor (Zeek), devpi or cve-search use; scoring and logging go to 256 MB. The preflight warns when the VMs that run could outgrow the host; the floors are unchanged |
+| S31 | Medium | Under memory pressure Proxmox's autoballoon can shrink platform VMs to their floors, below what monitor (Zeek), devpi or cve-search use; scoring and logging go to 256 MB. It happened on worms-dev on 2026-11-23 while a sandbox was built (the host above 80 %): it took sandbox-gw to 256 MB, the guest thrashed at its first apt update and every build hung until its timeout (the gateway has no balloon since). The preflight warns when the VMs that run could outgrow the host; the platform VMs' floors are unchanged |
 | S20 | Medium | Team disks share the ZFS pool with the database disk, with no reservation |
 | S21 | Low–Medium | The SSH gateway's shared login slots (`MaxStartups`) can be exhausted from the internet. The host's rate rule limits only logging |
 | S22 | Medium | The host's SSH and 8006 accept any source unless the operator rules have `--source` |

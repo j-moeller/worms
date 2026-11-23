@@ -54,6 +54,26 @@ HOST_WORKSPACE = "/opt/worms"  # the round agent's workspace: the sandbox stack'
 log = logging.getLogger("orchestrator")
 
 
+def on_the_host() -> bool:
+    """This machine is the Proxmox host: its cluster file system and its round agent's environment are here."""
+    return os.path.isdir("/etc/pve") and os.path.exists(AGENT_ENV)
+
+
+def local_on_the_host(config) -> str:
+    """For a round's commands (manage.py, HOST_ONLY), before the host's lock and the database are
+    reached: on the host, a WORMS_SSH (laptop mode: ~/.worms/config, or the environment) is set
+    aside, so that everything is reached from here, as the round agent does (its environment
+    empties WORMS_SSH too). Elsewhere: why not ("" when it may go on)."""
+    if not on_the_host():
+        return (f"a round runs on the Proxmox host itself ({AGENT_ENV} is not here): "
+                "`worms round start` there, as root")  # fmt: skip
+    if config.ssh:
+        print(output.color(f"on the host itself: WORMS_SSH={config.ssh} set aside for this command", "dim"), file=sys.stderr)
+        config.env["WORMS_SSH"] = ""
+        os.environ["WORMS_SSH"] = ""
+    return ""
+
+
 def directory() -> Path:
     return Path(os.path.expanduser("~")) / ".worms" / "rounds"
 
@@ -634,8 +654,6 @@ def start(config, args) -> int:
     from orchestrator.rounds.power import ProxmoxPower
     from worms_cli import control, runlog
 
-    if os.environ.get("WORMS_SSH"):
-        raise BuildError("a round runs on the host itself: `worms round start` there, not from a laptop")
     if os.geteuid() != 0:
         raise BuildError("a round runs as root on the host")
     round_ = control.find_round(args.round)
@@ -762,7 +780,7 @@ def teardown(config, yes=False) -> int:
     from orchestrator.rounds.power import ProxmoxPower
     from worms_cli import power
 
-    if os.environ.get("WORMS_SSH") or os.geteuid() != 0:
+    if os.geteuid() != 0:
         raise BuildError("on the host itself, as root")
     sandbox = sorted(vm["name"] for vm in power.Power(config).runner.vms() if vm.get("pool") == "sandbox")
     if not sandbox:
@@ -858,9 +876,7 @@ def check_gameplans(config) -> None:
     """After `worms apply` of the gameplans: the host's copy checked here and the dashboard's list
     brought up to date (staff choose a round's gameplan from it), as the conductor did when it
     started. On the host only: a laptop leaves it to the next `worms round start`."""
-    from worms_cli.session import for_config
-
-    if for_config(config).laptop or not os.path.isdir(os.path.join(HOST_WORKSPACE, "gameplans")):
+    if not on_the_host() or not os.path.isdir(os.path.join(HOST_WORKSPACE, "gameplans")):
         print(output.color("gameplans: checked at the next `worms round start` (on the host)", "dim"))
         return
     scripts = str(Path(config.repo_root) / "scripts")

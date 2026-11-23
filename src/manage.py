@@ -2476,6 +2476,13 @@ def main(argv=None) -> int:
     if args.command == "completion":  # read at every shell start: no notice, no host
         return cmd_completion(config, args)
     command = _command(args)
+    if command in HOST_ONLY:
+        from worms_cli import rounds
+
+        refusal = rounds.local_on_the_host(config)
+        if refusal:
+            output.error(refusal)
+            return 1
     tee = _run_log(config, args, command)
     lock = None
     code = 1
@@ -2505,6 +2512,9 @@ def main(argv=None) -> int:
         print(output.color(f"this run's whole output: {tee.path} (`worms log run`)", "dim"), file=sys.stderr)
     return code
 
+
+# A round's own commands run on the Proxmox host itself, as there, whatever WORMS_SSH says (worms_cli/rounds.py).
+HOST_ONLY = {"round start", "round teardown"}
 
 # The commands that change something: their whole output goes to a run log too (worms_cli/runlog.py).
 # Never one whose output is a secret (`user add`, `user password`: a one-time password) or a VM's

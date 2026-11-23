@@ -89,11 +89,12 @@ class FlagCapture(models.Model):
 
     @staticmethod
     def published():
-        """The captures that count, and that teams see: those of an attempt that FINISHED. A
-        failed attempt's are kept for staff and never count; a running one's wait for its end."""
+        """The captures that count, and that teams see: those of an attempt that FINISHED, in a
+        round whose results are published (`worms round publish`). A failed attempt's are kept
+        for staff and never count; a running one's wait for its end."""
         from core.models.rounds import RoundRun
 
-        return FlagCapture.objects.filter(vm__run__state=RoundRun.State.FINISHED)
+        return FlagCapture.objects.filter(vm__run__state=RoundRun.State.FINISHED, round__results_published_at__isnull=False)
 
     @staticmethod
     def get_round_standings(round: Round) -> list[tuple[int, int]]:

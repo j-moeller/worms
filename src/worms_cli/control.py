@@ -1,19 +1,16 @@
-"""Holding things up and letting them go: the round agent's jobs and the rounds.
+"""Holding up the round agent's jobs and letting them go (a round itself: worms_cli/rounds.py).
 
     worms jobs pause [--reason TEXT]   the agent finishes the job under way and takes no other
     worms jobs resume                  ... takes jobs again
-    worms jobs cancel <n>...           queued jobs, never run: failed, "cancelled by the operator"
+    worms jobs cancel <n>...           queued jobs, never run: failed, "cancelled by the operator";
+                                       and a job marked running whose heartbeat stopped (its agent
+                                       was killed): it runs nowhere
     worms jobs cancel --team <t>       every queued job of a team (its devbox's)
-    worms round pause <r>              the conductor starts no attempt of it (one under way ends as
-                                       usual); the devboxes it holds are started again meanwhile
-    worms round resume <r>             ... starts them again, holding the devboxes again if it wants
-    worms round start <r>              a round still to come begins now (its start is moved to now)
-    worms round cancel <r>             its attempts still to come are skipped
 
 The pause is a file on the host the agent looks at before each job (scripts/round_agent/agent.py,
-claim; handlers.paused_path); the rest are the database's, which the orchestrator reads
-(conductor.py: Round.on_hold; devbox_runs.py: a cancelled reset fails its upload, said why).
-A running job is not cancelled here: it is a process on the host, half-way through something.
+claim; handlers.paused_path); the rest are the database's (devbox_runs.py: a cancelled reset fails
+its upload, said why). A job that is running is not cancelled here: it is a process on the host,
+half-way through something.
 """
 
 from __future__ import annotations
@@ -66,11 +63,25 @@ def cancel_jobs(numbers=(), team=None) -> int:
         missing = sorted(set(numbers) - {job.id for job in jobs})
         if missing:
             raise BuildError(f"no host job {', '.join(f'#{n}' for n in missing)} (`worms jobs`)")
+    from datetime import timedelta
+
+    from worms_cli.services import SILENT_AFTER
+
+    silent_before = timezone.now() - timedelta(seconds=SILENT_AFTER)
     problems = 0
     for job in jobs:
+        beat = job.heartbeat_at or job.started_at or job.requested_at
+        if job.state == HostJob.State.RUNNING and beat and beat < silent_before:
+            updated = HostJob.objects.filter(id=job.id, state=HostJob.State.RUNNING, heartbeat_at=job.heartbeat_at).update(
+                state=HostJob.State.FAILED, finished_at=timezone.now(),
+                error=f"marked running, but its heartbeat stopped at {beat:%Y-%m-%d %H:%M} UTC (its agent stopped): {CANCELLED}")  # fmt: skip
+            print(output.status_cell("ok" if updated else "error", f"#{job.id} {job.kind}: " + (
+                "silent since " + f"{beat:%Y-%m-%d %H:%M} UTC, marked failed" if updated else "it beat again meanwhile, not cancelled")))
+            problems += not updated
+            continue
         if job.state != HostJob.State.QUEUED:
             output.error(f"#{job.id} {job.kind} is {job.state}: only a queued job is cancelled"
-                         + (" (a running one: `worms jobs pause`, then it ends; or `worms service restart agent`)" if job.state == "running" else ""))
+                         + (" (a running one: `worms jobs pause`, then it ends)" if job.state == "running" else ""))
             problems += 1
             continue
         updated = HostJob.objects.filter(id=job.id, state=HostJob.State.QUEUED).update(
@@ -94,54 +105,3 @@ def find_round(text: str):
     if found is None:
         raise BuildError(f"no round {text!r} (`worms round` lists them, id first)")
     return found
-
-
-def pause_round(round_) -> int:
-    from core.models.competition import Round
-
-    Round.objects.filter(pk=round_.pk).update(on_hold=True)
-    print(output.status_cell("warn", f"round {round_.name!r} is on hold: no attempt of it starts (one under way ends as "
-                                     f"usual); `worms round resume {round_.id}`"))  # fmt: skip
-    return 0
-
-
-def resume_round(round_) -> int:
-    from core.models.competition import Round
-    from core.models.rounds import RoundRun
-
-    Round.objects.filter(pk=round_.pk).update(on_hold=False)
-    # Its devboxes were started again while it waited: shut them down again before its next attempt.
-    if round_.devbox_hold == "released" and RoundRun.objects.filter(round=round_, state=RoundRun.State.PENDING).exists():
-        Round.objects.filter(pk=round_.pk, devbox_hold="released").update(devbox_hold="wanted")
-    print(output.status_cell("ok", f"round {round_.name!r} goes on"))
-    return 0
-
-
-def start_round_now(round_) -> int:
-    from core.models.competition import Round
-    from django.utils import timezone
-
-    now = timezone.now()
-    if round_.round_start and round_.round_start <= now:
-        raise BuildError(f"round {round_.name!r} has started already ({round_.round_start:%Y-%m-%d %H:%M} UTC)"
-                         + (": it is on hold, `worms round resume`" if round_.on_hold else ""))  # fmt: skip
-    if round_.round_end and round_.round_end <= now:
-        raise BuildError(f"round {round_.name!r} ended at {round_.round_end:%Y-%m-%d %H:%M} UTC")
-    Round.objects.filter(pk=round_.pk).update(round_start=now)
-    print(output.status_cell("ok", f"round {round_.name!r} starts now (was {round_.round_start:%Y-%m-%d %H:%M} UTC): its "
-                                   "runs are planned with the uploads made until now, then the conductor begins it "
-                                   "(`worms log conductor -f`)"))  # fmt: skip
-    return 0
-
-
-def cancel_round(round_) -> int:
-    from core.models.rounds import RoundRun
-    from django.utils import timezone
-
-    pending = RoundRun.objects.filter(round=round_, state=RoundRun.State.PENDING)
-    if not pending.exists() and not RoundRun.objects.filter(round=round_).exists():
-        raise BuildError(f"round {round_.name!r} has not begun: nothing to cancel. To keep it from starting: "
-                         f"`worms round pause {round_.id}`, or delete it on /staff/rounds/")  # fmt: skip
-    count = pending.update(state=RoundRun.State.SKIPPED, finished_at=timezone.now(), error="cancelled by the operator (`worms round cancel`)")
-    print(output.status_cell("ok", f"round {round_.name!r}: {count} attempt(s) still to come skipped; one under way ends as usual"))
-    return 0

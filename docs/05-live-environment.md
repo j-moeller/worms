@@ -6,28 +6,29 @@ This is the dashboard's **Live** view.
 - **Gameplan.** A Python file in [`gameplans/`](../gameplans/) that defines two things:
   - the sandbox (VMs, networks, firewall rules, credentials, files);
   - what happens while a team's worm runs (`execute()`).
-- **Turns.** When the round starts, every team's latest upload runs in turn in a fresh copy of that sandbox.
-- **Publication.** A team's result is published only when its run succeeded.
+- **Turns.** The operator starts the round on the host (`worms round start`); every team's latest upload from before the round's start then runs in turn in a fresh copy of that sandbox. Nothing starts a round by itself.
+- **Publication.** A team's result is shown only when its run succeeded and the operator published the round's results (`worms round publish`).
 
 ## Architecture
 
 ```
 dashboard ──(round: name, dates, gameplan file name, minutes per team)──► database
-orchestrator: conduct_rounds ──HostJob rows──► round agent (root, host) ──► OpenTofu, Ansible, SSH into VMs
-             └─ Proxmox API (power token: VM.Audit + VM.PowerMgmt on /pool/sandbox) ──► start/stop/suspend sandbox VMs
+host: worms round start (the operator's terminal) ──► the host's steps, in its own process ──► OpenTofu, Ansible, SSH into VMs
+                                                   └─ this host's Proxmox API (pvesh) ──► start/stop/suspend sandbox VMs
 ```
 
-**The conductor** ([`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py), service `orchestrator-conduct-rounds`)
-- It runs on the low-privilege orchestrator VM and drives one attempt at a time.
-- It powers sandbox VMs through the Proxmox API ([`power.py`](../projects/dashboard/orchestrator/rounds/power.py)). It refuses any VM that is not registered to the run, or whose Proxmox name does not match.
+**The round session** ([`rounds.py`](../src/worms_cli/rounds.py), the attempt engine [`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py))
+- `worms round start <r>`, on the host, as root, in the operator's terminal: it asks before every step, says the command that does the same and the one that undoes it, and writes everything to `~/.worms/rounds/<round>-<time>/` (`worms log round`).
+- It runs the round agent's handlers itself, one attempt at a time, with the agent's environment and the WORMS key in an ssh-agent of its own. Each step is a `host_jobs` row, for the record; none is queued.
+- It powers sandbox VMs through this host's Proxmox API ([`power.py`](../projects/dashboard/orchestrator/rounds/power.py)). It refuses any VM that is not registered to the run, or whose Proxmox name does not match.
 
-**Host jobs**
-- Everything else is a `host_jobs` row: the conductor inserts it and sends `NOTIFY host_jobs`.
+**Host jobs** (the devboxes' and the gameplans check)
+- The dashboard asks the orchestrator (its API), which inserts a `host_jobs` row and sends `NOTIFY host_jobs`.
 - The orchestrator's role may only insert jobs.
 - The agent's role may only read them and update their state, result and error.
 
 **The round agent** ([`scripts/round_agent/`](../scripts/round_agent/), service `worms-round-agent`)
-- It runs as root and claims one queued job at a time, round jobs before devbox jobs.
+- It runs as root and claims one queued job at a time: a team's devbox reset or rebuild, a key update. During a round it is stopped (`worms round start` asks).
 - It validates every parameter against a fixed menu ([`validation.py`](../scripts/round_agent/validation.py)) and builds commands from literals and validated values only. It sends a heartbeat every 30 s.
 - Job menu:
   - `gameplans`, `prepare`, `check`, `deploy`
@@ -46,7 +47,7 @@ orchestrator: conduct_rounds ──HostJob rows──► round agent (root, host
 
 A gameplan version is its bytes, named by their SHA-256. Once recorded, a version never changes. A round runs one version from its first attempt to its last.
 
-- **Recorded.** Each time the orchestrator checks the gameplans (when the conductor starts, then every 10 minutes), it reads each file once and records it ([`gameplans.py`](../projects/dashboard/orchestrator/rounds/gameplans.py), `refresh`):
+- **Recorded.** Each time the gameplans are checked (after `worms apply gameplans`, at every `worms round start`), the check reads each file once and records it ([`gameplans.py`](../projects/dashboard/orchestrator/rounds/gameplans.py), `refresh`):
   - **A new version**, in `gameplan_versions`: the SHA-256, the bytes, their size, the file name it had, its `description`, when it was first seen and the database account that recorded it.
   - **A change**, in `gameplan_changes`: the file appeared, became another version, or went.
   - **The files now**, in `gameplans`: each one's current version, valid or not.
@@ -77,36 +78,26 @@ A gameplan version is its bytes, named by their SHA-256. Once recorded, a versio
    - A slot is 15 s fuse + duration + 120 s drain + 900 s overhead ([`core/schedule.py`](../projects/dashboard/core/schedule.py)). Retries are not in the estimate.
    - Before its start a round can be edited fully. After it, its end, its gameplan and its duration per team can change until its first attempt starts. A team skipped for want of an upload does not count as a start.
    - Every staff page warns of a round not over whose gameplan is missing or not valid.
-2. **Validation, every 10 minutes** ([`orchestrator/rounds/gameplans.py`](../projects/dashboard/orchestrator/rounds/gameplans.py)).
-   - The conductor asks the host for its view (the `gameplans` job: SHA-256 and validity, with the packages checked against the apt cache). It validates its own copy.
-   - A file is valid only if both copies are identical and both find nothing wrong.
-   - Each upcoming round gets `gameplan_status` `ok` or `invalid`, checked at its duration per team.
-3. **Planning.** Once `round_start` has passed, the round is planned ([`planner.py`](../projects/dashboard/orchestrator/rounds/planner.py)), with or without a gameplan.
+2. **Validation** ([`orchestrator/rounds/gameplans.py`](../projects/dashboard/orchestrator/rounds/gameplans.py)), after `worms apply gameplans` and at every `worms round start`: the host's copy (a `gameplans` step: SHA-256 and validity, with the packages checked against the apt cache), the table the dashboard picks from, and each upcoming round's `gameplan_status` (`ok` or `invalid`, at its duration per team).
+3. **Planning**, when the operator starts the round ([`planner.py`](../projects/dashboard/orchestrator/rounds/planner.py)); before its start `worms round start` asks to move the start (the upload deadline) to now.
    - Every team of the competition gets a run, at attempt 0, in an order shuffled by the round's seed.
-   - Each run uses the team's latest Live upload from **before** `round_start`, however late the gameplan comes. A team without one is SKIPPED.
-4. **Pin, or wait alone** ([`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py), `_next` and `_pin`).
-   - Before a round's first attempt, its gameplan's SHA-256 is written into every run of that round, so every team runs the same version.
-   - The gameplan must be chosen, and valid on the orchestrator and the host at the round's duration per team.
-   - If it is not, the round waits, **alone**: the rounds after it go ahead. The conductor looks at it again every `gameplan_poll` seconds (60) and records each look (`gameplan_checked_at`). Once staff choose a valid gameplan, the round begins at the next look, as soon as no other round is under way.
-   - A round whose teams all lack an upload needs no gameplan: each run is skipped.
-5. **Attempts.** One round at a time. The round under way (a pinned attempt still to come) goes on until every team's run is over, retries included. Then the next round that can begin, earliest start first. Within a round, attempts run by (position, attempt) (next section).
-6. **Finish.** A round is finished when its end has passed **and** no run is still open. Runs and retries may go past `round_end`, and so may a round that waited for its gameplan.
+   - Each run uses the team's latest Live upload from **before** `round_start`. A team without one is SKIPPED.
+4. **Pin** ([`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py), `pin`): the gameplan must be chosen and valid on the host at the round's duration per team; its SHA-256 is written into every run still to come, so every team runs the same version (a later session refuses another version). Otherwise the round does not start, and says why.
+5. **Attempts**, in the session, by (position, attempt) (next section). A failed attempt is not run again by itself: `worms round start <r> --resume` runs a new attempt of every team that has not finished, `--team <t>` one team.
+6. **Publish.** Once every team's attempt finished without an error (or was skipped), the session asks; `worms round publish <r>` does it later, `worms round unpublish <r>` undoes it.
 
 ## An attempt
 
 ```
 PENDING → PREPARING → CHECKING → RUNNING → ENDING → TEARING_DOWN → FINISHED
-                 └──────────────── any failure ────────────────→ FAILED (+ retry)       SKIPPED
+                 └──────────────── any failure ────────────────→ FAILED (--resume: a new attempt)       SKIPPED
 ```
 
-**Before an attempt** (it is still PENDING; [`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py), `_ready`):
-1. A round that holds the devboxes: job `hold_devboxes` again, before every attempt (it shuts down any devbox that runs). If it fails, the attempt does not start.
-2. Job `preflight` ([`handlers.py`](../scripts/round_agent/handlers.py)), which changes nothing: the internet window closed; the host's firewall units and the cluster firewall; every service VM running and the scoring and logging APIs active; the devboxes off (when held); no sandbox VM running; **memory**: MemAvailable plus what the ZFS ARC gives back must hold every ceiling of the gameplan's VMs and the gateway, 40 MB per QEMU and a 1024 MB reserve (a rooted guest can touch all of its memory; `round_one` needs 12 616 MB); every package the gameplan installs cached in apt-cacher-ng. Warnings only: service VMs without a `clean` snapshot, and how far the VMs that run could still grow.
-3. A failed hold or preflight is logged as an error with every failed check, and tried again after 60 s. After 5 failures in a row the round is **put on hold** (`worms round resume <r>` once fixed). No attempt is used up.
+**Before an attempt** (it is still PENDING; [`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py), `preflight`): job `preflight` ([`handlers.py`](../scripts/round_agent/handlers.py)), which changes nothing: the internet window closed; the host's firewall units and the cluster firewall; every service VM running and the scoring and logging APIs active; the devboxes off; no sandbox VM running; **memory**: MemAvailable plus what the ZFS ARC gives back must hold every ceiling of the gameplan's VMs and the gateway, 40 MB per QEMU and a 1024 MB reserve (a rooted guest can touch all of its memory; `round_one` needs 12 616 MB); every package the gameplan installs cached in apt-cacher-ng. Warnings only: service VMs without a `clean` snapshot, and how far the VMs that run could still grow. A failed preflight stops the round there, with every failed check; no attempt is used up.
 
 | State | What happens |
 |---|---|
-| PREPARING | Job `prepare` (below). The conductor stores the topology and the entry VM, creates the attempt's `virtual_machines` rows and records the flag hashes |
+| PREPARING | Job `prepare` (below). The session stores the topology and the entry VM, creates the attempt's `virtual_machines` rows and records the flag hashes |
 | CHECKING | Job `check`: `proxmox-firewall`, `worms-host-firewall`, the watchdog timer and `worms-mirror` are active; the mirror drops; every VM is registered. **Started** (`vm:<name>:start`, the host's view, for every VM of the sandbox (the sandbox stack's outputs: the gameplan's VMs) and for sandbox-gw): it is in the pool `sandbox` under its name; Proxmox says it runs, and so does its QEMU (not paused, not halted); its QEMU started after this attempt's `prepare` began (`/proc/<pid>/stat`, on the kernel's clock `prepare` noted), so a VM left running from before the rollback, which would hold the last run's state, fails. A run that an older agent prepared (a deploy between `prepare` and `check`) has no such note: its `start` fails, and that attempt runs again. Each but the gateway has exactly `cpu: x86-64-v3`. **Initialised** (`vm:<name>:init:<what>`, from inside, all at once, before the worm; [`startup.py`](../scripts/round_agent/startup.py)): `cloud-init` done and not in error (recoverable errors pass; an error names cloud-init's module, the job log what it said), waited for up to 90 s; systemd done booting (`is-system-running`, up to 90 s). `degraded` (a unit failed) or still `starting` after the wait (a job left) fail only by a unit the start rests on: sshd, the time service (`systemd-timesyncd`, `chrony`), `systemd-networkd`, `networking`, a cloud-init stage, one of the gameplan's services, and on sandbox-gw `nftables` and `worms-llm-route`; the other units are counted, and the job log names them. Every NIC has the address its stack gives it (found by the MAC in Proxmox's config); the default route goes to the VM's first network's gateway; sshd listens on its SSH port; the gameplan's users exist and its services are active. sandbox-gw: no default route, its nftables chains (hook and policy: `forward` drops), and IP forwarding and `nf_conntrack_max`, each as the cloud-init it was built with sets them (a different `nf_conntrack_max` is a warning: capacity, not routing): its snippet on the host, which its Proxmox config names (rendered from its [template](../opentofu/stacks/sandbox/templates/sandbox-gw.tftpl) by the apply that built the sandbox; a deploy during a round changes the template, not the round's gateway). A VM that did not start, or did not answer, is not probed. Then, from inside every sandbox VM at once, before the worm (the VMs are still ours; [`probe.py`](../scripts/round_agent/probe.py)): the flag is there; DNS; scoring and logging over HTTPS verified by the internal CA (a GET, never a submission); `apt-get update` through the cache; pypi; the clock synced; the internet, the dashboard, the database, the orchestrator and the devboxes unreachable; every connection the gameplan allows works and the ones it does not are refused; every file has its owner and mode. Every sandbox and devbox QEMU gets `oom_score_adj` 1000: an OOM kill takes a team VM, never the database |
 | RUNNING | The gameplan's `execute()` runs against the real backend; then the rest of the duration is waited out. The run is watched (below) |
 | ENDING | Every sandbox VM is hard-stopped; 120 s drain for late submissions |
@@ -137,25 +128,22 @@ The run's clock starts at `armed_at + 15 s` and ends after the round's duration 
 - **Before `deploy_worm()`.** Every guest step (flags, files) must succeed; any failure fails the attempt.
 - **After it.** A guest step that fails is recorded (staff only) and skipped: the worm is root on the VM and may have caused it.
 - **Always fatal.** Power and API failures fail the attempt (API calls are tried 3 times first), and so does a `RoundError` that `execute()` catches.
-- **The watch.** Only the host's view of a sandbox VM counts once the worm is there: every VM is assumed rooted. Every sandbox VM and the gateway have an expected state (running after the check, then what each power action of the gameplan left). Every 10 s the conductor reads every VM's state from the Proxmox API. A VM not in its expected state: job `observe` asks the host why ([`host_state.py`](../scripts/round_agent/host_state.py): the kernel's and systemd's lines of that VM's QEMU, Proxmox's tasks).
+- **The watch.** Only the host's view of a sandbox VM counts once the worm is there: every VM is assumed rooted. Every sandbox VM and the gateway have an expected state (running after the check, then what each power action of the gameplan left). Every 10 s the session reads every VM's state from the Proxmox API. A VM not in its expected state: job `observe` asks the host why ([`host_state.py`](../scripts/round_agent/host_state.py): the kernel's and systemd's lines of that VM's QEMU, Proxmox's tasks).
   - Stopped by its guest after the deploy (a power-off from inside, a guest that halted its QEMU): the worm's doing. An event (`vm_stopped`, how: guest), not an error; the VM stays stopped.
-  - Anything else fails the attempt, which runs again: an OOM kill, a crashed QEMU, a Proxmox task that stopped it (an operator, the firewall watchdog), a cause the host cannot tell, a VM running or paused that should not be, the gateway not running, an observe job not answered within 120 s. Raised so that `execute()` cannot catch it.
-  - Every 60 s, and after every start, an observe job for every VM: the host's memory goes to the orchestrator's journal (a warning below 2048 MB available), team VMs' QEMUs get their OOM priority again, and a devbox found running while the round holds them is logged as an error and held again.
-- **Twice in a row before the deploy.** An attempt that fails before its deploy job, right after another attempt of the round that did too, puts the round on hold: a fault of ours that trying again does not mend stops after two attempts, not after every team's four. A team's upload cannot trigger it (a zip that does not unpack fails at the deploy), nor can a conductor restart.
+  - Anything else fails the attempt: an OOM kill, a crashed QEMU, a Proxmox task that stopped it (an operator, the firewall watchdog), a cause the host cannot tell, a VM running or paused that should not be, the gateway not running, an observe job not answered within 120 s. Raised so that `execute()` cannot catch it.
+  - Every 60 s, and after every start, an observe job for every VM: the host's memory goes to the round's log (a warning below 2048 MB available), team VMs' QEMUs get their OOM priority again, and a devbox found running is logged as an error (nothing stops it: the operator does, `worms vm stop devboxes`). After every look, the flag submissions and log records so far are counted (the processor is stopped).
 - **What a failure does** ([`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py), `fail`):
-  - The attempt becomes FAILED and its VMs stop.
-  - If `attempt < max_retries` (3), attempt + 1 is created with the same upload, gameplan and duration. That makes **at most 4 attempts**, and only the failed team's run repeats.
-  - The retry runs right after the teardown.
-- **Publication.** Only a FINISHED attempt counts.
+  - The attempt becomes FAILED, its VMs stop, its sandbox is kept, powered off, and the error goes to the attempt, its events and the round's log. Nothing runs again by itself.
+  - The round goes on with the next team. At the end the session asks whether to run a new attempt of each failed team (attempt + 1, the same upload, gameplan and duration); later: `worms round start <r> --resume`.
+- **Publication.** Only a FINISHED attempt counts, and only once the round's results are published (`worms round publish`, `rounds.results_published_at`).
   - Its captures are `FlagCapture.published()`; its logs are published too.
-  - A team sees nothing of an unfinished run: its progression is `withheld`, and the API returns no submissions or logs.
+  - A team sees nothing of a run before: its progression is `withheld`, and the API returns no submissions or logs.
   - Points of failed attempts are discarded.
-- **Restart.** If the conductor restarts, an attempt in PREPARING, CHECKING or RUNNING fails and is retried; ENDING and TEARING_DOWN are completed. **Do not redeploy the orchestrator during a round:** each deploy costs the running team an attempt.
-- **Teardown hold.** If the teardown of a FAILED attempt fails, the queue holds until it is fixed by hand.
+- **Ctrl-C** in the session fails the attempt under way at its next step (its VMs stopped, its sandbox kept); twice, out at once. An attempt left under way that way fails as the next session starts (ENDING and TEARING_DOWN are completed).
 
 ### Scoring
 
-[`captures.py`](../projects/dashboard/orchestrator/rounds/captures.py) runs in `process_attempts`, every 2 s. A submitted flag counts if all of these hold:
+[`captures.py`](../projects/dashboard/orchestrator/rounds/captures.py) runs in `process_attempts`, every 2 s, and, during a round (the processor stopped), in the session after every look of the watch and at each attempt's end. A submitted flag counts if all of these hold:
 - its hash is a sandbox VM's current flag;
 - that VM belongs to the submitting team's run;
 - it arrived between `worm_start_at − 120 s` and `ends_at + 120 s`;
@@ -165,19 +153,14 @@ Flags released late are credited for submissions up to 900 s earlier. The round 
 
 ### Timing settings
 
-[`config/settings/orchestrator.py`](../projects/dashboard/config/settings/orchestrator.py), `ROUND_CONDUCTOR`:
+[`config/settings/manage.py`](../projects/dashboard/config/settings/manage.py) (the session's), `ROUND_CONDUCTOR`:
 
 | Setting | Default | Environment |
 |---|---|---|
 | `worm_start_delay` | 15 s | `ROUND_WORM_START_DELAY` |
 | `end_drain` | 120 s | `ROUND_END_DRAIN` |
 | `slot_overhead` | 900 s | `ROUND_SLOT_OVERHEAD` |
-| `job_timeout` (no heartbeat) | 1800 s | `ROUND_JOB_TIMEOUT` |
 | `capture_grace` | 120 s | `ROUND_CAPTURE_GRACE` |
-| `max_retries` | 3 | `ROUND_MAX_RETRIES` |
-| `gameplan_check_interval` | 600 s | — |
-| `gameplan_poll` (a round waiting for its gameplan) | 60 s | `ROUND_GAMEPLAN_POLL` |
-| `preflight_retry`, `preflight_attempts` (then the round on hold) | 60 s, 5 | — |
 | `watch_interval` (the Proxmox API), `observe_interval` (an observe job) | 10 s, 60 s | — |
 | `observe_timeout` (not answered: the attempt fails) | 120 s | — |
 | `memory_warn_mb` (the journal warns below it) | 2048 MB | — |
@@ -377,8 +360,8 @@ PYTHONPATH=src python3 -c "from gameplan import loader, runtime; print(runtime.v
 
 **Staff → Simulations** shows how a gameplan plays out before a round uses it: its attempt, replayed on the sandbox it describes in the round player.
 
-- **The attempt.** [`gameplan/simulation.py`](../src/gameplan/simulation.py) runs it as the conductor would: prepare (every VM gets its flag, the files with `at_reset` are written), check, `execute()` under the Runner's rules, the rest of the run's time, every VM stopped, the drain, the teardown.
-- **The clock is pretend.** `wait(600)` moves it by 600 s and is recorded. Every other step takes a nominal time (`TIMING`: a host job 3–5 s, start 5 s, shutdown up to 10 s, prepare 60 s), plus the conductor's fuse and drain.
+- **The attempt.** [`gameplan/simulation.py`](../src/gameplan/simulation.py) runs it as a round would: prepare (every VM gets its flag, the files with `at_reset` are written), check, `execute()` under the Runner's rules, the rest of the run's time, every VM stopped, the drain, the teardown.
+- **The clock is pretend.** `wait(600)` moves it by 600 s and is recorded. Every other step takes a nominal time (`TIMING`: a host job 3–5 s, start 5 s, shutdown up to 10 s, prepare 60 s), plus the round's fuse and drain.
 - **There is no worm.** Nothing is captured, and `read_file` sees a file change only when the gameplan writes it. What a real round would refuse (resuming a running VM, a second `deploy_worm()`) fails the simulation the same way.
 - **Where it runs.** On the orchestrator, which holds the gameplans ([`simulations.py`](../projects/dashboard/orchestrator/rounds/simulations.py)), one at a time, in a child process limited to 20 s, 10 s of CPU and 1 GiB. The dashboard asks through the orchestrator API (`/gameplans/<file>/simulation/?duration=`, [`api.py`](../projects/dashboard/orchestrator/api.py)).
 - **Kept.** One document per version of the file (SHA-256), duration per team and `SIMULATION_VERSION`, in `gameplan_simulations`; up to 20 per file. A changed file is simulated again on the next request.
@@ -388,21 +371,18 @@ PYTHONPATH=src python3 -c "from gameplan import loader, runtime; print(runtime.v
 
 ## Running a round
 
-1. **Create the round** on **Staff → Rounds**: its window (the start is the upload deadline; teams' latest Live uploads before it are used) and its duration per team. The gameplan is optional here. Tick **Shut down every devbox while its attempts run** when the host needs the memory ([Devboxes during a round](#devboxes-during-a-round)).
-2. **Commit and deploy** the gameplan: `worms apply gameplans`, outside a round. It copies `gameplans/` and the framework (`src/gameplan`) to the host, then to the orchestrator, and restarts the conductor, which checks them at once. Nothing else is configured and no package installed, so it needs no internet and takes seconds. The round agent reads gameplan files fresh for every job, and restarts itself, between jobs, when the framework or its own code changed on disk ([`agent.py`](../scripts/round_agent/agent.py), `LoadedCode`).
-3. **Check it is valid, and the version.** **Staff → Rounds** marks it valid. The gameplan choice, the rounds list, the round's page and **Staff → Simulations** name each gameplan's version by the first 12 hex digits of its SHA-256: compare them with `sha256sum gameplans/<file> | cut -c1-12` in your checkout. A file missing from the choice is not valid. If not, read `journalctl -u orchestrator-conduct-rounds` on the orchestrator and the `gameplans` job log on the host. **Staff → Simulations** (or **Simulate** on the round's page) replays its attempt at the round's duration per team ([Simulation](#simulation)).
-4. **Choose it** on the round's page. That works until the round's first attempt starts: a round without a valid gameplan waits alone, and the conductor looks again every minute ([`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py), `_pin`). Then the gameplan's version is pinned for every attempt.
-5. **Watch it** (next section). `worms status` shows the active run. On the host, `tail -F /var/log/worms/jobs/latest.log`.
+1. **Create the round** on **Staff → Rounds**: its window (the start is the upload deadline; teams' latest Live uploads before it are used) and its duration per team. The gameplan is optional here.
+2. **Commit and deploy** the gameplan: `worms apply gameplans`, outside a round. It copies `gameplans/` and the framework (`src/gameplan`) to the host, then to the orchestrator, and checks the host's copy (the list staff choose from). Nothing else is configured and no package installed, so it needs no internet and takes seconds.
+3. **Check it is valid, and the version.** **Staff → Rounds** marks it valid. The gameplan choice, the rounds list, the round's page and **Staff → Simulations** name each gameplan's version by the first 12 hex digits of its SHA-256: compare them with `sha256sum gameplans/<file> | cut -c1-12` in your checkout. A file missing from the choice is not valid: `worms show gameplans`, and the `gameplans` step's log. **Staff → Simulations** (or **Simulate** on the round's page) replays its attempt at the round's duration per team ([Simulation](#simulation)).
+4. **Choose it** on the round's page.
+5. **Run it** on the host, once its start has passed: `worms round start <r>`. It asks, one by one: stop the orchestrator, stop the round agent (and cancel its queued jobs), stop every devbox VM and gateway; it checks each, then the host's preflight, then asks once more. The terminal stays with the round to its end; `worms log round <r> -f` follows it from another.
+6. **A team failed?** At the end the session asks to run it again at once; later, `worms round start <r> --resume`.
+7. **Publish** once every team finished without an error: the session asks; or `worms round publish <r>`.
+8. **Afterwards** the session asks to destroy the round's sandbox and to start the devboxes, the round agent and the orchestrator again.
 
 ### Devboxes during a round
 
-A round runs with every devbox shut down, for the host's memory, unless staff turn it off: the switch **Shut down every devbox while its attempts run** (`rounds.devboxes_off`, on by default since migration `0023`, which also set it on every round that had not begun).
-- **Until the round's start** staff can set it, on creating the round or on its page. After the start it is no longer on the form.
-- **When the round begins** (its gameplan pinned, [`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py), `_pin`), the conductor records it once, in `rounds.devbox_hold`: `no`, or `wanted`. From then on only the record counts, whatever the switch says. The round's page shows it.
-- **Before each of its attempts** the conductor asks the round agent (`hold_devboxes`): every devbox VM and gateway that runs (the Proxmox pool `devbox`) is shut down, each one recorded on the host first (`/var/lib/worms/held-devboxes.json`); the round is `held`. If that fails, the attempt does not start: tried again after 60 s, and after 5 failures (with the preflight's) the round goes on hold. While an attempt runs, a devbox found running is shut down again.
-- **Meanwhile** the agent takes no `devbox_*` job (resets, key updates, dev uploads wait in the queue) and dev uploads wait to start.
-- **Once no round that holds them has a run to come or under way** (after the last run's teardown), the agent starts again exactly the VMs it recorded (`release_devboxes`) and the round is `released`. A failed release (the internet window open, ...) is tried again every minute; a next round that holds them too keeps them off until it is over.
-- **By hand**, if the conductor is gone: `qm start` the VMs listed in that file on the host, then delete the file (the agent takes devbox jobs again).
+They are stopped, by the operator, before the round's first attempt: `worms round start` lists the devbox VMs and gateways that run and asks (`worms vm stop devboxes`: a shutdown, forced after 120 s). It does not start while one runs. Nothing stops or starts a devbox by itself meanwhile: one found running during an attempt is an error in the round's log. At the session's end it asks to start them again (`worms vm start devboxes`). While the round agent is stopped, the teams' devbox resets and key updates fail on the dashboard (the orchestrator is stopped too) and nothing is queued.
 
 ### Following a round
 
@@ -423,7 +403,7 @@ A round runs with every devbox shut down, for the host's memory, unless staff tu
   - The host job it waits for.
   - Its own timeline, and a log of what it did, timed from the worm's start: states, flags removed and placed, power, captures, files by number, skipped steps and errors.
 
-Every staff page lists the rounds not over whose gameplan is missing or not valid. A scheduled round gets a warning; one that already waits gets an error, with the time of the conductor's last look.
+Every staff page lists the rounds not over whose gameplan is missing or not valid. A scheduled round gets a warning; one that already waits gets an error, with the time of the last check.
 
 ### Telling the teams
 

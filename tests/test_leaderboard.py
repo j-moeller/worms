@@ -20,7 +20,9 @@ STAR = "⭐️"  # ⭐️ won a round (with the emoji variation selector)
 def _round(competition, name, start, end):
     from core.models.competition import Round
 
-    return Round.objects.create(competition=competition, name=name, seed=1, round_start=start, round_end=end)
+    # Published (`worms round publish`): the leaderboard counts only a published round's points.
+    return Round.objects.create(competition=competition, name=name, seed=1, round_start=start, round_end=end,
+                                results_published_at=start)
 
 
 def _captures(round_obj, team, count, sandbox=8):

@@ -55,8 +55,9 @@ Times are epoch seconds (float, this machine's clock), sizes bytes, rates bytes 
         or None), requested_at, started_at, heartbeat_at, finished_at, error, reasons (why a
         queued one waits: worms_cli.jobs.queue_reasons; [] for the others)
     snap["rounds"]        the current competition's rounds, by their start
-        id, name, start, end, gameplan, gameplan_status, team_duration (s), on_hold, devboxes_off,
-        devbox_hold, runs {state: count}, current (now between its start and its end)
+        id, name, start, end, gameplan, gameplan_status, team_duration (s), published (its results
+        out: `worms round publish`), runs {state: count}, current (now between its start and its end);
+        on_hold, devboxes_off, devbox_hold: unused since 2026-11-23
     snap["run"]           the attempt under way: {id, round, round_id, team, state, attempt,
                           worm_start_at, ends_at, state_changed_at}, or None
     snap["services"]      worms_cli.services.SERVICES, in their order

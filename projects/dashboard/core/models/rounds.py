@@ -92,6 +92,10 @@ class RoundRun(models.Model):
     # Not over yet: the round's results wait for these.
     OPEN_STATES = (State.PENDING, State.PREPARING, State.CHECKING, State.RUNNING, State.ENDING, State.TEARING_DOWN)
 
+    def shown_to_team(self) -> bool:
+        """Whether its team sees this attempt: it finished, and the round's results are published."""
+        return self.state == self.State.FINISHED and self.round.results_published_at is not None
+
     @classmethod
     def for_team(cls, round_, team):
         """The attempt that stands for a team in a round: its finished one, else its latest."""

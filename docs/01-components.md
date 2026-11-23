@@ -20,7 +20,7 @@ Every sandbox and devbox VM is treated as malicious and rooted ([`docs/IMPORTANT
 | [8 User guide](08-user-guide.md) | for teams: the dashboard, APIs, the worm contract |
 | [9 VM configuration](09-vm-configuration.md) | what Ansible runs on each VM, and by which command |
 | [10 SSH gateway](10-ssh-gateway.md) | the teams' way to their devboxes: concepts, storage, security |
-| [11 Orchestrator](11-orchestrator.md) | the conductor, the processor, gameplans, VM resets |
+| [11 Orchestrator](11-orchestrator.md) | a round (`worms round start`), the processor, gameplans, VM resets |
 
 ## Overview
 
@@ -52,7 +52,7 @@ Every sandbox and devbox VM is treated as malicious and rooted ([`docs/IMPORTANT
 | Host network | host | Bridges' sysctls, nftables zone firewall, DNAT, internet window, traffic mirror, firewall watchdog | role [`host_network`](../ansible/roles/host/host_network/) |
 | Round agent | host, as root | Runs a fixed menu of validated host jobs: sandbox build, flags, worm deploy, devbox jobs | [`scripts/round_agent/`](../scripts/round_agent/), role [`round_agent`](../ansible/roles/host/round_agent/) |
 | Dashboard | VM `dashboard` (dmz) | Django and gunicorn behind nginx: teams, uploads, results, staff pages, team API | [`projects/dashboard/dashboard/`](../projects/dashboard/dashboard/) |
-| Orchestrator | VM `orchestrator` (core) | The same Django project with other settings: runs migrations, the round conductor, capture processing, topology collection, the REST API (devbox resets, gameplan simulations) | [`projects/dashboard/orchestrator/`](../projects/dashboard/orchestrator/) |
+| Orchestrator | VM `orchestrator` (core) | The same Django project with other settings: runs migrations, capture processing, topology collection, the REST API (devbox resets, gameplan simulations) | [`projects/dashboard/orchestrator/`](../projects/dashboard/orchestrator/) |
 | Database | VM `database` (core) | PostgreSQL. TLS only; one role per component with column-level grants | roles [`database/*`](../ansible/roles/database/) |
 | Scoring, logging | VMs `scoring`, `logging` | `POST /submit` for flags and log records from team VMs. Teams are identified by source address | role [`sandbox_api`](../ansible/roles/applications/sandbox_api/) |
 | Monitor | VM `monitor` | Zeek on a receive-only copy of all sandbox traffic, shipped into `network_flows`/`network_events` | role [`network_monitor`](../ansible/roles/applications/network_monitor/) |

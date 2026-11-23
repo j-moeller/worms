@@ -153,7 +153,7 @@ def summary(team: Team, rnd: Round, now) -> dict:
     )
     start, end = progression.window(team, rnd, now, run)
     counts = {"submissions": 0, "logs": 0}
-    if start is not None and run.state == RoundRun.State.FINISHED:
+    if start is not None and run.shown_to_team():
         scope = {"team_uuid": str(team.uuid), "devbox": False, "created_at__gte": start, "created_at__lte": end}
         counts = {
             "submissions": FlagCaptureAttempt.objects.filter(**scope).count(),

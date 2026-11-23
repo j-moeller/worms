@@ -644,10 +644,10 @@
         detail: "{{ p.value }}"
 
 # ---------------------------------------------------------------------------
-# Scoring is capture-based: the submitted flag only counts once the conductor
-# turns the attempt into a FlagCapture against the VM's released secret. The
-# conductor daemon does this on its own, but trigger one pass here so the
-# check is deterministic (and does not depend on the daemon's cadence).
+# Scoring is capture-based: the submitted flag only counts once an attempt is
+# turned into a FlagCapture against the VM's released secret. The processor
+# daemon does this on its own, but trigger one pass here so the check is
+# deterministic (and does not depend on the daemon's cadence).
 - name: Simulation | process captures (orchestrator)
   hosts: orchestrator
   gather_facts: false
@@ -658,19 +658,6 @@
     django_venv: /opt/orchestrator/venv
     django_src: /opt/orchestrator/src
   tasks:
-    - name: Conductor daemon running
-      ansible.builtin.command: systemctl is-active orchestrator-conduct-rounds
-      register: conductor_unit
-      changed_when: false
-      failed_when: false
-
-    - name: Check | conductor daemon active
-      ansible.builtin.include_tasks: simulation/record.yml
-      vars:
-        check: "orchestrator: conduct-rounds daemon active"
-        ok: "{{ conductor_unit.rc == 0 }}"
-        detail: "{{ conductor_unit.stdout }}"
-
     - name: Process pending attempts into captures (one pass)
       ansible.builtin.shell:
         cmd: set -a && . {{ django_env_file }} && set +a && {{ django_venv }}/bin/python manage.py process_captures

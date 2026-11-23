@@ -235,7 +235,8 @@ comp.registration_ends_at = now - timedelta(minutes=1)
 comp.save(update_fields=['registration_ends_at'])
 r = Round.objects.get(uuid='{round_uuid}')
 r.round_start, r.round_end = now - timedelta(minutes=5), now + timedelta(hours=1)
-r.save(update_fields=['round_start', 'round_end'])
+r.results_published_at = now  # `worms round publish`: a team sees a published round's results only
+r.save(update_fields=['round_start', 'round_end', 'results_published_at'])
 out = {{}}
 for position, name in enumerate(['Journey Blue', 'Journey Red'], start=1):
     team = Team.objects.get(name=name)

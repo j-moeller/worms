@@ -308,9 +308,13 @@ def world(request, site):  # noqa: F811
         teams[name] = team
 
     rounds = {
-        "R1": Round.objects.create(competition=comp, name="R1", seed=1, round_start=now - hours(8), round_end=now - hours(2)),
-        "R2": Round.objects.create(competition=comp, name="R2", seed=2, round_start=now - hours(1), round_end=now + hours(3)),
-        "RX": Round.objects.create(competition=other, name="X1", seed=4, round_start=now - hours(8), round_end=now - hours(2)),
+        # Published (`worms round publish`): a team sees a finished attempt of a published round only.
+        "R1": Round.objects.create(competition=comp, name="R1", seed=1, round_start=now - hours(8), round_end=now - hours(2),
+                                   results_published_at=now),
+        "R2": Round.objects.create(competition=comp, name="R2", seed=2, round_start=now - hours(1), round_end=now + hours(3),
+                                   results_published_at=now),
+        "RX": Round.objects.create(competition=other, name="X1", seed=4, round_start=now - hours(8), round_end=now - hours(2),
+                                   results_published_at=now),
     }
     ledger = Ledger(rng, now)
     alpha, bravo = teams["alpha"], teams["bravo"]

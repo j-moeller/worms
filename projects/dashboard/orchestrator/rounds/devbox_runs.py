@@ -18,7 +18,6 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
-from core.models.competition import Round
 from core.models.devbox import DevboxRun
 from core.models.rounds import HostJob, RoundRun
 from core.models.worms import Upload
@@ -97,12 +96,6 @@ def reset_waits_for() -> str:
     busy = RoundRun.objects.filter(state__in=ROUND_BUSY).select_related("round", "team").first()
     if busy is not None:
         return f"a round's attempt is under way (round {busy.round.name!r}, team {busy.team.name}: {busy.state})"
-    # A round shuts the devboxes down for all its attempts (devboxes_off): the upload waits
-    # until they are started again after its last run (conductor.py, _release_devboxes).
-    holding = Round.objects.filter(devbox_hold__in=("wanted", "held")).first()
-    if holding is not None:
-        return (f"round {holding.name!r} holds the devboxes shut down ({holding.devbox_hold}) until its last "
-                "attempt is over")
     return ""
 
 

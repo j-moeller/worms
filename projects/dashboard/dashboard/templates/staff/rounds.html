@@ -50,7 +50,7 @@
                 <tbody>
                     {% for row in live_rounds %}
                     <tr>
-                        <th scope="row"><a href="{% url 'staff_round' row.round.uuid %}">{{ row.round.name }}</a> <span class="badge{% if row.phase.tone %} badge--{{ row.phase.tone }}{% endif %}" title="{{ row.phase.text }}">{{ row.phase.label }}</span>{% if row.round.on_hold %} <span class="badge badge--warn" title="paused on the console, or by the orchestrator for a fault on our side: no attempt of it starts until `worms round resume {{ row.round.id }}`">on hold</span>{% endif %}</th>
+                        <th scope="row"><a href="{% url 'staff_round' row.round.uuid %}">{{ row.round.name }}</a> <span class="badge{% if row.phase.tone %} badge--{{ row.phase.tone }}{% endif %}" title="{{ row.phase.text }}">{{ row.phase.label }}</span>{% if row.round.results_published_at %} <span class="badge" title="its results are shown to the teams (`worms round unpublish {{ row.round.id }}` hides them)">published</span>{% endif %}</th>
                         <td>{{ row.round.round_start|date:"Y-m-d H:i" }} – {{ row.round.round_end|date:"H:i" }}</td>
                         <td>{% include "staff/_gameplan.html" with round=row.round sha256=row.version %}</td>
                         <td>{% for state, count in row.states %}<span class="badge badge--state">{{ state }} {{ count }}</span> {% empty %}<span class="muted">planned at the start</span>{% endfor %}</td>
@@ -87,7 +87,6 @@
             <div class="fields">
                 {% include "staff/_field.html" with field=form.gameplan %}
                 {% include "staff/_field.html" with field=form.team_duration %}
-                {% include "staff/_field.html" with field=form.devboxes_off %}
             </div>
             {% if form.gameplan.field.choices|length == 1 %}<p class="form__note">No gameplan is valid yet: the round can be created without one and given one later. Gameplans are files in <code>gameplans/</code> on the host and the orchestrator; the orchestrator's journal (<code>journalctl -u orchestrator-conduct-rounds</code>) says what is wrong with one.</p>{% endif %}
         </fieldset>

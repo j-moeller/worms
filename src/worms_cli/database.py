@@ -152,7 +152,7 @@ def restore(config, path: str) -> int:
         name = group_var(config.repo_root, "postgres_db")
     except SessionError as exc:
         raise BuildError(str(exc)) from None
-    holders = ["agent", "processor", "conductor", "api", "dashboard"]
+    holders = ["agent", "processor", "topology", "api", "dashboard"]
 
     def units(action: str, names) -> None:
         for service_name in names:

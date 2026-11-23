@@ -1,17 +1,18 @@
 """The platform's services, in one registry: where each runs, its systemd units, its log, and
 whether `worms service restart` may restart it. `worms service`, `worms log <name>`, `worms service
-restart <name>` and `worms show <vm>` read it (docs/03-manage-py.md).
+restart|stop|start <name>` and `worms show <vm>` read it (docs/03-manage-py.md).
 
-    worms service restart conductor           its units, on the orchestrator
-    worms service restart agent conductor     always the agent first: it waits until no host job runs
+    worms service restart processor           its units, on the orchestrator
+    worms service stop orchestrator           every service of the orchestrator: api, processor, topology
+    worms service stop agent                  the round agent, once its job under way has ended
+    worms service start agent orchestrator    ... started again
 
-The round agent is restarted only when no host job is RUNNING (the database says so): systemd
-stops a service within its stop timeout and then kills it, which would end a sandbox build
-halfway. It waits for that (`--timeout`), and refuses once it has waited that long. A job claimed
-in the second between that check and the restart finishes on SIGTERM (agent.py, main) as long as
-systemd lets it.
-
-The conductor checks the gameplans when it starts, against the host: after the agent, then.
+The round agent is restarted or stopped only when no host job is RUNNING (the database says so;
+one silent for minutes has no agent any more): systemd stops a service within its stop timeout
+and then kills it, which would end a devbox rebuild halfway. A restart waits for that
+(`--timeout`), and refuses once it has waited that long; a stop first pauses the agent (it takes no
+other job), then waits as long as it takes (Ctrl-C stops waiting; `worms jobs resume` undoes the
+pause).
 """
 
 from __future__ import annotations
@@ -45,8 +46,7 @@ class Service:
         return self.files or list(self.units)
 
 
-# In restart order: the agent before the conductor (it checks the gameplans against the host when
-# it starts), the orchestrator's before the website and the sandboxes' APIs.
+# In restart order: the agent first, the orchestrator's before the website and the sandboxes' APIs.
 SERVICES: dict[str, Service] = {
     "agent": Service("host", "the round agent: each host job started, done or failed", ("worms-round-agent",)),
     "firewall": Service("host", "the host firewall, its watchdog and the traffic mirror",
@@ -55,8 +55,9 @@ SERVICES: dict[str, Service] = {
                         active=("worms-host-firewall", "worms-firewall-watchdog.timer", "worms-mirror")),
     "processor": Service("orchestrator", "captures and worm logs counted; dev uploads run", ("orchestrator-process-attempts",)),
     "api": Service("orchestrator", "the orchestrator's API: simulations, devbox key pushes", ("orchestrator",)),
-    "conductor": Service("orchestrator", "rounds and their attempts; the gameplan checks (why one is invalid)",
-                         ("orchestrator-conduct-rounds",)),
+    "topology": Service("orchestrator", "the Proxmox topology for the dashboard, every 2 minutes",
+                        ("orchestrator-collect-topology.timer", "orchestrator-collect-topology.service"),
+                        active=("orchestrator-collect-topology.timer",)),
     "dashboard": Service("dashboard", "the website: errors and tracebacks", ("dashboard",)),
     "scoring": Service("scoring", "flag submissions (the sandbox API)", ("sandbox-api",)),
     "logging": Service("logging", "the worms' log records (the sandbox API)", ("sandbox-api",)),
@@ -67,6 +68,26 @@ SERVICES: dict[str, Service] = {
     "audit": Service("syslog", "every platform VM's audit trail (auditd), one file per sender address",
                      files="/var/log/remote/*/audit.log", restartable=False, why_not="a log, not a service"),
 }  # fmt: skip
+
+
+# `worms service stop|start <group>`: several services at once.
+GROUPS: dict[str, tuple[str, ...]] = {"orchestrator": ("api", "processor", "topology")}
+# A unit of an earlier deployment, stopped with its group if it is still there (`worms apply` removes it).
+RETIRED = {"orchestrator": ("orchestrator-conduct-rounds",)}
+SILENT_AFTER = 300  # s: a running host job without a heartbeat this long has no agent any more (it beats every 30 s)
+
+
+def expand(names) -> list[str]:
+    """Services and groups, as the services, once each, in SERVICES' order; KeyError for an unknown name."""
+    wanted = set()
+    for name in names:
+        if name in GROUPS:
+            wanted.update(GROUPS[name])
+        elif name in SERVICES:
+            wanted.add(name)
+        else:
+            raise KeyError(name)
+    return [name for name in SERVICES if name in wanted]
 
 
 def on(vm: str) -> list[str]:
@@ -92,7 +113,12 @@ def running_jobs() -> list:
     from django.db import DatabaseError
 
     try:
-        return list(HostJob.objects.filter(state=HostJob.State.RUNNING).order_by("id"))
+        from django.db.models.functions import Now
+        from datetime import timedelta
+
+        # One whose heartbeat stopped (its agent was killed) runs nowhere: `worms jobs cancel` closes it.
+        return list(HostJob.objects.filter(state=HostJob.State.RUNNING, heartbeat_at__gte=Now() - timedelta(seconds=SILENT_AFTER))
+                    .order_by("id"))  # fmt: skip
     except DatabaseError as exc:
         raise BuildError(f"the database does not say whether the round agent runs a host job ({str(exc).strip()[:120]}): "
                          "not restarted. `worms status` says what is down") from None  # fmt: skip
@@ -148,3 +174,111 @@ class Restarter:
         if proc.returncode != 0:
             raise BuildError(f"{name} on {vm['name']}: restart failed or not active after it (exit {proc.returncode}: "
                              f"{proc.stderr.strip()[-200:]}): `worms log {name}`")  # fmt: skip
+
+
+class Units:
+    """`worms service stop|start <name>...` and what `worms round start` asks: a service's (or a
+    group's) units stopped, started, or which of them are active, where they run."""
+
+    def __init__(self, config, catalogue=None):
+        from worms_cli.vms import Catalogue
+
+        self.config = config
+        self.catalogue = catalogue or Catalogue(config)
+        self.runner = self.catalogue.runner
+
+    def _units(self, names, retired=True, up=False) -> dict[str, list[str]]:
+        """{where: [units]} of these services and groups (up: the ones that are active when it runs;
+        a timer's, not its oneshot's)."""
+        out: dict[str, list[str]] = {}
+        for name in expand(names):
+            out.setdefault(SERVICES[name].where, []).extend(SERVICES[name].up_units if up else SERVICES[name].units)
+        if retired:
+            for name in names:
+                for unit in RETIRED.get(name, ()):
+                    out.setdefault(SERVICES[GROUPS[name][0]].where, []).append(unit)
+        return out
+
+    def _sh(self, where: str, command: str, check=True) -> tuple[int, str]:
+        if where == "host":
+            code, out, err = self.runner.session.host_run(["sh", "-c", command])
+        else:
+            vm = self.catalogue.resolve(where)
+            if vm.get("status") != "running":
+                if check:
+                    raise BuildError(f"{vm['name']} is {vm.get('status')}")
+                return 0, ""
+            argv, env = self.catalogue.ssh_argv(vm, f"sudo -n sh -c {_quote(command)}", interactive=False)
+            proc = subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=600)
+            code, out, err = proc.returncode, proc.stdout, proc.stderr
+        if check and code != 0:
+            raise BuildError(f"on {where}: {command}: exit {code}: {(err or out).strip()[-300:]}")
+        return code, out
+
+    def active(self, name: str) -> list[str]:
+        """The units of a service or group that are active (a VM that is not running: none)."""
+        found = []
+        for where, units in self._units([name]).items():
+            _code, out = self._sh(where, "systemctl is-active " + " ".join(units) + " || true", check=False)
+            found += [unit for unit, state in zip(units, out.split()) if state in ("active", "activating", "reloading")]
+        return found
+
+    def stop(self, names) -> None:
+        if "agent" in names:
+            self._stop_agent()
+        for where, units in self._units([n for n in names if n != "agent"]).items():
+            up = [unit for unit in units if unit in self._active_on(where, units)]
+            if not up:
+                print(output.status_cell("stopped", f"{where}: {', '.join(units)}: stopped already"))
+                continue
+            self._sh(where, "systemctl stop " + " ".join(up))
+            still = self._active_on(where, up)
+            if still:
+                raise BuildError(f"on {where}: still active after the stop: {', '.join(still)}")
+            print(output.status_cell("stopped", f"{where}: {', '.join(up)}: stopped"))
+
+    def start(self, names) -> None:
+        for where, up in self._units(names, retired=False, up=True).items():
+            self._sh(where, "systemctl start " + " ".join(up))
+            down = [unit for unit in up if unit not in self._active_on(where, up)]
+            if down:
+                raise BuildError(f"on {where}: not active after the start: {', '.join(down)} (`worms log {names[0]}`)")
+            print(output.status_cell("running", f"{where}: {', '.join(up)}: started"))
+
+    def _active_on(self, where, units) -> list[str]:
+        _code, out = self._sh(where, "systemctl is-active " + " ".join(units) + " || true", check=False)
+        return [unit for unit, state in zip(units, out.split()) if state in ("active", "activating", "reloading")]
+
+    def _stop_agent(self) -> None:
+        """Paused first (it takes no other job), its job under way waited for, then stopped; the pause
+        undone (a start of the service takes jobs again)."""
+        from worms_cli.jobs import PAUSED
+
+        unit = "worms-round-agent"
+        if not self._active_on("host", [unit]):
+            print(output.status_cell("stopped", f"host: {unit}: stopped already"))
+            return
+        self._sh("host", f"install -d -m 755 /var/lib/worms && printf '%s\\n' 'paused by worms service stop agent' > {PAUSED}")
+        try:
+            said = None
+            while True:
+                busy = running_jobs()
+                if not busy:
+                    break
+                names = ", ".join(f"#{job.id} {job.kind}" for job in busy)
+                if names != said:
+                    print(output.color(f"the round agent is paused; waiting for it to finish {names} (Ctrl-C stops "
+                                       "waiting: `worms jobs resume` undoes the pause)", "dim"), flush=True)  # fmt: skip
+                    said = names
+                time.sleep(5)
+            self._sh("host", f"systemctl stop {unit}")
+        finally:
+            if not self._active_on("host", [unit]):
+                self._sh("host", f"rm -f {PAUSED}", check=False)
+        print(output.status_cell("stopped", f"host: {unit}: stopped"))
+
+
+def _quote(text: str) -> str:
+    import shlex
+
+    return shlex.quote(text)

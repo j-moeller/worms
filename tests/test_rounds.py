@@ -195,8 +195,8 @@ def fake_power(clock=None):
 
 
 class Agent:
-    """The round agent: every host job answered at once, as the real one answers it, and waited
-    for as the conductor waits (HostJobs.run, on the clock). `fail` makes a kind of job fail (a
+    """The host's steps: every one answered at once, as the real handlers answer it, and waited
+    for on the clock. `fail` makes a kind of job fail (a
     number of times, or always); `hold` leaves it queued (the agent has not got to it);
     `armed_at` is what a deploy job reports. `after_deploy`: [(seconds, VM, state, cause)], what
     happens to a VM that long after the worm is deployed (the worm, the host). `busy_after_deploy`:
@@ -229,9 +229,18 @@ class Agent:
         return job
 
     def run(self, run, kind, within=None, **params):
-        from orchestrator.rounds.conductor import HostJobs
+        """The job's result, waited for on the clock as a queue's would be (waited)."""
+        from core.models.rounds import HostJob
+        from orchestrator.rounds.conductor import waited
 
-        return HostJobs.run(self, run, kind, within=within, **params)
+        counted = self.conductor.now()
+        job = self.request(run, kind, **params)
+        while True:
+            job.refresh_from_db()
+            if job.state == HostJob.State.DONE:
+                return job.result or {}
+            counted = waited(self.conductor, job, counted, within)
+            self.conductor.sleep(self.conductor.cfg["job_poll"])
 
     def tick(self):
         """The clock moved: the devbox job the agent is on (its heartbeat fresh) ends when it is
@@ -407,6 +416,34 @@ def make_conductor(gameplans, power=None, clock=None):
     return conductor, agent, clock
 
 
+def run_round(conductor, round_obj):
+    """What `worms round start` does with the conductor (worms_cli/rounds.py): the round's gameplan
+    pinned, then each team's attempt still to come, in order, the host's preflight before each.
+    Returns (the attempts as they ended, why the round stopped or None)."""
+    from core.models.rounds import RoundRun
+
+    pending = RoundRun.objects.filter(round=round_obj, state=RoundRun.State.PENDING)
+    problem = conductor.pin(round_obj) if pending.filter(upload__isnull=False).exists() else None  # none to run: no gameplan needed
+    if problem:
+        return [], problem
+    ended = []
+    for run in RoundRun.objects.filter(round=round_obj, state=RoundRun.State.PENDING).select_related("team", "round") \
+            .order_by("position", "attempt"):  # fmt: skip
+        if run.upload_id is not None:
+            problem = conductor.preflight(run)
+            if problem:
+                return ended, problem
+        ended.append(conductor.attempt(run))
+    return ended, None
+
+
+def publish(round_obj):
+    from core.models.competition import Round
+    from django.utils import timezone
+
+    Round.objects.filter(pk=round_obj.pk).update(results_published_at=timezone.now())
+
+
 def attempts(round_obj, team):
     from core.models.rounds import RoundRun
 
@@ -415,13 +452,14 @@ def attempts(round_obj, team):
 
 @pytest.fixture
 def ran(one_run, gameplans):
-    """The team's first attempt, run start to finish."""
+    """The team's first attempt, run start to finish, and the round's results published."""
     from core.models.rounds import RoundRun
 
     conductor, agent, clock = make_conductor(gameplans)
-    assert conductor.tick() is True
+    assert run_round(conductor, one_run["round"])[1] is None
     run = RoundRun.objects.get(pk=one_run["run"].pk)
     assert run.state == RoundRun.State.FINISHED, run.error
+    publish(one_run["round"])
     return {**one_run, "run": run, "conductor": conductor, "agent": agent, "clock": clock}
 
 
@@ -429,12 +467,11 @@ def ran(one_run, gameplans):
 
 
 def test_conductor_runs_a_full_round(one_run, gameplans):
-    """A round without a gameplan waits for one, alone: a later round goes ahead, and the
-    conductor looks again every gameplan_poll seconds. Once it has one, the team's attempt runs
-    start to finish, with the upload from before the round's start: the devboxes held and the
-    host's preflight before it, its VMs watched while it runs. A VM the worm powers off, or whose
-    QEMU it halts (a KVM internal error), is the worm's doing (the host says so), and a dropped
-    connection to Proxmox is tried again: none of these fails the attempt."""
+    """A round without a gameplan does not start: it says so (for the staff pages too). Another
+    round's team runs start to finish, with the upload from before its round's start: the host's
+    preflight before it, its VMs watched while it runs. A VM the worm powers off, or whose QEMU it
+    halts (a KVM internal error), is the worm's doing (the host says so), and a dropped connection
+    to Proxmox is tried again: none of these fails the attempt. Nothing starts or stops a devbox."""
     from core.models.competition import Round
     from core.models.rounds import HostJob, RoundRun, RunEvent
     from core.models.worms import MalwareArtifact, Upload
@@ -449,11 +486,14 @@ def test_conductor_runs_a_full_round(one_run, gameplans):
     later = Round.objects.create(seed=6, name="R2", competition=one_run["competition"], gameplan="two.py", team_duration=600,
                                  round_start=round_obj.round_start + timezone.timedelta(seconds=30), round_end=round_obj.round_end)  # fmt: skip
     [later_run] = plan_round(later)
+    assert run_round(conductor, round_obj) == ([], "it has no gameplan: staff choose one on its page (Staff -> Rounds)")
+    waiting = Round.objects.get(pk=round_obj.pk)
+    assert waiting.gameplan_status == "" and waiting.gameplan_checked_at is not None  # looked at, for the staff pages
     # In R2's attempt the worm powers vm1 off (20 s after it starts), and Proxmox drops the
     # orchestrator's first two requests.
     agent.after_deploy = [(30, "sandbox-vm1", "stopped", "guest")]
     power.api().flaky = 2
-    assert conductor.tick() is True  # R1 waits; R2 runs
+    assert run_round(conductor, later)[1] is None
     later_run.refresh_from_db()
     assert later_run.state == RoundRun.State.FINISHED, later_run.error
     assert power.api().waited == 2 * ProxmoxPower.RETRY_DELAY  # each tried again, 2 s later
@@ -465,24 +505,17 @@ def test_conductor_runs_a_full_round(one_run, gameplans):
     assert not later_run.events.filter(kind=RunEvent.Kind.ERROR).exists()
     run.refresh_from_db()
     assert run.state == RoundRun.State.PENDING and not run.jobs.exists()
-    waiting = Round.objects.get(pk=round_obj.pk)
-    assert waiting.gameplan_status == "" and waiting.gameplan_checked_at is not None  # looked at, for the staff pages
-    assert conductor.tick() is True  # R2 is over: the devboxes it held are started again
-    assert Round.objects.get(pk=later.pk).devbox_hold == "released"
-    assert conductor.tick() is False  # R1 looked at again: still no gameplan
 
     # An upload after the round's start does not take part, however late the gameplan comes.
     Upload.objects.create(artifact=MalwareArtifact.objects.create(content_hash=sha("late"), storage_key="k-late"),
                           user=one_run["team"].users.first(), team=one_run["team"], created_at=timezone.now())  # fmt: skip
     Round.objects.filter(pk=round_obj.pk).update(gameplan="two.py")
-    assert conductor.tick() is False  # not before gameplan_poll seconds
-    clock.advance(conductor.cfg["gameplan_poll"])
     power.api().stopped.clear()
     # The worm halts vm1 20 s into its run: its QEMU runs on, stopped for good (internal-error).
     agent.after_deploy = [(30, "sandbox-vm1", "internal-error", "guest")]
 
     start = clock.now()
-    assert conductor.tick() is True
+    assert run_round(conductor, round_obj)[1] is None
     run.refresh_from_db()
     assert run.state == RoundRun.State.FINISHED, run.error
     assert run.upload_id == one_run["run"].upload_id
@@ -502,10 +535,10 @@ def test_conductor_runs_a_full_round(one_run, gameplans):
     assert run.jobs.get(kind=HostJob.Kind.PREFLIGHT).params == {"gameplan": "two.py", "gameplan_sha256": sha(GAMEPLAN),
                                                                  "hold_devboxes": True}  # fmt: skip
     assert run.jobs.get(kind=HostJob.Kind.CHECK).params == {"run_uuid": str(run.uuid)}  # its probes inside the VMs
-    # Its devboxes (devboxes_off, the default) were shut down before the attempt.
-    hold = HostJob.objects.get(kind=HostJob.Kind.HOLD_DEVBOXES, params__round_uuid=str(round_obj.uuid))
-    assert hold.state == HostJob.State.DONE and hold.id < run.jobs.get(kind=HostJob.Kind.PREFLIGHT).id
-    assert run.jobs.get(kind=HostJob.Kind.TEARDOWN).params["keep"] is False
+    # Nothing touched a devbox: the operator stopped them before the round.
+    assert not HostJob.objects.filter(kind__in=[HostJob.Kind.HOLD_DEVBOXES, HostJob.Kind.RELEASE_DEVBOXES]).exists()
+    # The sandbox kept, powered off, for another attempt: the session destroys it at its end.
+    assert run.jobs.get(kind=HostJob.Kind.TEARDOWN).params["keep"] is True
     # The sandbox as built, for the replay.
     assert run.entrypoint == "sandbox-vm0" and run.topology["nodes"]
     assert sorted(run.virtual_machines.values_list("vm_identifier", flat=True)) == ["sandbox-vm0", "sandbox-vm1"]
@@ -523,12 +556,14 @@ def test_conductor_runs_a_full_round(one_run, gameplans):
         assert kind in events, kind
     states = [e.data["state"] for e in run.events.filter(kind=RunEvent.Kind.STATE).order_by("id")]
     assert states == ["preparing", "checking", "running", "ending", "tearing_down", "finished"]
-    assert conductor.tick() is True  # its devboxes started again
-    assert conductor.tick() is False  # nothing left
+    assert run_round(conductor, round_obj) == ([], None)  # nothing left
+    assert conductor.destroy_sandbox() == {"destroyed": True, "kept": False}
+    assert HostJob.objects.filter(kind=HostJob.Kind.TEARDOWN).order_by("-id").first().params == {"keep": False}
 
 
 def test_capture_is_recorded_when_a_released_secret_is_submitted(ran):
-    from core.models.rounds import RunEvent
+    from core.models.competition import Round
+    from core.models.rounds import RoundRun, RunEvent
     from core.models.scoring import FlagCapture, FlagCaptureAttempt
     from orchestrator.rounds import captures
 
@@ -540,6 +575,12 @@ def test_capture_is_recorded_when_a_released_secret_is_submitted(ran):
     assert FlagCapture.objects.filter(team=team, vm=vm).count() == 1
     assert FlagCapture.published().filter(team=team, vm=vm).count() == 1
     assert run.events.filter(kind=RunEvent.Kind.CAPTURED, vm=vm).exists()
+    # Until the round's results are published (`worms round publish`), no team sees it.
+    Round.objects.filter(pk=run.round_id).update(results_published_at=None)
+    assert not FlagCapture.published().filter(team=team, vm=vm).exists()
+    assert not RoundRun.objects.get(pk=run.pk).shown_to_team()
+    publish(run.round)
+    assert RoundRun.objects.get(pk=run.pk).shown_to_team()
 
     # A second submission of the same flag does not count twice.
     FlagCaptureAttempt.objects.create(team_uuid=str(team.uuid), vm_flag_hash=vm.ctf_flag_hash,
@@ -563,51 +604,49 @@ def test_wrong_team_does_not_capture(ran):
     assert FlagCapture.objects.count() == 0
 
 
-def test_a_failed_attempt_is_thrown_away_and_the_team_runs_again(one_run, gameplans, caplog):
-    """An attempt the infrastructure fails is thrown away (its sandbox torn down) and the
-    team's worm runs again, at most max_retries more times; the next attempt finishes. A VM the
+def test_a_failed_attempt_is_thrown_away_and_the_team_runs_again(one_run, gameplans):
+    """An attempt the infrastructure fails is thrown away (its VMs stopped, its sandbox kept,
+    powered off) and nothing runs it again by itself: the operator runs a new attempt (`worms round
+    start --resume`, Conductor.again), with the same upload and gameplan, and it finishes. A VM the
     host's OOM killer takes while the worm runs is such a failure: the host's records say so, the
-    worm has no say; so are the gateway stopped on the host, and the agent not answering an
-    observe job. A fault of ours that trying again does not mend puts the round on hold, rather
-    than every team's attempts used up on it: two attempts in a row that fail before the worm is
-    deployed, or two teams' attempts in a row that fail on our side or in their deploy (a team's
-    own retries never count twice). An attempt the conductor's stop failed is passed over."""
+    worm has no say; so are the gateway stopped on the host, the host not answering an observe
+    job, and a failed deploy. An attempt left under way by a session that was killed fails as the
+    next session starts (abandon), not counted as the attempt's own failure."""
     from core.models.competition import Round
     from core.models.rounds import HostJob, RoundRun, RunEvent
     from orchestrator.rounds.planner import plan_round
 
     conductor, agent, clock = make_conductor(gameplans)
     agent.fail[HostJob.Kind.PREPARE] = 1
-    assert conductor.tick() is True
-    first, second = attempts(one_run["round"], one_run["team"])
-    assert first.state == RoundRun.State.FAILED and "prepare job failed" in first.error
-    assert first.jobs.filter(kind=HostJob.Kind.TEARDOWN).exists()  # it may have built half a sandbox
+    ended, problem = run_round(conductor, one_run["round"])
+    [first] = ended
+    assert problem is None and first.state == RoundRun.State.FAILED and "prepare job failed" in first.error, first.error
+    assert first.jobs.get(kind=HostJob.Kind.TEARDOWN).params["keep"] is True  # it may have built half a sandbox
+    assert attempts(one_run["round"], one_run["team"]) == [first]  # no retry by itself
+    assert run_round(conductor, one_run["round"]) == ([], None)  # nothing pending
+    second = conductor.again(first)
     assert (second.state, second.attempt, second.upload_id) == (RoundRun.State.PENDING, 1, first.upload_id)
     assert second.gameplan_sha256 == first.gameplan_sha256
-    assert conductor.tick() is True
-    second.refresh_from_db()
+    with pytest.raises(ValueError):
+        conductor.again(second)  # only a failed attempt is run again
+    [second] = run_round(conductor, one_run["round"])[0]
     assert second.state == RoundRun.State.FINISHED, second.error
-    assert not Round.objects.get(pk=one_run["round"].pk).on_hold  # one failure before the worm: no more
-    assert conductor.tick() is True  # R1 is over: its devboxes are started again
 
-    # Never more than max_retries more. The next round has a second team. The first team's
-    # attempts: the host's OOM killer takes vm1 30 s after the deploy (20 s into the worm's run);
-    # the agent does not answer the observe job before the gameplan; a task on the host stops the
-    # gateway; the deploy job fails. Then the other team's first attempt: the OOM killer.
-    make_team(one_run["competition"], "team-b", upload_before=one_run["round"].round_start - clock_delta(300))
+    # The failures, one attempt each: the host's OOM killer takes vm1 30 s after the deploy (20 s
+    # into the worm's run); the host does not answer the observe job before the gameplan; a task
+    # on the host stops the gateway; the deploy job fails.
+    oom = [(30, "sandbox-vm1", "stopped", "oom")]
     r2 = Round.objects.create(seed=6, name="R2", competition=one_run["competition"], round_start=one_run["round"].round_start,
                               round_end=one_run["round"].round_end, gameplan="two.py", team_duration=600)  # fmt: skip
     plan_round(r2)
-    first, other = (run.team for run in RoundRun.objects.filter(round=r2).order_by("position"))
-    oom = [(30, "sandbox-vm1", "stopped", "oom")]
-    for index in range(conductor.cfg["max_retries"] + 1):
+    runs = []
+    for index in range(4):
         agent.after_deploy = {2: [(30, "sandbox-gw", "stopped", "host")], 3: []}.get(index, oom)
         agent.hold = {HostJob.Kind.OBSERVE} if index == 1 else set()
         agent.fail[HostJob.Kind.DEPLOY] = int(index == 3)
-        assert conductor.tick() is True  # an attempt, start to failure
+        runs.append(run_round(conductor, r2)[0][0] if index == 0 else conductor.attempt(conductor.again(runs[-1])))
     agent.hold = set()
-    runs = attempts(r2, first)
-    assert [r.state for r in runs] == [RoundRun.State.FAILED] * (conductor.cfg["max_retries"] + 1)
+    assert [r.state for r in runs] == [RoundRun.State.FAILED] * 4
     assert "sandbox-vm1 is stopped, it should be running: killed by the host's OOM killer (cause oom)" in runs[0].error, runs[0].error
     assert runs[0].ends_at == runs[0].worm_start_at + clock_delta(20)  # its window closed when the watch saw it
     explained = runs[0].jobs.filter(kind=HostJob.Kind.OBSERVE, params__vmids=[901])
@@ -617,113 +656,38 @@ def test_a_failed_attempt_is_thrown_away_and_the_team_runs_again(one_run, gamepl
     assert runs[1].worm_start_at is None and not runs[1].jobs.filter(kind=HostJob.Kind.DEPLOY).exists()
     assert runs[2].error.startswith("the sandbox's gateway sandbox-gw is stopped, it should be running: stopped by a task on "
                                     "the host (cause host"), runs[2].error  # fmt: skip
-    assert runs[3].error.startswith("deploy job failed") and runs[3].worm_start_at is None
-    errors = [run.events.get(kind=RunEvent.Kind.ERROR).data for run in runs]
+    assert runs[3].error.startswith("deploy job failed") and runs[3].worm_start_at is None, runs[3].error
+    errors = [r.events.get(kind=RunEvent.Kind.ERROR).data for r in runs]
     assert [(error["ours"], error["deploy_failed"]) for error in errors] == [(True, False)] * 3 + [(False, True)]
-    # One team's failures never put the round on hold, however many: its worm, or its upload, may
-    # be the cause.
-    assert not Round.objects.get(pk=r2.pk).on_hold
-    agent.after_deploy = oom
-    assert conductor.tick() is True
-    [failed, retry] = attempts(r2, other)
-    assert (failed.state, retry.state, retry.attempt) == (RoundRun.State.FAILED, RoundRun.State.PENDING, 1)
-    assert Round.objects.get(pk=r2.pk).on_hold  # two teams in a row, on our side or in the deploy
 
-    # In a third round every check fails: the second attempt in a row that fails before its worm
-    # was deployed puts the round on hold; the next attempt waits for `worms round resume`. The
-    # conductor stopped during the attempt in between (left behind, then failed as it starts):
-    # that attempt is passed over.
-    r3 = Round.objects.create(seed=7, name="R3", competition=one_run["competition"], round_start=one_run["round"].round_start,
-                              round_end=one_run["round"].round_end, gameplan="two.py", team_duration=600)  # fmt: skip
-    plan_round(r3)
-    team = RoundRun.objects.filter(round=r3).order_by("position").first().team
-    agent.fail[HostJob.Kind.CHECK] = True
-    while not RoundRun.objects.filter(round=r3, state=RoundRun.State.FAILED).exists():
-        assert conductor.tick() is True
-    RoundRun.objects.filter(round=r3, team=team, attempt=1).update(state=RoundRun.State.PREPARING)
-    while conductor.tick():
-        pass
-    runs3 = attempts(r3, team)
-    assert [(r.attempt, r.state) for r in runs3] == [(0, RoundRun.State.FAILED), (1, RoundRun.State.FAILED),
-                                                     (2, RoundRun.State.FAILED), (3, RoundRun.State.PENDING)]  # fmt: skip
-    assert runs3[1].events.get(kind=RunEvent.Kind.ERROR).data["conductor_stopped"] is True
-    assert Round.objects.get(pk=r3.pk).on_hold
-    assert [r.getMessage() for r in caplog.records if r.levelname == "ERROR" and "is put on hold" in r.getMessage()] == [
-        f"round R2 is put on hold: two teams' attempts in a row failed on our side or in their deploy ({first.name}, attempt "
-        f"3: {runs[3].error}; {other.name}, attempt 0: {failed.error}), a fault on our side (`worms round resume {r2.pk}` once "
-        "it is mended)",
-        f"round R3 is put on hold: two attempts in a row failed before their worm was deployed ({team.name}, attempt 0: "
-        f"{runs3[0].error}; {team.name}, attempt 2: {runs3[2].error}), a fault on our side (`worms round resume {r3.pk}` "
-        "once it is mended)"]  # fmt: skip
+    # Left under way by a session that was stopped: failed as the next one starts.
+    left = conductor.again(runs[3])
+    RoundRun.objects.filter(pk=left.pk).update(state=RoundRun.State.PREPARING)
+    left.refresh_from_db()
+    conductor.abandon(left)
+    left.refresh_from_db()
+    assert left.state == RoundRun.State.FAILED and "left under way" in left.error
+    assert left.events.get(kind=RunEvent.Kind.ERROR).data["conductor_stopped"] is True
 
 
-def test_next_run_waits_for_the_previous_teardown(one_run, gameplans, caplog):
-    """A failed attempt tears its sandbox down asynchronously; the next must not build over it
-    until that teardown has completed (docs/07-security.md, S7). Nor before the devboxes are held
-    and the host's preflight passes: until then no attempt starts and none is used up; it is
-    tried again every preflight_retry seconds, and after preflight_attempts tries in a row the
-    round is put on hold until `worms round resume`. Once it runs, an observe job that waits its
-    turn behind another job of the agent's (one at a time: a team's devbox rebuild) is not late,
-    however long that takes."""
-    from core.models.competition import Round
+def test_a_failed_preflight_starts_no_attempt(one_run, gameplans):
+    """The host's preflight before each attempt: one that fails stops the round there, and no
+    attempt is used up. Once it passes, an observe job that waits its turn behind another job of
+    the host's (a team's devbox rebuild) is not late, however long that takes."""
     from core.models.rounds import HostJob, RoundRun
-    from worms_cli import control
 
     conductor, agent, clock = make_conductor(gameplans)
-    cfg, round_obj = conductor.cfg, one_run["round"]
-    agent.fail[HostJob.Kind.CHECK] = 1
-    agent.hold = {HostJob.Kind.TEARDOWN}
-    assert conductor.tick() is True
-    first, second = attempts(one_run["round"], one_run["team"])
-    assert first.state == RoundRun.State.FAILED
-    teardown = first.jobs.get(kind=HostJob.Kind.TEARDOWN)
-    assert teardown.state == HostJob.State.QUEUED
-
-    # The teardown is still pending: the retry waits.
-    assert conductor.tick() is False
-    second.refresh_from_db()
-    assert second.state == RoundRun.State.PENDING
-
-    # Teardown done; but the devboxes are not all shut down, and then the host lacks the memory
-    # the gameplan's VMs need.
-    agent.hold = set()
-    agent.answer(teardown)
-    agent.fail[HostJob.Kind.HOLD_DEVBOXES] = 1
+    cfg = conductor.cfg
     agent.preflight_failures = {"memory:admission"}
-    preflights = second.jobs.filter(kind=HostJob.Kind.PREFLIGHT)
-    for _ in range(cfg["preflight_attempts"] - 1):
-        assert conductor.tick() is True
-        assert conductor.tick() is False  # not tried again before preflight_retry seconds
-        clock.advance(cfg["preflight_retry"])
-    assert preflights.count() == cfg["preflight_attempts"] - 2  # the first try's hold failed: no preflight after it
-    assert not Round.objects.get(pk=round_obj.pk).on_hold
-    assert conductor.tick() is True  # the last try
-    round_obj.refresh_from_db()
-    second.refresh_from_db()
-    assert round_obj.on_hold and (second.state, second.attempt) == (RoundRun.State.PENDING, 1)  # no attempt used up
-    assert preflights.count() == cfg["preflight_attempts"] - 1 and not second.jobs.exclude(kind=HostJob.Kind.PREFLIGHT).exists()
-    assert preflights.order_by("-id").first().params["hold_devboxes"] is True
-    errors = [r.getMessage() for r in caplog.records if r.levelname == "ERROR" and "round R1" in r.getMessage()]
-    assert "the devboxes were not all shut down" in errors[0] and "try 1 of 5" in errors[0]
-    assert errors[-1] == (f"round R1 is put on hold: 5 tries in a row before an attempt failed, the last: preflight checks "
-                          f"failed: memory:admission (not enough) (`worms round resume {round_obj.pk}` once that is mended)")  # fmt: skip
-
-    # On hold, its devboxes run again meanwhile. Resumed (the memory is back), the retry runs,
-    # the devboxes held again before it. From 100 s after its deploy the agent is on a devbox
-    # rebuild for 5 minutes.
-    while conductor.tick():
-        pass
-    assert Round.objects.get(pk=round_obj.pk).devbox_hold == "released"
+    ended, problem = run_round(conductor, one_run["round"])
+    assert ended == [] and problem == "preflight checks failed: memory:admission (not enough)"
+    run = RoundRun.objects.get(pk=one_run["run"].pk)
+    assert run.state == RoundRun.State.PENDING and set(run.jobs.values_list("kind", flat=True)) == {HostJob.Kind.PREFLIGHT}
     agent.preflight_failures = set()
     agent.busy_after_deploy = (100, 300)
-    control.resume_round(Round.objects.get(pk=round_obj.pk))  # `worms round resume`
-    assert conductor.tick() is True
-    second.refresh_from_db()
-    assert second.state == RoundRun.State.FINISHED, second.error
+    [run] = run_round(conductor, one_run["round"])[0]
+    assert run.state == RoundRun.State.FINISHED, run.error
     assert max(agent.waited["observe"]) > cfg["observe_timeout"]  # it waited its turn, longer than its own time
-    hold = HostJob.objects.filter(kind=HostJob.Kind.HOLD_DEVBOXES, state=HostJob.State.DONE).order_by("-id").first()
-    assert hold.id < second.jobs.get(kind=HostJob.Kind.PREPARE).id
-    assert Round.objects.get(pk=round_obj.pk).devbox_hold == "held"
 
 
 def _two_teams(one_run, second_upload=True):
@@ -739,46 +703,18 @@ def _two_teams(one_run, second_upload=True):
 
 def test_the_runs_of_a_round_share_its_sandbox(one_run, gameplans):
     """Built once from the round's gameplan and rolled back for every team: the same sandbox
-    for all, and the teardown in between keeps it."""
+    for all, kept by every teardown; the session destroys it at its end, asked."""
     from core.models.rounds import HostJob
 
     first, second = _two_teams(one_run)
     conductor, agent, clock = make_conductor(gameplans)
-    assert conductor.tick() is True and conductor.tick() is True
+    assert [run.state for run in run_round(conductor, one_run["round"])[0]] == ["finished", "finished"]
     prepares = HostJob.objects.filter(kind=HostJob.Kind.PREPARE).order_by("id")
     assert [(job.params["gameplan"], job.params["gameplan_sha256"]) for job in prepares] == [("two.py", sha(GAMEPLAN))] * 2
     teardowns = HostJob.objects.filter(kind=HostJob.Kind.TEARDOWN).order_by("id")
-    assert [(job.run_id, job.params["keep"]) for job in teardowns] == [(first.id, True), (second.id, False)]
-
-
-def test_no_sandbox_is_kept_for_a_run_that_has_nothing_to_run(one_run, gameplans):
-    from core.models.rounds import HostJob
-
-    first = next(run for run in _two_teams(one_run, second_upload=False) if run.upload_id)
-    conductor, agent, clock = make_conductor(gameplans)
-    while conductor.tick():
-        pass
-    assert [job.params["keep"] for job in first.jobs.filter(kind=HostJob.Kind.TEARDOWN)] == [False]
-
-
-def test_a_sandbox_kept_for_a_run_that_is_then_skipped_is_destroyed(one_run, gameplans):
-    """The next team's run was given up: nothing is left to roll the sandbox back."""
-    from core.models.rounds import HostJob, RoundRun
-
-    first, second = _two_teams(one_run)
-    conductor, agent, clock = make_conductor(gameplans)
-    assert conductor.tick() is True
-    RoundRun.objects.filter(pk=second.pk).update(state=RoundRun.State.SKIPPED)
-    agent.hold = {HostJob.Kind.TEARDOWN}
-    assert conductor.tick() is True  # the round is over: the devboxes it held are started again
-    assert HostJob.objects.filter(kind=HostJob.Kind.RELEASE_DEVBOXES).count() == 1
-    assert conductor.tick() is True
-    final = first.jobs.filter(kind=HostJob.Kind.TEARDOWN).order_by("-id").first()
-    assert final.params == {"keep": False, "run_uuid": str(first.uuid)} and final.state == HostJob.State.QUEUED
-    assert conductor.tick() is False  # it waits for that teardown, and asks for no other
-    agent.answer(final)
-    assert conductor.tick() is False
-    assert first.jobs.filter(kind=HostJob.Kind.TEARDOWN).count() == 2
+    assert [(job.run_id, job.params["keep"]) for job in teardowns] == [(first.id, True), (second.id, True)]
+    conductor.destroy_sandbox()
+    assert HostJob.objects.filter(kind=HostJob.Kind.TEARDOWN).order_by("-id").first().params == {"keep": False}
 
 
 def test_run_without_upload_is_skipped(one_run, gameplans):
@@ -787,8 +723,7 @@ def test_run_without_upload_is_skipped(one_run, gameplans):
     _first, second = sorted(_two_teams(one_run, second_upload=False), key=lambda r: r.upload_id is None)
     assert second.upload_id is None
     conductor, agent, clock = make_conductor(gameplans)
-    while conductor.tick():
-        pass
+    run_round(conductor, one_run["round"])
     second.refresh_from_db()
     assert second.state == RoundRun.State.SKIPPED and second.error == "no upload before the round's start"
     assert not second.jobs.exists()
@@ -1001,7 +936,7 @@ def test_the_worm_start_is_dated_from_when_the_agent_armed_it(one_run, gameplans
     conductor, agent, clock = make_conductor(gameplans)
     armed = clock.now() - clock_delta(4)
     agent.armed_at = armed.isoformat()
-    conductor.tick()
+    run_round(conductor, one_run["round"])
     run = RoundRun.objects.get(pk=one_run["run"].pk)
     assert run.worm_start_at == armed + clock_delta(10)  # worm_start_delay in make_conductor
     assert run.ends_at == run.worm_start_at + clock_delta(600)
@@ -1015,14 +950,14 @@ def test_an_implausible_armed_at_is_ignored(one_run, gameplans, armed_at):
     conductor, agent, clock = make_conductor(gameplans)
     start = clock.now()
     agent.armed_at = armed_at
-    conductor.tick()
+    run_round(conductor, one_run["round"])
     run = RoundRun.objects.get(pk=one_run["run"].pk)
     assert run.worm_start_at == start + clock_delta(10)
 
 
 def test_a_failed_run_stops_its_vms_and_scores_no_more(one_run, gameplans):
     """Power control fails during execute(): the attempt is thrown away, its VMs stopped and
-    its window closed; what it captured never counts; the team's worm runs again."""
+    its window closed; what it captured never counts."""
     from core.models.rounds import HostJob, RoundRun, RunEvent
     from core.models.scoring import FlagCapture, FlagCaptureAttempt
     from orchestrator.rounds import captures
@@ -1037,14 +972,13 @@ def test_a_failed_run_stops_its_vms_and_scores_no_more(one_run, gameplans):
         ProxmoxPower.stop(power, vm)
 
     power.stop = broken_stop
-    conductor.tick()
-    first, second = attempts(one_run["round"], one_run["team"])
+    run_round(conductor, one_run["round"])
+    [first] = attempts(one_run["round"], one_run["team"])
     assert first.state == RoundRun.State.FAILED and "power control" in first.error
     assert first.events.get(kind=RunEvent.Kind.ERROR).data["ours"] is True  # whatever the worm did
     assert first.ends_at == first.finished_at == first.worm_start_at + clock_delta(60)
     assert set(power.api().stopped) == {"sandbox-vm0", "sandbox-vm1"}
     assert first.jobs.filter(kind=HostJob.Kind.TEARDOWN).exists()
-    assert second.state == RoundRun.State.PENDING
 
     vm = first.virtual_machines.get(vm_identifier="sandbox-vm0")
     # During the attempt: recorded for staff, never published.

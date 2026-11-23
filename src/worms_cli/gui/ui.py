@@ -1382,10 +1382,8 @@ class RoundsTab(Tab):
 
     @staticmethod
     def _hold(r, ui):
-        parts = (["ON HOLD"] if r.get("on_hold") else []) + (["devboxes off"] if r.get("devboxes_off") else [])
-        if r.get("devbox_hold") and not r.get("devboxes_off"):
-            parts.append(f"holds {r['devbox_hold']}" if not isinstance(r["devbox_hold"], bool) else "holds devboxes")
-        return ", ".join(parts)
+        # Since 2026-11-23 nothing holds a round or its devboxes: what is left to say is whether its results are out.
+        return "published" if r.get("published") else ""
 
     @staticmethod
     def _hold_style(r, ui):
@@ -3447,7 +3445,7 @@ def help_lines(ui) -> list:
         ("Commands", H),
         ("Every command is the CLI's own (`worms ...`, src/manage.py) with its checks, lock and run log. What changes something "
          "asks first, naming its targets. Typed `yes` (not y): on production (or a system not known yet), vm stop, restart, "
-         "reset, rebuild, jobs cancel, round cancel, service restart --during-round, internet on and apply; vm kill always. "
+         "reset, rebuild, jobs cancel, service restart --during-round, internet on and apply; vm kill always. "
          "login, run, log, show, apply, reset, rebuild, kill, status and internet run on the terminal: worms-gui comes back "
          "when they end (after a login at once, else after a key). The rest run in the background: the Tasks tab, their end "
          "in the status line.", "normal"),

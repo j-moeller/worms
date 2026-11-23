@@ -78,9 +78,9 @@ postgresql_table_privileges:
     - privs: INSERT, DELETE
       tables: [rounds]
     # A round names its gameplan by file only (docs/05-live-environment.md); editing one clears the
-    # orchestrator's check of it (gameplan_status), which the orchestrator then redoes. Whether its
-    # attempts run with the devboxes shut down (devboxes_off), until its start.
-    - privs: UPDATE (name, seed, round_start, round_end, gameplan, team_duration, gameplan_status, devboxes_off)
+    # check of it (gameplan_status), which the next check redoes. Whether its results are published
+    # is the console's (`worms round publish`, the admin), never the dashboard's.
+    - privs: UPDATE (name, seed, round_start, round_end, gameplan, team_duration, gameplan_status)
       tables: [rounds]
     # Notifications to the teams (dashboard/views/staff_notifications.py): staff write, edit,
     # switch on and off and delete them, and choose the teams one is for (notifications_teams;
@@ -122,9 +122,8 @@ postgresql_table_privileges:
       tables: [gameplan_versions]
     - privs: INSERT (filename, sha256)
       tables: [gameplan_changes]
-    # Its check of a round's gameplan, what it did about the round's devboxes (devbox_hold), and
-    # a round it put on hold (on_hold: a fault on our side that trying again does not mend).
-    - privs: UPDATE (gameplan_status, gameplan_checked_at, devbox_hold, on_hold)
+    # Its check of a round's gameplan (a round itself runs from `worms round start`, as the admin).
+    - privs: UPDATE (gameplan_status, gameplan_checked_at)
       tables: [rounds]
     - privs: INSERT
       tables: [host_jobs, run_events]

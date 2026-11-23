@@ -49,7 +49,7 @@ The UI's API, which stays as it is:
 Modes. Foreground: what asks, takes long or is the operator's own terminal (login, run, log -f,
 show, apply, vm reset, vm rebuild, vm kill, internet on|off); the CLI asks its own questions there,
 so it gets no --yes (apply shows its plan first). Background: what is quick and asks nothing (vm
-start|stop|restart, jobs cancel|pause|resume, round pause|resume|start|cancel, service restart),
+start|stop|restart, jobs cancel|pause|resume, round start|publish|unpublish, service restart),
 with --yes where the command takes it, as the GUI has asked. Check: `worms check --json`, read-only
 (it changes nothing on a VM, so --dry-run runs it too), one at a time, its answer kept per team
 (checks.py). The commands that take the host's lock (manage.py's LOCKED) run one at a time: a
@@ -424,40 +424,24 @@ def _job_logs(jobs: list[dict]) -> list[Action]:
 
 # -- rounds ------------------------------------------------------------------------------------------------------
 
-ROUND_QUESTIONS = {
-    "pause": "Hold round {}: none of its attempts starts until `resume`?",
-    "resume": "Let round {} go on (its devboxes held again if it wants them off)?",
-    "start": "Start round {} now (its start moved to now, its runs planned with the uploads made until now)?",
-    "cancel": "Skip every attempt of round {} still to come (one under way ends as usual)?",
-}
-
-
 def _round_menu(rounds: list[dict], snap: dict) -> list[Entry]:
+    """A round runs in the terminal (`worms round start` asks before each step): the GUI steps aside
+    for it, as for a login, and comes back when it is over."""
     none = "" if rounds else "no round marked or under the cursor"
-    now = snap.get("now") or time.time()
-    held = [r for r in rounds if r.get("on_hold")]
-    going = [r for r in rounds if not r.get("on_hold")]
-    to_come = [r for r in rounds if not r.get("start") or r["start"] > now]
+    one = none or ("" if len(rounds) == 1 else "one round at a time")
     return [
-        _entry("p", "pause: no attempt of it starts (one under way ends as usual)", lambda _: _round("pause", going, snap),
-               none or ("" if going else "on hold already")),
-        _entry("P", "resume", lambda _: _round("resume", held, snap), none or ("" if held else "not on hold")),
-        _entry("s", "start now (a round still to come begins now)", lambda _: _round("start", to_come, snap),
-               none or ("" if to_come else "it has started already")),
-        _entry("c", "cancel: its attempts still to come are skipped", lambda _: _round("cancel", rounds, snap), none),
+        _entry("s", "start: run it here, team by team (asks before each step)", lambda _: _round(rounds[:1], "start"), one),
+        _entry("r", "resume: every team that has not finished", lambda _: _round(rounds[:1], "start", "--resume"), one),
+        _entry("u", "publish its results (asks)", lambda _: _round(rounds[:1], "publish"), one),
+        _entry("U", "unpublish its results (asks)", lambda _: _round(rounds[:1], "unpublish"), one),
     ]  # fmt: skip
 
 
-def _round(verb: str, rounds: list[dict], snap: dict) -> list[Action]:
-    """One command each: `worms round <verb>` takes one round."""
-    destructive = verb == "cancel"
-    actions = []
-    for r in rounds:
-        label = f"{r['id']} {r.get('name', '')}".strip()
-        argv = worms("round", verb, r["id"], *(["--yes"] if verb == "cancel" else []))
-        question = ROUND_QUESTIONS[verb].format(repr(r.get("name") or r["id"]))
-        actions.append(Action(f"round {verb} {label}", argv, "background", question, destructive, [label], _typed(destructive, snap)))
-    return actions
+def _round(rounds: list[dict], verb: str, *extra: str) -> list[Action]:
+    r = rounds[0]
+    label = f"{r['id']} {r.get('name', '')}".strip()
+    return [Action(f"round {verb} {label}{' ' + ' '.join(extra) if extra else ''}", worms("round", verb, r["id"], *extra),
+                   "foreground", "", False, [label])]  # fmt: skip
 
 
 # -- services ------------------------------------------------------------------------------------------------------

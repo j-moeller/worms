@@ -58,6 +58,8 @@ django_post_migrate_commands: []
 django_timers: []
 # Long-running management commands (systemd services): [{name, command, description}].
 django_daemons: []
+# Daemons of earlier deployments: stopped, disabled and their unit removed (start.yml).
+django_retired_daemons: []
 django_run_migrations: false
 # Per-connection lock_timeout for `migrate` and the post-migrate commands, so a
 # contended DDL lock fails fast instead of hanging the deploy indefinitely.

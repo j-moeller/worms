@@ -52,6 +52,7 @@ def _round(team, name, start_hours, end_hours):
     return Round.objects.create(
         competition=team.competition, name=name, seed=1,
         round_start=now + timedelta(hours=start_hours), round_end=now + timedelta(hours=end_hours),
+        results_published_at=now,  # `worms round publish`: a team sees a published round's results only
     )  # fmt: skip
 
 

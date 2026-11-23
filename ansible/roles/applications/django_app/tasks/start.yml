@@ -158,7 +158,25 @@
   loop_control:
     label: "{{ item.name }}"
 
-# Long-running management commands (e.g. the orchestrator's conduct_rounds).
+# A daemon of an earlier deployment (the orchestrator's conduct-rounds, until 2026-11-23): stopped,
+# disabled, its unit removed. Nothing is there on a VM built since.
+- name: Stop and disable retired management daemons
+  ansible.builtin.systemd:
+    name: "{{ django_app_name }}-{{ item }}"
+    state: stopped
+    enabled: false
+  loop: "{{ django_retired_daemons }}"
+  failed_when: false
+
+- name: Remove retired management daemons' units
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ django_app_name }}-{{ item }}.service"
+    state: absent
+  loop: "{{ django_retired_daemons }}"
+  notify:
+    - Reload systemd
+
+# Long-running management commands (the orchestrator's process_attempts).
 - name: Install management daemon services
   ansible.builtin.template:
     src: django-daemon.service.j2

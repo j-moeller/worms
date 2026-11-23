@@ -2,9 +2,9 @@
 run` takes (worms_cli/remote.py: a VM, `<team>/<role>`, a group of platform VMs). And the devbox
 VMs that something else stopped, which are written down on the host:
 
-    held        a round with "shut down every devbox" (round agent, hold_devboxes:
-                /var/lib/worms/held-devboxes.json); its release job starts them again.
-                `worms vm start --held` starts them by hand, once no round is on.
+    held        an earlier round's record (until 2026-11-23 a round shut the devboxes down
+                itself: /var/lib/worms/held-devboxes.json); `worms vm start --held` starts
+                them. Today `worms round start` asks to stop them, `worms vm stop devboxes`.
     window      `worms internet on` shut them down (WINDOW_STOPPED); `worms internet off`
                 starts them again once the window is closed.
 
@@ -141,11 +141,10 @@ class Power:
         team = [vm for vm in vms if vm.get("pool") == "devbox"]
         if team:
             self._refuse_while_window("start a devbox VM")
-            holds = {r["vmid"] for r in read_record(self.runner, HELD_DEVBOXES)}
-            on_hold = [vm["name"] for vm in team if int(vm["vmid"]) in holds]
-            if on_hold:
-                raise BuildError(f"{', '.join(on_hold)}: held shut down by a round with devboxes off ({HELD_DEVBOXES}): "
-                                 "its release starts them; once no round is on, `worms vm start --held`")  # fmt: skip
+            if read_record(self.runner, HELD_DEVBOXES):
+                # An earlier round's hold (until 2026-11-23 rounds shut the devboxes down themselves): over.
+                write_record(self.runner, HELD_DEVBOXES, [])
+                print(output.color(f"an earlier round's hold record removed ({HELD_DEVBOXES})", "dim"))
         stopped = [vm for vm in vms if vm.get("status") != "running"]
         for vm in vms:
             if vm.get("status") == "running":

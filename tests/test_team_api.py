@@ -70,9 +70,10 @@ def api(db_clean):
     AccessTokens.objects.create(name="r", access_token_hash=sha(TOKEN_REVOKED), team=a, created_by=user, revoked=True)
 
     start = now - timezone.timedelta(hours=2)
+    # Published (`worms round publish`): a team sees a finished attempt of a published round only.
     r1 = Round.objects.create(seed=1, name="R1", competition=comp, round_start=start - timezone.timedelta(hours=1),
-                              round_end=now)
-    r_other = Round.objects.create(seed=2, name="X", competition=other, round_start=start, round_end=now)
+                              round_end=now, results_published_at=now)
+    r_other = Round.objects.create(seed=2, name="X", competition=other, round_start=start, round_end=now, results_published_at=now)
     run = RoundRun.objects.create(round=r1, team=a, position=0, seed=1, state="finished",
                                   worm_start_at=start, ends_at=start + timezone.timedelta(hours=1))
     RoundRun.objects.create(round=r1, team=b, position=1, seed=1, state="pending")

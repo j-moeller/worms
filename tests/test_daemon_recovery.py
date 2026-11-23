@@ -3,11 +3,10 @@ import pytest
 from conftest import as_role
 
 
-@pytest.mark.parametrize("kind", ["processor", "conductor"])
-def test_daemon_recovers_a_closed_database_connection(db_clean, app_roles, monkeypatch, kind):
+def test_daemon_recovers_a_closed_database_connection(db_clean, app_roles, monkeypatch):
     from core.models.rounds import HostJob
     from django.db import OperationalError, connection
-    from orchestrator.management.commands import conduct_rounds, process_attempts
+    from orchestrator.management.commands import process_attempts
 
     class Finished(BaseException):
         pass
@@ -28,19 +27,10 @@ def test_daemon_recovers_a_closed_database_connection(db_clean, app_roles, monke
         if len(sleeps) == 2:
             raise Finished
 
-    module = process_attempts if kind == "processor" else conduct_rounds
-    monkeypatch.setattr(module.time, "sleep", sleep)
-    if kind == "processor":
-        command = module.Command()
-        monkeypatch.setattr(command, "pass_once", pass_once)
-        options = {"once": False, "interval": 0, "grace": 120}
-    else:
-        class Conductor:
-            stopping = False  # set by SIGTERM (conduct_rounds.py)
-            tick = staticmethod(pass_once)
-        monkeypatch.setattr(module, "Conductor", Conductor)
-        command = module.Command()
-        options = {"once": False, "plan_only": False, "interval": 0}
+    monkeypatch.setattr(process_attempts.time, "sleep", sleep)
+    command = process_attempts.Command()
+    monkeypatch.setattr(command, "pass_once", pass_once)
+    options = {"once": False, "interval": 0, "grace": 120}
     with as_role("django_orchestrator"), pytest.raises(Finished):
         command.handle(**options)
     assert recovered == [True]

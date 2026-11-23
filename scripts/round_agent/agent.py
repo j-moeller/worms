@@ -116,12 +116,10 @@ class Agent:
     # -- claiming -------------------------------------------------------------
 
     def claim(self):
-        """Claim the oldest queued job, a round's before a devbox's: a round's jobs are timed, and
-        a team's test must not hold them up. An observe goes first of all: it takes seconds, and
-        the conductor fails the attempt when one is not answered in time. While a round holds the
-        devboxes shut down (handlers.hold_devboxes), no devbox job: it would start one (a reset)
-        or need it running; it waits, queued, for the release. The observer claims observe jobs
-        alone. Returns (id, uuid, kind, params) or None."""
+        """Claim the oldest queued job, an observe first, a devbox's last. A round no longer runs
+        through this queue (`worms round start` runs its steps itself, with this agent stopped):
+        what is left is the devboxes' jobs and the gameplans check. The observer claims observe
+        jobs alone. Returns (id, uuid, kind, params) or None."""
         paused = handlers.paused_path(self.cfg)
         if paused.exists():
             # `worms jobs pause`: the operator's, for both workers; the job under way (if any) has ended already.
@@ -132,14 +130,12 @@ class Agent:
         if self._paused_said and not self.observe_only:
             log.info("resumed: taking jobs again")
         self._paused_said = False
-        held = handlers.held_devboxes_path(self.cfg).exists()
         conn = self.conn()
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE host_jobs SET state = 'running', started_at = now(), heartbeat_at = now() "
                 "WHERE id = (SELECT id FROM host_jobs WHERE state = 'queued' "
                 + ("AND kind = 'observe' " if self.observe_only else "")
-                + ("AND kind NOT LIKE 'devbox%%' " if held else "")
                 + "ORDER BY kind <> 'observe', kind LIKE 'devbox%%', id FOR UPDATE SKIP LOCKED LIMIT 1) "
                 "RETURNING id, uuid, kind, params"
             )

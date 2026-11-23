@@ -63,7 +63,7 @@ COMPONENTS: dict[str, Component] = {
                   module="module.dns", resource="proxmox_virtual_environment_vm.service_vm", group="dns", service=True),  # fmt: skip
         _persistent("syslog", "the central log server: every VM's audit log", ("dns",)),
         _persistent("database", "PostgreSQL: the platform's one database", ("dns", "syslog"), stateful=True),
-        _persistent("orchestrator", "the conductor, the attempt processor, the orchestrator API; runs the migrations",
+        _persistent("orchestrator", "the attempt processor, the orchestrator API; runs the migrations",
                     ("database",)),  # fmt: skip
         _persistent("dashboard", "the website: teams, uploads, results, staff pages, team API", ("database", "orchestrator")),
         Component("scoring", "the sandboxes' scoring API (flags)", ("database",), stack="infrastructure/ephemeral",
@@ -211,7 +211,7 @@ class Plan:
         if "orchestrator" in actions:
             restarts.append("the orchestrator's services (it migrates with them stopped)")
         if "gameplans" in actions:
-            restarts.append("the conductor (it checks the gameplans)")
+            restarts.append("the round agent; then the host's gameplans checked")
         if restarts:
             summary.append("restarts: " + "; ".join(restarts))
         return rows, summary

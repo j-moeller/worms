@@ -1,42 +1,26 @@
-"""The conductor: runs every team's worm in a round, one attempt after another, by the round's
-gameplan (docs/05-live-environment.md).
+"""A team's attempt in a round, start to finish, by the round's gameplan (docs/05-live-environment.md).
+Only `worms round start` runs one (src/worms_cli/rounds.py): on the host, in the operator's
+terminal, one team after another. Nothing here starts, stops, retries or waits by itself.
 
-One round at a time. The round under way (its gameplan pinned, attempts left) goes on until
-every team's run is over; then the next round that can begin, earliest start first. A round
-whose gameplan is missing or not valid waits alone: the rounds after it go ahead, and it is
-looked at again every `gameplan_poll` seconds until staff choose one (_next, _pin). Its runs
-were planned at its start, with the uploads from before it, however late the gameplan comes.
-
-    for each team (in the round's order):
-        hold the devboxes  (host job hold_devboxes, a round with devboxes_off: before every attempt)
-        preflight          (host job preflight: the host ready, nothing changed; else no attempt
-                            starts, none is used up, and it is tried again: _ready)
-        reset the sandbox  (host job prepare: built or rolled back, the run's secrets, files, flags)
-        check it           (host job check: the host, and probes inside every VM)
-        gameplan.execute() (deploy_worm, waits, power, flags: host jobs and the Proxmox API), the
-                           VMs watched meanwhile (AttemptBackend)
-        the rest of the run's time, stop every VM, drain, tear down
-    any failure: the attempt is thrown away (FAILED, its points never count) and the team's
-    worm runs again, at most max_retries more times.
-    a fault that trying again does not mend puts the round on hold (`worms round resume`):
-    preflight_attempts failed preflights in a row, two attempts in a row that failed before
-    their worm was deployed, or two teams' attempts in a row that failed on our side or in their
-    deploy (_breaker).
+    for each team (in the round's order), with the devboxes and the orchestrator stopped:
+        preflight          (the host ready, nothing changed; else the round stops here)
+        reset the sandbox  (prepare: built or rolled back, the run's secrets, files, flags)
+        check it           (check: the host, and probes inside every VM)
+        gameplan.execute() (deploy_worm, waits, power, flags), the VMs watched meanwhile
+                           (AttemptBackend)
+        the rest of the run's time, stop every VM, drain, tear down (the sandbox kept, powered
+        off, for the next team; the session destroys it at its end)
+    any failure: the attempt is thrown away (FAILED, its points never count), written to the
+    round's log, and the round goes on with the next team. The operator decides whether a
+    failed team runs again (`worms round start <r> --team <t>`).
 
 Errors on our side fail the attempt; nothing a team's worm does can. After the worm is deployed
 every sandbox VM is assumed rooted: what the watch trusts is the host's (Proxmox's VM state, the
-host's own records of why a VM stopped), never anything a VM says. Nor can a team's own jobs
-(a devbox reset) fail another team's attempt, or shift its schedule (waited, _observed).
-
-An attempt runs start to finish inside one tick (manage.py conduct_rounds is a loop with
-nothing else to do). The conductor never touches the host itself: VM power goes through the
-Proxmox API with a pool-scoped token (power.py), everything else is a HostJob the round agent
-executes. A crash cannot resume an attempt in the middle of execute(): the next start fails
-it and the team's worm runs again, as for any other failure.
+host's own records of why a VM stopped), never anything a VM says.
 
 Results are published only for a FINISHED attempt: its captures and logs count and are shown
 to the team (core/models/rounds.py). Failures are logged (the attempt's error and events, the
-journal) and kept for staff.
+round's log) and kept for staff.
 """
 
 from __future__ import annotations
@@ -50,8 +34,7 @@ from core.models.competition import Round
 from core.models.rounds import HostJob, RoundRun, RunEvent
 from core.models.vm import VirtualMachine
 from django.conf import settings
-from django.db import connection, transaction
-from django.db.models import Case, Q, Value, When
+from django.db import transaction
 from django.db.models.functions import Now
 from django.utils import timezone
 
@@ -69,11 +52,6 @@ CONFIG = {
     "job_timeout": 1800,            # a host job with no heartbeat for this long failed
     "job_poll": 2.0,                # seconds between looks at a host job
     "capture_grace": 120,           # captures/logs accepted this long after ends_at
-    "max_retries": 3,               # attempts after a team's first, when the infrastructure fails
-    "gameplan_check_interval": 600, # how often the gameplans are checked again (seconds)
-    "gameplan_poll": 60,            # a round waiting for its gameplan is looked at again after this
-    "preflight_retry": 60,          # a failed preflight (or devbox hold): tried again after this
-    "preflight_attempts": 5,        # ... this many failed in a row: the round is put on hold
     "watch_interval": 10,           # while execute() waits: every VM's state from the Proxmox API this often
     "observe_interval": 60,         # ... and an observe job for every VM this often (and after a start)
     "observe_timeout": 120,         # an observe job not answered within this: the attempt fails
@@ -86,8 +64,6 @@ CONFIG = {
 
 ACTIVE = [S.PREPARING, S.CHECKING, S.RUNNING, S.ENDING, S.TEARING_DOWN]
 DONE = [S.FINISHED, S.FAILED, S.SKIPPED]
-# Round.devbox_hold of a round that holds the devboxes shut down (devboxes_off when it began).
-HOLDING = ("wanted", "held")
 
 # What a power action leaves a VM in.
 AFTER = {"start": "running", "stop": "stopped", "shutdown": "stopped", "suspend": "paused", "resume": "running"}
@@ -122,7 +98,7 @@ def parse_armed_at(result, now, job_timeout):
 
 
 def waited(conductor, job, since, within=None):
-    """A host job not done yet, looked at again (HostJobs.run, AttemptBackend._observed): RoundError
+    """A host job not done yet, looked at again (AttemptBackend._observed): RoundError
     if it failed, went silent (no heartbeat for job_timeout seconds), or, given `within` (seconds,
     the conductor's clock), is not done that long after the round agent could be on it; else the
     moment `within` counts from, `since` or later.
@@ -160,34 +136,6 @@ class AttemptFailed(BaseException):
     off, the gateway down, the host not answering): it fails, and the team's worm runs again. A
     BaseException, so that a gameplan's `except Exception` does not swallow it; once raised,
     every later step of the attempt raises it again (AttemptBackend._go_on)."""
-
-
-class HostJobs:
-    """Host jobs, waited for: a row the round agent picks up, then its result."""
-
-    def __init__(self, conductor):
-        self.conductor = conductor
-
-    def request(self, run, kind, **params):
-        job = HostJob.objects.create(run=run, kind=kind, params=params)
-        # Wake the round agent at once (it also polls, so a missed NOTIFY only adds a few seconds).
-        with connection.cursor() as cur:
-            cur.execute("NOTIFY host_jobs")
-        log.info("run %s requested %s job %s", run.uuid if run else "-", kind, job.uuid)
-        return job
-
-    def run(self, run, kind, within=None, **params):
-        """The job's result, or RoundError if it failed or went silent. within: seconds the agent
-        may take over it once it could be on it (waited): an observe job, which it answers in
-        seconds, while the attempt it explains waits for it."""
-        counted = self.conductor.now()
-        job = self.request(run, kind, **params)
-        while True:
-            job.refresh_from_db()
-            if job.state == HostJob.State.DONE:
-                return job.result or {}
-            counted = waited(self.conductor, job, counted, within)
-            self.conductor.sleep(self.conductor.cfg["job_poll"])
 
 
 class AttemptBackend:
@@ -280,6 +228,8 @@ class AttemptBackend:
             conductor.sleep(min(float(conductor.cfg["watch_interval"]), left))
             self._look()
             self._observed()
+            if conductor.on_watch is not None:
+                conductor.on_watch()  # the CLI counts the flag submissions and log records so far
 
     def begin(self):
         """Before execute(): the watch's first look (power control answers, every VM is as the
@@ -407,13 +357,10 @@ class AttemptBackend:
         else:
             self.log(line)
         running = [str(name) for name in result.get("devboxes_running") or []]
-        if running and Round.objects.filter(pk=self.run.round_id, devbox_hold__in=HOLDING).exists():
-            log.error("run %s: devbox VMs run while round %s holds them shut down: %s; shutting them down again",
-                      self.run.uuid, self.run.round.name, ", ".join(running)[:500])  # fmt: skip
-            # Not waited for: the attempt goes on, and the agent takes it before the next of its jobs.
-            asked = HostJob.objects.filter(kind=HostJob.Kind.HOLD_DEVBOXES, state__in=[HostJob.State.QUEUED, HostJob.State.RUNNING])
-            if not asked.exists():
-                self.conductor.jobs.request(None, HostJob.Kind.HOLD_DEVBOXES, round_uuid=str(self.run.round.uuid))
+        if running:
+            # Nothing here starts or stops them: the operator stopped them before the round.
+            log.error("run %s: devbox VMs are running during the round, which counted on them being stopped: %s "
+                      "(`worms vm stop devboxes`)", self.run.uuid, ", ".join(running)[:500])  # fmt: skip
 
     # -- the gameplan's steps --------------------------------------------------------------
 
@@ -548,19 +495,19 @@ class AttemptBackend:
 
 
 class Conductor:
-    def __init__(self, power=None, now=None, sleep=None, jobs=None):
+    """One attempt of a team, start to finish, when `worms round start` asks for it
+    (src/worms_cli/rounds.py): nothing here runs by itself. `jobs` runs the host's steps (the CLI
+    runs them in its own process on the host, worms_cli/rounds.py LocalJobs), `power` switches the
+    sandbox's VMs (power.py), `on_watch` is called after every look of the watch (the CLI counts
+    the flag submissions and log records there)."""
+
+    def __init__(self, jobs, power=None, now=None, sleep=None, on_watch=None):
         self.power = power or ProxmoxPower()
         self._now, self._sleep = now, sleep
         self.cfg = config()
-        self.jobs = jobs or HostJobs(self)
-        self.stopping = False
-        self._checked_at, self._valid, self._waiting = None, {}, {}
-        self._held_said: set = set()  # the rounds on hold it has said so of (_say_held)
-        self._next_look = {}  # round pk -> when a waiting round is looked at again
-        self._release_after = None  # after a failed release of the devboxes: when to try again
-        # round pk -> (failed tries in a row, when to try again) before an attempt (_ready). This
-        # process's count: a restart, or the round put on hold (_say_held), starts it again.
-        self._gate = {}
+        self.jobs = jobs
+        self.on_watch = on_watch
+        self.stopping = False  # Ctrl-C: the attempt under way fails at its next wait
         gameplans.framework()  # the framework's modules, for what follows
 
     def now(self):
@@ -574,7 +521,7 @@ class Conductor:
         deadline = time.monotonic() + max(0.0, float(seconds))
         while True:
             if self.stopping:
-                raise Stopping("the conductor is stopping")
+                raise Stopping("stopped by the operator (Ctrl-C)")
             left = deadline - time.monotonic()
             if left <= 0:
                 return
@@ -590,32 +537,6 @@ class Conductor:
         run.save()
         RunEvent.objects.create(run=run, kind=RunEvent.Kind.STATE, data={"state": state})
         log.info("run %s (%s, attempt %s) -> %s", run.uuid, run.team.name, run.attempt, state)
-
-    def _sandbox_needed_after(self, run) -> bool:
-        """Whether another attempt of the round may still use its sandbox: keep it, powered off."""
-        return RoundRun.objects.filter(round_id=run.round_id, state=S.PENDING, upload__isnull=False).exclude(pk=run.pk).exists()
-
-    def _kept_sandbox(self):
-        """The run whose teardown kept the sandbox for a run that then never came (it was
-        skipped), if the host still holds that sandbox: it is destroyed once nothing is left."""
-        last = HostJob.objects.filter(kind=HostJob.Kind.TEARDOWN).order_by("-id").select_related("run").first()
-        if last is None or not (last.params or {}).get("keep") or last.state != HostJob.State.DONE:
-            return None
-        return last.run
-
-    def _teardown_pending(self) -> bool:
-        """True while a sandbox teardown has not completed, so the host may still hold a
-        sandbox and the next attempt must not build over it. An attempt (failed or finished)
-        whose last teardown itself failed means the host is dirty: the queue holds until an
-        operator clears it, rather than applying a fresh sandbox over the leftovers
-        (docs/07-security.md, S7)."""
-        teardowns = HostJob.objects.filter(kind=HostJob.Kind.TEARDOWN)
-        if teardowns.filter(state__in=[HostJob.State.QUEUED, HostJob.State.RUNNING]).exists():
-            return True
-        for job in teardowns.filter(state=HostJob.State.FAILED, run__state__in=[S.FAILED, S.FINISHED]).only("id", "run_id"):
-            if not teardowns.filter(run_id=job.run_id, id__gt=job.id).exclude(state=HostJob.State.FAILED).exists():
-                return True
-        return False
 
     def apply_released(self, run, released):
         """released: [{vm, flag_hash}] from a prepare / place_flags job."""
@@ -647,201 +568,58 @@ class Conductor:
                 )  # fmt: skip
         self.apply_released(run, result.get("released", []))
 
-    # -- gameplans ------------------------------------------------------------
+    # -- the gameplan ---------------------------------------------------------
 
-    def check_gameplans(self, force=False):
-        """Every gameplan_check_interval: the host's view (a `gameplans` job), the table the
-        dashboard picks from, and the gameplan of every round that has not started. Returns
-        {file: sha256} of the valid gameplans."""
-        now = self.now()
-        if not force and self._checked_at is not None and now - self._checked_at < timedelta(seconds=self.cfg["gameplan_check_interval"]):
-            return self._valid
-        self._checked_at = now
+    def check_gameplans(self):
+        """The host's gameplans checked now (a `gameplans` job), the table the dashboard picks
+        from brought up to date, and the gameplan of every round still to come checked against
+        its duration. Returns {file: sha256} of the valid gameplans."""
         from gameplan.definition import RoundError
 
+        now = self.now()
         try:
             self.jobs.run(None, HostJob.Kind.GAMEPLANS)
         except RoundError as error:
             log.warning("the host did not list its gameplans: %s", error)
-        valid = self._valid = gameplans.refresh(gameplans.host_view())
-        for round_ in Round.objects.filter(round_start__gt=now):
+        valid = gameplans.refresh(gameplans.host_view())
+        for round_ in Round.objects.filter(runs__isnull=True).distinct():
             status = gameplans.check_round(round_, valid)
             Round.objects.filter(pk=round_.pk).update(gameplan_status=status, gameplan_checked_at=now)
         return valid
 
-    def _waits(self, round_, reason):
-        """Log why a round waits, once per reason (the loop asks every few seconds)."""
-        if self._waiting.get(round_.pk) != reason:
-            self._waiting[round_.pk] = reason
-            log.warning("round %s waits: %s", round_.name, reason)
-        return False
-
-    def _pin(self, round_):
-        """Whether the round can begin: its gameplan is chosen, and the orchestrator and the
-        host both hold it and find it valid at the round's duration per team. Then its version
-        is fixed for every attempt still to come. Otherwise the round waits, alone, and is
-        looked at again after gameplan_poll seconds: staff may choose its gameplan until its
-        first attempt starts. Each look is recorded (gameplan_checked_at) for the staff pages."""
-        now = self.now()
-        due = self._next_look.get(round_.pk)
-        if due is not None and now < due:
-            return False
-        self._next_look[round_.pk] = now + timedelta(seconds=self.cfg["gameplan_poll"])
+    def pin(self, round_):
+        """The round's gameplan checked (chosen, valid at its duration per team) and its version
+        fixed on every attempt still to come. None once it is, else why not."""
         round_ = Round.objects.get(pk=round_.pk)
         if not round_.gameplan:
-            Round.objects.filter(pk=round_.pk).update(gameplan_status="", gameplan_checked_at=now)
-            return self._waits(round_, "it has no gameplan yet (staff choose one on its page); the rounds after it go ahead")
-        # The host is asked again at most once a minute while the round waits.
-        stale = self._checked_at is None or now - self._checked_at > timedelta(seconds=60)
-        valid = self.check_gameplans(force=stale)
+            Round.objects.filter(pk=round_.pk).update(gameplan_status="", gameplan_checked_at=self.now())
+            return "it has no gameplan: staff choose one on its page (Staff -> Rounds)"
+        valid = self.check_gameplans()
         status = gameplans.check_round(round_, valid)
         Round.objects.filter(pk=round_.pk).update(gameplan_status=status, gameplan_checked_at=self.now())
         if status != "ok":
-            return self._waits(round_, f"its gameplan {round_.gameplan!r} is not valid (see above); the rounds after it go ahead")
+            return f"its gameplan {round_.gameplan!r} is not valid at {round_.team_duration} s per team (`worms show gameplans`)"
         with serialized_resource("round-plan", round_.pk):
-            # Against staff changing the gameplan or the duration meanwhile (staff_rounds.py).
-            current = Round.objects.filter(pk=round_.pk).values_list("gameplan", "team_duration").first()
-            if current != (round_.gameplan, round_.team_duration):
-                self._next_look.pop(round_.pk, None)  # changed under us: look again at once
-                return False
-            # The version is recorded already (check_gameplans: gameplans.refresh records each
-            # version it sees); the run names it by hash and links it (core/models/rounds.py).
+            pinned = RoundRun.objects.filter(round=round_).exclude(gameplan_sha256="").values_list("gameplan_sha256", flat=True).first()
+            if pinned and pinned != valid[round_.gameplan]:
+                return (f"its attempts so far ran version {pinned[:12]} of the gameplan, the host now has "
+                        f"{valid[round_.gameplan][:12]}: every team must run the same version")  # fmt: skip
             RoundRun.objects.filter(round=round_, gameplan_sha256="").update(
                 gameplan=round_.gameplan, gameplan_sha256=valid[round_.gameplan],
                 gameplan_version_id=valid[round_.gameplan], duration=round_.team_duration)  # fmt: skip
-            # Staff's devboxes_off, recorded once: from here on only the record counts (it can no
-            # longer change on the dashboard either, the round has started).
-            Round.objects.filter(pk=round_.pk, devbox_hold="").update(
-                devbox_hold=Case(When(devboxes_off=True, then=Value("wanted")), default=Value("no")))  # fmt: skip
-        self._waiting.pop(round_.pk, None)
-        self._next_look.pop(round_.pk, None)
-        log.info("round %s begins: gameplan %s, version %s", round_.name, round_.gameplan, valid[round_.gameplan][:12])
-        return True
-
-    def _next(self):
-        """The attempt to run now, or None.
-
-        The round under way (a pinned attempt still to come) goes on, so that one round runs
-        at a time. Otherwise the rounds with attempts to come, earliest start first: one whose
-        teams all lack an upload needs no gameplan (each run is skipped); any other begins once
-        _pin lets it, and until then the next round is tried."""
-        # A round on hold (`worms round pause`) starts no attempt, under way or not.
-        self._say_held()
-        pending = RoundRun.objects.filter(state=S.PENDING, round__on_hold=False).select_related("round", "team", "upload__artifact")
-        under_way = pending.exclude(gameplan_sha256="").order_by("round__round_start", "round_id", "position", "attempt").first()
-        if under_way is not None:
-            return under_way
-        for round_ in Round.objects.filter(runs__state=S.PENDING, on_hold=False).distinct().order_by("round_start", "id"):
-            runs = pending.filter(round=round_).order_by("position", "attempt")
-            if runs.filter(upload__isnull=False).exists() and not self._pin(round_):
-                continue
-            return runs.first()
         return None
 
-    def _say_held(self):
-        """Once per round put on hold: that it is."""
-        held = set(Round.objects.filter(on_hold=True, runs__state=S.PENDING).distinct().values_list("pk", "name"))
-        for pk, name in held - self._held_said:
-            log.warning("round %s is on hold (`worms round resume %s`): no attempt of it starts", name, pk)
-        for pk, _name in held:
-            self._gate.pop(pk, None)  # resumed, its tries before an attempt start again from none
-        self._held_said = held
+    # -- before an attempt ----------------------------------------------------
 
-    # -- the tick -------------------------------------------------------------
-
-    def tick(self):
-        """Run the next attempt, start to finish, or tidy up. Returns True if anything changed
-        (the loop then ticks again without sleeping)."""
-        self.check_gameplans()
-        left = RoundRun.objects.filter(state__in=ACTIVE).select_related("round", "team").order_by("round_id", "position", "attempt").first()
-        if left is not None:
-            # Nobody runs it: this process does one attempt at a time, inside a tick.
-            return self.recover(left)
-
-        # A failed attempt tears its sandbox down asynchronously; don't build the next one
-        # until that teardown has finished (S7).
-        if self._teardown_pending():
-            return False
-        if self._release_devboxes():
-            return True
-
-        nxt = self._next()
-        if nxt is not None:
-            if nxt.upload_id is None:
-                self.set_state(nxt, S.SKIPPED, finished_at=self.now(), error="no upload before the round's start")
-                return True
-            after = self._gate.get(nxt.round_id, (0, None))[1]
-            if after is not None and self.now() < after:
-                return False  # its last try before an attempt failed: not again yet
-            if self._ready(nxt):
-                self.run_attempt(nxt)
-            return True
-        # Nothing to run now (no attempt left, or every round left waits for its gameplan).
-        kept = self._kept_sandbox()
-        if kept is not None:
-            log.info("no attempt left for the sandbox kept after run %s: destroying it", kept.uuid)
-            self.jobs.request(kept, HostJob.Kind.TEARDOWN, keep=False, run_uuid=str(kept.uuid))
-            return True
-        return False
-
-    # -- before an attempt; the devboxes of a round with devboxes_off ----------------------
-    # The host holds them for every such round at once (round_agent/handlers.py, hold_devboxes):
-    # one record of the VMs it shut down, while which it takes no devbox job.
-
-    HOLDING = HOLDING
-
-    def _ready(self, run):
-        """Before each attempt (after _pin): the devboxes held, if the round holds them, then the
-        host's preflight. True if the attempt may start. Otherwise it does not, and no attempt is
-        used up: logged as an error and tried again after preflight_retry seconds; after
-        preflight_attempts failures in a row the round is put on hold (`worms round resume`)."""
-        round_ = run.round
-        problem = self._hold_devboxes(round_) or self._preflight(run)
-        if problem is None:
-            self._gate.pop(round_.pk, None)
-            return True
-        tries = self._gate.get(round_.pk, (0, None))[0] + 1
-        limit = self.cfg["preflight_attempts"]
-        if tries >= limit:
-            self._gate.pop(round_.pk, None)
-            Round.objects.filter(pk=round_.pk).update(on_hold=True)
-            log.error("round %s is put on hold: %s tries in a row before an attempt failed, the last: %s "
-                      "(`worms round resume %s` once that is mended)", round_.name, tries, problem, round_.pk)  # fmt: skip
-        else:
-            self._gate[round_.pk] = (tries, self.now() + timedelta(seconds=self.cfg["preflight_retry"]))
-            log.error("round %s: no attempt starts (try %s of %s, the next in %s s): %s",
-                      round_.name, tries, limit, self.cfg["preflight_retry"], problem)  # fmt: skip
-        return False
-
-    def _hold_devboxes(self, round_):
-        """Before every attempt of a round that holds the devboxes (it recorded devboxes_off when
-        it began): every devbox VM and gateway shut down, until _release_devboxes. The job is
-        idempotent: it shuts down any that runs again. None if they are held (or the round does
-        not hold them), else why not: the attempt does not start, the memory it counts on is not
-        there (fail closed)."""
-        from gameplan.definition import RoundError
-
-        if not Round.objects.filter(pk=round_.pk, devbox_hold__in=HOLDING).exists():
-            return None
-        try:
-            result = self.jobs.run(None, HostJob.Kind.HOLD_DEVBOXES, round_uuid=str(round_.uuid))
-        except RoundError as error:
-            return f"the devboxes were not all shut down: {error}"
-        log.info("round %s: the devboxes are shut down while its attempts run (%s VMs shut down now, %s held)",
-                 round_.name, len(result.get("stopped") or []), len(result.get("held") or []))  # fmt: skip
-        Round.objects.filter(pk=round_.pk, devbox_hold="wanted").update(devbox_hold="held")
-        return None
-
-    def _preflight(self, run):
+    def preflight(self, run):
         """The host's checks before an attempt (a preflight job; it changes nothing): None if they
         pass, else every one that failed."""
         from gameplan.definition import RoundError
 
         name = run.round.name
-        holds = Round.objects.filter(pk=run.round_id, devbox_hold__in=HOLDING).exists()
         try:
             result = self.jobs.run(run, HostJob.Kind.PREFLIGHT, gameplan=run.gameplan,
-                                   gameplan_sha256=run.gameplan_sha256, hold_devboxes=holds)  # fmt: skip
+                                   gameplan_sha256=run.gameplan_sha256, hold_devboxes=True)  # fmt: skip
         except RoundError as error:
             return f"the preflight failed: {error}"
         for warning in result.get("warnings") or []:
@@ -860,44 +638,39 @@ class Conductor:
         named = [f"{check} ({detail[check]})" if detail.get(check) else check for check in failed]
         return "preflight checks failed: " + ("; ".join(named) or "not ok, and no check named")
 
-    def _release_devboxes(self):
-        """Once no round that holds the devboxes has a run to come or under way: the round agent
-        starts again the ones it shut down. True if it did. A failure (the internet window open,
-        ...) is logged and tried again after gameplan_poll seconds; the next round goes ahead
-        meanwhile, and if it holds them too, they stay off until it is over."""
-        from gameplan.definition import RoundError
+    # -- an attempt -----------------------------------------------------------
 
-        holding = Round.objects.filter(devbox_hold__in=self.HOLDING)
-        if not holding.exists():
-            return False
-        # A round on hold waits for the operator, its devboxes needn't: only an attempt running holds them.
-        busy = RoundRun.objects.filter(Q(state__in=ACTIVE) | Q(state=S.PENDING, round__on_hold=False)).values("round_id")
-        if holding.filter(pk__in=busy).exists():
-            return False
-        now = self.now()
-        if self._release_after is not None and now < self._release_after:
-            return False
-        names = ", ".join(holding.order_by("round_start", "id").values_list("name", flat=True))
-        try:
-            result = self.jobs.run(None, HostJob.Kind.RELEASE_DEVBOXES, round_uuid=str(holding.order_by("-id").first().uuid))
-        except RoundError as error:
-            self._release_after = now + timedelta(seconds=self.cfg["gameplan_poll"])
-            log.error("round %s: the devboxes were not started again (tried again in %s s): %s", names, self.cfg["gameplan_poll"], error)
-            return False
-        self._release_after = None
-        holding.exclude(pk__in=busy).update(devbox_hold="released")
-        log.info("round %s is over: the devboxes are started again (%s VMs)", names, len(result.get("started") or []))
-        return True
+    def attempt(self, run):
+        """A team's pending attempt: SKIPPED without an upload, else run start to finish
+        (run_attempt). Returns the run as it ended."""
+        if run.upload_id is None:
+            self.set_state(run, S.SKIPPED, finished_at=self.now(), error="no upload before the round's start")
+        else:
+            self.run_attempt(run)
+        run.refresh_from_db()
+        return run
 
-    def recover(self, run):
-        """An attempt a previous conductor left behind. Before its end it cannot be resumed
-        (execute() was in the middle of something): it fails, and the worm runs again. Past
-        its end, only the teardown is left to do."""
+    def again(self, run):
+        """Another attempt of a team whose last one failed: a new pending run (attempt + 1)."""
+        if run.state != S.FAILED:
+            raise ValueError(f"{run.team.name}'s attempt {run.attempt} is {run.state}: only a failed one is run again")
+        return RoundRun.objects.create(
+            round=run.round, team=run.team, upload=run.upload, position=run.position,
+            attempt=run.attempt + 1, seed=run.seed, gameplan=run.gameplan,
+            gameplan_sha256=run.gameplan_sha256, gameplan_version_id=run.gameplan_version_id, duration=run.duration,
+        )  # fmt: skip
+
+    def abandon(self, run):
+        """An attempt an earlier `worms round start` left under way (it was killed): it cannot be
+        resumed. Past its end only the teardown is left; before it, it fails."""
         if run.state in (S.ENDING, S.TEARING_DOWN):
             self.end(run)
         else:
-            self.fail(run, "the conductor stopped during the attempt", counts=False)
-        return True
+            self.fail(run, "left under way by an earlier `worms round start` (it was stopped)", counts=False)
+
+    def destroy_sandbox(self):
+        """The round's sandbox, kept after its last attempt for one more, destroyed."""
+        return self.jobs.run(None, HostJob.Kind.TEARDOWN, keep=False)
 
     def run_attempt(self, run):
         from gameplan.definition import GameplanError, RoundError
@@ -910,7 +683,7 @@ class Conductor:
                                      gameplan_sha256=run.gameplan_sha256, run_uuid=str(run.uuid))  # fmt: skip
             self._register(run, prepared)
             self.set_state(run, S.CHECKING)
-            # With the run, the round agent probes inside every VM too: they are ours until the worm.
+            # With the run, the host probes inside every VM too: they are ours until the worm.
             result = self.jobs.run(run, HostJob.Kind.CHECK, run_uuid=str(run.uuid))
             if not result.get("ok", False):
                 raise RoundError(f"sanity checks failed: {result.get('failures')}")
@@ -927,16 +700,17 @@ class Conductor:
             return
         except GameplanError as error:
             log.error("run %s: the gameplan %s: %s", run.uuid, run.gameplan, error)
-            self.fail(run, "the gameplan was used the wrong way (the orchestrator's journal says how)")
+            self.fail(run, f"the gameplan was used the wrong way: {error}"[:2000])
             return
         except Exception as error:  # noqa: BLE001  (the gameplan's own code, or ours)
             log.exception("run %s failed", run.uuid)
-            self.fail(run, f"{type(error).__name__} in the attempt (the orchestrator's journal has the traceback)")
+            self.fail(run, f"{type(error).__name__} in the attempt: {error} (the round's log has the traceback)"[:2000])
             return
         self.end(run)
 
     def end(self, run):
-        """ENDING: every VM stopped, the monitor drains; TEARING_DOWN; FINISHED."""
+        """ENDING: every VM stopped, the monitor drains; TEARING_DOWN (the sandbox kept, powered
+        off, for the next attempt); FINISHED."""
         from gameplan.definition import RoundError
 
         if run.state != S.TEARING_DOWN:
@@ -952,55 +726,28 @@ class Conductor:
                 if drained.total_seconds() > 0:
                     self.sleep(drained.total_seconds())
             except Stopping:
-                return  # the next start finishes it (recover)
+                pass  # the drain cut short: the rest of the teardown still runs
             self.set_state(run, S.TEARING_DOWN)
-            job = self.jobs.request(run, HostJob.Kind.TEARDOWN, keep=self._sandbox_needed_after(run), run_uuid=str(run.uuid))
-        else:
-            job = run.jobs.filter(kind=HostJob.Kind.TEARDOWN).order_by("-id").first()
-            if job is None:
-                job = self.jobs.request(run, HostJob.Kind.TEARDOWN, keep=self._sandbox_needed_after(run), run_uuid=str(run.uuid))
         try:
-            self._wait(job)
-        except Stopping:
-            return
+            self.jobs.run(run, HostJob.Kind.TEARDOWN, keep=True, run_uuid=str(run.uuid))
         except RoundError as error:
-            # The worm's run is over and its results stand; the host may hold leftovers. The
-            # queue holds until an operator has looked (_teardown_pending).
+            # The worm's run is over and its results stand; the host may hold leftovers.
             log.error("run %s: teardown failed: %s", run.uuid, error)
             self.set_state(run, S.FINISHED, finished_at=self.now(), error=f"teardown failed: {error}"[:2000])
             return
         self.set_state(run, S.FINISHED, finished_at=self.now())
 
-    def _wait(self, job):
-        from gameplan.definition import RoundError
-
-        while True:
-            job.refresh_from_db()
-            if job.state == HostJob.State.DONE:
-                return job.result or {}
-            if job.state == HostJob.State.FAILED:
-                raise RoundError(f"{job.kind} job failed: {job.error}"[:1000])
-            reference = job.heartbeat_at or job.started_at or job.requested_at
-            if reference and self.now() - reference > timedelta(seconds=self.cfg["job_timeout"]):
-                raise RoundError(f"{job.kind} job timed out")
-            self.sleep(self.cfg["job_poll"])
-
     def fail(self, run, message, counts=True, ours=False):
         """The attempt is thrown away: its VMs stopped, its window closed (nothing more can
-        count), its sandbox torn down, and the team's worm queued to run again while attempts
-        are left. Its points never count: only a FINISHED attempt's do. counts: the attempt's
-        own failure, not the conductor stopping. ours: a fault of ours whatever the team's worm
-        did (the watch's or power control's: AttemptFailed). Both for _breaker, which the error
-        event tells."""
+        count), its sandbox kept, powered off, for the next attempt. Its points never count: only
+        a FINISHED attempt's do. counts: the attempt's own failure, not the operator stopping it.
+        ours: a fault of ours whatever the team's worm did (the watch's or power control's)."""
+        from gameplan.definition import RoundError
+
         log.warning("run %s (%s, attempt %s) failed: %s", run.uuid, run.team.name, run.attempt, message)
-        # Before the deploy job the team's upload had no part in it: the fault is ours. From the
-        # deploy on it may be the upload's (a zip that does not unpack, a worm that breaks the
-        # SSH a flag step needs), which must not put the round on hold by itself.
         deploy = run.jobs.filter(kind=HostJob.Kind.DEPLOY).order_by("-id").values_list("state", flat=True).first()
         before_worm = deploy is None
         ours = counts and (ours or before_worm)
-        # The deploy job not done: the worm never ran. What failed is a step of ours (the artifact,
-        # the scoring and logging servers, the VM; the agent does not say which) or the upload.
         deploy_failed = counts and not before_worm and deploy != HostJob.State.DONE
         RunEvent.objects.create(run=run, kind=RunEvent.Kind.ERROR,
                                 data={"message": message[:500], "before_worm": before_worm, "ours": ours,
@@ -1016,62 +763,9 @@ class Conductor:
                     log.warning("run %s: could not stop %s", run.uuid, vm.vm_identifier)
             if run.ends_at is None or run.ends_at > now:
                 fields["ends_at"] = now
-        retry = None
-        with transaction.atomic():
-            self.set_state(run, S.FAILED, **fields)
-            if run.attempt < self.cfg["max_retries"] and run.upload_id is not None:
-                retry = RoundRun.objects.create(
-                    round=run.round, team=run.team, upload=run.upload, position=run.position,
-                    attempt=run.attempt + 1, seed=run.seed, gameplan=run.gameplan,
-                    gameplan_sha256=run.gameplan_sha256, gameplan_version_id=run.gameplan_version_id, duration=run.duration,
-                )  # fmt: skip
+        self.set_state(run, S.FAILED, **fields)
         if built:
-            # The next attempt waits for this teardown (_teardown_pending); it may keep the
-            # sandbox for that retry, which rolls back to the clean snapshot.
-            self.jobs.request(run, HostJob.Kind.TEARDOWN, keep=self._sandbox_needed_after(run), run_uuid=str(run.uuid))
-        if retry is not None:
-            log.info("run %s: the team's worm runs again (attempt %s of %s)", run.uuid, retry.attempt + 1, self.cfg["max_retries"] + 1)
-        else:
-            log.error("run %s: no attempt left for team %s in round %s", run.uuid, run.team.name, run.round.name)
-        if ours or deploy_failed:
-            self._breaker(run, before_worm)
-
-    def _breaker(self, run, before_worm):
-        """A fault on our side that trying again does not mend puts the round on hold, rather than
-        every team's attempts used up on it; `worms round resume` once it is mended. An attempt
-        that failed on our side or in its deploy (fail) puts it on hold
-        - right after another attempt of the round that failed before its worm was deployed, if
-          it did too: the host, the sandbox the gameplan builds (the upload had no part yet);
-        - if the last attempt of another team to end failed on our side or in its deploy too: a
-          fault from the deploy on (a step of the deploy, power control, the watch, the host's
-          memory), two teams' attempts in a row, which no team can bring about alone (a team's
-          own retries never count twice; a deploy fails by the upload only if it does not unpack,
-          which two teams' in a row are unlikely to, and a hold costs no attempt).
-        An attempt that failed because the conductor stopped is passed over: it neither counts
-        nor parts two that do."""
-        ended = RoundRun.objects.filter(round_id=run.round_id, state__in=[S.FAILED, S.FINISHED]).exclude(pk=run.pk)
-
-        def last(runs):
-            """The last of these attempts to end, passing over the conductor's stops, and its error
-            event's data ({} if it finished)."""
-            for other in runs.order_by("-finished_at", "-id"):
-                if other.state != S.FAILED:
-                    return other, {}
-                data = other.events.filter(kind=RunEvent.Kind.ERROR).order_by("-id").values_list("data", flat=True).first() or {}
-                if not data.get("conductor_stopped"):
-                    return other, data
-            return None, {}
-
-        previous, error = last(ended)
-        if before_worm and error.get("before_worm"):
-            why = "two attempts in a row failed before their worm was deployed"
-        else:
-            previous, error = last(ended.exclude(team_id=run.team_id))
-            # An event from before `ours` and `deploy_failed`: before_worm was all.
-            if not (error.get("ours", error.get("before_worm")) or error.get("deploy_failed")):
-                return
-            why = "two teams' attempts in a row failed on our side or in their deploy"
-        Round.objects.filter(pk=run.round_id).update(on_hold=True)
-        log.error("round %s is put on hold: %s (%s, attempt %s: %s; %s, attempt %s: %s), a fault on our side "
-                  "(`worms round resume %s` once it is mended)", run.round.name, why, previous.team.name, previous.attempt,
-                  previous.error[:300], run.team.name, run.attempt, run.error[:300], run.round_id)  # fmt: skip
+            try:
+                self.jobs.run(run, HostJob.Kind.TEARDOWN, keep=True, run_uuid=str(run.uuid))
+            except RoundError as error:
+                log.error("run %s: teardown failed: %s", run.uuid, error)

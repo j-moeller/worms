@@ -410,8 +410,8 @@ def show_audit(config, args) -> int:
 def show_gameplans(config, args) -> int:
     def show(queries):
         print(output.table(queries.gameplan_rows(config.repo_root), headers=["Gameplan", "Orchestrator + host", "This checkout"]))
-        print(output.color("Why the deployed copy is invalid: `worms log conductor` (the orchestrator's check), "
-                           "and the newest gameplans job's log (`worms jobs`, then `worms log <#>`).", "dim"))  # fmt: skip
+        print(output.color("Why the deployed copy is invalid: the newest gameplans step's log (`worms jobs --limit 50`, "
+                           "then `worms log <#>`; a round's: `worms log round`).", "dim"))  # fmt: skip
 
     return _listing(config, show)
 
@@ -581,7 +581,7 @@ def _pipeline(config, args):
 
 
 def _prepared(pipe, config, names, rebuild=False):
-    """(the plan of these components, whether the agent and the conductor restart after it, the
+    """(the plan of these components, whether the agent restarts after it (and the gameplans are checked), the
     sandbox VMs there are). The orchestrator and the round agent bring the gameplans along (the
     host's copy and the orchestrator's, checked), unless a round is on; pending migrations bring
     the orchestrator (components.plan). KeyError, ValueError: no such component, no plan."""
@@ -606,8 +606,8 @@ def _refused_during_round(plan, sandboxes, args) -> bool:
 
     machines = [n for n in plan.names() if components.COMPONENTS[n].kind in ("vm", "host")]
     if sandboxes and machines and not args.during_round:
-        output.error(f"refusing during a round ({len(sandboxes)} sandbox VM(s)): it restarts the conductor, which costs the "
-                     "running team its attempt; --during-round if it must")  # fmt: skip
+        output.error(f"refusing while a round's sandbox exists ({len(sandboxes)} sandbox VM(s)): it restarts the round "
+                     "agent and the orchestrator; destroy the sandbox at the round's end, or --during-round if it must")  # fmt: skip
         return True
     return False
 
@@ -651,7 +651,7 @@ def _restore_point(config, pipe, names) -> tuple[bool, str]:
 
 def _configure(config, args, pipe, plan, follow_up) -> int:
     """The plan carried out: its components (pipeline.build_components), the agent (once no host job
-    runs) and the conductor restarted when `follow_up`, the devboxes (the round agent's jobs,
+    runs) restarted and the host's gameplans checked when `follow_up`, the devboxes (the round agent's jobs,
     followed); what runs recorded (worms_cli/changes.py)."""
     from worms_cli import components, services
 
@@ -662,12 +662,12 @@ def _configure(config, args, pipe, plan, follow_up) -> int:
         _record_deployed(pipe, infrastructure.names())
     if follow_up:
         _with_db(config)
-        restarter = services.Restarter(config)
-        for name in ("agent", "conductor"):
-            if name == "agent":
-                services.wait_until_idle(getattr(args, "timeout", 900))
-            restarter.restart(name)
-            print(output.status_cell("ok", f"{name}: restarted, active"))
+        services.wait_until_idle(getattr(args, "timeout", 900))
+        services.Restarter(config).restart("agent")
+        print(output.status_cell("ok", "agent: restarted, active"))
+        from worms_cli import rounds
+
+        rounds.check_gameplans(config)
     if infrastructure.steps:
         print(output.status_cell("ok", f"applied: {', '.join(infrastructure.names())}"))
     if "devbox" in dict(plan.steps):
@@ -724,7 +724,7 @@ def _apply_components(config, args, names, rebuild=False) -> int:
             return 1
         _print_plan(plan, args.packages)
         if follow_up:
-            print(output.color("  then: the round agent restarted once no host job runs, then the conductor", "dim"))
+            print(output.color("  then: the round agent restarted once no host job runs, then the host's gameplans checked", "dim"))
         if args.plan:
             vms = [name for name, _ in plan.steps if components.COMPONENTS[name].kind == "vm"]
             if vms:
@@ -1367,7 +1367,7 @@ def _reset_devboxes(config, args) -> int:
     return _wait_for_jobs(jobs, config)
 
 
-ROUND_CRITICAL = ("agent", "processor", "conductor", "scoring", "logging")  # a round's attempt needs them running
+ROUND_CRITICAL = ("agent", "processor", "scoring", "logging")  # a round's attempt needs them running
 
 
 def cmd_restart(config, args) -> int:
@@ -1836,12 +1836,14 @@ SECTIONS = (
         ("jobs resume", "the agent takes jobs again"),
         ("jobs cancel <n>...|--team <t>", "queued jobs, never run"),
         ("round", "the rounds and their attempts"),
-        ("round pause <r>", "no attempt of the round starts"),
-        ("round resume <r>", "its attempts start again"),
-        ("round start <r>", "a round still to come begins now"),
-        ("round cancel <r>", "its attempts still to come are skipped"),
+        ("round start <r>", "run a round here, now, team by team (asks first)"),
+        ("round start <r> --resume", "... every team that has not finished"),
+        ("round publish <r>", "its results to the teams and the leaderboard"),
+        ("round unpublish <r>", "... hidden from them again"),
         ("service", "the services and where they run"),
         ("service restart <name>...", "in a safe order (the agent once idle)"),
+        ("service stop <name>...", "stopped (orchestrator: all of its services)"),
+        ("service start <name>...", "... started again"),
     )),
     Section("data and accounts", "The console's part: teams and rounds are managed on the dashboard.", (
         ("db", "the database's tables"),
@@ -1911,7 +1913,8 @@ VM is not started."""
 
 LOG_HELP = """\
   worms log                 the names there are
-  worms log conductor -f    a service's log (`worms service` lists them), followed
+  worms log processor -f    a service's log (`worms service` lists them), followed
+  worms log round [3] [alpha]  a round's sessions (`worms round start`): round.log, an attempt's steps
   worms log dns             a VM's journal (--since "1 hour ago")
   worms log 2003            a host job's log, by its number (`worms jobs`)
   worms log latest -f       the newest host job's, followed
@@ -1986,7 +1989,7 @@ def _components_overview() -> str:
                       "--packages; one that is missing is created, and so is a missing dependency, once you agree. When "
                       "the orchestrator (it migrates) or the database changes, a dump of the database comes first. The "
                       "orchestrator and the round agent bring the gameplans along, and restart the agent (once no host "
-                      "job runs) and the conductor after.", HELP_WIDTH),  # fmt: skip
+                      "job runs) after; then the host's gameplans are checked (the dashboard's list).", HELP_WIDTH),  # fmt: skip
     ])  # fmt: skip
 
 
@@ -2126,17 +2129,23 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     v.add_argument("numbers", nargs="*", type=int, metavar="n", help="the jobs' numbers (`worms jobs`)")
     v.add_argument("--team", help="every queued job of this team (its name or slug t<id>)")
     p, verbs = _noun(sub, "round")
-    for verb in ("pause", "resume", "start", "cancel"):
-        v = _add(verbs, f"round {verb}")
-        v.add_argument("round", help="its id (`worms round`) or its name")
-        if verb == "cancel":
-            _yes(v)
+    v = _yes(_add(verbs, "round start"))
+    v.add_argument("round", help="its id (`worms round`) or its name")
+    v.add_argument("--resume", action="store_true", help="every team that has not finished (a new attempt after a failed one)")
+    v.add_argument("--team", action="append", default=[], metavar="TEAM", help="only this team (again: several)")
+    v = _yes(_add(verbs, "round publish"))
+    v.add_argument("round", help="its id (`worms round`) or its name")
+    v.add_argument("--anyway", action="store_true", help="even though not every team finished without an error (asked)")
+    _yes(_add(verbs, "round unpublish")).add_argument("round", help="its id (`worms round`) or its name")
     p, verbs = _noun(sub, "service")
     v = _add(verbs, "service restart")
-    v.add_argument("services", nargs="+", metavar="name", help="agent, processor, api, conductor, dashboard, scoring, "
+    v.add_argument("services", nargs="+", metavar="name", help="agent, processor, api, topology, dashboard, scoring, "
                    "logging, monitor")  # fmt: skip
     v.add_argument("--timeout", type=int, default=900, help="agent: how long to wait for its running host job (s, default 900)")
     v.add_argument("--during-round", action="store_true", help="restart what a round needs even while one is on")
+    for verb in ("stop", "start"):
+        _add(verbs, f"service {verb}").add_argument("services", nargs="+", metavar="name",
+                                                    help="orchestrator (api, processor, topology), agent, or any of `worms service`")  # fmt: skip
 
     # -- data and accounts
     p, verbs = _noun(sub, "db")
@@ -2231,6 +2240,13 @@ def verb_show(config, args) -> int:
 
 
 def verb_log(config, args) -> int:
+    if args.what == "round":
+        from worms_cli import rounds
+
+        if len(args.more) > 2:
+            output.error("`worms log round [<round>] [<team>]`")
+            return 2
+        return _said(lambda: rounds.show_logs(*(args.more + [None, None])[:2], lines=args.lines, follow=args.follow))
     numbers = [word for word in args.more if word.isdigit()]
     words = [word for word in args.more if not word.isdigit()]
     if args.more and (args.what != "run" or len(numbers) > 1 or len(words) > 1):
@@ -2307,17 +2323,49 @@ def jobs_cancel(config, args) -> int:
     return _control(config, lambda control: control.cancel_jobs(numbers=args.numbers))
 
 
-def round_verb(config, args) -> int:
-    """`worms round pause|resume|start|cancel <r>` (worms_cli/control.py)."""
+def round_start(config, args) -> int:
+    """`worms round start <r> [--resume] [--team <t>]`: the round, run here (worms_cli/rounds.py)."""
     def act(control):
-        round_ = control.find_round(args.round)
-        if args.action == "cancel" and not build.confirm(f"Skip every attempt of round {round_.name!r} still to come?",
-                                                        getattr(args, "yes", False)):
-            return 1
-        return {"pause": control.pause_round, "resume": control.resume_round, "start": control.start_round_now,
-                "cancel": control.cancel_round}[args.action](round_)  # fmt: skip
+        from worms_cli import rounds
+
+        if args.resume and args.team:
+            raise build.BuildError("--resume runs every team that has not finished; --team the ones named: one of them")
+        return rounds.start(config, args)
 
     return _control(config, act)
+
+
+def round_publish(config, args) -> int:
+    """`worms round publish|unpublish <r>` (worms_cli/rounds.py)."""
+    def act(control):
+        from worms_cli import rounds
+
+        round_ = control.find_round(args.round)
+        if args.action == "unpublish":
+            return rounds.unpublish(round_, args.yes)
+        return rounds.publish(round_, args.yes, args.anyway)
+
+    return _control(config, act)
+
+
+def service_power(config, args) -> int:
+    """`worms service stop|start <name>...` (worms_cli/services.py, Units)."""
+    from worms_cli import services
+
+    try:
+        services.expand(args.services)
+    except KeyError as exc:
+        output.error(f"no service {exc.args[0]!r}: {', '.join([*services.GROUPS, *services.SERVICES])}")
+        return 2
+    if "agent" in args.services:
+        _with_db(config)
+    units = services.Units(config)
+    try:
+        (units.stop if args.action == "stop" else units.start)(args.services)
+    except build.BuildError as exc:
+        output.error(str(exc))
+        return 1
+    return 0
 
 
 def vm_reset(config, args) -> int:
@@ -2372,8 +2420,8 @@ HANDLERS = {
     "vm": list_vms, "vm start": cmd_power, "vm stop": cmd_power, "vm restart": cmd_power, "vm reset": vm_reset,
     "vm rebuild": vm_rebuild, "vm kill": cmd_emergency_stop,
     "jobs": list_jobs, "jobs pause": jobs_pause, "jobs resume": jobs_resume, "jobs cancel": jobs_cancel,
-    "round": list_rounds, **{f"round {verb}": round_verb for verb in ("pause", "resume", "start", "cancel")},
-    "service": list_services, "service restart": cmd_restart,
+    "round": list_rounds, "round start": round_start, "round publish": round_publish, "round unpublish": round_publish,
+    "service": list_services, "service restart": cmd_restart, "service stop": service_power, "service start": service_power,
     "db": list_tables, "db backup": cmd_backup, "db restore": db_restore, "db reset": lambda config, args: cmd_reset(
         config, _with(args, what="database")),
     "team": list_teams, "team delete": cmd_delete_team,
@@ -2449,13 +2497,15 @@ def main(argv=None) -> int:
 # The commands that change something: their whole output goes to a run log too (worms_cli/runlog.py).
 # Never one whose output is a secret (`user add`, `user password`: a one-time password) or a VM's
 # (run, login).
+# `round start` writes its own, in its session's folder (worms_cli/rounds.py).
 LOGGED = {"apply", "destroy", "internet", "vm start", "vm stop", "vm restart", "vm reset", "vm rebuild", "vm kill",
-          "jobs pause", "jobs resume", "jobs cancel", "round pause", "round resume", "round start", "round cancel",
-          "service restart", "db restore", "db reset", "team delete", "key add", "key remove", "key sync", "step"}
+          "jobs pause", "jobs resume", "jobs cancel", "round publish", "round unpublish",
+          "service restart", "service stop", "service start", "db restore", "db reset", "team delete", "key add", "key remove", "key sync", "step"}
 
-# The commands that change the platform: one at a time, by the host's lock (worms_cli/lock.py). Never
-# `vm kill`, `jobs ...`, `round ...`: they must work while a build runs.
+# The commands that change the platform: one at a time, by the host's lock (worms_cli/lock.py); a round's
+# session holds it to its end. Never `vm kill`, `jobs ...`, `round publish`: they must work meanwhile.
 LOCKED = {"apply", "destroy", "internet", "vm start", "vm stop", "vm restart", "vm reset", "vm rebuild", "service restart",
+          "service stop", "service start", "round start",
           "db restore", "db reset", "key sync", "step"}
 
 

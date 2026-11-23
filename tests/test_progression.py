@@ -62,8 +62,11 @@ def world(site):  # noqa: F811
     AccessTokens.objects.create(name="b", access_token_hash=sha(TOKEN_B), team=b, created_by=staff)
 
     start = now - hours(2)
-    r1 = Round.objects.create(competition=comp, name="R1", seed=1, round_start=start - hours(1), round_end=now - hours(0.2))
-    r2 = Round.objects.create(competition=comp, name="R2", seed=2, round_start=now - hours(0.1), round_end=now + hours(2))
+    # Published (`worms round publish`): a team sees a finished attempt of a published round only.
+    r1 = Round.objects.create(competition=comp, name="R1", seed=1, round_start=start - hours(1), round_end=now - hours(0.2),
+                              results_published_at=now)
+    r2 = Round.objects.create(competition=comp, name="R2", seed=2, round_start=now - hours(0.1), round_end=now + hours(2),
+                              results_published_at=now)
     run = RoundRun.objects.create(
         round=r1, team=a, position=0, seed=1, state="finished", worm_start_at=start, ends_at=start + timezone.timedelta(minutes=10),
         entrypoint="vm-start", topology={"secret_architecture": "ARCH-SECRET"},

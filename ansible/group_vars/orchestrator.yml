@@ -55,12 +55,10 @@ django_timers:
     command: collect_topology
     description: Collect Proxmox topology for the dashboard (read-only)
     on_calendar: "*:0/2"
-# Round conductor loop (orchestrator/rounds, docs/05-live-environment.md): plans runs for
-# due rounds and drives the active run. One instance; safe to restart.
+# A round runs only from `worms round start` on the host (docs/05-live-environment.md): the
+# conductor daemon that ran rounds by their start time is gone since 2026-11-23, its unit removed.
+django_retired_daemons: [conduct-rounds]
 django_daemons:
-  - name: conduct-rounds
-    command: conduct_rounds
-    description: Round conductor (sandbox lifecycle, game plan)
   # The single writer of captures/logs: continuously turns the sandbox APIs'
   # attempts into flag_captures, logging rows and `captured` timeline events.
   - name: process-attempts

@@ -41,3 +41,20 @@ DATABASES = {"default": postgres_database(_user or "", _password or "")}
 # server certificate against DB_HOST (libpq's hostaddr).
 if os.environ.get("WORMS_DB_HOSTADDR"):
     DATABASES["default"]["OPTIONS"]["hostaddr"] = os.environ["WORMS_DB_HOSTADDR"]
+
+# A round runs from the CLI on the host (`worms round start`, src/worms_cli/rounds.py): the
+# gameplans are the host's copy (the round agent's workspace, which `worms apply gameplans`
+# deploys and its handlers read), the framework this checkout's, the power control this host's
+# own Proxmox API (rounds.Pvesh: PROXMOX names the node, set by the CLI from its config).
+from config.settings.base import ROUND_TIMING  # noqa: E402
+
+_REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+GAMEPLAN_DIR = env("WORMS_GAMEPLAN_DIR", "/opt/worms/gameplans")
+GAMEPLAN_LIB = env("WORMS_GAMEPLAN_LIB", os.path.join(_REPO, "src"))
+PROXMOX = {"node": env("WORMS_PROXMOX_NODE", "")}
+ROUND_CONDUCTOR = {
+    "worm_start_delay": ROUND_TIMING["worm_start_delay"],
+    "end_drain": ROUND_TIMING["end_drain"],
+    "slot_overhead": ROUND_TIMING["slot_overhead"],
+    "capture_grace": int(env("ROUND_CAPTURE_GRACE", "120")),
+}

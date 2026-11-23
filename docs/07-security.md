@@ -27,7 +27,7 @@ Tokens are defined in [`tokens.py`](../src/worms_cli/tokens.py). Each is privile
 | Token | Role, path | Privileges | Used by |
 |---|---|---|---|
 | `worms-provision@pve!worms` | `WormsProvision` on `/` | Datastore.*, Pool.Allocate/Audit, SDN.Use, Sys.Audit/Modify, VM.Allocate/Audit/Config.*/PowerMgmt. No user, ACL, console or node power rights | OpenTofu (controller), the round agent (host) |
-| `orchestrator@pam!orchestrator-prov` | `WormsSandboxPower` on `/pool/sandbox` | VM.Audit, VM.PowerMgmt | the conductor: sandbox VM power ([`power.py`](../projects/dashboard/orchestrator/rounds/power.py) also checks VM name and run) |
+| `orchestrator@pam!orchestrator-prov` | `WormsSandboxPower` on `/pool/sandbox` | VM.Audit, VM.PowerMgmt | unused since 2026-11-23 (a round's sandbox power is the host's own, `pvesh` as root, in `worms round start`): kept for the staff simulations' API; sandbox VM power ([`power.py`](../projects/dashboard/orchestrator/rounds/power.py) also checks VM name and run) |
 | `topology@pve!readonly` | `WormsTopology` on `/` | Pool.Audit, SDN.Audit, Sys.Audit, VM.Audit | `collect_topology`, `worms status` |
 
 Root SSH to the host goes beyond the tokens:
@@ -44,7 +44,7 @@ PostgreSQL accepts TLS only (`hostssl`, `scram-sha-256`), and each role connects
 |---|---|---|
 | `admin` (superuser) | the host | everything: the `worms` CLI |
 | `django_migrator` | orchestrator | owns the tables, runs migrations, `init` |
-| `django_orchestrator` | orchestrator | Read: the 25 tables its API, conductor, attempt processor and topology collector use (rounds, teams, uploads, runs, VMs, jobs, attempts, captures, logs, devbox tables, gameplans, topology). Never accounts, sessions, tokens, memberships, notifications, the monitor's tables, nor a gameplan version's `content`. Write: runs, VMs, topology, devbox tables, `gameplans`, `gameplan_simulations`, captures, logs, `run_events`; INSERT `host_jobs`; INSERT only, named columns, into `gameplan_versions` and `gameplan_changes`; named columns of `rounds`/`teams` |
+| `django_orchestrator` | orchestrator | Read: the 25 tables its API, attempt processor and topology collector use (and the conductor's, until 2026-11-23) (rounds, teams, uploads, runs, VMs, jobs, attempts, captures, logs, devbox tables, gameplans, topology). Never accounts, sessions, tokens, memberships, notifications, the monitor's tables, nor a gameplan version's `content`. Write: runs, VMs, topology, devbox tables, `gameplans`, `gameplan_simulations`, captures, logs, `run_events`; INSERT `host_jobs`; INSERT only, named columns, into `gameplan_versions` and `gameplan_changes`; named columns of `rounds`/`teams` |
 | `django_dashboard` | dashboard | Read: the 31 tables its pages use, every column of `gameplan_versions` but `content`, and only the `id` of `password_resets` (what an INSERT returns). Not `network_events`, `gameplan_simulations`, Django's auth/admin tables (no `/admin/`). Insert: uploads, tokens, SSH keys, memberships, users, teams, rounds, password resets. Update: named columns only. A trigger refuses staff or superuser rows. Never `username`, `is_staff`, `is_superuser` |
 | `dbuser_scoring`, `dbuser_logging` | scoring, logging | INSERT into their attempt table only (3–4 columns) |
 | `dbuser_network_monitor` | monitor | INSERT into `network_flows`, `network_events` |
@@ -149,7 +149,7 @@ Account rules ([`core/accounts.py`](../projects/dashboard/core/accounts.py), [`m
 | Every VM but sandbox and devbox | – | the internet (80, 443, 53) while the window is open |
 | Every infrastructure VM | – | **exception:** its audit log to the syslog VM (TCP 514, rate-limited) |
 
-The exceptions are deliberate (2026-11-20): the audit trail, the conductor's sandbox power, the round agent's job queue and the teams' LLM access. Database roles: least privilege ([Database](#database)); scoring, logging and the monitor are INSERT-only on their own tables.
+The exceptions are deliberate (2026-11-20): the audit trail, a round's sandbox power (until 2026-11-23 the conductor's, through a pool-scoped token; now the host's own, as root), the round agent's job queue and the teams' LLM access. Database roles: least privilege ([Database](#database)); scoring, logging and the monitor are INSERT-only on their own tables.
 
 ### Trust zones
 
@@ -217,7 +217,7 @@ The database is the one place where the trusted zone meets the rest. Nothing on 
 | `password_resets` | dashboard, in the reset's transaction | SQL |
 | auditd on every infrastructure VM | forwarded to the syslog VM | `/var/log/remote/<ip>/audit.log` |
 | Sandbox network traffic | Zeek → `network_flows`, `network_events` | progression pages, SQL |
-| Host jobs, run events | agent, conductor | staff pages, job logs |
+| Host jobs, run events | agent, `worms round start` | staff pages, job logs |
 
 ## Findings
 
@@ -269,6 +269,7 @@ IDs are cited in code comments. S = team VMs, D = dashboard, C = cross-cutting. 
   - F14/G8: gateways without nftables.
   - G5: Zeek stopped at log rotation.
   - S27 (2026-11-08): a failing gameplan job could copy gameplan content into the database.
+  - S34 (2026-11-23): in the first round on production the first team's `prepare` failed, and the devboxes ran during the round (most likely the conductor started them again when the failures put the round on hold, as it was built to): the conductor ran a round by its start time, retried, held and released the devboxes on its own, and the operator could not see why. Since then a round runs only from `worms round start` on the host, in the operator's terminal: it asks before stopping the orchestrator, the round agent and the devboxes, checks each, retries nothing by itself, and writes every step to `~/.worms/rounds/`. Its power control is the host's own Proxmox API as root (`pvesh`), no longer the pool-scoped token on the orchestrator; it still refuses a VM not registered to the run or whose name differs. A round's results are hidden from the teams until `worms round publish`.
   - S33 (2026-11-22): dns recorded no audit event from 2026-11-14 to 2026-11-22. Its disk had filled with DNS query logs (S8), and Debian's auditd.conf suspends logging then and never resumes by itself, while `auditctl -s` still says enabled, lost 0. The role sets every disk action to SYSLOG now, and resumes a suspended auditd. That week of dns's events is lost.
   - S29 (2026-11-22): a sandbox VM that died during a run (an OOM kill, a crash) went unnoticed and the attempt counted; every QEMU had `oom_score_adj` 0, so an OOM kill took the biggest VM (the database, cve-search). Now the conductor watches every sandbox VM and the gateway through the Proxmox API and asks the host why one stopped: only the guest's own power-off is the worm's doing, anything else fails the attempt. Team VMs' QEMUs get `oom_score_adj` 1000, and a preflight refuses a sandbox whose ceilings the host cannot hold ([5](05-live-environment.md#an-attempt)).
   - S30 (2026-11-22): the firewall watchdog passed without checking anything when it could not list the VMs, had no timeout, and stopped every team VM during sandbox builds before proxmox-firewall had compiled their rules (2026-11-12, -13). Now it fails loudly, ends after 60 s, and checks a VM whose firewall configuration just changed on its next run.

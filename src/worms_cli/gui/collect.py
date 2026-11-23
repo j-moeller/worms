@@ -690,6 +690,7 @@ class Database(Collector):
                 rounds.append({"id": r.id, "name": r.name, "start": start, "end": end, "gameplan": r.gameplan,
                                "gameplan_status": r.gameplan_status, "team_duration": r.team_duration, "on_hold": r.on_hold,
                                "devboxes_off": r.devboxes_off, "devbox_hold": r.devbox_hold, "runs": counts.get(r.id, {}),
+                               "published": r.results_published_at is not None,
                                "current": bool(start and start <= now and (end is None or now < end))})  # fmt: skip
         done = (RoundRun.State.FINISHED, RoundRun.State.FAILED, RoundRun.State.SKIPPED, RoundRun.State.PENDING)
         active = RoundRun.objects.exclude(state__in=done).select_related("round", "team").order_by("-id").first()

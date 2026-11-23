@@ -302,7 +302,7 @@ def round_rows() -> list[list[str]]:
     for rnd in Round.objects.filter(competition=_require_competition()).order_by("round_start", "id"):
         states = Counter(RoundRun.objects.filter(round=rnd).values_list("state", flat=True))
         rows.append([
-            f"{rnd.id} {rnd.name}" + (" (ON HOLD)" if rnd.on_hold else ""), _when(rnd.round_start), _when(rnd.round_end),
+            f"{rnd.id} {rnd.name}" + (" (published)" if rnd.results_published_at else ""), _when(rnd.round_start), _when(rnd.round_end),
             rnd.gameplan or "(none yet)",
             rnd.gameplan_status or "—", f"{rnd.team_duration // 60} min",
             ", ".join(f"{state}: {n}" for state, n in sorted(states.items())) or "not planned",

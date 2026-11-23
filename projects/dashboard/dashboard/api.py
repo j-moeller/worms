@@ -276,8 +276,8 @@ def round_scoring(request, team, round_uuid):
     limit = _limit(request, "scoring")
     cursor = _decode_cursor(request, "s", 2)
     run = RoundRun.for_team(rnd, team)
-    # Only a finished attempt's results are shown (docs/05-live-environment.md): before, the run is withheld.
-    shown_run = run if run is not None and run.state == RoundRun.State.FINISHED else None
+    # Only a finished attempt's results, once published (docs/05-live-environment.md): before, the run is withheld.
+    shown_run = run if run is not None and run.shown_to_team() else None
     captures = FlagCapture.published().filter(team=team, round=rnd)
     summary = {
         "captured": captures.count(),
@@ -343,7 +343,7 @@ def round_logging(request, team, round_uuid):
     # A finished attempt's logs only (and logs from before attempts existed): nothing of a run
     # is shown before it has finished, and a failed attempt's never are (docs/05-live-environment.md).
     qs = Logging.objects.filter(team=team, round=rnd).filter(
-        Q(run__state=RoundRun.State.FINISHED) | Q(run__isnull=True)
+        Q(run__state=RoundRun.State.FINISHED, run__round__results_published_at__isnull=False) | Q(run__isnull=True)
     )
     if cursor:
         qs = qs.filter(id__gt=cursor[0])

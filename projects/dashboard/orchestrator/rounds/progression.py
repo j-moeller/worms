@@ -216,9 +216,10 @@ def _live(team, rnd, now, audience, infra, flow_limit, chosen=None):
     )
     if run is None:
         zero, tl = rnd.round_start or now, _empty_timeline()
-    elif audience == "team" and run.state != RoundRun.State.FINISHED:
-        # Nothing of a run is shown to its team before it has finished: what it captured, sent
-        # or did only counts once the attempt is over and no failure threw it away.
+    elif audience == "team" and not run.shown_to_team():
+        # Nothing of a run is shown to its team before it has finished and the round's results are
+        # published: what it captured, sent or did only counts once the attempt is over and no
+        # failure threw it away.
         zero, tl = run.worm_start_at or run.created_at, _empty_timeline()
         tl["run"] = _run_info(run, zero)
         tl["run"].update(withheld=True, start_vm=None)  # not even where the worm starts
@@ -621,7 +622,7 @@ def log_record(team, rnd, ref, *, now, run=None, audience="team"):
     run in the round. `run`: that attempt (staff), else the team's standing one. A team
     gets nothing of an attempt before it has finished (docs/07-security.md, D14)."""
     run = run or RoundRun.for_team(rnd, team)
-    if run is None or (audience == "team" and run.state != RoundRun.State.FINISHED):
+    if run is None or (audience == "team" and not run.shown_to_team()):
         return None
     start, end = window(team, rnd, now, run)
     if start is None:

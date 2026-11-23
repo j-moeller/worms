@@ -10,7 +10,7 @@ test database -- the single test that ties every subsystem together:
     the user reads the score + logs of the run (team API, progression, board).
 
 What is real here: every dashboard view, form, URL and middleware; the staff
-provisioning flow; the round planner; the conductor state machine; the attempt
+provisioning flow; the round planner; the attempt's state machine (`worms round start`); the attempt
 processor (captures/logs, round and devbox); the team API; and the
 dashboard->orchestrator devbox-reset HTTP hop (the orchestrator view is called
 in-process with its real token check).
@@ -42,8 +42,8 @@ import pytest
 # competition + an admin) and its helpers.
 from test_dashboard_login import HOST, login, proxied, site  # noqa: F401 (fixture)
 
-# The proven conductor driver: a fake Proxmox, a fake round agent, a gameplan (two.py).
-from test_rounds import gameplans, make_conductor  # noqa: F401 (fixture)
+# The proven conductor driver: a fake Proxmox, a fake host, a gameplan (two.py); run_round is `worms round start`.
+from test_rounds import gameplans, make_conductor, publish, run_round  # noqa: F401 (fixture)
 
 pytest.importorskip("django")
 pytest.importorskip("psycopg2")
@@ -201,7 +201,7 @@ def test_end_to_end_competition_journey(site, monkeypatch, gameplans):  # noqa: 
     # (by file name only), and staff choose one on the round's page.
     assert (r1.gameplan, r1.team_duration) == ("", 600)
     conductor, agent, flow_clock = make_conductor(gameplans)
-    conductor.check_gameplans(force=True)
+    conductor.check_gameplans()
     picked = _post(site, f"/staff/rounds/{r1.uuid}/", _round_form(name="R1", seed=r1.seed, gameplan="two.py",
                    round_start=r1.round_start.strftime("%Y-%m-%dT%H:%M"), round_end=r1.round_end.strftime("%Y-%m-%dT%H:%M")),
                    page=f"/staff/rounds/{r1.uuid}/")  # fmt: skip
@@ -290,9 +290,9 @@ def test_end_to_end_competition_journey(site, monkeypatch, gameplans):  # noqa: 
     [run] = plan_round(r1)
     assert run.team == alpha and run.upload_id == upload.pk
 
-    # One tick runs the attempt start to finish: PREPARING -> CHECKING -> RUNNING (the
+    # `worms round start` runs the attempt start to finish: PREPARING -> CHECKING -> RUNNING (the
     # gameplan's execute()) -> ENDING -> TEARING_DOWN -> FINISHED.
-    assert conductor.tick() is True
+    assert run_round(conductor, r1)[1] is None
     run.refresh_from_db()
     assert run.state == RoundRun.State.FINISHED, run.error
     assert run.virtual_machines.count() == 2  # the sandbox was "built" (VMs registered)
@@ -307,6 +307,8 @@ def test_end_to_end_competition_journey(site, monkeypatch, gameplans):  # noqa: 
     LoggingAttempt.objects.create(team_uuid=str(alpha.uuid), log_data={"event": "on the start vm"}, created_at=during)
     captures.process_flags(conductor.cfg["capture_grace"])
     captures.process_logs(conductor.cfg["capture_grace"])
+    assert not FlagCapture.published().filter(team=alpha, vm=start_vm).exists()  # until `worms round publish`
+    publish(r1)
     assert FlagCapture.published().filter(team=alpha, vm=start_vm).count() == 1
     assert run.events.filter(kind=RunEvent.Kind.CAPTURED, vm=start_vm).exists()
     assert Logging.objects.filter(team=alpha, round=r1, run=run).count() == 1
@@ -374,7 +376,7 @@ def test_a_team_that_never_uploaded_is_skipped(db_clean, gameplans):
     assert run.upload_id is None
 
     conductor, _agent, _clock = make_conductor(gameplans)
-    conductor.tick()
+    run_round(conductor, rnd)
     run.refresh_from_db()
     assert run.state == RoundRun.State.SKIPPED and "upload" in run.error
 
@@ -392,8 +394,7 @@ def test_two_teams_run_one_after_another(db_clean, gameplans):
     assert [r.position for r in runs] == [0, 1]
 
     conductor, _agent, _clock = make_conductor(gameplans)
-    while conductor.tick():
-        pass
+    assert run_round(conductor, rnd)[1] is None
     for run in runs:
         run.refresh_from_db()
     assert all(run.state == RoundRun.State.FINISHED for run in runs)

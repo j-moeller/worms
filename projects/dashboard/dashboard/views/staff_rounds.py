@@ -103,7 +103,6 @@ def rounds(request: HttpRequest):
                     created = Round.objects.create(
                         competition=comp, name=data["name"], seed=form.chosen_seed(),
                         round_start=start, round_end=end, gameplan=data["gameplan"], team_duration=duration,
-                        devboxes_off=data["devboxes_off"],
                     )  # fmt: skip
                     events.competition("round_created", request=request, round_id=created.pk, detail={"name": created.name})
                     note = "" if created.gameplan else " It has no gameplan yet: choose one on its page. Without one at its start it waits, alone."
@@ -150,12 +149,6 @@ def rounds(request: HttpRequest):
         .select_related("run__team", "run__round").order_by("-id")[:5],
         "timing": schedule.timing_defaults(),
     })  # fmt: skip
-
-
-def _max_retries():
-    from django.conf import settings
-
-    return getattr(settings, "ROUND_CONDUCTOR", {}).get("max_retries", 3)
 
 
 def _begun(runs) -> bool:
@@ -232,9 +225,8 @@ def round_detail(request: HttpRequest, round_uuid):
                                 round_obj.seed, round_obj.gameplan = form.chosen_seed(), data["gameplan"]
                                 # The orchestrator checks it again against the new values.
                                 round_obj.team_duration, round_obj.gameplan_status = duration, ""
-                                round_obj.devboxes_off = data["devboxes_off"]
                                 round_obj.save(update_fields=["name", "seed", "round_start", "round_end", "gameplan",
-                                                              "team_duration", "gameplan_status", "devboxes_off"])  # fmt: skip
+                                                              "team_duration", "gameplan_status"])  # fmt: skip
                             events.competition("round_updated", request=request, round_id=round_obj.pk, detail={"name": round_obj.name})
                             messages.success(request, f"Saved {round_obj.name}.")
                             return redirect("staff_round", round_uuid=round_obj.uuid)
@@ -250,7 +242,6 @@ def round_detail(request: HttpRequest, round_uuid):
         "form": form,
         "started": started,
         "timing": schedule.timing_defaults(),
-        "max_retries": _max_retries(),
         "estimate": _estimate(round_obj, teams),
         # Not the observe jobs that went well: one a minute while an attempt runs, they say
         # nothing staff need (the host's memory is in the orchestrator's journal).

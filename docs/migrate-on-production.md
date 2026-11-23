@@ -241,7 +241,53 @@ worms log conductor -f
 worms vm kill         # hard-stop every VM, destroy nothing: the only hard stop
 ```
 
-## Before the gameplan is assigned (2026-11-23)
+## Rounds by hand (2026-11-23, after the first round's failed start)
+
+From this update on a round runs only from `worms round start` on the host: no conductor, no automatic
+devbox stop or start, no retries ([11](11-orchestrator.md#a-round-worms-round-start)). Production runs
+`5d50c6e`; its Round 1 has a failed attempt (or two) of its first team and is on hold.
+
+**0. Stop what runs by itself** (today's code; each with its way back):
+```sh
+worms run orchestrator --root -- "systemctl disable --now orchestrator-conduct-rounds"   # back: ... enable --now
+worms jobs pause                                                                            # back: worms jobs resume
+worms round                                                                                 # Round 1: its attempts, nothing running
+```
+
+**1. The code:** on worms-dev `git -C /root/app bundle create /root/worms-update.bundle main`, copied over; then
+```sh
+git bundle verify /root/worms-update.bundle && git pull --ff-only /root/worms-update.bundle main
+git log --oneline -1; git status --short   # the bundle's head; nothing
+worms db backup
+```
+
+**2. Deploy** (named: no package changes, no internet):
+```sh
+worms apply --plan dashboard orchestrator round-agent   # migration 0024 (results_published_at); the conductor's unit removed
+worms apply dashboard orchestrator round-agent          # y; ends with '● agent: restarted, active', 'gameplans checked on the host: ...'
+worms jobs resume                                       # the pause from step 0 (the agent was restarted with it)
+```
+
+**3. Check:**
+```sh
+worms service                                            # no conductor; api, processor, topology on the orchestrator
+worms run orchestrator --root -- "systemctl is-active orchestrator-conduct-rounds; ls /etc/systemd/system | grep -c conduct"   # inactive, 0
+worms show gameplans                                     # round_one.py valid on the host, 3858cca4c905
+worms round                                              # Round 1: the first team failed, the others pending
+```
+
+**4. Why the first team's `prepare` failed:** `worms jobs --limit 40` (the failed `prepare`), `worms log <n>`. Mend that first.
+
+**5. The round:** `worms round start <round id> --resume` (Round 1's id: `worms round`). It asks: a new attempt of the failed team; stop the
+orchestrator; stop the round agent (and cancel the queued jobs: the old `gameplans` and `devbox_rebuild` ones); stop the
+devboxes; then it checks each, runs the preflight and asks once more. Follow it from a second terminal with
+`worms log round <id> -f`; one team's steps: `worms log round <id> <team>`.
+
+**6. At its end:** a failed team again (`--resume`, later too); publish once every team finished without an error
+(`worms round publish <id>`, back `worms round unpublish <id>`); then destroy the sandbox, start the devboxes, the
+round agent and the orchestrator again: each asked, each with its command for later.
+
+## Before the gameplan is assigned (2026-11-23; superseded by the section above)
 
 Production runs `f11b1a5` (2026-11-20). Everything since then comes with this update: `Site.yml`
 with role stamps, the round's preflight, check and watch (migrations `0021`-`0023`), the sandbox

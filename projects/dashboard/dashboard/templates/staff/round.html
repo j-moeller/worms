@@ -3,8 +3,7 @@
 {% block content %}
 <header class="page-head">
     <p class="page-head__kicker">Staff · Rounds</p>
-    <h1 class="page-head__title">{{ round.name }} <span class="badge{% if status == 'active' %} badge--accent{% endif %}">{{ status }}</span>{% if round.on_hold %} <span class="badge badge--warn">on hold</span>{% endif %}</h1>
-    {% if round.on_hold %}<p class="notice notice--warn">On hold, paused on the console or by the orchestrator (a fault on our side that trying again did not mend: its journal says what): no attempt of this round starts (one under way ends as usual) until <code>worms round resume {{ round.id }}</code>. Its devboxes run meanwhile.</p>{% endif %}
+    <h1 class="page-head__title">{{ round.name }} <span class="badge{% if status == 'active' %} badge--accent{% endif %}">{{ status }}</span>{% if round.results_published_at %} <span class="badge">published</span>{% endif %}</h1>
     <p class="page-head__lead">{{ round.round_start|date:"Y-m-d H:i" }} – {{ round.round_end|date:"Y-m-d H:i" }} UTC.
         {% if not form %}It has begun, or is over: it can no longer change.
         {% elif started %}Started: its end, its gameplan and the duration per team can change until the first attempt starts. Its teams' uploads are those from before its start.{% if not round.gameplan %} It waits for a gameplan, alone: the rounds after it go ahead.{% endif %}
@@ -22,8 +21,9 @@
                 <div><dt>Gameplan</dt><dd>{% include "staff/_gameplan.html" %}{% if round.gameplan %} <a class="btn btn--ghost btn--sm" href="{% url 'staff_simulations' %}#gameplan={{ round.gameplan|urlencode }}&amp;duration={{ round.team_duration }}">Simulate</a>{% endif %}</dd></div>
                 {% if version.sha256 %}<div><dt>Version</dt><dd><a class="mono" href="{% url 'staff_gameplans' %}#v-{{ version.sha256 }}" title="{{ version.sha256 }}">{{ version.sha256|slice:":12" }}</a> {% if version.pinned %}<span class="badge badge--accent">pinned</span> every attempt runs it{% else %}<span class="badge">current</span> the file's version now: pinned when the first attempt starts{% endif %}{% if not version.recorded %} · <span class="muted">known by its hash only</span>{% endif %}</dd></div>{% endif %}
                 <div><dt>Duration</dt><dd>{{ round.team_duration }} s from the worm's start ({{ timing.worm_start_delay }} s after it is deployed)</dd></div>
-                <div><dt>Attempts</dt><dd>up to {{ max_retries|add:1 }} per team: an attempt the infrastructure fails is thrown away and run again</dd></div>
-                <div><dt>Devboxes</dt><dd>{% if round.devbox_hold == "held" %}<span class="badge badge--warn">shut down</span> while its attempts run, started again after its last run{% elif round.devbox_hold == "wanted" %}<span class="badge badge--warn">shut down</span> before its next attempt, started again after its last run{% elif round.devbox_hold == "released" %}<span class="badge">started again</span> after its last run (they were shut down while its attempts ran){% elif round.devbox_hold == "no" %}running during its attempts{% elif round.devboxes_off %}to be shut down while its attempts run <span class="muted">(recorded when the round begins)</span>{% else %}running during its attempts <span class="muted">(can change until its start)</span>{% endif %}</dd></div>
+                <div><dt>Runs</dt><dd>only from the console, team by team: <code>worms round start {{ round.id }}</code> (an attempt the infrastructure fails is thrown away; <code>--resume</code> runs a new one)</dd></div>
+                <div><dt>Results</dt><dd>{% if round.results_published_at %}published {{ round.results_published_at|date:"Y-m-d H:i" }} UTC: the teams see their attempts and the leaderboard the points (<code>worms round unpublish {{ round.id }}</code>){% else %}not published: no team sees anything of its attempts until <code>worms round publish {{ round.id }}</code>, once every team finished{% endif %}</dd></div>
+                <div><dt>Devboxes</dt><dd>stopped before its first attempt, and started again after its last, by <code>worms round start</code>: asked, each time</dd></div>
             </dl>
             <p class="form__note">The gameplan is a file on the host and the orchestrator (<code>gameplans/</code>); this page knows its name, its versions by SHA-256 and their descriptions for teams, never its code. Every team meets the same sandbox, rolled back for each.</p>
         </div>
@@ -111,7 +111,6 @@
         <fieldset class="fieldset"><legend>Each team's run</legend><div class="fields">
             {% include "staff/_field.html" with field=form.gameplan %}
             {% include "staff/_field.html" with field=form.team_duration %}
-            {% include "staff/_field.html" with field=form.devboxes_off %}
         </div></fieldset>
         {% endif %}
         <div class="form__actions"><button type="submit" class="btn btn--primary">Save</button></div>

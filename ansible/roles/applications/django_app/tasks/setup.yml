@@ -171,19 +171,6 @@
     group: "{{ django_app_group }}"
     mode: "u=rwX,g=rX,o="
 
-# The conductor checks the gameplans when it starts, then every 10 minutes. `worms apply
-# gameplans` synced the host's copy first, so a check now finds both copies alike: a changed copy
-# here restarts it (Restart Django); an unchanged one restarts it here.
-- name: Have the conductor check the gameplans at once (worms apply gameplans)
-  when:
-    - django_variant == "orchestrator"
-    - "'gameplans' in ansible_run_tags"
-    - django_gameplans_sync is not changed
-  tags: [gameplans]
-  ansible.builtin.systemd:
-    name: "{{ django_app_name }}-conduct-rounds"
-    state: restarted
-
 - name: Remove any gameplans from the dashboard
   when: django_variant != "orchestrator"
   ansible.builtin.file:

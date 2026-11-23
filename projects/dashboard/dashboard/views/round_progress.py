@@ -92,22 +92,24 @@ def phase(round_, runs, window_now, current=None) -> Phase:
     if not runs:
         if window_now < start:
             return Phase("scheduled", "scheduled", "Nothing is built before its start.")
-        return Phase("planning", "planning", "Its start has passed: the orchestrator plans its runs.", "accent")
+        return Phase("planning", "not started", f"Its start has passed: it runs when the operator starts it (`worms round start {round_.id}`).", "accent")
     if not any(run.state in OPEN for run in runs):
         return Phase("done", "done", "Every team's run is over.", "ok")
-    if any(run.state in ACTIVE or (run.state == S.PENDING and run.gameplan_sha256) for run in runs):
-        return Phase("running", "running", "Its gameplan is pinned; the teams run one after another.", "accent")
+    if any(run.state in ACTIVE for run in runs):
+        return Phase("running", "running", "The teams run one after another (`worms round start` on the host).", "accent")
+    if any(run.state == S.PENDING and run.gameplan_sha256 for run in runs):
+        return Phase("running", "stopped", f"Teams are still to run: `worms round start {round_.id} --resume`.", "warn")
     if not any(run.state == S.PENDING and run.upload_id for run in runs):
         return Phase("running", "running", "No team left has an upload: each is skipped.", "accent")
     if not round_.gameplan:
-        return Phase("waiting", "waiting for a gameplan", "It has no gameplan: it waits, and the rounds after it go ahead. "
-                     "Choose one on its page; the orchestrator looks every minute or so.", "bad")  # fmt: skip
+        return Phase("waiting", "waiting for a gameplan", "It has no gameplan: `worms round start` refuses it. "
+                     "Choose one on its page.", "bad")  # fmt: skip
     if round_.gameplan_status == "invalid":
-        return Phase("waiting", "gameplan not valid", f"Its gameplan {round_.gameplan} is not valid: it waits, and the "
-                     "rounds after it go ahead. The orchestrator's journal says why.", "bad")  # fmt: skip
+        return Phase("waiting", "gameplan not valid", f"Its gameplan {round_.gameplan} is not valid: `worms round start` "
+                     "refuses it. `worms show gameplans` says why.", "bad")  # fmt: skip
     if current is not None and current.pk != round_.pk:
         return Phase("queued", "queued", f"Its gameplan is ready: it begins when {current.name} is over.", "warn")
-    return Phase("starting", "starting", "Its gameplan is ready: it begins at the orchestrator's next look.", "accent")
+    return Phase("starting", "ready", f"Its gameplan is ready: it runs when the operator starts it (`worms round start {round_.id}`).", "accent")
 
 
 def warnings(competition) -> list[dict]:

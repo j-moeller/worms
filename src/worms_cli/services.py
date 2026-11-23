@@ -17,9 +17,14 @@ pause).
 
 from __future__ import annotations
 
+import os
+import shlex
+import socket
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from worms_cli import output
 from worms_cli.build import BuildError
@@ -104,6 +109,46 @@ def in_order(names) -> list[str]:
         if not SERVICES[name].restartable:
             raise ValueError(f"{name} is not restarted by `worms service restart`: {SERVICES[name].why_not}")
     return [name for name in SERVICES if name in set(names)]
+
+
+def this_process() -> dict:
+    """Who runs a host job outside the round agent (worms_cli/rounds.py LocalJobs): kept in the job's
+    result while it runs, so that one this process leaves behind is known for what it is at once."""
+    return {"host": socket.gethostname(), "pid": os.getpid(), "start": _started(os.getpid()),
+            "by": shlex.join(["worms", *sys.argv[1:]])[:200]}  # fmt: skip
+
+
+def _started(pid: int) -> str | None:
+    """A process's start (clock ticks after boot, /proc/<pid>/stat field 22): a pid used again is
+    another process. None: no such process (or no /proc)."""
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError):
+        return None
+
+
+def left_behind(job, agent_stopped: bool = False) -> str:
+    """Why a host job marked running runs nowhere any more, or "" while it may still run: the
+    `worms round start` that ran it has ended (its process, on this host, is gone), the round agent
+    is stopped and the job is not a session's, or its heartbeat stopped (SILENT_AFTER)."""
+    from django.utils import timezone
+
+    owner = job.result.get("owner") if isinstance(job.result, dict) else None
+    if isinstance(owner, dict) and owner.get("host") == socket.gethostname():
+        try:
+            pid = int(owner.get("pid"))
+        except (TypeError, ValueError):
+            pid = 0
+        started = _started(pid) if pid else None
+        if started is None or (owner.get("start") and started != owner["start"]):
+            return f"the `{owner.get('by') or 'worms'}` that ran it (pid {pid}) has ended"
+        return ""  # its process runs on this host, and beats
+    if owner is None and agent_stopped:
+        return "the round agent is stopped, and no `worms round start` runs it"
+    beat = job.heartbeat_at or job.started_at or job.requested_at
+    if beat and (timezone.now() - beat).total_seconds() > SILENT_AFTER:
+        return f"no heartbeat since {beat:%Y-%m-%d %H:%M:%S} UTC"
+    return ""
 
 
 def running_jobs() -> list:
@@ -222,6 +267,15 @@ class Units:
             _code, out = self._sh(where, "systemctl is-active " + " ".join(units) + " || true", check=False)
             found += [unit for unit, state in zip(units, out.split()) if state in ("active", "activating", "reloading")]
         return found
+
+    def stopped(self, name: str) -> bool:
+        """Every unit of a service or group says it is stopped (no answer is not stopped)."""
+        for where, units in self._units([name], retired=False).items():
+            code, out = self._sh(where, "systemctl is-active " + " ".join(units) + " || true", check=False)
+            states = out.split()
+            if code != 0 or len(states) != len(units) or any(state not in ("inactive", "failed") for state in states):
+                return False
+        return True
 
     def stop(self, names) -> None:
         if "agent" in names:

@@ -42,6 +42,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -55,6 +56,7 @@ AGENT_ENV = "/etc/worms/round-agent.env"  # ansible/roles/host/round_agent: the 
 HOST_STEP_MODULES = ("bcrypt", "cryptography", "yaml")
 SYSTEM_PACKAGES = "/usr/lib/python3/dist-packages"
 HOST_WORKSPACE = "/opt/worms"  # the round agent's workspace: the sandbox stack's state, the gameplans
+HEARTBEAT = 30  # s: a step's heartbeat while it runs, as the round agent's (scripts/round_agent/agent.py)
 log = logging.getLogger("orchestrator")
 
 
@@ -149,7 +151,12 @@ class Pvesh:
 class LocalJobs:
     """The host's steps of a round, run in this process, one after another, as the round agent ran
     them: a host_jobs row each, for the record (`worms show job <n>`), its commands and output in
-    a file of the session's folder. The conductor's `jobs` (orchestrator/rounds/conductor.py)."""
+    a file of the session's folder. The conductor's `jobs` (orchestrator/rounds/conductor.py).
+
+    While a step runs its row names this process (services.this_process) and beats every
+    HEARTBEAT seconds; however the step ends (an error, Ctrl-C twice, SIGTERM or SIGHUP: start's
+    _end_on_signals) its row is closed. Only a SIGKILL leaves it marked running, and the next
+    session knows it for that at once (services.left_behind: its process is gone)."""
 
     def __init__(self, repo_root: str, folder, echo=print):
         from round_agent import agent, handlers, validation
@@ -161,6 +168,33 @@ class LocalJobs:
         self.folder = folder  # run -> the folder its steps' files go to
         self.echo = echo
         self.count = 0
+        self._running = set()  # the rows of the steps under way: the heartbeat's
+        self._beat = None
+
+    def _beating(self, job_id, on=True):
+        if on:
+            self._running.add(job_id)
+            if self._beat is None:
+                self._beat = threading.Thread(target=self._heartbeat, name="host-step heartbeat", daemon=True)
+                self._beat.start()
+        else:
+            self._running.discard(job_id)
+
+    def _heartbeat(self):
+        from core.models.rounds import HostJob
+        from django.db import connection
+        from django.utils import timezone
+
+        while True:
+            time.sleep(HEARTBEAT)
+            ids = list(self._running)
+            if not ids:
+                continue
+            try:
+                HostJob.objects.filter(pk__in=ids, state=HostJob.State.RUNNING).update(heartbeat_at=timezone.now())
+            except Exception as exc:  # noqa: BLE001  (beats again in HEARTBEAT seconds, on a new connection)
+                log.warning("the heartbeat of host job(s) %s: %s", ids, exc)
+                connection.close()
 
     def request(self, run, kind, **params):
         """Done when it returns (the watch's observe: AttemptBackend._ask)."""
@@ -179,39 +213,59 @@ class LocalJobs:
         from core.models.rounds import HostJob
         from django.utils import timezone
 
+        from worms_cli import services
+
         now = timezone.now()
         job = HostJob.objects.create(run=run, kind=kind, params=params, state=HostJob.State.RUNNING, started_at=now,
-                                     heartbeat_at=now)  # fmt: skip
+                                     heartbeat_at=now, result={"owner": services.this_process()})  # fmt: skip
+        self._beating(job.pk)
         self.count += 1
-        self.executor.log_dir = str(self.folder(run))
         name = f"{self.count:03d}-{kind}"
         quiet = kind == "observe"  # every minute of a gameplan: its file only, unless it fails
-        state, result, error = HostJob.State.FAILED, {}, ""
-        with self.executor.job_log(name, kind, job.id) as job_log:
-            if not quiet:
-                self.echo(output.color(f"  ▸ {kind} (#{job.id}; {job_log.path or 'no log file'})", "bold"))
-                note = job_log.note
+        state, result, error, interrupted = HostJob.State.FAILED, {}, "", None
+        try:
+            self.executor.log_dir = str(self.folder(run))
+            with self.executor.job_log(name, kind, job.id) as job_log:
+                if not quiet:
+                    self.echo(output.color(f"  ▸ {kind} (#{job.id}; {job_log.path or 'no log file'})", "bold"))
+                    note = job_log.note
 
-                def both(text, note=note):
-                    note(text)
-                    self.echo(output.color(f"    {text}", "dim"))
+                    def both(text, note=note):
+                        note(text)
+                        self.echo(output.color(f"    {text}", "dim"))
 
-                job_log.note = both
+                    job_log.note = both
+                try:
+                    clean = self.validation.validate(kind, params)
+                    result = self.handlers.HANDLERS[kind](self.executor, self.cfg, clean) or {}
+                    state = HostJob.State.DONE
+                    job_log.note("done")
+                except self.validation.Invalid as exc:
+                    error = f"invalid: {exc}"
+                    job_log.note(f"rejected: {exc}")
+                except Exception as exc:  # noqa: BLE001  (its message and the log say why)
+                    error = f"{type(exc).__name__}: {exc}"
+                    job_log.note(f"failed: {error}")
+                    if quiet:
+                        self.echo(output.color(f"  ▸ {kind} (#{job.id}) failed: {error} ({job_log.path})", "red"))
+                except BaseException as exc:  # Ctrl-C twice, SIGTERM, SIGHUP (_end_on_signals)
+                    job_log.note(f"interrupted: {type(exc).__name__} {exc}".rstrip())
+                    raise
+        except BaseException as exc:  # the step's own end, or this code's (its terminal gone, ...)
+            interrupted = exc
+            state, result = HostJob.State.FAILED, {}
+            error = error or f"the session ended in the middle of it ({type(exc).__name__}{f': {exc}' if str(exc) else ''})"
+            raise
+        finally:
+            self._beating(job.pk, False)
             try:
-                clean = self.validation.validate(kind, params)
-                result = self.handlers.HANDLERS[kind](self.executor, self.cfg, clean) or {}
-                state = HostJob.State.DONE
-                job_log.note("done")
-            except self.validation.Invalid as exc:
-                error = f"invalid: {exc}"
-                job_log.note(f"rejected: {exc}")
-            except Exception as exc:  # noqa: BLE001  (its message and the log say why)
-                error = f"{type(exc).__name__}: {exc}"
-                job_log.note(f"failed: {error}")
-                if quiet:
-                    self.echo(output.color(f"  ▸ {kind} (#{job.id}) failed: {error} ({job_log.path})", "red"))
-        HostJob.objects.filter(pk=job.pk).update(state=state, result=json.loads(json.dumps(result, default=str)),
-                                                 error=error[:4000], finished_at=timezone.now(), heartbeat_at=timezone.now())  # fmt: skip
+                HostJob.objects.filter(pk=job.pk).update(state=state, result=json.loads(json.dumps(result, default=str)),
+                                                         error=error[:4000], finished_at=timezone.now(), heartbeat_at=timezone.now())  # fmt: skip
+            except Exception:
+                if interrupted is None:
+                    raise
+                log.warning("host job #%s is left marked running (the database did not take its end): the next "
+                            "`worms round start` closes it", job.pk)  # fmt: skip
         job.refresh_from_db()
         return job
 
@@ -348,25 +402,39 @@ def _complete(runs) -> bool:
 # -- what must be stopped first ------------------------------------------------------------------
 
 
-def _host_jobs():
+def _host_jobs(agent_stopped=False):
+    """(queued, running, left): left, [(job, why)], marked running but run nowhere any more
+    (services.left_behind): an earlier session's, or a killed agent's."""
     from core.models.rounds import HostJob
-    from django.utils import timezone
 
-    from worms_cli.services import SILENT_AFTER
+    from worms_cli.services import left_behind
 
-    now = timezone.now()
     queued = list(HostJob.objects.filter(state=HostJob.State.QUEUED).order_by("id"))
-    running, silent = [], []
+    running, left = [], []
     for job in HostJob.objects.filter(state=HostJob.State.RUNNING).order_by("id"):
-        beat = job.heartbeat_at or job.started_at or job.requested_at
-        (silent if beat and (now - beat).total_seconds() > SILENT_AFTER else running).append(job)
-    return queued, running, silent
+        why = left_behind(job, agent_stopped)
+        if why:
+            left.append((job, why))
+        else:
+            running.append(job)
+    return queued, running, left
 
 
 def _describe(job) -> str:
     from worms_cli.jobs import describe
 
     return describe(job)
+
+
+def _running_by(job) -> str:
+    """A running job, and who runs it."""
+    from django.utils import timezone
+
+    owner = job.result.get("owner") if isinstance(job.result, dict) else None
+    beat = job.heartbeat_at or job.started_at
+    said = _describe(job) + (f", run by `{owner.get('by')}` (pid {owner.get('pid')} on {owner.get('host')})"
+                             if isinstance(owner, dict) else ", run by the round agent")  # fmt: skip
+    return said + (f", its heartbeat {int((timezone.now() - beat).total_seconds())} s ago" if beat else "")
 
 
 def _stop_everything(session) -> bool:
@@ -393,7 +461,7 @@ def _stop_everything(session) -> bool:
     # 2. The round agent and its queue.
     print(output.heading("2. the round agent and its host jobs"))
     if units.active("agent"):
-        queued, running, _silent = _host_jobs()
+        queued, running, _left = _host_jobs()
         if running:
             print("  running now: " + "; ".join(_describe(job) for job in running) + ": the agent finishes it first")
         print("  Stopped, it takes no host job (devbox resets and rebuilds, key updates) until it is started again.")
@@ -404,7 +472,7 @@ def _stop_everything(session) -> bool:
         units.stop(["agent"])
     else:
         print(output.status_cell("ok", "the round agent is stopped already"))
-    queued, running, silent = _host_jobs()
+    queued, running, left = _host_jobs(agent_stopped=units.stopped("agent"))
     if queued:
         print("  queued: " + "; ".join(_describe(job) for job in queued))
         print("  Cancelled, they never run (a team asks again for its devbox reset; the gameplans check runs here).")
@@ -413,14 +481,19 @@ def _stop_everything(session) -> bool:
             print("The round does not start while host jobs are queued.")
             return False
         control.cancel_jobs(numbers=[job.id for job in queued])
-    if silent:
-        print("  marked running, but silent (no heartbeat for minutes: the agent that ran them stopped): "
-              + "; ".join(_describe(job) for job in silent))  # fmt: skip
-        says("worms jobs cancel " + " ".join(str(job.id) for job in silent))
-        if not ask(f"Mark these {len(silent)} job(s) failed?", True, yes):
+    if left:
+        print("  marked running, but run nowhere any more (what ran them stopped half-way):")
+        for job, why in left:
+            print(f"    {_describe(job)}: {why}")
+        says("worms jobs cancel " + " ".join(str(job.id) for job, _why in left))
+        if not ask(f"Mark these {len(left)} job(s) failed?", True, yes):
             print("The round does not start while host jobs are marked running.")
             return False
-        control.cancel_jobs(numbers=[job.id for job in silent])
+        control.cancel_jobs(numbers=[job.id for job, _why in left], agent_stopped=units.stopped("agent"))
+    if running:
+        print("  running now: " + "; ".join(_running_by(job) for job in running))
+        print("The round does not start while another host job runs: let it end (or stop what runs it).")
+        return False
 
     # 3. The devboxes and their gateways.
     print(output.heading("3. the devboxes"))
@@ -448,12 +521,13 @@ def _verified(session) -> bool:
     units = services.Units(session.config)
     machines = power.Power(session.config)
     vms = machines.runner.vms()
-    queued, running, silent = _host_jobs()
+    queued, running, left = _host_jobs(agent_stopped=units.stopped("agent"))
+    jobs = [_describe(job) for job in queued] + [_running_by(job) for job in running]
+    jobs += [f"{_describe(job)}: {why} (`worms jobs cancel {job.id}`)" for job, why in left]
     checks = [
         ("the orchestrator's services are stopped", not units.active("orchestrator"), ", ".join(units.active("orchestrator"))),
         ("the round agent is stopped", not units.active("agent"), "worms-round-agent is active"),
-        ("no host job is queued or running", not (queued or running or silent),
-         "; ".join(_describe(job) for job in queued + running + silent)),
+        ("no host job is queued or running", not jobs, "; ".join(jobs)),
         ("every devbox VM is stopped", all(vm.get("status") == "stopped" for vm in vms if vm.get("pool") == "devbox"),
          ", ".join(vm["name"] for vm in vms if vm.get("pool") == "devbox" and vm.get("status") != "stopped")),
         ("the internet window is closed", not machines.runner.flag_exists(power.INTERNET_FLAG), "`worms internet off`"),
@@ -496,6 +570,18 @@ def _interrupt(session):
                            "and no other starts. Ctrl-C again: out at once.", "yellow"), flush=True)  # fmt: skip
 
     signal.signal(signal.SIGINT, handler)
+
+
+def _end_on_signals():
+    """SIGTERM, or SIGHUP (the terminal or its SSH connection gone): out through every `finally`,
+    as Ctrl-C twice is: the step under way marked failed (LocalJobs), its command stopped, the
+    ssh-agent too. A SIGKILL cannot be; the next session closes what it leaves."""
+
+    def ended(signum, frame):
+        raise SystemExit(f"ended by {signal.Signals(signum).name}")
+
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, ended)
 
 
 def _run(session, runs) -> list:
@@ -712,8 +798,12 @@ def start(config, args) -> int:
         logging.getLogger(name).setLevel(logging.INFO)
         logging.getLogger(name).propagate = False
     key = None
+    _end_on_signals()
     try:
         print(output.color(f"this session's log: {session.dir}/round.log", "dim"))
+        if not (os.environ.get("TMUX") or os.environ.get("STY")):
+            print(output.color("not inside tmux or screen: a dropped SSH connection ends this session, and the attempt "
+                               "under way fails (`tmux new -s round`, then this command, keeps it)", "yellow"))  # fmt: skip
         # The round's start is the teams' upload deadline: before it, starting moves it to now.
         now = timezone.now()
         if round_.round_start is None:
@@ -805,6 +895,13 @@ def start(config, args) -> int:
         print(output.color("\nout at once: what was under way may be left as it was. `worms round` and `worms vm` say "
                            "what is; `worms round start` again fails an attempt left under way.", "red"))  # fmt: skip
         return 130
+    except SystemExit as exc:  # _end_on_signals
+        try:
+            print(output.color(f"\n{exc}: the step under way is marked failed. `worms round start {round_.id} --resume` "
+                               "fails an attempt left under way and goes on.", "red"))  # fmt: skip
+        except OSError:
+            pass  # no terminal any more: round.log has it
+        raise
     finally:
         if key is not None:
             key.stop()
@@ -880,6 +977,7 @@ def teardown(config, yes=False) -> int:
     sandbox = sorted(vm["name"] for vm in power.Power(config).runner.vms() if vm.get("pool") == "sandbox")
     folder = directory() / f"teardown-{datetime.now():%Y%m%d-%H%M%S}"
     folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _end_on_signals()
     _repo_root, jobs, key = _host_steps(config, lambda run=None: folder)
     try:
         record = jobs.handlers.unfinished_build(jobs.cfg)

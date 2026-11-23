@@ -272,7 +272,7 @@ class Executor:
             thread.start()
         try:
             proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
+        except BaseException:  # its timeout, or this process ending (Ctrl-C, SIGTERM): no command left running
             proc.kill()
             proc.wait()
             raise

@@ -2322,7 +2322,14 @@ def jobs_cancel(config, args) -> int:
         from worms_cli import queries
 
         return _control(config, lambda control: control.cancel_jobs(team=queries.team(args.team)))
-    return _control(config, lambda control: control.cancel_jobs(numbers=args.numbers))
+    def act(control):
+        from worms_cli import services
+
+        # The round agent stopped: a job marked running that no `worms round start` runs is left behind.
+        agent_stopped = services.Units(config).stopped("agent")
+        return control.cancel_jobs(numbers=args.numbers, agent_stopped=agent_stopped)
+
+    return _control(config, act)
 
 
 def round_start(config, args) -> int:

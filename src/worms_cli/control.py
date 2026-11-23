@@ -48,8 +48,10 @@ def resume_jobs(session) -> int:
     return 0
 
 
-def cancel_jobs(numbers=(), team=None) -> int:
-    """Queued jobs failed, never run. A running one is refused: it is half-way through something."""
+def cancel_jobs(numbers=(), team=None, agent_stopped=False) -> int:
+    """Queued jobs failed, never run; one marked running that runs nowhere any more
+    (services.left_behind) marked failed. One that may still run is refused: it is half-way
+    through something."""
     from core.models.rounds import HostJob
     from django.utils import timezone
 
@@ -63,25 +65,23 @@ def cancel_jobs(numbers=(), team=None) -> int:
         missing = sorted(set(numbers) - {job.id for job in jobs})
         if missing:
             raise BuildError(f"no host job {', '.join(f'#{n}' for n in missing)} (`worms jobs`)")
-    from datetime import timedelta
+    from worms_cli.services import left_behind
 
-    from worms_cli.services import SILENT_AFTER
-
-    silent_before = timezone.now() - timedelta(seconds=SILENT_AFTER)
     problems = 0
     for job in jobs:
-        beat = job.heartbeat_at or job.started_at or job.requested_at
-        if job.state == HostJob.State.RUNNING and beat and beat < silent_before:
+        why = left_behind(job, agent_stopped) if job.state == HostJob.State.RUNNING else ""
+        if why:
             updated = HostJob.objects.filter(id=job.id, state=HostJob.State.RUNNING, heartbeat_at=job.heartbeat_at).update(
                 state=HostJob.State.FAILED, finished_at=timezone.now(),
-                error=f"marked running, but its heartbeat stopped at {beat:%Y-%m-%d %H:%M} UTC (its agent stopped): {CANCELLED}")  # fmt: skip
+                error=f"marked running, but it ran nowhere any more: {why}; {CANCELLED}")  # fmt: skip
             print(output.status_cell("ok" if updated else "error", f"#{job.id} {job.kind}: " + (
-                "silent since " + f"{beat:%Y-%m-%d %H:%M} UTC, marked failed" if updated else "it beat again meanwhile, not cancelled")))
+                f"{why}: marked failed" if updated else "it beat again meanwhile, not cancelled")))
             problems += not updated
             continue
         if job.state != HostJob.State.QUEUED:
             output.error(f"#{job.id} {job.kind} is {job.state}: only a queued job is cancelled"
-                         + (" (a running one: `worms jobs pause`, then it ends)" if job.state == "running" else ""))
+                         + (" (a running one: `worms jobs pause`, then it ends; one that runs nowhere any more: "
+                            "once the round agent is stopped)" if job.state == "running" else ""))
             problems += 1
             continue
         updated = HostJob.objects.filter(id=job.id, state=HostJob.State.QUEUED).update(

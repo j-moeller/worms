@@ -6,6 +6,8 @@ ansible
 django>=6.0
 psycopg2-binary
 flask
+# A gameplan user's SSH key, encrypted (src/gameplan/render.py): `worms round start` runs that step here.
+bcrypt
 pyyaml
 shellcheck-py
 proxmoxer

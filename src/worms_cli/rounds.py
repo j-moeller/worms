@@ -50,6 +50,10 @@ from worms_cli import output
 from worms_cli.build import BuildError
 
 AGENT_ENV = "/etc/worms/round-agent.env"  # ansible/roles/host/round_agent: the agent's environment
+# The host's steps import these beyond the standard library. The round agent ran them on the host's
+# system Python, whose packages its role installs (round_agent_python_packages); a venv may lack one.
+HOST_STEP_MODULES = ("bcrypt", "cryptography", "yaml")
+SYSTEM_PACKAGES = "/usr/lib/python3/dist-packages"
 HOST_WORKSPACE = "/opt/worms"  # the round agent's workspace: the sandbox stack's state, the gameplans
 log = logging.getLogger("orchestrator")
 
@@ -759,9 +763,31 @@ def start(config, args) -> int:
         tee.stop()
 
 
+def _python_for_host_steps() -> None:
+    """Before anything is stopped: every module the host's steps import is here. One this venv lacks
+    is taken from the host's system packages (the round agent's own: bcrypt, for a gameplan user's
+    encrypted SSH key, was missing on 2026-11-23 and failed a prepare after its build); one missing
+    there too is a BuildError that names it."""
+    import importlib.util
+
+    missing = [name for name in HOST_STEP_MODULES if importlib.util.find_spec(name) is None]
+    if missing and os.path.isdir(SYSTEM_PACKAGES) and SYSTEM_PACKAGES not in sys.path:
+        sys.path.append(SYSTEM_PACKAGES)  # last: this venv's own packages come first
+        importlib.invalidate_caches()
+        found = [name for name in missing if importlib.util.find_spec(name) is not None]
+        if found:
+            print(output.color(f"from the host's system packages ({SYSTEM_PACKAGES}), as the round agent has them: "
+                               f"{', '.join(found)}", "dim"))  # fmt: skip
+        missing = [name for name in missing if name not in found]
+    if missing:
+        raise BuildError(f"the round's steps need the Python module(s) {', '.join(missing)}, in neither this venv nor "
+                         f"{SYSTEM_PACKAGES}: `apt install python3-{missing[0]}` (the round agent's role installs them)")  # fmt: skip
+
+
 def _host_steps(config, folder):
     """The round agent's environment and code, as the service has them, and an ssh-agent with the
     WORMS key: (repo_root, LocalJobs, KeyAgent). The KeyAgent is the caller's to stop."""
+    _python_for_host_steps()
     environment = _agent_environment()
     os.environ.update({k: v for k, v in environment.items() if k not in ("PWD", "SHLVL", "_")})
     repo_root = os.environ.get("REPO_ROOT", HOST_WORKSPACE)

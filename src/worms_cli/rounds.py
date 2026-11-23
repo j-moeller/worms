@@ -6,6 +6,7 @@ last (docs/05-live-environment.md). Nothing else runs a round: no daemon, no sch
     worms round start 3 --team alpha     one team (its attempt still to come, or a new one after a failure)
     worms round publish 3                its results to the teams and the leaderboard, once every team finished
     worms round unpublish 3              ... hidden again
+    worms round teardown                 the round's sandbox (kept, powered off, after a session) destroyed
     worms log round [3] [alpha]          what each session wrote: round.log, and each attempt's steps
 
 Before anything runs it asks, one by one, and says the command that does the same, and the
@@ -596,12 +597,15 @@ def _afterwards(session):
         print(output.heading("the round's sandbox"))
         print(f"  kept, powered off, for another attempt: {len(sandbox)} VM(s). Another `worms round start` of the "
               "same gameplan rolls it back instead of building it (minutes instead of an hour).")  # fmt: skip
+        says("worms round teardown")
         if ask("Destroy the round's sandbox now?", False, False):
             try:
                 session.conductor.destroy_sandbox()
                 print(output.status_cell("ok", "destroyed"))
             except Exception as exc:  # noqa: BLE001
-                output.error(f"not destroyed: {exc}")
+                output.error(f"not destroyed: {exc}; later: `worms round teardown`")
+        else:
+            print("  later: worms round teardown")
     print(output.heading("start again what was stopped"))
     for question, command, act in (
         ("Start the devboxes again?", "worms vm start devboxes", lambda: power.Power(session.config).start(["devboxes"])),
@@ -667,14 +671,9 @@ def start(config, args) -> int:
         _say_round(round_, _latest_runs(round_))
 
         # The round agent's environment and code, as the service has them.
-        environment = _agent_environment()
-        os.environ.update({k: v for k, v in environment.items() if k not in ("PWD", "SHLVL", "_")})
-        repo_root = os.environ.get("REPO_ROOT", HOST_WORKSPACE)
+        repo_root, session.jobs, key = _host_steps(config, session.folder)
         _same_code(config, repo_root, args.yes)
-        sys.path.insert(0, str(Path(config.repo_root) / "scripts"))
-        key = KeyAgent(os.environ.get("SSH_KEY", "/etc/worms/ssh/worms"))
         settings.PROXMOX["node"] = config.proxmox_node()
-        session.jobs = LocalJobs(repo_root, session.folder)
         session.conductor = Conductor(jobs=session.jobs, power=ProxmoxPower(api=Pvesh()), on_watch=_count)
 
         left = list(RoundRun.objects.filter(round=round_, state__in=ACTIVE).select_related("team", "round"))
@@ -740,6 +739,51 @@ def start(config, args) -> int:
         if key is not None:
             key.stop()
         tee.stop()
+
+
+def _host_steps(config, folder):
+    """The round agent's environment and code, as the service has them, and an ssh-agent with the
+    WORMS key: (repo_root, LocalJobs, KeyAgent). The KeyAgent is the caller's to stop."""
+    environment = _agent_environment()
+    os.environ.update({k: v for k, v in environment.items() if k not in ("PWD", "SHLVL", "_")})
+    repo_root = os.environ.get("REPO_ROOT", HOST_WORKSPACE)
+    scripts = str(Path(config.repo_root) / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    key = KeyAgent(os.environ.get("SSH_KEY", "/etc/worms/ssh/worms"))
+    return repo_root, LocalJobs(repo_root, folder), key
+
+
+def teardown(config, yes=False) -> int:
+    """`worms round teardown`: the sandbox a session kept (powered off, for another attempt) destroyed."""
+    from django.conf import settings
+
+    from orchestrator.rounds.conductor import Conductor
+    from orchestrator.rounds.power import ProxmoxPower
+    from worms_cli import power
+
+    if os.environ.get("WORMS_SSH") or os.geteuid() != 0:
+        raise BuildError("on the host itself, as root")
+    sandbox = sorted(vm["name"] for vm in power.Power(config).runner.vms() if vm.get("pool") == "sandbox")
+    if not sandbox:
+        print("No sandbox VM: nothing to destroy.")
+        return 0
+    print(f"the round's sandbox: {', '.join(sandbox)}")
+    print("  Destroyed, the next `worms round start` builds it again (about an hour) instead of rolling it back.")
+    if not ask(f"Destroy these {len(sandbox)} VM(s)?", False, yes):
+        return 1
+    folder = directory() / f"teardown-{datetime.now():%Y%m%d-%H%M%S}"
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _repo_root, jobs, key = _host_steps(config, lambda run=None: folder)
+    try:
+        settings.PROXMOX["node"] = config.proxmox_node()
+        Conductor(jobs=jobs, power=ProxmoxPower(api=Pvesh())).destroy_sandbox()
+    except Exception as exc:  # noqa: BLE001  (its step's file says more)
+        raise BuildError(f"not destroyed: {exc} (its steps: {folder})") from None
+    finally:
+        key.stop()
+    print(output.status_cell("ok", f"destroyed (its steps: {folder})"))
+    return 0
 
 
 def _same_code(config, repo_root, yes):

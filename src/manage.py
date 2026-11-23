@@ -1840,6 +1840,7 @@ SECTIONS = (
         ("round start <r> --resume", "... every team that has not finished"),
         ("round publish <r>", "its results to the teams and the leaderboard"),
         ("round unpublish <r>", "... hidden from them again"),
+        ("round teardown", "the round's sandbox, kept after a session, destroyed"),
         ("service", "the services and where they run"),
         ("service restart <name>...", "in a safe order (the agent once idle)"),
         ("service stop <name>...", "stopped (orchestrator: all of its services)"),
@@ -2137,6 +2138,7 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     v.add_argument("round", help="its id (`worms round`) or its name")
     v.add_argument("--anyway", action="store_true", help="even though not every team finished without an error (asked)")
     _yes(_add(verbs, "round unpublish")).add_argument("round", help="its id (`worms round`) or its name")
+    _yes(_add(verbs, "round teardown"))
     p, verbs = _noun(sub, "service")
     v = _add(verbs, "service restart")
     v.add_argument("services", nargs="+", metavar="name", help="agent, processor, api, topology, dashboard, scoring, "
@@ -2348,6 +2350,16 @@ def round_publish(config, args) -> int:
     return _control(config, act)
 
 
+def round_teardown(config, args) -> int:
+    """`worms round teardown`: the sandbox a session kept, destroyed (worms_cli/rounds.py)."""
+    def act(control):
+        from worms_cli import rounds
+
+        return rounds.teardown(config, args.yes)
+
+    return _control(config, act)
+
+
 def service_power(config, args) -> int:
     """`worms service stop|start <name>...` (worms_cli/services.py, Units)."""
     from worms_cli import services
@@ -2420,7 +2432,7 @@ HANDLERS = {
     "vm": list_vms, "vm start": cmd_power, "vm stop": cmd_power, "vm restart": cmd_power, "vm reset": vm_reset,
     "vm rebuild": vm_rebuild, "vm kill": cmd_emergency_stop,
     "jobs": list_jobs, "jobs pause": jobs_pause, "jobs resume": jobs_resume, "jobs cancel": jobs_cancel,
-    "round": list_rounds, "round start": round_start, "round publish": round_publish, "round unpublish": round_publish,
+    "round": list_rounds, "round start": round_start, "round publish": round_publish, "round unpublish": round_publish, "round teardown": round_teardown,
     "service": list_services, "service restart": cmd_restart, "service stop": service_power, "service start": service_power,
     "db": list_tables, "db backup": cmd_backup, "db restore": db_restore, "db reset": lambda config, args: cmd_reset(
         config, _with(args, what="database")),
@@ -2499,13 +2511,13 @@ def main(argv=None) -> int:
 # (run, login).
 # `round start` writes its own, in its session's folder (worms_cli/rounds.py).
 LOGGED = {"apply", "destroy", "internet", "vm start", "vm stop", "vm restart", "vm reset", "vm rebuild", "vm kill",
-          "jobs pause", "jobs resume", "jobs cancel", "round publish", "round unpublish",
+          "jobs pause", "jobs resume", "jobs cancel", "round publish", "round unpublish", "round teardown",
           "service restart", "service stop", "service start", "db restore", "db reset", "team delete", "key add", "key remove", "key sync", "step"}
 
 # The commands that change the platform: one at a time, by the host's lock (worms_cli/lock.py); a round's
 # session holds it to its end. Never `vm kill`, `jobs ...`, `round publish`: they must work meanwhile.
 LOCKED = {"apply", "destroy", "internet", "vm start", "vm stop", "vm restart", "vm reset", "vm rebuild", "service restart",
-          "service stop", "service start", "round start",
+          "service stop", "service start", "round start", "round teardown",
           "db restore", "db reset", "key sync", "step"}
 
 

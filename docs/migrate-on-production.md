@@ -285,7 +285,7 @@ devboxes; then it checks each, runs the preflight and asks once more. Follow it 
 
 **6. At its end:** a failed team again (`--resume`, later too); publish once every team finished without an error
 (`worms round publish <id>`, back `worms round unpublish <id>`); then destroy the sandbox, start the devboxes, the
-round agent and the orchestrator again: each asked, each with its command for later.
+round agent and the orchestrator again: each asked, each with its command for later (the sandbox: `worms round teardown`).
 
 ## Before the gameplan is assigned (2026-11-23; superseded by the section above)
 

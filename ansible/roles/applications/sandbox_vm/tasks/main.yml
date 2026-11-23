@@ -39,7 +39,8 @@
     name: "{{ item }}"
     shell: "{{ (sandbox_vm.accounts | default({}))[item].shell | default('/bin/bash') }}"
     groups: "{{ ((sandbox_vm.accounts | default({}))[item].groups | default([])) or omit }}"
-    append: true
+    # Only with groups: ansible-core 2.21 refuses `append` without them (2.19 let it pass).
+    append: "{{ ((sandbox_vm.accounts | default({}))[item].groups | default([])) | length > 0 }}"
     create_home: true
     password: "!"
   loop: "{{ sandbox_vm.users | default([]) }}"

@@ -784,12 +784,31 @@ def _python_for_host_steps() -> None:
                          f"{SYSTEM_PACKAGES}: `apt install python3-{missing[0]}` (the round agent's role installs them)")  # fmt: skip
 
 
+def _system_path() -> None:
+    """The host's steps start python3 (`worms step`), ansible-playbook and tofu by name: the host's
+    own, as the round agent has them, never an active venv's. A venv's newer Ansible (core 2.21)
+    refused a task the host's (2.19) runs, and failed a prepare on 2026-11-23. Says which are used."""
+    import shutil
+
+    venvs = {os.path.realpath(os.path.join(prefix, "bin")) for prefix in (sys.prefix, os.environ.get("VIRTUAL_ENV", ""))
+             if prefix and os.path.realpath(prefix) != os.path.realpath(sys.base_prefix)}  # fmt: skip
+    parts = [part for part in os.environ.get("PATH", "").split(os.pathsep) if part and os.path.realpath(part) not in venvs]
+    os.environ["PATH"] = os.pathsep.join(parts) or "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    os.environ.pop("VIRTUAL_ENV", None)
+    tools = {name: shutil.which(name) for name in ("python3", "ansible-playbook", "tofu")}
+    print(output.color("the host's steps run " + ", ".join(f"{name} {path or '(missing)'}" for name, path in tools.items()), "dim"))
+    missing = [name for name, path in tools.items() if not path]
+    if missing:
+        raise BuildError(f"the host lacks {', '.join(missing)} on its own PATH (the round agent's role installs them)")
+
+
 def _host_steps(config, folder):
     """The round agent's environment and code, as the service has them, and an ssh-agent with the
     WORMS key: (repo_root, LocalJobs, KeyAgent). The KeyAgent is the caller's to stop."""
     _python_for_host_steps()
     environment = _agent_environment()
     os.environ.update({k: v for k, v in environment.items() if k not in ("PWD", "SHLVL", "_")})
+    _system_path()
     repo_root = os.environ.get("REPO_ROOT", HOST_WORKSPACE)
     scripts = str(Path(config.repo_root) / "scripts")
     if scripts not in sys.path:

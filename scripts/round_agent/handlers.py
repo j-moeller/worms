@@ -1199,6 +1199,16 @@ def _place_worm(ex, cfg, ip, artifact):
     )
 
 
+# An earlier worm's unit and fuse stopped (its processes with it: the unit's cgroup), and
+# forgotten, so that systemd-run may use the name again. Fixed literals; nothing there is an error.
+STOP_WORM = (f"systemctl stop {WORM_UNIT}.timer {WORM_UNIT}.service 2>/dev/null; "
+             f"systemctl reset-failed {WORM_UNIT}.timer {WORM_UNIT}.service 2>/dev/null; true")  # fmt: skip
+
+
+def _stop_worm(ex, ip):
+    ex.ssh(ip, ["sudo", "/bin/sh", "-c", STOP_WORM])
+
+
 def _arm_worm(ex, ip, delay, *properties):
     """Arm a one-shot systemd timer on the VM: after `delay` it runs the worm as the login user,
     in its directory. No shell: fixed literals. Returns when the fuse was lit (the host's clock):
@@ -1455,7 +1465,9 @@ def devbox_provision(ex, cfg, params):
 
 def devbox_deploy(ex, cfg, params):
     """Put a team's dev upload on its VM A and arm the fuse, as `deploy` does for a sandbox. The
-    rebuild before it wrote the tokens, and scoring and logging know a devbox by its gateway's
+    devbox is as it is: no reset before it (since 2026-11-24), so an earlier upload's worm, still
+    running or its fuse still set, is stopped first (its unit's name is the new one's). The tokens
+    are those of the devbox's last reset, and scoring and logging know a devbox by its gateway's
     address, so there are no secrets to release and no current team to set. A devbox is not torn
     down when its time is up, so systemd stops main.sh instead."""
     start = params["start_vm"]
@@ -1464,6 +1476,7 @@ def devbox_deploy(ex, cfg, params):
         raise validation.Invalid(f"{start} is not a VM of team {params['team_slug']}")
     if not _has_team_vm_cpu(ex, vm["vmid"]):
         raise validation.Invalid(f"{start} does not have the CPU a team's VM must have: {TEAM_VM_CPU}")
+    _stop_worm(ex, vm["maintenance_ip"])
     _place_worm(ex, cfg, vm["maintenance_ip"], params["artifact"])
     delay = params["worm_delay"]
     armed_at = _arm_worm(ex, vm["maintenance_ip"], delay, f"--property=RuntimeMaxSec={params['run_duration']}")

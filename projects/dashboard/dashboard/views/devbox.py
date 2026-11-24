@@ -42,7 +42,7 @@ def captured_vm_ids(team: Team) -> set[int]:
 
 
 def active_upload(team: Team) -> Upload | None:
-    """The team's dev upload under way, from waiting for its reset to the end of its hour.
+    """The team's dev upload under way, from waiting to start to the end of its hour.
     Only the newest can be (orchestrator/rounds/devbox_runs.py): a newer upload or a reset
     replaces it. One the orchestrator has not picked up yet is about to reset the devbox."""
     upload = Upload.objects.filter(team=team, devbox=True).select_related("devbox_run").order_by("-created_at", "-id").first()

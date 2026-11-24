@@ -6,8 +6,8 @@ identified by the SHA-256 of the file's content: the same zip uploaded twice is
 stored once. An upload belongs to the uploader's team at the time.
 
 The two views are separate. Live: the team's latest upload before a round starts
-is its entry (orchestrator/rounds/planner.py). Dev: the upload resets the team's
-devbox and then runs on VM A (orchestrator/rounds/devbox_runs.py), and never enters
+is its entry (orchestrator/rounds/planner.py). Dev: the upload runs on VM A of the team's
+devbox as it is, not reset first (orchestrator/rounds/devbox_runs.py), and never enters
 a round; a newer one cancels it. Only the orchestrator acts on it: this view only
 stores it. A team can download its own uploads again from the history.
 """
@@ -47,8 +47,8 @@ ENTRY = "main.sh"
 ENVELOPE = 64 * 1024
 # What a team sees of a dev upload. A failure's reason is for staff: it can name internals.
 RUN_STATUS = {
-    DevboxRun.State.PENDING: "Waiting for a reset or a round to finish",
-    DevboxRun.State.RESETTING: "Resetting your VMs",
+    DevboxRun.State.PENDING: "Waiting for a round, or your devbox's reset, to finish",
+    DevboxRun.State.RESETTING: "Resetting your VMs",  # a run from before 2026-11-24
     DevboxRun.State.DEPLOYING: "Copying it to VM A",
     DevboxRun.State.ARMED: "About to start",
     DevboxRun.State.RUNNING: "Running",
@@ -96,13 +96,13 @@ def _history(request: HttpRequest, team: Team):
     )
     # The dev upload under way: a new one cancels it (the page says so before it is sent).
     running = active_upload(team) if environment == "dev" else None
-    # What an upload waiting for its reset waits for (orchestrator/rounds/devbox_runs.py): asked once.
+    # What an upload waiting to start waits for (orchestrator/rounds/devbox_runs.py): asked once.
     waits = ""
     if running is not None and getattr(running, "devbox_run", None) is None or (
             running is not None and running.devbox_run.state == DevboxRun.State.PENDING):
-        from orchestrator.rounds.devbox_runs import reset_waits_for
+        from orchestrator.rounds.devbox_runs import deploy_waits_for
 
-        waits = reset_waits_for()
+        waits = deploy_waits_for(team)
     rows = []
     for upload in uploads:
         # The rounds this upload was run in (newest first).
@@ -294,7 +294,7 @@ def _receive(request: HttpRequest, team: Team):
         request,
         f"Uploaded {uploaded.name} ({filesizeformat(uploaded.size)}), sha256 {content_hash[:16]}…. "
         + (
-            "Your devbox VMs are being reset, and then it runs on VM A."
+            "It runs on VM A of your devbox as it is (nothing is reset: Reset devbox on your devbox page does that)."
             if dev
             else "Your team's latest upload before a round starts is the one that runs."
         ),

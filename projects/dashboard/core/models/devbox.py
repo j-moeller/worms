@@ -186,8 +186,8 @@ class DevboxRun(models.Model):
     orchestrator (orchestrator/rounds/devbox_runs.py); the dashboard only reads it."""
 
     class State(models.TextChoices):
-        PENDING = "pending"  # waiting for a rebuild already in progress
-        RESETTING = "resetting"  # host: rebuild the team's VMs, new tokens
+        PENDING = "pending"  # waiting for a round's attempt, or the team's own reset, to be over
+        RESETTING = "resetting"  # before 2026-11-24 only: an upload reset the team's VMs first
         DEPLOYING = "deploying"  # host: the worm onto VM A, fuse lit
         ARMED = "armed"  # worm starts at worm_start_at
         RUNNING = "running"  # until ends_at
@@ -198,7 +198,8 @@ class DevboxRun(models.Model):
     upload = models.OneToOneField(Upload, on_delete=models.CASCADE, related_name="devbox_run")
     team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="devbox_runs")
     state = models.TextField(choices=State.choices, default=State.PENDING)
-    # The team's devbox_version this run reset the VMs to.
+    # The team's devbox_version it runs on (a reset after it replaces the run); the reset's, for a
+    # run from before 2026-11-24 (rebuild_job: that reset).
     devbox_version = models.PositiveIntegerField(null=True, blank=True)
     rebuild_job = models.ForeignKey(HostJob, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
     deploy_job = models.ForeignKey(HostJob, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")

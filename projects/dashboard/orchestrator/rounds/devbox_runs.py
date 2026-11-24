@@ -1,16 +1,19 @@
-"""Uploads made in the dev view: reset the team's devbox, then run the upload on VM A
-(docs/04-dev-environment.md).
+"""Uploads made in the dev view: run the upload on VM A of the team's devbox, as the devbox is
+(docs/04-dev-environment.md). Not reset first (since 2026-11-24): what earlier uploads left on
+the VMs stays, and the dev score and logs go on (a capture counts once per devbox version). The
+team resets its devbox by hand for fresh VMs, new tokens and a new score.
 
 The devbox's counterpart of the conductor, and separate from it: no round, no sandbox, no
 other team, and the upload never enters a round (orchestrator/rounds/planner.py).
 
-    PENDING -> RESETTING -> DEPLOYING -> ARMED -> RUNNING -> FINISHED
+    PENDING -> DEPLOYING -> ARMED -> RUNNING -> FINISHED
     (any of them) -> FAILED, or REPLACED by a newer upload or a manual reset
+
+(RESETTING: a run from before 2026-11-24 whose reset was under way; it goes on to DEPLOYING.)
 
 The dashboard only stores the upload (Upload.devbox); this picks it up. Nothing here runs a
 command: it asks the round agent through host jobs, as the conductor does. A pass is
-idempotent, and the orchestrator's attempt loop runs one after applying finished devbox
-jobs, so a rebuilt VM's token is known before the worm can submit it.
+idempotent.
 """
 
 from __future__ import annotations
@@ -18,21 +21,21 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 
-from core.models.devbox import DevboxRun
+from core.models.devbox import Devbox, DevboxRun
 from core.models.rounds import HostJob, RoundRun
 from core.models.worms import Upload
 from django.db import transaction
 from django.utils import timezone
 
 from orchestrator.rounds.conductor import config, parse_armed_at
-from orchestrator.rounds.devbox import request_rebuild, team_slug
+from orchestrator.rounds.devbox import team_slug
 
 log = logging.getLogger("orchestrator")
 
 S = DevboxRun.State
 ACTIVE = [S.PENDING, S.RESETTING, S.DEPLOYING, S.ARMED, S.RUNNING]
 ENTRY_ROLE = "a"  # where the worm starts, as the start VM of a sandbox
-_WAITING: dict[int, str] = {}  # what each pending run was last said to wait for (_start_reset)
+_WAITING: dict[int, str] = {}  # what each pending run was last said to wait for (_start)
 # A round's run, from its first host job to its last.
 ROUND_BUSY = [
     RoundRun.State.PREPARING, RoundRun.State.CHECKING,
@@ -68,8 +71,8 @@ def _advance_team(team_id, now):
 
 def _step(run, now, cfg):
     if run.state == S.PENDING:
-        _start_reset(run)
-    elif run.state == S.RESETTING:
+        _start(run, cfg)
+    elif run.state == S.RESETTING:  # a run from before 2026-11-24, its reset under way
         if _finished(run, run.rebuild_job, now, cfg):
             _start_deploy(run, cfg)
     elif run.devbox_version != run.team.devbox_version:
@@ -86,39 +89,38 @@ def _step(run, now, cfg):
             _set(run, S.FINISHED)
 
 
-def reset_waits_for() -> str:
-    """Why a team's upload cannot have its devbox reset now ("" if it can): what it waits for, in
-    words, for the processor's log, `worms trace` and the dashboard."""
-    # The agent runs one job at a time and a rebuild takes many minutes. Started now, it would
-    # hold up a running round's timed jobs, so a round's team would pay for another's test. The
-    # agent also takes a round's jobs first (round_agent/agent.py, claim), but it cannot stop a
-    # rebuild it has begun.
+def deploy_waits_for(team=None) -> str:
+    """Why a team's upload cannot go onto its devbox now ("" if it can): what it waits for, in
+    words, for the processor's log, `worms trace` and the dashboard. A round's attempt under way
+    (its host steps come first; during a session the agent is stopped anyway), or a reset of the
+    team's devbox that is not done yet (the team's own: the upload goes onto the VMs it leaves)."""
     busy = RoundRun.objects.filter(state__in=ROUND_BUSY).select_related("round", "team").first()
     if busy is not None:
         return f"a round's attempt is under way (round {busy.round.name!r}, team {busy.team.name}: {busy.state})"
+    if team is not None and HostJob.objects.filter(kind=HostJob.Kind.DEVBOX_REBUILD, params__team_uuid=str(team.uuid),
+                                                   state__in=[HostJob.State.QUEUED, HostJob.State.RUNNING]).exists():  # fmt: skip
+        return "the reset of its devbox that is under way"
     return ""
 
 
-def _start_reset(run):
-    waits = reset_waits_for()
+def _start(run, cfg):
+    """A new upload onto the devbox as it is: no reset first (since 2026-11-24)."""
+    waits = deploy_waits_for(run.team)
     if waits:
         # Said once per reason, not every pass: the processor's log tells what an upload waits for.
         if _WAITING.get(run.pk) != waits:
             _WAITING[run.pk] = waits
-            log.info("devbox run of upload %s waits to reset the devbox: %s", run.upload_id, waits)
+            log.info("devbox run of upload %s waits: %s", run.upload_id, waits)
         return
     _WAITING.pop(run.pk, None)
-    with transaction.atomic():
-        job, enqueued = request_rebuild(run.team)
-        if job is None:
-            _fail(run, "the team has no devbox")
-        elif enqueued:
-            run.rebuild_job = job
-            run.devbox_version = job.params["devbox_version"]
-            _set(run, S.RESETTING, "rebuild_job", "devbox_version")
-        # Otherwise a rebuild is in progress (a replaced upload's, or a manual reset): wait for
-        # it. This one needs fresh VMs of its own, because that rebuild may have been followed
-        # by anything.
+    if not Devbox.objects.filter(team_id=run.team_id).exists():
+        _fail(run, "the team has no devbox")
+        return
+    run.team.refresh_from_db(fields=["devbox_version"])
+    # The devbox it runs on: a reset after this (a new version) replaces it (_step).
+    run.devbox_version = run.team.devbox_version
+    run.save(update_fields=["devbox_version"])
+    _start_deploy(run, cfg)
 
 
 def _start_deploy(run, cfg):

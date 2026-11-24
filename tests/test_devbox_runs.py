@@ -1,4 +1,4 @@
-"""An upload in the dev view resets the team's devbox and then runs on VM A
+"""An upload in the dev view runs on VM A of the team's devbox as it is, not reset first
 (orchestrator/rounds/devbox_runs.py, docs/04-dev-environment.md), and never enters a round.
 
 The page through the dashboard's real URLs and role, the scheduling as the orchestrator's real
@@ -82,11 +82,9 @@ def _jobs(kind):
 
 
 def _to_running(upload):
-    """Through the reset and the deploy, to a worm that has started."""
+    """Through the deploy, to a worm that has started."""
     from django.utils import timezone
 
-    _advance()
-    _done(_run(upload).rebuild_job)
     _advance()
     _done(_run(upload).deploy_job, armed_at=timezone.now().isoformat())
     _advance()
@@ -107,14 +105,15 @@ def team(site, team_upload, app_roles):  # noqa: F811
 def test_each_view_warns_about_what_an_upload_does_there(site, team):  # noqa: F811
     live = _page(site)
     assert "This is your team's entry." in live and "switch to the Dev view" in live
-    assert "This resets your devbox" not in live and "a sandbox VM" in live
+    assert "your devbox as it is" not in live and "a sandbox VM" in live
     assert re.search(r'<button type="submit" class="btn btn--primary">Upload</button>', live)
 
     _dev_view(site)
     dev = _page(site)
-    assert "This resets your devbox." in dev and "everything on them is lost" in dev and "does not enter any round" in dev
+    assert "Your upload runs on VM A of your devbox as it is" in dev and "nothing is reset" in dev
+    assert "a flag counts only once until you reset your devbox" in dev and "does not enter any round" in dev
     assert "This is your team's entry" not in dev
-    assert re.search(r'<button type="submit" class="btn btn--primary">Upload, reset and run</button>', dev)
+    assert re.search(r'<button type="submit" class="btn btn--primary">Upload and run</button>', dev)
     assert "VM A of your devbox" in dev
 
 
@@ -131,7 +130,7 @@ def test_an_upload_in_the_dev_view_is_a_dev_upload(site, team):  # noqa: F811
     assert made.devbox is True
     # The dashboard only stores it. It cannot ask the agent for anything itself.
     assert HostJob.objects.count() == jobs
-    assert "Your devbox VMs are being reset" in _page(site)
+    assert "It runs on VM A of your devbox as it is" in _page(site)
 
 
 def test_an_upload_in_the_live_view_stays_an_entry(site, team):  # noqa: F811
@@ -142,7 +141,7 @@ def test_an_upload_in_the_live_view_stays_an_entry(site, team):  # noqa: F811
     made = Upload.objects.filter(team=team).order_by("-id").first()
     assert made.devbox is False
     _advance()
-    assert not hasattr(made, "devbox_run") and _jobs("devbox_rebuild") == []
+    assert not hasattr(made, "devbox_run") and _jobs("devbox_deploy") == [] and _jobs("devbox_rebuild") == []
 
 
 def test_each_view_lists_only_its_own_uploads(site, team, team_upload):  # noqa: F811
@@ -196,7 +195,7 @@ def test_a_failures_reason_stays_with_staff(site, team):  # noqa: F811
 
     upload = _dev_upload(team)
     _advance()
-    HostJob.objects.filter(pk=_run(upload).rebuild_job.pk).update(state="failed", error="ERRSECRET ssh debian@10.6.0.11")
+    HostJob.objects.filter(pk=_run(upload).deploy_job.pk).update(state="failed", error="ERRSECRET ssh debian@10.6.0.11")
     _advance()
     assert _run(upload).state == "failed" and "ERRSECRET" in _run(upload).error
 
@@ -246,37 +245,29 @@ def test_a_dev_upload_touches_no_other_team(site, team):  # noqa: F811
     _advance()
 
     other.refresh_from_db()
-    assert _run(upload).state == "resetting" and other.devbox_version == 1
-    assert _jobs("devbox_rebuild")[0].params["team_uuid"] == str(team.uuid)
+    assert _run(upload).state == "deploying" and other.devbox_version == 1
+    assert _jobs("devbox_deploy")[0].params["team_uuid"] == str(team.uuid) and _jobs("devbox_rebuild") == []
 
 
 # ---- The run
 
 
-def test_an_upload_resets_the_devbox_then_runs_on_vm_a(site, team):  # noqa: F811
+def test_an_upload_runs_on_vm_a_of_the_devbox_as_it_is(site, team):  # noqa: F811
     from django.utils import timezone
 
     version = team.devbox_version
     upload = _dev_upload(team)
     assert not hasattr(upload, "devbox_run")
 
-    # Reset: one rebuild, at a new version, so the score starts over.
+    # No reset (since 2026-11-24): the devbox as it is, at its version, so the score goes on.
+    # The upload, to this team's VM A, with what the agent's validator asks for.
     _advance()
     _advance()
     run = _run(upload)
     team.refresh_from_db()
-    [rebuild] = _jobs("devbox_rebuild")
-    assert run.state == "resetting" and run.rebuild_job == rebuild
-    assert team.devbox_version == version + 1 == run.devbox_version == rebuild.params["devbox_version"]
-    assert _jobs("devbox_deploy") == [], "nothing is deployed until the VMs are fresh"
-
-    # Then the upload, to this team's VM A, with what the agent's validator asks for.
-    _done(rebuild)
-    _advance()
-    _advance()
-    run = _run(upload)
     [deploy] = _jobs("devbox_deploy")
-    assert run.state == "deploying" and run.deploy_job == deploy
+    assert run.state == "deploying" and run.deploy_job == deploy and run.rebuild_job is None
+    assert team.devbox_version == version == run.devbox_version and _jobs("devbox_rebuild") == []
     assert deploy.params["start_vm"] == f"devbox-t{team.id}-a" and deploy.params["team_slug"] == f"t{team.id}"
     assert deploy.params["artifact"] == {"storage_key": KEY, "content_hash": "c" * 64}
     import sys
@@ -285,7 +276,6 @@ def test_an_upload_resets_the_devbox_then_runs_on_vm_a(site, team):  # noqa: F81
     from round_agent import validation
 
     assert validation.validate("devbox_deploy", deploy.params)["run_duration"] == 3600
-    assert validation.validate("devbox_rebuild", rebuild.params)
 
     # Dated from when the agent lit the fuse.
     armed = timezone.now() - timedelta(seconds=4)
@@ -303,7 +293,7 @@ def test_an_upload_resets_the_devbox_then_runs_on_vm_a(site, team):  # noqa: F81
 
     # Finished is the end: nothing more is asked of the agent.
     _advance(run.ends_at + timedelta(hours=1))
-    assert len(_jobs("devbox_rebuild")) == 1 and len(_jobs("devbox_deploy")) == 1
+    assert len(_jobs("devbox_rebuild")) == 0 and len(_jobs("devbox_deploy")) == 1
 
 
 def test_only_the_latest_upload_runs(site, team):  # noqa: F811
@@ -311,22 +301,24 @@ def test_only_the_latest_upload_runs(site, team):  # noqa: F811
 
     _advance()
 
-    assert _run(first).state == "replaced" and _run(second).state == "resetting"
-    assert len(_jobs("devbox_rebuild")) == 1
+    assert _run(first).state == "replaced" and _run(second).state == "deploying"
+    assert len(_jobs("devbox_deploy")) == 1 and _jobs("devbox_rebuild") == []
 
 
-def test_an_upload_during_a_reset_waits_and_then_resets_again(site, team):  # noqa: F811
-    first = _dev_upload(team)
-    _advance()
-    second = _dev_upload(team)
-    _advance()
-    assert _run(first).state == "replaced" and _run(second).state == "pending"
-    assert len(_jobs("devbox_rebuild")) == 1, "rebuilds do not pile up"
+def test_an_upload_during_the_teams_reset_waits_for_it(site, team):  # noqa: F811
+    """The team reset its devbox by hand: the upload goes onto the VMs that reset leaves, at its version."""
+    from orchestrator.rounds.devbox import request_rebuild
 
-    _done(_jobs("devbox_rebuild")[0])
+    rebuild, _ = request_rebuild(team)
+    upload = _dev_upload(team)
     _advance()
-    assert _run(second).state == "resetting" and len(_jobs("devbox_rebuild")) == 2
-    assert _jobs("devbox_deploy") == [], "the replaced upload is never deployed"
+    assert _run(upload).state == "pending" and _jobs("devbox_deploy") == []
+
+    _done(rebuild)
+    _advance()
+    team.refresh_from_db()
+    assert _run(upload).state == "deploying" and _run(upload).devbox_version == team.devbox_version
+    assert len(_jobs("devbox_rebuild")) == 1, "the upload asks for no reset of its own"
 
 
 def test_a_new_upload_replaces_a_running_one(site, team):  # noqa: F811
@@ -336,8 +328,8 @@ def test_a_new_upload_replaces_a_running_one(site, team):  # noqa: F811
     second = _dev_upload(team)
     _advance()
 
-    assert _run(first).state == "replaced" and _run(second).state == "resetting"
-    assert len(_jobs("devbox_rebuild")) == 2
+    assert _run(first).state == "replaced" and _run(second).state == "deploying"
+    assert len(_jobs("devbox_deploy")) == 2 and _jobs("devbox_rebuild") == []
 
 
 def test_the_dev_page_shows_the_upload_under_way_until_it_ends(site, team):  # noqa: F811
@@ -346,17 +338,17 @@ def test_the_dev_page_shows_the_upload_under_way_until_it_ends(site, team):  # n
     _dev_view(site)
     assert "data-running" not in _page(site) and "btn--running" not in _page(site)
     upload = _dev_upload(team)
-    # Before the orchestrator has picked it up, too: it is about to reset the devbox.
+    # Before the orchestrator has picked it up, too: it is about to go onto the devbox.
     for step in ("new", "running"):
         if step == "running":
             _to_running(upload)
         page = _page(site)
         assert "Your current upload is under way" in page and "This cancels your current upload" in page, step
-        assert re.search(r'class="btn btn--primary btn--running">Cancel it, reset and run this one</button>', page), step
+        assert re.search(r'class="btn btn--primary btn--running">Cancel it and run this one</button>', page), step
         assert page.count('class="is-running"') == 1, step
     DevboxRun.objects.filter(upload=upload).update(state="finished")
     page = _page(site)
-    assert "data-running" not in page and "btn--running" not in page and "This resets your devbox." in page
+    assert "data-running" not in page and "btn--running" not in page and "Your upload runs on VM A of your devbox as it is" in page
 
 
 def test_a_manual_reset_ends_a_running_upload(site, team):  # noqa: F811
@@ -374,7 +366,7 @@ def test_a_manual_reset_ends_a_running_upload(site, team):  # noqa: F811
 
 @pytest.mark.parametrize("state", ["preparing", "running", "tearing_down"])
 def test_a_running_round_goes_first(site, team, state):  # noqa: F811
-    """The agent runs one job at a time, and a rebuild would hold up a round's timed jobs."""
+    """The agent runs one job at a time: a round's timed jobs come first."""
     from core.models.competition import Round
     from core.models.rounds import RoundRun
     from django.utils import timezone
@@ -388,12 +380,12 @@ def test_a_running_round_goes_first(site, team, state):  # noqa: F811
     _advance()
 
     team.refresh_from_db()
-    assert _run(upload).state == "pending" and _jobs("devbox_rebuild") == [] and team.devbox_version == version
+    assert _run(upload).state == "pending" and _jobs("devbox_deploy") == [] and team.devbox_version == version
 
     # Once it is over, the upload goes ahead by itself.
     RoundRun.objects.filter(pk=run.pk).update(state="finished")
     _advance()
-    assert _run(upload).state == "resetting"
+    assert _run(upload).state == "deploying"
 
 
 def test_a_round_that_has_not_begun_does_not_hold_it_up(site, team):  # noqa: F811
@@ -408,19 +400,15 @@ def test_a_round_that_has_not_begun_does_not_hold_it_up(site, team):  # noqa: F8
 
     _advance()
 
-    assert _run(upload).state == "resetting"
+    assert _run(upload).state == "deploying"
 
 
-@pytest.mark.parametrize("step", ["rebuild_job", "deploy_job"])
-def test_a_failed_job_fails_the_run(site, team, step):  # noqa: F811
+def test_a_failed_job_fails_the_run(site, team):  # noqa: F811
     from core.models.rounds import HostJob
 
     upload = _dev_upload(team)
     _advance()
-    if step == "deploy_job":
-        _done(_run(upload).rebuild_job)
-        _advance()
-    HostJob.objects.filter(pk=getattr(_run(upload), step).pk).update(state="failed", error="it broke")
+    HostJob.objects.filter(pk=_run(upload).deploy_job.pk).update(state="failed", error="it broke")
 
     _advance()
 
@@ -438,11 +426,11 @@ def test_a_job_that_stops_reporting_fails_the_run_but_a_queued_one_waits(site, t
 
     # Queued behind a round's jobs: still its turn to come.
     _advance(later)
-    assert _run(upload).state == "resetting"
+    assert _run(upload).state == "deploying"
 
     started = timezone.now()
-    HostJob.objects.filter(pk=_run(upload).rebuild_job.pk).update(state="running", started_at=started, heartbeat_at=started)
+    HostJob.objects.filter(pk=_run(upload).deploy_job.pk).update(state="running", started_at=started, heartbeat_at=started)
     _advance(started + timedelta(minutes=5))
-    assert _run(upload).state == "resetting"
+    assert _run(upload).state == "deploying"
     _advance(later)
     assert _run(upload).state == "failed" and "timed out" in _run(upload).error

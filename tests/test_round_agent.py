@@ -1628,7 +1628,10 @@ def test_devbox_deploy_puts_the_worm_on_the_teams_vm_a_and_arms_it():
 
     assert result["start_vm"] == "devbox-t1-a" and result["armed_at"]
     hosts = [c["host"] for c in ex.ssh_calls]
-    assert hosts[0] == "10.5.0.18" and set(hosts[1:]) == {"10.6.0.11"}  # the artifact, then only this VM
+    # An earlier upload's worm stopped on this VM (no reset before a dev upload since 2026-11-24),
+    # then the artifact, then only this VM.
+    assert hosts[:2] == ["10.6.0.11", "10.5.0.18"] and set(hosts[2:]) == {"10.6.0.11"}
+    assert ex.ssh_calls[0]["argv"] == ["sudo", "/bin/sh", "-c", handlers.STOP_WORM] and "worms-start.timer" in handlers.STOP_WORM
     arm = next(c for c in ex.ssh_calls if "systemd-run" in c["argv"])
     assert arm["argv"] == [
         "sudo", "systemd-run", "--on-active=10", "--unit=worms-start", "--property=RuntimeMaxSec=3600",

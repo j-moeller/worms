@@ -2,15 +2,15 @@
 
     upload 42  alpha  19:12  by erik  (sha256 3f2a…)
       ✓ picked up by the orchestrator   19:12:05  devbox run 9
-      ⏸ reset of the devbox             waits: round 'Final' holds the devboxes shut down (held) …
-      · put on alpha/a:/home/debian     —
+      ⏸ put on VM A                     waits: a round's attempt is under way (round 'Final', …)
       · runs                            —
 
 Each link is read from the database: the upload, its devbox run (orchestrator/rounds/devbox_runs.py,
-the state machine PENDING -> RESETTING -> DEPLOYING -> ARMED -> RUNNING -> FINISHED), its two host
-jobs (devbox_rebuild, devbox_deploy) and, for a queued job, why the agent has not taken it
-(worms_cli/jobs.py). What the orchestrator waits for before the reset (a round's attempt under
-way, a round holding the devboxes) is its own words (devbox_runs.reset_waits_for).
+the state machine PENDING -> DEPLOYING -> ARMED -> RUNNING -> FINISHED: the devbox as it is, no
+reset first since 2026-11-24), its host job (devbox_deploy; devbox_rebuild for an upload from
+before) and, for a queued job, why the agent has not taken it (worms_cli/jobs.py). What the
+orchestrator waits for before the deploy (a round's attempt under way, the team's own reset) is
+its own words (devbox_runs.deploy_waits_for).
 """
 
 from __future__ import annotations
@@ -56,26 +56,25 @@ def chain(session, upload) -> list[tuple[str, str, str]]:
     if run is None:
         links.append(("wait", "picked up by the orchestrator", "not yet: the attempt processor picks uploads up every few "
                                                                "seconds (`worms log processor`)"))  # fmt: skip
-        return links + [("todo", "reset of the devbox", "—"), ("todo", "put on VM A", "—"), ("todo", "runs", "—")]
+        return links + [("todo", "put on VM A", "—"), ("todo", "runs", "—")]
     links.append(("ok", "picked up by the orchestrator", f"{_when(run.created_at)}: devbox run {run.id} ({run.state})"))
     S = run.State
-    # The reset.
-    if run.state == S.PENDING:
-        waits = devbox_runs.reset_waits_for()
-        if waits:
-            links.append(("wait", "reset of the devbox", f"waits: {waits}"))
-        else:
-            open_rebuild = run.team and _open_rebuild(run.team)
-            links.append(("wait", "reset of the devbox", f"waits for the rebuild already under way: {_job_link(session, open_rebuild, host)[1]}"
-                          if open_rebuild else "about to be requested"))  # fmt: skip
-    else:
+    # A reset before the deploy: an upload from before 2026-11-24 only (since: the devbox as it is).
+    if run.rebuild_job_id:
         state, text = _job_link(session, run.rebuild_job, host)
         links.append((state, "reset of the devbox", text))
     # The deploy onto VM A.
-    deploy_state, deploy_text = _job_link(session, run.deploy_job, host)
-    if deploy_state == "ok":
-        deploy_text += f": the zip unpacked in {WORM_DIR} on VM A"
-    links.append((deploy_state, "put on VM A", deploy_text))
+    if run.state == S.PENDING:
+        waits = devbox_runs.deploy_waits_for(run.team)
+        open_rebuild = waits and run.team and _open_rebuild(run.team)
+        text = (f"waits for the reset of its devbox under way: {_job_link(session, open_rebuild, host)[1]}" if open_rebuild
+                else f"waits: {waits}" if waits else "about to be requested")  # fmt: skip
+        links.append(("wait", "put on VM A", text))
+    else:
+        deploy_state, deploy_text = _job_link(session, run.deploy_job, host)
+        if deploy_state == "ok":
+            deploy_text += f": the zip unpacked in {WORM_DIR} on VM A"
+        links.append((deploy_state, "put on VM A", deploy_text))
     # Its hour.
     now = timezone.now()
     if run.state == S.ARMED:

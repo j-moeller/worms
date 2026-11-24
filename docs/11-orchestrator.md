@@ -66,14 +66,14 @@ any of them ─▶ FAILED (the operator may run a new one: --resume, attempt + 1
 **A dev upload** ([`devbox_runs.py`](../projects/dashboard/orchestrator/rounds/devbox_runs.py)), from the dashboard's `Upload(devbox=True)` to the team's devbox:
 
 ```
-PENDING ─▶ RESETTING ─▶ DEPLOYING ─▶ ARMED ─▶ RUNNING ─▶ FINISHED
+PENDING ─▶ DEPLOYING ─▶ ARMED ─▶ RUNNING ─▶ FINISHED
 any of them ─▶ FAILED, or REPLACED (a newer upload, or a reset by hand)
 ```
 
 1. Only a team's newest upload runs; older ones are replaced.
-2. It **waits** while a round's attempt is under way (`reset_waits_for`: the processor's log says it once, the dashboard shows the team, `worms trace <team>` too); during a round the processor is stopped anyway.
-3. **Resetting:** the team's devbox reset, as the dashboard's reset is (a `devbox_rebuild` job: its version goes up, its dev score starts over).
-4. **Deploying:** a `devbox_deploy` job: the zip onto VM A, the fuse lit (10 s), a run time of an hour.
+2. It **waits** while a round's attempt is under way, or a reset of the team's devbox is not done (`deploy_waits_for`: the processor's log says it once, the dashboard shows the team, `worms trace <team>` too); during a round the processor is stopped anyway.
+3. **No reset** (since 2026-11-24; RESETTING is an older run's): the devbox as it is, the dev score going on. The team resets it by hand for fresh VMs and a new score; a reset after the upload began replaces it.
+4. **Deploying:** a `devbox_deploy` job: an earlier upload's worm on VM A stopped, the zip onto VM A, the fuse lit (10 s), a run time of an hour.
 5. Armed, running, finished: the VMs stay as the worm left them.
 
 A queued devbox job never times out here (unlike an attempt's).

@@ -3,7 +3,7 @@
 Each team gets three always-on VMs, **A–B–C**, to develop against. They correspond to the dashboard's **Dev** view.
 
 - **Services.** Devbox VMs reach the same scoring, logging and private internet as a round, attributed to the team's devbox and never to a round.
-- **Dev uploads.** A dev upload resets the devbox and runs the worm on A.
+- **Dev uploads.** A dev upload runs the worm on A of the devbox as it is: no reset first (since 2026-11-24).
 - **What teams see.** The team's side of this is in [8 User guide](08-user-guide.md#devbox).
 
 ## What a team gets
@@ -51,7 +51,7 @@ laptop ──22 (prod) / 2222 (dev)──► host DNAT ──► devbox-ssh-gate
 | Action | Who | Host job | What the round agent does ([`handlers.py`](../scripts/round_agent/handlers.py)) |
 |---|---|---|---|
 | Provision | operator: `worms apply devbox` | `devbox_provision` | Generates `generated_devboxes.tf` for every team, applies the stack, snapshots each new VM as `clean` after its first boot (before any team key), configures, writes tokens and the attribution map |
-| Reset | team: **Reset devbox** button; a dev upload; operator: `worms vm reset <team>` | `devbox_rebuild` | Rolls A, B and C back to `clean`, their configured snapshot from before any team key (VMs without a snapshot are replaced), then the CA, the team's keys and new tokens over SSH, no Ansible; updates the map. A snapshot from before the devbox's setup existed gets it once, without network. What a reset gives is what the snapshot holds: a change of the devbox role needs a rebuild ([11](11-orchestrator.md#the-resets)) |
+| Reset | team: **Reset devbox** button; operator: `worms vm reset <team>` (a dev upload before 2026-11-24) | `devbox_rebuild` | Rolls A, B and C back to `clean`, their configured snapshot from before any team key (VMs without a snapshot are replaced), then the CA, the team's keys and new tokens over SSH, no Ansible; updates the map. A snapshot from before the devbox's setup existed gets it once, without network. What a reset gives is what the snapshot holds: a change of the devbox role needs a rebuild ([11](11-orchestrator.md#the-resets)) |
 | Rebuild | operator: `worms vm rebuild <team>...` or `worms vm rebuild devboxes` | `devbox_rebuild` (`fresh`) | Replaces A, B and C, configures them (`SetupDevbox.yml`, the packages from the apt cache, a missing one named), snapshots them, then the keys and tokens as a reset |
 | Keys | dashboard, on any key or membership change | `devbox_reconfigure` | Pushes the keys alone (no package, no internet) and the attribution map |
 | Dev run | a dev upload | `devbox_deploy` | Places the zip on A and arms `main.sh` |
@@ -66,13 +66,14 @@ laptop ──22 (prod) / 2222 (dev)──► host DNAT ──► devbox-ssh-gate
 [`devbox_runs.py`](../projects/dashboard/orchestrator/rounds/devbox_runs.py) advances each run on every pass of `process_attempts`:
 
 ```
-PENDING → RESETTING → DEPLOYING → ARMED → RUNNING → FINISHED
-                                        └→ FAILED, REPLACED (a newer upload or a manual reset)
+PENDING → DEPLOYING → ARMED → RUNNING → FINISHED
+                          └→ FAILED, REPLACED (a newer upload or a manual reset)
 ```
 
 - **Which upload runs.** Only a team's newest dev upload runs.
-- **Waiting.** A run waits while any round attempt is between PREPARING and TEARING_DOWN, and while a round holds the devboxes shut down. The agent also takes round jobs before devbox jobs.
-- **Deploy.** The zip goes to VM A and is started as `bash main.sh` (user `debian`) after a 10 s fuse. systemd stops it after 3600 s (`RuntimeMaxSec`). Processes it started on B or C keep running until the next reset.
+- **No reset.** The upload goes onto the devbox as it is (since 2026-11-24; RESETTING is an older run's): what earlier uploads left on A, B and C stays, and the dev score and logs go on (a flag counts once per devbox version, which only a reset raises). For fresh VMs, new tokens and a new score the team resets its devbox (the **Reset devbox** button); a reset after an upload began replaces it.
+- **Waiting.** A run waits while any round attempt is between PREPARING and TEARING_DOWN, and while a reset of the team's devbox is queued or running. The agent also takes round jobs before devbox jobs.
+- **Deploy.** An earlier upload's worm on A is stopped first (its unit `worms-start` and its fuse, its processes with them). The zip goes to VM A and is started as `bash main.sh` (user `debian`) after a 10 s fuse. systemd stops it after 3600 s (`RuntimeMaxSec`). Processes it started on B or C keep running until the next reset.
 - **Errors.** The error text is for staff only. Teams see a status line on the Upload page.
 
 ## Scoring and logging

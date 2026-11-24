@@ -25,15 +25,15 @@
             <span class="dropzone__file" data-dropzone-file hidden></span>
         </label>
         {% if environment == "dev" and running %}
-        <p class="alert alert--warn"><strong>This cancels your current upload and resets your devbox again.</strong> All three VMs are rebuilt, so everything on them is lost and your captures start over. Then the new upload runs on VM A, for up to an hour. It does not enter any round.</p>
+        <p class="alert alert--warn"><strong>This cancels your current upload.</strong> Its worm is stopped on VM A and the new upload runs there, for up to an hour, on your devbox as it is: nothing is reset. What earlier uploads left on the VMs stays, and a flag counts only once until you reset your devbox (<em>Reset devbox</em> on your devbox page). It does not enter any round.</p>
         {% elif environment == "dev" %}
-        <p class="alert alert--warn"><strong>This resets your devbox.</strong> All three VMs are rebuilt, so everything on them is lost and your captures start over. Then your upload runs on VM A, for up to an hour. It does not enter any round.</p>
+        <p class="alert alert--warn"><strong>Your upload runs on VM A of your devbox as it is</strong>, for up to an hour: nothing is reset. What earlier uploads left on the VMs stays, and a flag counts only once until you reset your devbox (<em>Reset devbox</em> on your devbox page). It does not enter any round.</p>
         {% else %}
         <p class="alert alert--warn"><strong>This is your team's entry.</strong> Your latest upload before a round begins is the one that runs in that round. To try something first, switch to the Dev view.</p>
         {% endif %}
         <div class="upload__actions">
             <span class="upload__status" data-upload-status role="status"></span>
-            <button type="submit" class="btn btn--primary{% if running %} btn--running{% endif %}">{% if environment == "dev" and running %}Cancel it, reset and run this one{% elif environment == "dev" %}Upload, reset and run{% else %}Upload{% endif %}</button>
+            <button type="submit" class="btn btn--primary{% if running %} btn--running{% endif %}">{% if environment == "dev" and running %}Cancel it and run this one{% elif environment == "dev" %}Upload and run{% else %}Upload{% endif %}</button>
         </div>
     </form>
     {% endif %}

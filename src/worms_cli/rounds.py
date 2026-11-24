@@ -212,7 +212,7 @@ class LocalJobs:
 
         job = self._do(run, kind, params)
         if job.state != HostJob.State.DONE:
-            error = RoundError(f"{kind} failed: {job.error}"[:1000])
+            error = RoundError(f"{kind} failed: {job.error.removeprefix(f'the {kind} job failed: ')}"[:1000])
             # Why, for the attempt's row (conductor.failure_of): the dashboard's staff pages.
             error.failure = (job.result or {}).get("failure") or {"step": kind, "job": job.id, "headline": job.error[:400]}
             raise error
@@ -229,10 +229,11 @@ class LocalJobs:
     def _who(run) -> str:
         return f"{run.team.name}, attempt {run.attempt}" if run is not None else "the session"
 
-    def _ended(self, run, kind, job_id, state, result, error, cause, path, quiet, took) -> dict:
+    def _ended(self, run, kind, job_id, state, result, error, cause, path, quiet, took, caught=None) -> dict:
         """A step's end, said: on the terminal (how it ended, how long it took, its log again, and
-        for a failure what of its output says why) and in summary.log. A failure's account goes
-        into the job's result (the dashboard's staff pages) and to run() for the attempt's row."""
+        for a failure what of its output says why) and in summary.log, both on the host: all of
+        it. A failure's account goes into the job's result (the dashboard's staff pages) and to
+        run() for the attempt's row: without what a gameplan's step said (failure.for_database)."""
         from core.models.rounds import HostJob
 
         from worms_cli.summary import _took
@@ -246,8 +247,9 @@ class LocalJobs:
                 if self.summary is not None:
                     self.summary.step(kind, job_id, who, True, took, path)
             return result
-        cause = cause or self.failure.Cause(headline=(error or "failed")[:400])
-        account = {"step": kind, "job": job_id, "log": path, **cause.as_dict(), **self.context(run)}
+        cause = cause or self.failure.Cause(headline=(error or "failed")[:400], public=(error or "failed")[:400])
+        told = self.failure.for_database(caught, cause) if caught is not None else cause.as_dict()
+        account = {"step": kind, "job": job_id, "log": path, **told, **self.context(run)}
         if self.summary is not None:
             account["entry"] = self.summary.failure(f"{kind} #{job_id} ({who}) failed after {_took(took)}", cause.headline,
                                                     cause.text(), path, cause.logs, listed=False)  # fmt: skip
@@ -277,7 +279,7 @@ class LocalJobs:
         self.count += 1
         name = f"{self.count:03d}-{kind}"
         quiet = kind == "observe"  # every minute of a gameplan: its file only, unless it fails
-        state, result, error, interrupted, cause, path = HostJob.State.FAILED, {}, "", None, None, ""
+        state, result, error, interrupted, cause, path, caught = HostJob.State.FAILED, {}, "", None, None, "", None
         began = time.monotonic()
         try:
             self.executor.log_dir = str(self.folder(run))
@@ -300,14 +302,18 @@ class LocalJobs:
                     job_log.note("done")
                 except self.validation.Invalid as exc:
                     error = f"invalid: {exc}"
-                    cause = self.failure.Cause(headline=error[:400], blocks=[error])
+                    cause = self.failure.Cause(headline=error[:400], blocks=[error], public=error[:400])
                     job_log.note(f"rejected: {exc}")
                 except Exception as exc:  # noqa: BLE001  (its message and the log say why)
-                    error = str(exc) if isinstance(exc, self.CommandError) else f"{type(exc).__name__}: {exc}"
+                    caught = exc
+                    # A quiet handler's (handlers._quiet) names where it failed, not what was said.
+                    told = isinstance(exc, self.CommandError) or getattr(exc, "original", None) is not None
+                    error = str(exc) if told else f"{type(exc).__name__}: {exc}"
                     cause = self.failure.from_exception(exc)
                     job_log.note(f"failed: {error}")
-                    # The file only: the whole traceback, and what of the output says why.
-                    job_log.write(traceback.format_exc())
+                    # The file only: the whole traceback (of what a quiet handler hid, too), and
+                    # what of the output says why.
+                    job_log.write("".join(traceback.format_exception(getattr(exc, "original", None) or exc)))
                     job_log.write(f"what says why (scripts/round_agent/failure.py):\n{cause.text()}\n")
                 except BaseException as exc:  # Ctrl-C twice, SIGTERM, SIGHUP (_end_on_signals)
                     job_log.note(f"interrupted: {type(exc).__name__} {exc}".rstrip())
@@ -320,7 +326,8 @@ class LocalJobs:
         finally:
             self._beating(job.pk, False)
             try:
-                result = self._ended(run, kind, job.id, state, result, error, cause, path, quiet, time.monotonic() - began)
+                result = self._ended(run, kind, job.id, state, result, error, cause, path, quiet, time.monotonic() - began,
+                                     caught)  # fmt: skip
             except Exception:  # noqa: BLE001  (what is said of a step never changes how it ends)
                 log.exception("host job #%s: its end not said", job.pk)
             try:

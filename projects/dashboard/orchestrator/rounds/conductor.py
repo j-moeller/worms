@@ -147,8 +147,9 @@ class AttemptFailed(BaseException):
 def failure_of(error, phase):
     """What the attempt's row keeps of why it failed (RoundRun.failure, the dashboard's staff
     pages): the failed host step's account when it was one (its kind, number, log on the host,
-    the excerpt of its output that says why: scripts/round_agent/failure.py), else the error and
-    where it was raised (the last frames; a gameplan's own first)."""
+    the excerpt of its output that says why, or for a step that may quote the gameplan only
+    where it failed: scripts/round_agent/failure.py), else the error and where it was raised
+    (the last frames, a gameplan's own first: file, line and function, never the code there)."""
     found = getattr(error, "failure", None)
     if isinstance(found, dict) and found:
         return {**found, "phase": phase}
@@ -157,10 +158,9 @@ def failure_of(error, phase):
     mine = [frame for frame in frames if "/gameplans/" in frame.filename]
     if mine:
         frame = mine[-1]
-        lines.append(f"in the gameplan at {frame.filename}:{frame.lineno}, in {frame.name}"
-                     + (f": {frame.line.strip()}" if frame.line else ""))  # fmt: skip
+        lines.append(f"in the gameplan at {frame.filename}:{frame.lineno}, in {frame.name}")
     for frame in frames[-3:]:
-        lines.append(f"at {frame.filename}:{frame.lineno}, in {frame.name}" + (f": {frame.line.strip()}" if frame.line else ""))
+        lines.append(f"at {frame.filename}:{frame.lineno}, in {frame.name}")
     headline = (f"{type(error).__name__}: {error}".splitlines() or [type(error).__name__])[0][:400]
     return {"phase": phase, "headline": headline, "detail": "\n".join([str(error)[:1500], *lines])}
 

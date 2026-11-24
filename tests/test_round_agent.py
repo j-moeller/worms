@@ -622,7 +622,10 @@ def test_prepare_builds_the_gameplans_sandbox_and_reports_its_topology(tmp_path)
 
 def test_a_failed_build_tells_the_database_nothing_of_the_gameplan():
     """Ansible prints the setup command that failed; the job's error (which the dashboard can
-    read) names the job only, and the reason goes to the job log on the host."""
+    read) names the job and where it failed (an exception's type, our file and line), never what
+    was said: that goes to the job log on the host, and stays with the error for the host's own
+    accounts (`original`: the round session's terminal and summary.log)."""
+    from round_agent import failure
 
     class Failing(FakeExecutor):
         def worms(self, component, timeout=3600, args=None):
@@ -630,10 +633,12 @@ def test_a_failed_build_tells_the_database_nothing_of_the_gameplan():
 
     ex = Failing()
     ex.sandbox_built = False
-    with pytest.raises(RuntimeError) as failure:
+    with pytest.raises(RuntimeError) as caught:
         _prepare(ex)
-    assert str(failure.value) == "the prepare job failed: its log on the host says why"
+    assert str(caught.value).startswith("the prepare job failed: RuntimeError raised at ") and "hunter2" not in str(caught.value)
     assert any("hunter2" in note for note in ex.notes)
+    cause = failure.from_exception(caught.value)
+    assert "hunter2" in cause.headline and "hunter2" not in json.dumps(failure.for_database(caught.value, cause))
 
 
 def test_the_gameplans_packages_and_files_reach_ansible_unsafe(monkeypatch):

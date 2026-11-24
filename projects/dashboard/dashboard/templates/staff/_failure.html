@@ -6,4 +6,4 @@
     {% if f.logs %}<div><dt>Failed VMs' logs</dt><dd class="mono">{% for path in f.logs %}{{ path }}{% if not forloop.last %}<br>{% endif %}{% endfor %}</dd></div>{% endif %}
     {% if f.summary %}<div><dt>Summary</dt><dd class="mono">{{ f.summary }} <span class="muted">(<code>worms log round {{ round.id }} summary</code>)</span></dd></div>{% endif %}
 </dl>
-{% if f.detail %}<details class="failure__detail"{% if open %} open{% endif %}><summary>What its output said</summary><pre class="code code--wrap"><code>{{ f.detail }}</code></pre></details>{% endif %}
+{% if f.detail %}<details class="failure__detail"{% if open %} open{% endif %}><summary>What its output said</summary><pre class="code code--wrap"><code>{{ f.detail }}</code></pre></details>{% elif f.withheld %}<p class="muted">What it said is not here: {{ f.withheld }} (<code>worms log round {{ round.id }} summary</code>).</p>{% endif %}

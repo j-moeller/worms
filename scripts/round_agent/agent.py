@@ -187,10 +187,11 @@ class Agent:
                 job_log.note(f"job rejected: {exc}")
                 log.warning("job %s rejected: %s", uuid, exc)
             except Exception as exc:  # noqa: BLE001
-                # Why, in the job's result too (failure.py): the dashboard's staff pages show it.
+                # Why, in the job's result too (failure.py): the dashboard's staff pages show it,
+                # without what a gameplan's job said (failure.for_database).
                 cause = failure.from_exception(exc)
-                self.finish(job_id, "failed", result={"failure": {**cause.as_dict(), "log": str(job_log.path or "")}},
-                            error=f"{type(exc).__name__}: {exc}")  # fmt: skip
+                account = {**failure.for_database(exc, cause), "log": str(job_log.path or "")}
+                self.finish(job_id, "failed", result={"failure": account}, error=f"{type(exc).__name__}: {exc}")
                 job_log.note(f"job failed: {type(exc).__name__}: {exc}\n{cause.text()}")
                 log.exception("job %s failed", uuid)
             finally:

@@ -30,7 +30,7 @@ from gameplan import render as gameplan_render
 from gameplan import runtime as gameplan_runtime
 from gameplan.definition import SECRET_MARKER, GameplanError
 from generate_devbox import team_addressing
-from round_agent import host_state, probe, snapshots, startup, validation
+from round_agent import failure, host_state, probe, snapshots, startup, validation
 
 FLAG_PATH = "/etc/worms/flag"
 # The gameplan files, in the agent's workspace (synced from the controller's checkout).
@@ -198,8 +198,10 @@ class Refused(RuntimeError):
 def _quiet(job):
     """For the jobs that load a gameplan or apply what it defines. Their errors can quote it
     (Ansible prints a failed setup command, OpenTofu the resource it refused), and a job's
-    error goes to the database, which the dashboard reads. The reason goes to the job log;
-    the database gets the job's name only."""
+    error goes to the database, which the dashboard reads. The reason goes to the job log; the
+    database gets where it failed, never what it said (failure.py: an Ansible role and its
+    file:line, the VMs; an exception's type and where it was raised). The exception hidden is
+    kept as `original`, for the host's own accounts (the round session's terminal, summary.log)."""
 
     def wrapper(ex, cfg, params):
         try:
@@ -208,7 +210,10 @@ def _quiet(job):
             raise
         except Exception as error:  # noqa: BLE001
             ex.note(f"{job.__name__} failed: {type(error).__name__}: {error}")
-            raise RuntimeError(f"the {job.__name__} job failed: its log on the host says why") from None
+            quiet = RuntimeError(f"the {job.__name__} job failed: {failure.from_exception(error).public} "
+                                 "(what it said: the job's log on the host)")  # fmt: skip
+            quiet.original = error
+            raise quiet from None
 
     wrapper.__name__ = wrapper.__qualname__ = job.__name__
     wrapper.__doc__ = job.__doc__

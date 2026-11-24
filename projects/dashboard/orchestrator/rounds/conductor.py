@@ -19,9 +19,9 @@ terminal, one team after another. Nothing here starts, stops, retries or waits b
     delete_snapshot()      (destroy_sandbox, once the round is complete: the session asks)
     teardown()
     any failure: the attempt is thrown away (FAILED, its points never count), written to the
-    round's log, and the round goes on with the next team; the sandbox and its snapshot stay. The
-    operator decides whether a failed team runs again (`worms round start <r> --resume`): it
-    starts from the snapshot, never from a new build. A build that fails is kept (asked), and the
+    round's log, and the session stops the round there (the next team's attempt would most likely
+    meet the same error); the sandbox and its snapshot stay. `worms round start <r> --resume`
+    runs a new attempt of that team, from the snapshot, never from a new build, then the rest. A build that fails is kept (asked), and the
     next session continues it after OpenTofu's apply.
 
 Errors on our side fail the attempt; nothing a team's worm does can. After the worm is deployed
@@ -152,6 +152,37 @@ class AttemptFailed(BaseException):
     def __init__(self, message, failure=None):
         super().__init__(message)
         self.failure = failure
+
+
+def checks_failed(result):
+    """A check job's failed checks, said: (headline, detail). Grouped by what failed (`vm:<name>:
+    <what>`: the same probe on every VM is one entry, with how many VMs and the first one's why);
+    the detail has every distinct why with the VMs it was said of. 2026-11-24: "sanity checks
+    failed: ['vm:sandbox-a:time', ...]" named fifteen VMs and no reason."""
+    failed = {str(name) for name in result.get("failures") or []}  # the checks that decide (handlers.GATES)
+    rows = [row for row in result.get("checks") or [] if isinstance(row, dict) and not row.get("ok")
+            and (not failed or str(row.get("check")) in failed)]  # fmt: skip
+    rows = rows or [{"check": name, "detail": ""} for name in sorted(failed)]
+    groups = {}
+    for row in rows:
+        name, why = str(row.get("check")), str(row.get("detail") or "").strip()
+        vm, _, what = name.removeprefix("vm:").partition(":") if name.startswith("vm:") else ("", "", name)
+        groups.setdefault(what or name, []).append((vm, why))
+    parts, lines = [], []
+    for what, found in groups.items():
+        vms = [vm for vm, _ in found if vm]
+        first_vm, first_why = found[0]
+        part = what + (f" on {len(vms)} VM(s)" if vms else "")
+        if first_why:
+            part += f" ({f'{first_vm}: ' if first_vm else ''}{first_why[:200]})"
+        parts.append(part)
+        whys = {}
+        for vm, why in found:
+            whys.setdefault(why, []).append(vm)
+        for why, names in whys.items():
+            named = [name for name in names if name]
+            lines.append(f"{what}: {why or '(no reason given)'}" + (f"\n    on {', '.join(named)}" if named else ""))
+    return "check failed: " + "; ".join(parts or ["not ok, and no check named"]), "\n".join(lines)
 
 
 def failure_of(error, phase):
@@ -762,8 +793,13 @@ class Conductor:
             self.set_state(run, S.CHECKING)
             # With the run, the host probes inside every VM too: they are ours until the worm.
             result = self.jobs.run(run, HostJob.Kind.CHECK, run_uuid=str(run.uuid))
-            if not result.get("ok", False):
-                raise RoundError(f"sanity checks failed: {result.get('failures')}")
+            if not result.get("ok", False):  # its warnings: in the check's own log (handlers.check)
+                headline, detail = checks_failed(result)
+                error = RoundError(headline[:1000])
+                last = getattr(self.jobs, "last", None) or {}  # the check's own job and log (worms_cli/rounds.py LocalJobs)
+                error.failure = {"step": "check", "job": last.get("job"), "log": last.get("log", ""),
+                                 "headline": headline[:400], "detail": detail[:3500]}  # fmt: skip
+                raise error
             self.set_state(run, S.RUNNING)
             backend = AttemptBackend(self, run, gateway=prepared.get("gateway"))
             backend.begin()

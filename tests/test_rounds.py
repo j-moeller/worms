@@ -442,8 +442,9 @@ def make_conductor(gameplans, power=None, clock=None):
 def run_round(conductor, round_obj):
     """What `worms round start` does with the conductor (worms_cli/rounds.py): the round's gameplan
     pinned, the host's preflight, the round's sandbox built and snapshotted (build_sandbox), then
-    each team's attempt still to come, in order, the host's preflight before each but the first.
-    Returns (the attempts as they ended, why the round stopped or None)."""
+    each team's attempt still to come, in order, the host's preflight before each but the first;
+    an attempt that ends with an error stops it there. Returns (the attempts as they ended, why
+    the round stopped or None)."""
     from core.models.rounds import RoundRun
     from gameplan.definition import RoundError
 
@@ -468,6 +469,8 @@ def run_round(conductor, round_obj):
             if problem:
                 return ended, problem
         ended.append(conductor.attempt(run))
+        if run.upload_id is not None and (ended[-1].state == RoundRun.State.FAILED or ended[-1].error):
+            return ended, f"{run.team.name}'s attempt ended with an error: {ended[-1].error}"
     return ended, None
 
 
@@ -658,7 +661,8 @@ def test_a_failed_attempt_is_thrown_away_and_the_team_runs_again(one_run, gamepl
     agent.fail[HostJob.Kind.PREPARE] = 1
     ended, problem = run_round(conductor, one_run["round"])
     [first] = ended
-    assert problem is None and first.state == RoundRun.State.FAILED and "prepare job failed" in first.error, first.error
+    assert first.state == RoundRun.State.FAILED and "prepare job failed" in first.error, first.error
+    assert problem.startswith("team-a's attempt ended with an error")  # the round stops there
     assert first.jobs.get(kind=HostJob.Kind.TEARDOWN).params["keep"] is True  # it may have built half a sandbox
     assert attempts(one_run["round"], one_run["team"]) == [first]  # no retry by itself
     assert run_round(conductor, one_run["round"]) == ([], None)  # nothing pending

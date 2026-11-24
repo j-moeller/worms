@@ -981,13 +981,13 @@ def test_check_reports_ok_when_everything_is_up(tmp_path):
     for vm in ("sandbox-a", "sandbox-b", "sandbox-gw"):
         assert {f"vm:{vm}:{p}" for p in ("start", "init", "init:cloud-init", "init:boot", "init:addresses", "init:route", "init:sshd")} <= names
     for vm in ("sandbox-a", "sandbox-b"):
-        assert {f"vm:{vm}:{p}" for p in ("probe", "flag", "dns", "scoring", "logging", "apt", "pypi", "time", "isolated", "firewall")} <= names
+        assert {f"vm:{vm}:{p}" for p in ("probe", "flag", "dns", "scoring", "logging", "apt", "pypi", "isolated", "firewall")} <= names
     assert {"vm:sandbox-b:files", "vm:sandbox-b:init:users", "vm:sandbox-b:init:services", "host:inventory"} <= names
     assert "vm:sandbox-a:files" not in names  # its one file is written later, not at the reset
     assert "vm:sandbox-a:init:users" not in names and "vm:sandbox-a:init:services" not in names  # it has none
     assert {name.split(":", 2)[2] for name in names if name.startswith("vm:sandbox-gw:")} == {
         "start", "init", "init:cloud-init", "init:boot", "init:addresses", "init:route", "init:sshd", "init:nftables", "init:sysctl"}
-    assert detail["vm:sandbox-a:start"] == "running, booted in this attempt (its QEMU started 10 s into prepare, 290 s ago)"
+    assert detail["vm:sandbox-a:start"] == "running, booted in this attempt (its QEMU started 10 s after the sandbox's reset, 290 s ago)"
     assert [detail[f"vm:sandbox-b:init:{p}"] for p in ("cloud-init", "boot", "addresses", "route", "sshd", "users", "services")] == [
         "done", "running", "2 NICs, each with its address", "via its network's gateway", "sshd listens on its SSH port", "1 there",
         "1 running"]  # fmt: skip
@@ -1059,7 +1059,7 @@ def test_check_reports_ok_when_everything_is_up(tmp_path):
     me = pwd.getpwuid(os.getuid()).pw_name
     (tmp_path / "pids").mkdir()
     params = {
-        "deadline": 40, "apt_timeout": 20, "time_wait": 1, "connect_timeout": 1, "flag": str(tmp_path / "flag"), "tmp": str(tmp_path),
+        "deadline": 40, "apt_timeout": 20, "connect_timeout": 1, "flag": str(tmp_path / "flag"), "tmp": str(tmp_path),
         "dns": {"localhost": "127.0.0.1"}, "https": {"scoring": ["127.0.0.1", closed_port], "logging": ["127.0.0.1", closed_port]},
         "pypi": ["127.0.0.1", page.server_address[1], "/root/pypi/+simple/requests/"],
         "connect": [["0", "127.0.0.1", open_port, "open"], ["1", "127.0.0.1", closed_port, "reachable"], ["2", "127.0.0.1", closed_port, "open"]],
@@ -1072,20 +1072,19 @@ def test_check_reports_ok_when_everything_is_up(tmp_path):
         ran = subprocess.run(["python3", "-I", "-B", "-"], input=probe.script(params), capture_output=True, text=True, timeout=60, env=env)
         reply = probe.answer(ran.stdout)
         assert reply is not None, ran.stderr
-        assert [reply[key] for key in ("flag", "dns", "pypi", "apt", "time")] == [[True, ""], [True, ""], [True, "HTTP 200"], [True, ""], [True, ""]]
+        assert [reply[key] for key in ("flag", "dns", "pypi", "apt")] == [[True, ""], [True, ""], [True, "HTTP 200"], [True, ""]]
+        assert "time" not in reply  # no clock check (2026-11-24)
         assert reply["scoring"][0] is False and "Refused" in reply["scoring"][1]
         assert reply["connect"] == {"0": "open", "1": "refused", "2": "refused"} and reply["forbidden"] == {"internet": "open"}
         assert reply["files"] == {"0": "", "1": "missing", "2": f"owner {me}, mode 0644"} and "services" not in reply
         assert "deadline" not in reply and not list(tmp_path.glob("worms-check-*"))  # apt's directory is gone again
         # Its own deadline: it says what it has, and leaves no command running and nothing behind. What
-        # it cut off stays absent (apt's step, its command killed, would say "exit -9"). And a VM whose
-        # time service the gameplan took away: its clock as the host sees it (records) decides.
+        # it cut off stays absent (apt's step, its command killed, would say "exit -9").
         started = time.monotonic()
         ran = subprocess.run(["python3", "-I", "-B", "-"], input=probe.script({**params, "deadline": 3}), capture_output=True, text=True,
-                             timeout=60, env={**env, "WORMS_TEST_SLOW": "1", "WORMS_TEST_NO_NTP": "no"})  # fmt: skip
+                             timeout=60, env={**env, "WORMS_TEST_SLOW": "1"})  # fmt: skip
         reply = probe.answer(ran.stdout)
         assert time.monotonic() - started < 10 and reply["deadline"] is True and "apt" not in reply and reply["flag"] == [True, ""]
-        assert reply["time"] == [True, "no time service: its clock as the host sees it"]
         assert not list(tmp_path.glob("worms-check-*"))
         left = Path("/proc") / (tmp_path / "pids" / "sleep").read_text().strip() / "cmdline"  # apt's own child, killed with it
         for _ in range(20):
@@ -1175,7 +1174,8 @@ def test_check_flags_a_down_vm_and_dead_service(tmp_path, monkeypatch):
     ex.states = {900: ("stopped", None), 901: ("running", "internal-error"), 950: ("running", "paused")}
     result = handlers.check(ex, CFG, {})
     assert result["ok"] is False
-    assert set(result["failures"]) == {"host:worms-mirror", "vm:sandbox-a:start", "vm:sandbox-b:start", "vm:sandbox-gw:start"}
+    assert set(result["failures"]) == {"vm:sandbox-a:start", "vm:sandbox-b:start", "vm:sandbox-gw:start"}
+    assert "host:worms-mirror" in result["warnings"]  # said, but not what decides (handlers.GATES)
     detail = {c["check"]: c["detail"] for c in result["checks"]}
     assert detail["vm:sandbox-a:start"] == "stopped"
     assert detail["vm:sandbox-b:start"] == "Proxmox says running, but its QEMU is internal-error (halted)"
@@ -1231,7 +1231,6 @@ def test_check_flags_a_down_vm_and_dead_service(tmp_path, monkeypatch):
             reply["files"]["0"] = "owner root, mode 0600"
             reply["forbidden"]["database"] = "refused"  # an answer: it got there
             reply["apt"] = [False, "E: Failed to fetch http://apt-cache.worms.internal:3142/... 503"]
-            reply["started"] -= 600  # its clock
         else:  # sandbox-a: b's SSH does not answer where the gameplan lets it in
             reply["connect"] = {key: "refused" for key in reply["connect"]}
 
@@ -1243,10 +1242,11 @@ def test_check_flags_a_down_vm_and_dead_service(tmp_path, monkeypatch):
     ex.probe_hooks.append(broken)
     ex.init_hooks.append(failed_service)
     result = handlers.check(ex, CFG, validation.validate("check", {"run_uuid": RUN}))
-    assert set(result["failures"]) == {"vm:sandbox-a:firewall", "vm:sandbox-b:files", "vm:sandbox-b:init:services", "vm:sandbox-b:init:boot",
-                                       "vm:sandbox-b:isolated", "vm:sandbox-b:apt", "vm:sandbox-b:time"}  # fmt: skip
+    assert set(result["failures"]) == {"vm:sandbox-b:isolated", "vm:sandbox-b:apt"}
+    assert set(result["warnings"]) == {"vm:sandbox-a:firewall", "vm:sandbox-b:files", "vm:sandbox-b:init:services",
+                                       "vm:sandbox-b:init:boot"}  # fmt: skip
     detail = {c["check"]: c["detail"] for c in result["checks"]}
-    assert detail["vm:sandbox-b:isolated"] == "got to: database" and "-600 s" in detail["vm:sandbox-b:time"]
+    assert detail["vm:sandbox-b:isolated"] == "got to: database" and "vm:sandbox-b:time" not in detail
     assert detail["vm:sandbox-a:firewall"].startswith("1 of 1 connections not as the gameplan's firewall says")
     assert detail["vm:sandbox-b:init:boot"] == "degraded: 1 of the gameplan's services failed (the job log on the host names them)"
     # What is wrong, in the job log; the database gets numbers and the platform's names only.
@@ -1279,12 +1279,13 @@ def test_check_flags_a_down_vm_and_dead_service(tmp_path, monkeypatch):
 
     ex.init_hooks.append(not_up)
     result = handlers.check(ex, CFG, validation.validate("check", {"run_uuid": RUN}))
-    assert set(result["failures"]) == {
-        "vm:sandbox-a:start", "vm:sandbox-a:init", "vm:sandbox-a:probe", "vm:sandbox-b:init:cloud-init", "vm:sandbox-b:init:boot",
+    assert set(result["failures"]) == {"vm:sandbox-a:start", "vm:sandbox-a:probe"}
+    assert set(result["warnings"]) == {
+        "vm:sandbox-a:init", "vm:sandbox-b:init:cloud-init", "vm:sandbox-b:init:boot",
         "vm:sandbox-b:init:addresses", "vm:sandbox-b:init:route", "vm:sandbox-b:init:sshd", "vm:sandbox-b:init:users",
         "vm:sandbox-gw:init:route", "vm:sandbox-gw:init:nftables"}  # fmt: skip
     detail = {c["check"]: c["detail"] for c in result["checks"]}
-    assert detail["vm:sandbox-a:start"] == ("running since 600 s before this attempt's prepare began: it did not boot in this attempt "
+    assert detail["vm:sandbox-a:start"] == ("running since 600 s before this attempt's reset (the rollback, or the snapshot): it did not boot in this attempt "
                                             "and may hold the last run's state")  # fmt: skip
     assert detail["vm:sandbox-a:init"] == "not checked: it did not start in this attempt (start)"
     assert "10.4.0.10" not in ex.inits and "10.4.0.10" not in ex.probes
@@ -1315,7 +1316,7 @@ def test_check_flags_a_down_vm_and_dead_service(tmp_path, monkeypatch):
     result = handlers.check(ex, CFG, validation.validate("check", {"run_uuid": RUN}))
     assert {"vm:sandbox-a:start", "vm:sandbox-b:start", "vm:sandbox-gw:start"} <= set(result["failures"])
     assert {c["detail"] for c in result["checks"] if c["check"].endswith(":start")} == {
-        "running, but prepare noted no start (an older agent's?): whether it booted in this attempt is not known"}
+        "running, but its attempt has no note of its reset: whether it booted in this attempt is not known"}
     saved.write_text(json.dumps(state))
     # A VM whose check cannot be planned (nor probed then), a gateway whose cloud-init snippet cannot be
     # read, and a VM still starting after the wait, ssh's job and one of the gameplan's services' left.
@@ -1325,7 +1326,8 @@ def test_check_flags_a_down_vm_and_dead_service(tmp_path, monkeypatch):
     ex.init_hooks.append(lambda host, params, reply: host == "10.4.0.11" and reply["boot"].update(
         state="starting", jobs=3, pending=["cron.service", "multi-user.target", "ssh.service"], waited=90.2, late=True))
     result = handlers.check(ex, CFG, validation.validate("check", {"run_uuid": RUN}))
-    assert set(result["failures"]) == {"vm:sandbox-a:init", "vm:sandbox-a:probe", "vm:sandbox-gw:init", "vm:sandbox-b:init:boot"}
+    assert set(result["failures"]) == {"vm:sandbox-a:probe"}
+    assert set(result["warnings"]) == {"vm:sandbox-a:init", "vm:sandbox-gw:init", "vm:sandbox-b:init:boot"}
     detail = {c["check"]: c["detail"] for c in result["checks"]}
     assert detail["vm:sandbox-a:init"] == detail["vm:sandbox-gw:init"] == "not checked: it could not be planned (the job log on the host says why)"
     assert detail["vm:sandbox-a:probe"] == "not run: its start and initialisation check could not be planned (init)"
@@ -1340,7 +1342,7 @@ def test_check_flags_a_down_vm_and_dead_service(tmp_path, monkeypatch):
     ex.snippets = FakeExecutor().snippets
     ex.qm_config["950"] = "cores: 1\nname: sandbox-gw\n"
     result = handlers.check(ex, CFG, validation.validate("check", {"run_uuid": RUN}))
-    assert "vm:sandbox-gw:init" in result["failures"] and "10.4.0.2" not in ex.inits
+    assert "vm:sandbox-gw:init" in result["warnings"] and "10.4.0.2" not in ex.inits
     assert ("check sandbox-gw: its start and initialisation check: RuntimeError: its Proxmox config names no cloud-init snippet "
             "(cicustom user=)") in ex.notes  # fmt: skip
 
@@ -1353,7 +1355,8 @@ def test_check_flags_a_down_vm_and_dead_service(tmp_path, monkeypatch):
     ex.probe_hooks = [lambda host, params, reply: (reply.update(deadline=True), reply.pop("apt"))]
     result = handlers.check(ex, CFG, validation.validate("check", {"run_uuid": RUN}))
     detail = {c["check"]: c["detail"] for c in result["checks"]}
-    assert {"vm:sandbox-a:init", "vm:sandbox-a:probe", "vm:sandbox-b:probe", "vm:sandbox-b:apt", "vm:sandbox-gw:start"} <= set(result["failures"])
+    assert {"vm:sandbox-a:probe", "vm:sandbox-b:probe", "vm:sandbox-b:apt", "vm:sandbox-gw:start"} <= set(result["failures"])
+    assert "vm:sandbox-a:init" in result["warnings"]
     assert {name.split(":", 2)[2] for name in detail if name.startswith("vm:sandbox-a:")} == {"start", "no-kvm", "init", "probe"}
     assert detail["vm:sandbox-a:init"] == "no answer (the job log on the host says why)" and detail["vm:sandbox-b:apt"] == "no answer"
     assert detail["vm:sandbox-a:probe"] == "not run: the VM did not answer its start and initialisation check (init)"
@@ -1364,7 +1367,7 @@ def test_check_flags_a_down_vm_and_dead_service(tmp_path, monkeypatch):
     (_host(tmp_path)["PROC"] / "uptime").write_text("300.00 600.00\n")
     _fake_qemu(tmp_path, 950, 4950, started=20)
     detail = {c["check"]: c["detail"] for c in handlers.check(ex, CFG, validation.validate("check", {"run_uuid": RUN}))["checks"]}
-    assert detail["vm:sandbox-gw:start"] == "running, booted in this attempt (the host itself restarted after prepare began)"
+    assert detail["vm:sandbox-gw:start"] == "running, booted in this attempt (the host itself restarted after the sandbox's reset)"
     # No run on the host: the job fails, it does not pass without its probes.
     with pytest.raises(validation.Invalid, match="no state for run"):
         handlers.check(ex, CFG, validation.validate("check", {"run_uuid": "4" * 8 + RUN[8:]}))

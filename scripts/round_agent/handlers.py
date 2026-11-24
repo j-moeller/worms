@@ -799,7 +799,8 @@ def _started(name, vmid, resources, states, run, now):
     """Whether a VM of the sandbox started as it should, as the host alone sees it: (ok, detail).
     It is in the pool sandbox under its name; Proxmox says it runs, and so does QEMU's own run
     state (not paused, not halted). With the run, its QEMU also started after this attempt's
-    prepare began (the kernel's clock, which prepare noted): a VM left running from before the
+    sandbox was reset for this attempt (the kernel's clock, which the snapshot or the rollback noted
+    and prepare kept with the run): a VM left running from before the
     rollback would hold the last run's state. `resources`: {vmid: the cluster's entry}; `states`:
     _live_states; `now`: host_state.clock()."""
     vm = resources.get(int(vmid))
@@ -819,14 +820,14 @@ def _started(name, vmid, resources, states, run, now):
     if started is None:
         return False, "Proxmox says running, but the host finds no QEMU process of it"
     if began.get("uptime") is None:
-        return False, "running, but prepare noted no start (an older agent's?): whether it booted in this attempt is not known"
+        return False, "running, but its attempt has no note of its reset: whether it booted in this attempt is not known"
     if began.get("boot_id") and now.get("boot_id") and began["boot_id"] != now["boot_id"]:
-        return True, "running, booted in this attempt (the host itself restarted after prepare began)"
+        return True, "running, booted in this attempt (the host itself restarted after the sandbox's reset)"
     if started < began["uptime"]:
-        return False, (f"running since {began['uptime'] - started:.0f} s before this attempt's prepare began: it did not boot "
+        return False, (f"running since {began['uptime'] - started:.0f} s before this attempt's reset (the rollback, or the snapshot): it did not boot "
                        "in this attempt and may hold the last run's state")  # fmt: skip
     age = f", {now['uptime'] - started:.0f} s ago" if now.get("uptime") is not None else ""
-    return True, f"running, booted in this attempt (its QEMU started {started - began['uptime']:.0f} s into prepare{age})"
+    return True, f"running, booted in this attempt (its QEMU started {started - began['uptime']:.0f} s after the sandbox's reset{age})"
 
 
 def _gateway_snippet(ex, config):
@@ -859,6 +860,16 @@ def _init_plan(ex, name, info, config, specs, stack, addressing):
     return init, notes
 
 
+# The checks that decide whether an attempt starts (the operator's choice, 2026-11-24): every VM
+# running and booted in this attempt (start), the probe that answered, the flag on it, DNS,
+# scoring, logging, apt and PyPI reachable; and the isolation the platform's rules demand: the
+# host's firewalls up, no team VM with the host's CPU, nothing forbidden (the internet, the
+# infrastructure) reachable from a VM. Everything else (how it booted, the gameplan's own
+# connections and files, the mirror) is a warning.
+GATES = re.compile(r"^(?:host:(?:proxmox-firewall|worms-host-firewall)|sandbox:vms-registered"
+                   r"|vm:[^:]+:(?:start|no-kvm|probe|flag|dns|scoring|logging|apt|pypi|isolated))$")  # fmt: skip
+
+
 def check(ex, cfg, params):
     """Sanity checks on the host and the sandbox, right before the worm. Returns {ok, failures,
     checks}. The host's units; for every VM of the sandbox and for sandbox-gw, that it started
@@ -867,10 +878,12 @@ def check(ex, cfg, params):
     in this attempt and came up as it should, from inside (cloud-init done, the boot finished, its
     addresses, route, sshd, users and services; the gateway's rules and sysctl settings), and then
     the probes (probe.py) of every VM of its gameplan: its flag, the platform's names, scoring and
-    logging over verified HTTPS, apt and PyPI through the private internet, its clock, the
-    infrastructure and the internet out of its reach, the gameplan's firewall both ways, its
-    files. A VM that did not start, or did not answer, is not probed. The OOM priority of every
-    team VM, as after any start."""
+    logging over verified HTTPS, apt and PyPI through the private internet, the infrastructure and
+    the internet out of its reach, the gameplan's firewall both ways, its files. A VM that did not
+    start, or did not answer, is not probed. The OOM priority of every team VM, as after any start.
+
+    Only the checks GATES names fail it (`failures`: the attempt does not start); the others are
+    `warnings`, in the result and the job's log."""
     results = []
     record = _recorder(results)
     _host_units(ex, record)
@@ -951,8 +964,15 @@ def check(ex, cfg, params):
         record(f"vm:{name}:probe", False, "the gameplan's VM is not in the sandbox")
     _oom_priority(ex, cfg, resources, states)
 
-    failures = [r["check"] for r in results if not r["ok"]]
-    return {"ok": not failures, "failures": failures, "checks": results}
+    failures = [r["check"] for r in results if not r["ok"] and GATES.match(r["check"])]
+    warnings = [r["check"] for r in results if not r["ok"] and not GATES.match(r["check"])]
+    for row in results:  # the job's log says each failure and warning and why, not only the result
+        if not row["ok"]:
+            what = "failed" if row["check"] in failures else "warning (it does not fail the attempt)"
+            _note(ex, f"{what}: {row['check']}: {row.get('detail') or '(no reason given)'}")
+    _note(ex, f"{len(failures)} of the checks that decide failed" + (f": {', '.join(failures)}" if failures else "")
+          + (f"; {len(warnings)} warning(s)" if warnings else ""))  # fmt: skip
+    return {"ok": not failures, "failures": failures, "warnings": warnings, "checks": results}
 
 
 def _packages_in_cache(ex, spec, addressing, record):

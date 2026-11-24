@@ -27,8 +27,6 @@ from gameplan.definition import FLAG_PATH, SERVICE_PORTS
 
 DEADLINE = 150  # seconds, on the VM; the SSH command gets a minute more
 APT_TIMEOUT = 90
-TIME_WAIT = 45  # how long the VM's clock may take to report itself synchronised
-CLOCK_TOLERANCE = 60  # seconds between the host's clock and the VM's (TOTP accepts minutes)
 CONNECT_TIMEOUT = 4
 MARK = "@worms-probe "
 # A seeded package of the private PyPI (roles/private_internet/devpi, devpi_seed_packages).
@@ -230,22 +228,6 @@ def apt():
         shutil.rmtree(d, ignore_errors=True)
 
 
-def clock():
-    # A gameplan may remove or disable the VM's time service: then the host's clock check alone
-    # (records), which every VM gets.
-    until = time.time() + P["time_wait"]
-    while True:
-        code, output = command(["timedatectl", "show", "-p", "NTPSynchronized", "-p", "CanNTP", "-p", "NTP"], 10)
-        values = dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
-        if "no" in (values.get("CanNTP"), values.get("NTP")):
-            return put("time", [True, "no time service: its clock as the host sees it"])
-        synced = values.get("NTPSynchronized") == "yes"
-        if synced or time.time() > until:
-            break
-        time.sleep(3)
-    put("time", [synced, "" if synced else "not synchronised after %d s (%s)" % (P["time_wait"], " ".join(output.split())[:80])])
-
-
 def files():
     found = {}
     for key, path, owner, mode in P["files"]:
@@ -270,7 +252,7 @@ def files():
     put("files", found)
 
 
-steps = [("flag", flag), ("dns", dns), ("pypi", pypi), ("apt", apt), ("time", clock), ("files", files)]
+steps = [("flag", flag), ("dns", dns), ("pypi", pypi), ("apt", apt), ("files", files)]
 steps += [(key, https, key, host, port) for key, (host, port) in sorted(P["https"].items())]
 steps += [("error-connect-" + key, reach, "connect", key, a, port, want) for key, a, port, want in P["connect"]]
 steps += [("error-forbidden-" + key, reach, "forbidden", key, a, port, "blocked") for key, a, port in P["forbidden"]]
@@ -379,7 +361,7 @@ def plan(spec, name, addressing, maintenance, devbox_address=None):
     forbidden = [(label, address, port) for label, address, port in forbidden if address]
     files = [f for f in spec["files"] if f["vm"] == name and f["at_reset"]]
     params = {
-        "deadline": DEADLINE, "apt_timeout": APT_TIMEOUT, "time_wait": TIME_WAIT, "connect_timeout": CONNECT_TIMEOUT,
+        "deadline": DEADLINE, "apt_timeout": APT_TIMEOUT, "connect_timeout": CONNECT_TIMEOUT,
         "flag": FLAG_PATH, "tmp": "/var/tmp",
         "dns": {host: _lookup(addressing, path) or "" for host, path in DNS_NAMES.items()},
         "https": {"scoring": ["scoring.worms.internal", 443], "logging": ["logging.worms.internal", 443]},
@@ -440,16 +422,8 @@ def records(name, params, notes, reply, sent, note, why=None):
     for key in ("flag", "dns", "scoring", "logging", "apt", "pypi"):
         ok, detail = _pair(reply, key)
         out.append((f"{prefix}:{key}", ok, detail))
-
-    synced, detail = _pair(reply, "time")
-    started = reply.get("started")
-    offset = started - sent if isinstance(started, (int, float)) and not isinstance(started, bool) else None
-    if offset is None:
-        out.append((f"{prefix}:time", False, "no clock reading"))
-    elif abs(offset) > CLOCK_TOLERANCE:
-        out.append((f"{prefix}:time", False, f"its clock is {offset:+.0f} s from the host's"))
-    else:
-        out.append((f"{prefix}:time", synced, detail or "synchronised"))
+    # No time check (the operator's choice, 2026-11-24: NTP not yet synchronised failed every VM of
+    # an attempt): a VM's clock is what its boot from the host's RTC and the private NTP make it.
 
     forbidden = reply.get("forbidden") if isinstance(reply.get("forbidden"), dict) else {}
     labels = [label for label, _, _ in params["forbidden"]]

@@ -36,11 +36,11 @@ Each step's commands and output go to its own file in the session's folder, ~/.w
 terminal shows what each step does, its log's path when it starts and when it ends, and how it
 ends. What failed, why (scripts/round_agent/failure.py: the cause in the step's whole output) and
 in which file the rest is: the session's summary.log (worms_cli/summary.py; the newest session's is
-always ~/.worms/rounds/latest/summary.log), and each failed attempt's row for the staff pages. A failed attempt is written down and the
-round goes on with the next team; at the end the failed ones may be run again (or later with
---resume), and once every team finished without an error the results may be published; then the
-round's sandbox destroyed, the devboxes, the round agent and the orchestrator started again: each
-asked. The teams see nothing of the round's attempts until its results are published. Ctrl-C fails
+always ~/.worms/rounds/latest/summary.log), and each failed attempt's row for the staff pages. An
+attempt that ends with an error stops the round there (the next team's would most likely meet it
+too): `--resume` runs a new attempt of that team from the snapshot, then the teams still to come.
+Once every team finished without an error the results may be published; then the round's sandbox
+destroyed, the devboxes, the round agent and the orchestrator started again: each asked. The teams see nothing of the round's attempts until its results are published. Ctrl-C fails
 the attempt under way (its VMs stopped, its sandbox kept); twice, exits at once.
 """
 
@@ -415,7 +415,7 @@ class Session:
         self.conductor = None
         self.jobs = None
         self.interrupts = 0
-        self.stopped_on_prepare = False  # a prepare failed: the round stopped there (_after_failed_prepare)
+        self.stopped_on_failure = False  # an attempt ended with an error: the round stopped there (_after_failed_attempt)
 
     # The folder an attempt's steps go to; the session's own steps (gameplans, preflight) in the session's.
     def folder(self, run=None) -> Path:
@@ -731,8 +731,9 @@ def _run(session, runs) -> list:
         took = timedelta(seconds=int(time.monotonic() - began))
         _attempt_ended(session, run, took)
         ended.append(run)
-        if run.state == S.FAILED and _sandbox_step_failed(run):
-            _after_failed_prepare(session, run)
+        if run.state == S.FAILED or run.error:
+            # Any error stops the round: the next team's attempt would most likely meet it too.
+            _after_failed_attempt(session, run, runs[index:])
             break
     return ended
 
@@ -767,25 +768,21 @@ def _attempt_ended(session, run, took):
                             failure.get("logs") or (), then, refers=failure.get("entry"))  # fmt: skip
 
 
-def _sandbox_step_failed(run) -> bool:
-    """The attempt's rollback or prepare failed: the next team's would fail the same way."""
-    from core.models.rounds import HostJob
-
-    kinds = (HostJob.Kind.ROLLBACK, HostJob.Kind.PREPARE)
-    return run.jobs.filter(kind__in=kinds).exclude(state=HostJob.State.DONE).exists()
-
-
-def _after_failed_prepare(session, run):
-    """A rollback or a prepare that failed stops the round: the next team's would fail the same
-    way. The sandbox and its snapshot stay: `--resume` starts from the snapshot, not a build."""
-    print(output.heading("the sandbox's rollback or the prepare failed: the round stops here"))
-    print("  The sandbox and its snapshot are kept: `--resume` rolls it back and goes on, it is not built again.")
+def _after_failed_attempt(session, run, left):
+    """Any error of an attempt stops the round there: the next team's attempt would most likely
+    meet it too. The sandbox and its snapshot stay: `--resume` runs a new attempt of this team
+    from the snapshot (not a build), then the teams still to come."""
+    waiting = [other.team.name for other in left if other.pk != run.pk]
+    print(output.heading(f"{run.team.name}'s attempt {run.attempt} ended with an error: the round stops here"))
+    print(f"  Not run: {', '.join(waiting) or 'no other team'}. The sandbox and its snapshot are kept: `--resume` starts "
+          "from the snapshot, it is not built again.")  # fmt: skip
     print(f"  Mend the cause (what failed and why: {session.summary.path}; its steps: {session.folder(run)}). A change "
           "to Ansible, the gameplans or the host's code goes to the host with `worms apply round-agent`. Then: "
           f"`worms round start {session.round.id} --resume`.")  # fmt: skip
-    session.summary.note(f"the round stopped: {run.team.name}'s attempt failed preparing its sandbox (the next team's would "
-                         "fail the same way)")  # fmt: skip
-    session.stopped_on_prepare = True
+    says(f"worms round start {session.round.id} --resume")
+    session.summary.note(f"the round stopped after {run.team.name}'s attempt {run.attempt}: its error would most likely "
+                         f"stop the next team's too; not run: {', '.join(waiting) or 'no other team'}")  # fmt: skip
+    session.stopped_on_failure = True
 
 
 def _build(session, run) -> bool:
@@ -1094,20 +1091,13 @@ def start(config, args) -> int:
             _afterwards(session)
             _say_summary(session)
             return 1
-        ended = _run(session, runs)
-        failed = [run for run in ended if run.state == RoundRun.State.FAILED]
-        if failed and not session.conductor.stopping and not session.stopped_on_prepare:
-            print(f"failed: {', '.join(run.team.name for run in failed)} (each attempt's steps: {session.dir})")
-            says(f"worms round start {round_.id} --resume")
-            if ask("Run each of them again now? A new attempt starts from the sandbox's snapshot (minutes), not from a "
-                   "new build.", False, False):  # fmt: skip
-                _run(session, failed)
+        _run(session, runs)  # it stops at the first attempt that ends with an error (_after_failed_attempt)
         signal.signal(signal.SIGINT, signal.default_int_handler)
         _summary(session)
         _offer_publish(session)
         _afterwards(session)
         _say_summary(session)
-        return 0
+        return 1 if session.stopped_on_failure else 0
     except KeyboardInterrupt:
         session.summary.end("out at once (Ctrl-C twice): what was under way may be left as it was")
         print(output.color("\nout at once: what was under way may be left as it was. `worms round` and `worms vm` say "

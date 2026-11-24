@@ -726,6 +726,7 @@ def prepare(ex, cfg, params):
         raise RuntimeError(f"the sandbox lacks VMs of the gameplan: {', '.join(missing)}")
     values = _generate_secrets(ex, spec)
     _apply_setup(ex, vms, spec, values)
+    _install_capture_vm(ex, vms)  # the gameplan's VMs (not the gateway)
     for entry in spec["files"]:
         if entry["at_reset"]:
             _write_gameplan_file(ex, vms[entry["vm"]]["maintenance_ip"], entry, values)
@@ -1458,6 +1459,7 @@ def devbox_provision(ex, cfg, params):
     # Only the VMs this apply created: one that was there before may have had its team on it.
     _snapshot_fresh_devbox_vms(ex, [vm for vm in _team_vms(ex) if (vm["vmid"], vm["name"]) not in before])
     _configure_devbox(ex, teams)
+    _install_capture_vm(ex, _devbox_vms(ex))  # every team's A, B and C (not the gateways)
     report, sources = _devbox_report(ex, teams)
     _write_devbox_map(ex, cfg, teams)
     return {"vms": report, "services_sources": sources, "addresses": _devbox_addresses(teams)}
@@ -1553,6 +1555,23 @@ def _install_ca(ex, vms):
         ex.ssh(info["maintenance_ip"], ["sudo", "sh", "-c", CA_INSTALL], input=ca)
 
 
+# `capture-vm` on every team VM (sandbox and devbox): it submits the VM's flag to scoring, in the
+# background, once a minute until scoring accepts it (scripts/capture-vm). Written over SSH after
+# every reset (a devbox's, a sandbox attempt's prepare), as the CA is, so a snapshot from before
+# it has it too.
+CAPTURE_VM = "scripts/capture-vm"  # in the workspace
+CAPTURE_VM_PATH = "/usr/bin/capture-vm"
+
+
+def _install_capture_vm(ex, vms):
+    """/usr/bin/capture-vm on these VMs ({name: {maintenance_ip, ...}})."""
+    if not vms:
+        return
+    script = (ex.repo_root / CAPTURE_VM).read_text()
+    for info in vms.values():
+        ex.ssh(info["maintenance_ip"], ["sudo", "install", "-m", "0755", "/dev/stdin", CAPTURE_VM_PATH], input=script)
+
+
 def _write_team_keys(ex, team, vms):
     """The team's SSH keys on its VMs, directly: the key file `worms key sync` writes too.
     The SSH gateway's lines do not change with a reset."""
@@ -1601,6 +1620,7 @@ def devbox_rebuild(ex, cfg, params):
             how = "replaced; its configuration failed (the job log says why), the next reset tries again"
     own = {name: info for name, info in _devbox_vms(ex).items() if info["team"] == slug}
     _install_ca(ex, own)
+    _install_capture_vm(ex, own)
     _write_team_keys(ex, team, own)
 
     # Rewrite this team's tokens only.

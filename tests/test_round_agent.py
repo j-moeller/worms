@@ -311,6 +311,8 @@ class Pair(Gameplan):
 """
 GAMEPLAN_ROOT = Path(tempfile.mkdtemp(prefix="agent-gameplans-"))
 (GAMEPLAN_ROOT / "gameplans").mkdir()
+(GAMEPLAN_ROOT / "scripts").mkdir()  # what the agent's workspace holds of scripts/: capture-vm
+(GAMEPLAN_ROOT / handlers.CAPTURE_VM).write_text((REPO / handlers.CAPTURE_VM).read_text())
 (GAMEPLAN_ROOT / "gameplans" / "pair.py").write_text(PAIR)
 PAIR_SHA = hashlib.sha256(PAIR.encode()).hexdigest()
 # The platform's addresses, as `worms step inventory` leaves them in the agent's workspace.
@@ -1812,6 +1814,8 @@ class DevboxFake(FakeExecutor):
         self.repo_root = tmp_path
         (tmp_path / handlers.CA_CERT).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / handlers.CA_CERT).write_text("-----BEGIN CERTIFICATE-----\nworms CA\n-----END CERTIFICATE-----\n")
+        (tmp_path / handlers.CAPTURE_VM).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / handlers.CAPTURE_VM).write_text((REPO / handlers.CAPTURE_VM).read_text())
         self.devbox_built = built_before
         self._sync()
 

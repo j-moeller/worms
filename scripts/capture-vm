@@ -1,0 +1,46 @@
+#!/bin/bash
+# capture-vm: submit this VM's flag (/etc/worms/flag) to scoring, in the background, until
+# scoring has accepted it. Installed as /usr/bin/capture-vm on every sandbox and devbox VM by the
+# round agent (scripts/round_agent/handlers.py, _install_capture_vm).
+#
+#   capture-vm      returns at once; it goes on in the background, after a logout or a dropped
+#                   SSH connection too. Its tries: journalctl -t capture-vm
+#
+# Once a minute: no flag file yet, or a submission that did not succeed (scoring answered with
+# anything but 2xx, it could not be reached, curl is missing, ...): it waits a minute and tries
+# again. A submission scoring accepted ends it.
+set -u
+
+FLAG=/etc/worms/flag
+URL=https://scoring.worms.internal/submit
+PAUSE=60
+
+if [ "${CAPTURE_VM_DETACHED:-}" != 1 ]; then
+    # A session of its own, no terminal: a logout or a dropped SSH connection (SIGHUP) does not end it.
+    CAPTURE_VM_DETACHED=1 setsid -f nohup "$0" "$@" </dev/null >/dev/null 2>&1
+    echo "capture-vm: running in the background until scoring accepts this VM's flag (its tries: journalctl -t capture-vm)"
+    exit 0
+fi
+
+say() { logger -t capture-vm -- "$*" 2>/dev/null || true; }
+
+while true; do
+    if [ -e "$FLAG" ]; then
+        if flag=$(tr -d '\r\n' <"$FLAG" 2>/dev/null); then
+            flag=${flag//\\/\\\\}   # JSON: backslashes and quotes escaped
+            flag=${flag//\"/\\\"}
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 -X POST "$URL" \
+                -H "Content-Type: application/json" \
+                -d "{\"vm_flag\":\"$flag\"}" 2>/dev/null)
+            case "${code:-}" in
+                2??) say "flag submitted (HTTP $code)"; exit 0 ;;
+                *) say "not accepted (HTTP ${code:-none}); again in $PAUSE s" ;;
+            esac
+        else
+            say "$FLAG cannot be read; again in $PAUSE s"
+        fi
+    else
+        say "no $FLAG yet; again in $PAUSE s"
+    fi
+    sleep "$PAUSE"
+done

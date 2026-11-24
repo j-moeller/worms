@@ -87,6 +87,8 @@ curl -sS -X POST https://logging.worms.internal/submit -H 'Content-Type: applica
 | Body | `{"vm_flag": "<1–64 printable characters>"}`, at most 2 KiB | `{"log_data": {…}}`: a non-empty JSON object, at most 8 KiB compact, depth 8, 256 items; body at most 16 KiB |
 | Success | `201 {"status":"success","message":"Submission stored."}` | the same |
 
+- **`capture-vm`.** Every sandbox and devbox VM has it (`/usr/bin/capture-vm`): it sends the scoring request above for that VM's flag, in the background, and returns at once. It keeps going after you log out or your SSH connection drops. Without a flag file yet, or without a success (any answer but 2xx, scoring not reachable, curl missing), it tries again a minute later; a success ends it. What it tried: `journalctl -t capture-vm`.
+
 - **Answers.**
   - Scoring always answers 201 for a well-formed flag. Whether it counted shows later on the dashboard.
   - To log raw output, base64-encode it: `{"log_data": {"b64": "…"}}`.

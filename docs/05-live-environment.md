@@ -110,7 +110,7 @@ PENDING → PREPARING → CHECKING → RUNNING → ENDING → TEARING_DOWN → F
    - **Every attempt but the first after the snapshot:** `rollback`, `qm rollback … clean --start 1` of every VM.
    - `prepare` refuses a sandbox not of this gameplan, without its snapshot, with a VM not running, or not reset since the last prepare.
 3. It generates **this run's** secrets on the host: SSH keys, passwords and TOTP seeds.
-4. It sets the passwords, installs the keys and writes the files marked `at_reset`. Documents, archives and vaults are made on the host at this point, with the secrets in them ([`render.py`](../src/gameplan/render.py)).
+4. It installs `/usr/bin/capture-vm` on every VM ([`scripts/capture-vm`](../scripts/capture-vm): the VM's flag submitted in the background, once a minute until scoring accepts it; [8](08-user-guide.md#scoring-and-logging)). It sets the passwords, installs the keys and writes the files marked `at_reset`. Documents, archives and vaults are made on the host at this point, with the secrets in them ([`render.py`](../src/gameplan/render.py)).
 5. It places a fresh flag on **every** VM, reads it back and reports only its hash.
 6. It keeps the secrets in `/var/lib/worms/runs/<run>.json` (root, 0600) until teardown, and when it began (the kernel's boot id and uptime): the check's `start` tells a VM that booted in this attempt from one left running.
 

@@ -326,7 +326,8 @@ def progress(round_, now=None, window_now=None, current=None):
 
 def _attempt(run, states, flags, now, timing):
     """The attempt under way: its steps, its own time axis with the gameplan's steps on it, and
-    the log of what it did (events and file jobs, oldest first)."""
+    the log of what it did (events and file jobs, the newest first; times from the worm's start,
+    which is 0:00)."""
     began = next((ts for ts, state in states if state == S.PREPARING), run.state_changed_at or now)
     reached = {state: ts for ts, state in states}
     order = [step for step, _, _ in STEPS]
@@ -354,7 +355,8 @@ def _attempt(run, states, flags, now, timing):
         marks.append(axis.mark(run.ends_at, cls="end", label="run ends", title=f"The run ends: {run.ends_at:%H:%M:%S} UTC"))
 
     def offset(ts):
-        return _clock((ts - run.worm_start_at).total_seconds()) if run.worm_start_at else _clock((ts - began).total_seconds())
+        seconds = int((ts - (run.worm_start_at or began)).total_seconds())
+        return "0:00" if seconds == 0 else _clock(seconds)
 
     log = []
     for ts, state in states:
@@ -367,8 +369,11 @@ def _attempt(run, states, flags, now, timing):
                                                              message=str(data.get("message", ""))[:200])  # fmt: skip
         if event.kind == RunEvent.Kind.VM_STOPPED and data.get("how") == "guest":
             text += " from inside: the worm's doing (the host says)"  # the watch's, conductor.py
-        log.append({"ts": event.ts, "kind": event.kind, "text": text})
-        ticks.append(axis.mark(event.ts, cls=f"ev ev-{event.kind}", title=f"{event.ts:%H:%M:%S} {text}"))
+        # The worm started at worm_start_at, the fuse's end; the event is written when the conductor
+        # next looks, up to a watch interval later: it is shown at the worm's start, 0:00.
+        ts = run.worm_start_at if event.kind == RunEvent.Kind.WORM_STARTED and run.worm_start_at else event.ts
+        log.append({"ts": ts, "kind": event.kind, "text": text})
+        ticks.append(axis.mark(ts, cls=f"ev ev-{event.kind}", title=f"{ts:%H:%M:%S} {text}"))
     waiting_on = None
     for job in run.jobs.order_by("id").only("kind", "state", "params", "requested_at", "finished_at", "error"):
         if job.kind in (HostJob.Kind.WRITE_FILE, HostJob.Kind.READ_FILE):
@@ -380,7 +385,7 @@ def _attempt(run, states, flags, now, timing):
             ticks.append(axis.mark(when, cls=f"ev ev-{job.kind}", title=f"{when:%H:%M:%S} file #{number} {what}{outcome}"))
         if job.state in (HostJob.State.QUEUED, HostJob.State.RUNNING):
             waiting_on = job
-    log.sort(key=lambda entry: entry["ts"])
+    log.sort(key=lambda entry: entry["ts"], reverse=True)  # the newest first
     for entry in log:
         entry["offset"] = offset(entry["ts"])
 
@@ -398,7 +403,7 @@ def _attempt(run, states, flags, now, timing):
         "marks": marks,
         "ticks": ticks,
         "axis_ticks": axis.ticks(),
-        "log": log[-40:],
+        "log": log[:40],
         "log_cut": max(0, len(log) - 40),
         "run_time": run_time,
         "flags": flags,

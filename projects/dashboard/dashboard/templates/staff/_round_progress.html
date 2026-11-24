@@ -54,7 +54,7 @@ steps so far. `p`: progress(); `show_name`: link the round. The page refreshes t
                 {% for m in a.marks %}<g class="tl__mark tl__mark--{{ m.cls }}"><title>{{ m.title }}</title><line x1="{{ m.x }}" x2="{{ m.x }}" y1="14" y2="52"></line><text x="{{ m.x }}" y="9" text-anchor="middle">{{ m.label }}</text></g>{% endfor %}
                 {% for t in a.axis_ticks %}<text class="tl__tick" x="{{ t.x }}" y="66" text-anchor="{{ t.anchor }}">{{ t.text }}</text>{% endfor %}
             </svg>
-            <p class="field__label">What the attempt did{% if a.log_cut %} (the latest {{ a.log|length }}){% endif %}: time from the worm's start, then UTC</p>
+            <p class="field__label">What the attempt did, the newest first{% if a.log_cut %} (the latest {{ a.log|length }}){% endif %}: time from the worm's start (0:00), then UTC</p>
             <ol class="tl-log">
                 {% for e in a.log %}<li class="tl-log__{{ e.kind }}"><span class="mono">{{ e.offset }}</span><span class="mono muted">{{ e.ts|date:"H:i:s" }}</span><span>{{ e.text }}</span></li>{% empty %}<li><span></span><span></span><span class="muted">Nothing yet.</span></li>{% endfor %}
             </ol>

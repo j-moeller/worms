@@ -1916,6 +1916,8 @@ LOG_HELP = """\
   worms log                 the names there are
   worms log processor -f    a service's log (`worms service` lists them), followed
   worms log round [3] [alpha]  a round's sessions (`worms round start`): round.log, an attempt's steps
+  worms log round [3] summary  what failed in its newest session, why, and the file with the rest
+                            (~/.worms/rounds/latest/summary.log: always the newest session's)
   worms log dns             a VM's journal (--since "1 hour ago")
   worms log 2003            a host job's log, by its number (`worms jobs`)
   worms log latest -f       the newest host job's, followed
@@ -2246,7 +2248,7 @@ def verb_log(config, args) -> int:
         from worms_cli import rounds
 
         if len(args.more) > 2:
-            output.error("`worms log round [<round>] [<team>]`")
+            output.error("`worms log round [<round>] [<team>|summary]`")
             return 2
         return _said(lambda: rounds.show_logs(*(args.more + [None, None])[:2], lines=args.lines, follow=args.follow))
     numbers = [word for word in args.more if word.isdigit()]

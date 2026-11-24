@@ -2295,29 +2295,41 @@ def test_values_the_caller_reads_stay_out_of_the_log(logged, tmp_path, monkeypat
 
 
 def test_a_failed_build_keeps_its_real_reason_in_the_log(logged):
-    """Ansible reports a failed task on stdout. The job's `error` keeps only stderr, so
-    it has to say where the rest is."""
+    """Ansible reports a failed task on stdout, not stderr: the job's `error` (what the dashboard
+    shows) is that cause, found in the whole output (round_agent/failure.py), and says where the
+    rest is."""
     from round_agent.executor import CommandError
 
     ex, job_log = logged
     with pytest.raises(CommandError) as failure:
         ex.run(["sh", "-c", "echo 'fatal: [vm]: FAILED! => the real reason'; echo warning >&2; exit 3"], stream=True)
-    assert "exited 3: warning" in str(failure.value)
-    assert str(job_log.path) in str(failure.value)
-    # The failed task from stdout, too: the error is what the dashboard shows.
-    assert "last failure: fatal: [vm]: FAILED! => the real reason" in str(failure.value)
+    assert "exited 3: Ansible: fatal: [vm]: FAILED! => the real reason" in str(failure.value)
+    assert str(job_log.path) in str(failure.value) and "warning" not in str(failure.value).split(" exited 3: ")[1]
+    assert "the real reason" in failure.value.detail
     text = _log_text(job_log)
     assert "the real reason" in text and "exit 3 after" in text
 
 
-def test_a_failed_commands_error_keeps_the_end_of_stderr():
-    """Ansible starts stderr with inventory-plugin warnings; its reason comes last
-    (2026-11-07: the job's error showed only the warnings)."""
+def test_a_failed_commands_error_is_its_cause_not_the_warnings():
+    """Ansible fills stderr with warnings (inventory plugins, deprecations); its reason may come
+    anywhere (2026-11-07 and 2026-11-23: the job's error showed only warnings). The callback's
+    failed task (its VM, file:line and msg) comes first, the CLI's `error:` line after it."""
     from round_agent.executor import CommandError
 
     stderr = "[WARNING]: Failed to parse inventory with 'auto' plugin\n" * 40 + "[ERROR]: the real reason\n"
-    message = str(CommandError(["python3"], 1, stderr))
-    assert message.endswith("[ERROR]: the real reason") and "exited 1: ..." in message
+    message = str(CommandError(["python3", "src/manage.py", "step", "sandbox-configure"], 1, stderr))
+    assert message == "worms step sandbox-configure exited 1: Ansible: the real reason"
+    stdout = ("✗ sandbox-a · role : Create users · roles/x/tasks/main.yml:37\n    msg: One or more items failed\n"
+              "    item bob:\n      msg: 'append is True but groups is missing'\n    its whole log: /r/round/sandbox-a.log\n"
+              "\n✗ sandbox-b · role : Create users · roles/x/tasks/main.yml:37\n    msg: One or more items failed\n"
+              "    item bob:\n      msg: 'append is True but groups is missing'\n")  # fmt: skip
+    stderr = "[DEPRECATION WARNING]: INJECT_FACTS_AS_VARS\nOrigin: x.yml:5:9\n\nerror: step stopped: command failed (exit 2)\n"
+    error = CommandError(["python3", "src/manage.py", "step", "sandbox-configure"], 1, stderr, "/r/004-prepare.log", stdout)
+    assert str(error) == ("worms step sandbox-configure exited 1: Ansible: role : Create users failed on sandbox-a and 1 "
+                          "more VM(s) (roles/x/tasks/main.yml:37): append is True but groups is missing "
+                          "(full output: /r/004-prepare.log)")  # fmt: skip
+    assert "the same failure on: sandbox-b" in error.detail and "error: step stopped" in error.detail
+    assert error.cause.logs == ["/r/round/sandbox-a.log"] and "DEPRECATION" not in error.detail
 
 
 def test_a_timed_out_build_is_killed_and_noted(logged):
@@ -2417,8 +2429,8 @@ def test_a_job_logs_its_commands_and_how_it_ended(agent_db, tmp_path, monkeypatc
         state, error, uuid = cur.fetchone()
     # The job's error points to the log and names the failure (CommandError); the rest of its
     # stdout stays out of the database.
-    assert state == "failed" and f"{uuid}.log" in error and "last failure: fatal: the reason" in error
-    assert "step one done" not in error
+    assert state == "failed" and f"{uuid}.log" in error and "exited 1: fatal: the reason" in error
+    assert "step one done" not in error.split(" exited 1: ")[1]  # (the command line before it has it)
     assert isinstance(CommandError(["x"], 1, ""), RuntimeError)
 
 

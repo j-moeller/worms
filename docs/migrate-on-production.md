@@ -283,7 +283,7 @@ worms round                                              # Round 1: the first te
 **5. The round:** `worms round start <round id> --resume` (Round 1's id: `worms round`). It asks: a new attempt of the failed team; stop the
 orchestrator; stop the round agent (and cancel the queued jobs: the old `gameplans` and `devbox_rebuild` ones); stop the
 devboxes; then it checks each, runs the preflight and asks once more. Follow it from a second terminal with
-`worms log round <id> -f`; one team's steps: `worms log round <id> <team>`.
+`worms log round <id> -f`; one team's steps: `worms log round <id> <team>`; what failed, why and in which file: `worms log round <id> summary` (`~/.worms/rounds/latest/summary.log`).
 
 **6. At its end:** a failed team again (`--resume`, later too); publish once every team finished without an error
 (`worms round publish <id>`, back `worms round unpublish <id>`); then destroy the sandbox, start the devboxes, the

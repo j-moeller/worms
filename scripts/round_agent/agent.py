@@ -38,7 +38,7 @@ import sys
 import threading
 import time
 
-from round_agent import handlers, validation
+from round_agent import failure, handlers, validation
 from round_agent.executor import DEFAULT_JOB_LOG_DIR, Executor
 
 log = logging.getLogger("round-agent")
@@ -187,8 +187,11 @@ class Agent:
                 job_log.note(f"job rejected: {exc}")
                 log.warning("job %s rejected: %s", uuid, exc)
             except Exception as exc:  # noqa: BLE001
-                self.finish(job_id, "failed", error=f"{type(exc).__name__}: {exc}")
-                job_log.note(f"job failed: {type(exc).__name__}: {exc}")
+                # Why, in the job's result too (failure.py): the dashboard's staff pages show it.
+                cause = failure.from_exception(exc)
+                self.finish(job_id, "failed", result={"failure": {**cause.as_dict(), "log": str(job_log.path or "")}},
+                            error=f"{type(exc).__name__}: {exc}")  # fmt: skip
+                job_log.note(f"job failed: {type(exc).__name__}: {exc}\n{cause.text()}")
                 log.exception("job %s failed", uuid)
             finally:
                 stop.set()

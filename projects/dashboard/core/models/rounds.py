@@ -39,6 +39,15 @@ class RoundRun(models.Model):
         FAILED = "failed"  # see `error`; thrown away, and tried again while attempts are left
         SKIPPED = "skipped"  # no upload before the deadline
 
+    # Where in an attempt a failure happened (its `failure`'s phase: the state it was in), said.
+    PHASES = {"pending": "before it began", "preparing": "while its sandbox was prepared (prepare)",
+              "checking": "while its sandbox was checked (check)", "running": "while the gameplan ran",
+              "ending": "while its VMs were stopped (ending)", "tearing_down": "in its teardown"}  # fmt: skip
+
+    def failure_phase(self) -> str:
+        phase = str((self.failure or {}).get("phase") or "")
+        return self.PHASES.get(phase, f"while {phase.replace('_', ' ')}" if phase else "")
+
     uuid = models.UUIDField(default=uuid.uuid4, unique=True)
     round = models.ForeignKey(Round, on_delete=models.CASCADE, related_name="runs")
     team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="runs")
@@ -50,6 +59,11 @@ class RoundRun(models.Model):
 
     state = models.TextField(choices=State.choices, default=State.PENDING)
     error = models.TextField(blank=True, default="")
+    # Why it failed, for staff (the staff round page; never a team's): the phase, the host step
+    # (kind, job, its log on the host), the one-line cause, the excerpt of the output that says why
+    # (scripts/round_agent/failure.py), each failed VM's Ansible log and the session's summary.log
+    # (orchestrator/rounds/conductor.py failure_of). Empty while it has not failed.
+    failure = models.JSONField(default=dict, blank=True)
 
     # The gameplan this attempt runs (its file name and the SHA-256 the orchestrator validated:
     # the host runs only that version) and its duration per team (seconds from the worm's start).

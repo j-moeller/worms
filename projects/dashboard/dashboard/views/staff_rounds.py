@@ -235,10 +235,14 @@ def round_detail(request: HttpRequest, round_uuid):
         return redirect("staff_round", round_uuid=round_obj.uuid)
 
     teams = Team.objects.filter(competition=round_obj.competition).count()
+    # Why each attempt failed (RoundRun.failure, `worms round start` writes it), the newest first:
+    # the step, its phase, the cause, what of its output says it, and its logs on the host.
+    failures = sorted((run for run in runs if run.failure), key=lambda run: run.finished_at or run.created_at, reverse=True)
     return render_with_base_info(request, "staff/round.html", {
         "round": round_obj,
         "status": _status(round_obj, now),
         "runs": runs,
+        "failures": failures,
         "form": form,
         "started": started,
         "timing": schedule.timing_defaults(),

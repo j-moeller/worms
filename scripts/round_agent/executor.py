@@ -50,9 +50,6 @@ SSH_OPTS = [
 ]
 
 
-REASON_PREFIXES = ("fatal:", "failed:", "[ERROR]", "ERROR!", "Error:", "error:")
-
-
 def known_hosts_problems(path) -> list:
     """The lines of a known_hosts file that OpenTofu's Proxmox provider cannot read: it
     parses the whole file (Go's knownhosts) before every SSH login, and one bad line
@@ -85,19 +82,25 @@ def known_hosts_problems(path) -> list:
 
 
 class CommandError(RuntimeError):
-    """The job's `error` (and the dashboard's "Recently failed"): the END of stderr,
-    where Ansible, OpenTofu and the worms CLI put the reason (its start is Ansible's
-    inventory-plugin warnings), and the last failed task, which Ansible prints on stdout."""
+    """A command that failed. Its message, one line, is the job's `error` (the dashboard's
+    "Recently failed", the attempt's error): the command, its exit code, and the cause found in
+    its whole output (failure.py: Ansible's failed task with its VM, file:line and msg, OpenTofu's
+    Error:, a traceback; never the tail of a deprecation warning), and where the output is.
+    `cause` (failure.Cause) has the excerpts that say why, `detail` as text."""
 
     def __init__(self, argv, returncode, stderr, log_path=None, stdout=""):
+        from round_agent import failure
+
         self.argv, self.returncode, self.stderr = argv, returncode, stderr
+        self.log_path = str(log_path) if log_path else ""
+        self.command = failure.command_label(argv)
+        self.cause = failure.diagnose(stdout, stderr)
         where = f" (full output: {log_path})" if log_path else ""
-        err = stderr.strip()
-        reason = ("..." + err[-500:]) if len(err) > 500 else err
-        failed = [line.strip() for line in (stdout or "").splitlines() if line.lstrip().startswith(REASON_PREFIXES)]
-        if failed:
-            reason += f" | last failure: {failed[-1][:300]}"
-        super().__init__(f"{argv[0]} exited {returncode}: {reason}{where}")
+        super().__init__(f"{self.command} exited {returncode}: {self.cause.headline}{where}")
+
+    @property
+    def detail(self) -> str:
+        return self.cause.text()
 
 
 class JobLog:

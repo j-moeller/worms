@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import time
+import traceback
 from datetime import timedelta
 
 from core.locking import serialized_resource
@@ -135,7 +136,33 @@ class AttemptFailed(BaseException):
     """The watch found the attempt broken on our side (a VM down that the worm did not power
     off, the gateway down, the host not answering): it fails, and the team's worm runs again. A
     BaseException, so that a gameplan's `except Exception` does not swallow it; once raised,
-    every later step of the attempt raises it again (AttemptBackend._go_on)."""
+    every later step of the attempt raises it again (AttemptBackend._go_on). `failure`: the
+    failed host step's account (LocalJobs), when one was the cause."""
+
+    def __init__(self, message, failure=None):
+        super().__init__(message)
+        self.failure = failure
+
+
+def failure_of(error, phase):
+    """What the attempt's row keeps of why it failed (RoundRun.failure, the dashboard's staff
+    pages): the failed host step's account when it was one (its kind, number, log on the host,
+    the excerpt of its output that says why: scripts/round_agent/failure.py), else the error and
+    where it was raised (the last frames; a gameplan's own first)."""
+    found = getattr(error, "failure", None)
+    if isinstance(found, dict) and found:
+        return {**found, "phase": phase}
+    frames = traceback.extract_tb(error.__traceback__) if getattr(error, "__traceback__", None) else []
+    lines = []
+    mine = [frame for frame in frames if "/gameplans/" in frame.filename]
+    if mine:
+        frame = mine[-1]
+        lines.append(f"in the gameplan at {frame.filename}:{frame.lineno}, in {frame.name}"
+                     + (f": {frame.line.strip()}" if frame.line else ""))  # fmt: skip
+    for frame in frames[-3:]:
+        lines.append(f"at {frame.filename}:{frame.lineno}, in {frame.name}" + (f": {frame.line.strip()}" if frame.line else ""))
+    headline = (f"{type(error).__name__}: {error}".splitlines() or [type(error).__name__])[0][:400]
+    return {"phase": phase, "headline": headline, "detail": "\n".join([str(error)[:1500], *lines])}
 
 
 class AttemptBackend:
@@ -209,8 +236,8 @@ class AttemptBackend:
         if self.failed is not None:
             raise self.failed
 
-    def _broken(self, message):
-        self.failed = AttemptFailed(message)
+    def _broken(self, message, failure=None):
+        self.failed = AttemptFailed(message, failure)
         return self.failed
 
     def now(self):
@@ -315,7 +342,7 @@ class AttemptBackend:
         try:
             return self.conductor.jobs.run(self.run, HostJob.Kind.OBSERVE, within=self.conductor.cfg["observe_timeout"], **params)
         except RoundError as error:
-            raise self._broken(f"the host did not say how the sandbox's VMs are: {error}") from None
+            raise self._broken(f"the host did not say how the sandbox's VMs are: {error}", getattr(error, "failure", None)) from None
 
     def _ask(self):
         """An observe job for every VM, not waited for (_observed). One still queued covers a new
@@ -700,15 +727,17 @@ class Conductor:
             for note in notes:
                 log.info("run %s: %s", run.uuid, note)
         except (RoundError, Stopping, AttemptFailed) as error:
-            self.fail(run, str(error), counts=not isinstance(error, Stopping), ours=isinstance(error, AttemptFailed))
+            self.fail(run, str(error), counts=not isinstance(error, Stopping), ours=isinstance(error, AttemptFailed),
+                      failure=failure_of(error, run.state))  # fmt: skip
             return
         except GameplanError as error:
             log.error("run %s: the gameplan %s: %s", run.uuid, run.gameplan, error)
-            self.fail(run, f"the gameplan was used the wrong way: {error}"[:2000])
+            self.fail(run, f"the gameplan was used the wrong way: {error}"[:2000], failure=failure_of(error, run.state))
             return
         except Exception as error:  # noqa: BLE001  (the gameplan's own code, or ours)
             log.exception("run %s failed", run.uuid)
-            self.fail(run, f"{type(error).__name__} in the attempt: {error} (the round's log has the traceback)"[:2000])
+            self.fail(run, f"{type(error).__name__} in the attempt: {error} (the round's log has the traceback)"[:2000],
+                      failure=failure_of(error, run.state))  # fmt: skip
             return
         self.end(run)
 
@@ -737,15 +766,24 @@ class Conductor:
         except RoundError as error:
             # The worm's run is over and its results stand; the host may hold leftovers.
             log.error("run %s: teardown failed: %s", run.uuid, error)
-            self.set_state(run, S.FINISHED, finished_at=self.now(), error=f"teardown failed: {error}"[:2000])
+            self.set_state(run, S.FINISHED, finished_at=self.now(), error=f"teardown failed: {error}"[:2000],
+                           failure=self._where(run, failure_of(error, S.TEARING_DOWN)))  # fmt: skip
             return
         self.set_state(run, S.FINISHED, finished_at=self.now())
 
-    def fail(self, run, message, counts=True, ours=False):
+    def _where(self, run, failure):
+        """A failure's account with when, and where the session keeps its logs (the jobs'
+        `context`: worms_cli/rounds.py LocalJobs), for the dashboard to say where to look."""
+        context = getattr(self.jobs, "context", None)
+        where = context(run) if callable(context) else {}
+        return {**(where or {}), **(failure or {}), "at": self.now().isoformat()}
+
+    def fail(self, run, message, counts=True, ours=False, failure=None):
         """The attempt is thrown away: its VMs stopped, its window closed (nothing more can
         count), its sandbox kept, powered off, for the next attempt. Its points never count: only
         a FINISHED attempt's do. counts: the attempt's own failure, not the operator stopping it.
-        ours: a fault of ours whatever the team's worm did (the watch's or power control's)."""
+        ours: a fault of ours whatever the team's worm did (the watch's or power control's).
+        failure: why, for the attempt's row (failure_of)."""
         from gameplan.definition import RoundError
 
         log.warning("run %s (%s, attempt %s) failed: %s", run.uuid, run.team.name, run.attempt, message)
@@ -757,7 +795,9 @@ class Conductor:
                                 data={"message": message[:500], "before_worm": before_worm, "ours": ours,
                                       "deploy_failed": deploy_failed, "conductor_stopped": not counts})  # fmt: skip
         now = self.now()
-        fields = {"error": message[:2000], "finished_at": now}
+        headline = (message.splitlines() or [""])[0][:400]
+        failure = self._where(run, failure or {"phase": run.state, "headline": headline})
+        fields = {"error": message[:2000], "finished_at": now, "failure": failure}
         built = run.state not in (S.PENDING,)
         if built:
             for vm in run.virtual_machines.all():

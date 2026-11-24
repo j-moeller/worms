@@ -18,7 +18,7 @@ host: worms round start (the operator's terminal) ──► the host's steps, in
 ```
 
 **The round session** ([`rounds.py`](../src/worms_cli/rounds.py), the attempt engine [`conductor.py`](../projects/dashboard/orchestrator/rounds/conductor.py))
-- `worms round start <r>`, on the host, as root, in the operator's terminal: it asks before every step, says the command that does the same and the one that undoes it, and writes everything to `~/.worms/rounds/<round>-<time>/` (`worms log round`).
+- `worms round start <r>`, on the host, as root, in the operator's terminal: it asks before every step, says the command that does the same and the one that undoes it, and writes everything to `~/.worms/rounds/<round>-<time>/` (`worms log round`), what failed and why to its `summary.log` (`worms log round <r> summary`; the staff round page shows each failed attempt too).
 - It runs the round agent's handlers itself, one attempt at a time, with the agent's environment and the WORMS key in an ssh-agent of its own. Each step is a `host_jobs` row, for the record; none is queued.
 - It powers sandbox VMs through this host's Proxmox API ([`power.py`](../projects/dashboard/orchestrator/rounds/power.py)). It refuses any VM that is not registered to the run, or whose Proxmox name does not match.
 

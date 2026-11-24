@@ -24,7 +24,10 @@ Then, team after team: the host's steps (prepare, check, the gameplan, teardown)
 process as the round agent ran them (scripts/round_agent/handlers.py), with the round agent's
 environment and the WORMS key in an ssh-agent of its own (as worms-host-run gives the agent).
 Each step's commands and output go to its own file in the session's folder, ~/.worms/rounds/; the
-terminal shows what each step does and how it ends. A failed attempt is written down and the
+terminal shows what each step does, its log's path when it starts and when it ends, and how it
+ends. What failed, why (scripts/round_agent/failure.py: the cause in the step's whole output) and
+in which file the rest is: the session's summary.log (worms_cli/summary.py; the newest session's is
+always ~/.worms/rounds/latest/summary.log), and each failed attempt's row for the staff pages. A failed attempt is written down and the
 round goes on with the next team; at the end the failed ones may be run again (or later with
 --resume), and once every team finished without an error the results may be published; then the
 round's sandbox destroyed, the devboxes, the round agent and the orchestrator started again: each
@@ -44,6 +47,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -158,15 +162,17 @@ class LocalJobs:
     _end_on_signals) its row is closed. Only a SIGKILL leaves it marked running, and the next
     session knows it for that at once (services.left_behind: its process is gone)."""
 
-    def __init__(self, repo_root: str, folder, echo=print):
-        from round_agent import agent, handlers, validation
-        from round_agent.executor import Executor
+    def __init__(self, repo_root: str, folder, echo=print, summary=None):
+        from round_agent import agent, failure, handlers, validation
+        from round_agent.executor import CommandError, Executor
 
-        self.handlers, self.validation = handlers, validation
+        self.handlers, self.validation, self.failure, self.CommandError = handlers, validation, failure, CommandError
         self.cfg = agent.config(dict(os.environ))
         self.executor = Executor(repo_root, log_dir=str(folder()), latest=False)
         self.folder = folder  # run -> the folder its steps' files go to
         self.echo = echo
+        self.summary = summary  # the session's summary.log (worms_cli/summary.py), or None
+        self.last = {}  # the last step's kind, job, log and (failed) its summary.log entry
         self.count = 0
         self._running = set()  # the rows of the steps under way: the heartbeat's
         self._beat = None
@@ -206,8 +212,57 @@ class LocalJobs:
 
         job = self._do(run, kind, params)
         if job.state != HostJob.State.DONE:
-            raise RoundError(f"{kind} failed: {job.error}"[:1000])
+            error = RoundError(f"{kind} failed: {job.error}"[:1000])
+            # Why, for the attempt's row (conductor.failure_of): the dashboard's staff pages.
+            error.failure = (job.result or {}).get("failure") or {"step": kind, "job": job.id, "headline": job.error[:400]}
+            raise error
         return job.result or {}
+
+    def context(self, run):
+        """Where the session keeps what it wrote (for a failure's account: conductor._where)."""
+        where = {"session": str(self.folder(None))}
+        if self.summary is not None:
+            where["summary"] = str(self.summary.path)
+        return where
+
+    @staticmethod
+    def _who(run) -> str:
+        return f"{run.team.name}, attempt {run.attempt}" if run is not None else "the session"
+
+    def _ended(self, run, kind, job_id, state, result, error, cause, path, quiet, took) -> dict:
+        """A step's end, said: on the terminal (how it ended, how long it took, its log again, and
+        for a failure what of its output says why) and in summary.log. A failure's account goes
+        into the job's result (the dashboard's staff pages) and to run() for the attempt's row."""
+        from core.models.rounds import HostJob
+
+        from worms_cli.summary import _took
+
+        who = self._who(run)
+        if not quiet or state != HostJob.State.DONE:
+            self.last = {"kind": kind, "job": job_id, "log": path}
+        if state == HostJob.State.DONE:
+            if not quiet:
+                self.echo(output.status_cell("ok", f"{kind} #{job_id} done in {_took(took)} — its log: {path or 'none'}"))
+                if self.summary is not None:
+                    self.summary.step(kind, job_id, who, True, took, path)
+            return result
+        cause = cause or self.failure.Cause(headline=(error or "failed")[:400])
+        account = {"step": kind, "job": job_id, "log": path, **cause.as_dict(), **self.context(run)}
+        if self.summary is not None:
+            account["entry"] = self.summary.failure(f"{kind} #{job_id} ({who}) failed after {_took(took)}", cause.headline,
+                                                    cause.text(), path, cause.logs, listed=False)  # fmt: skip
+            self.summary.step(kind, job_id, who, False, took, path, note=f"→ failure [{account['entry']}]")
+            self.last["entry"] = account["entry"]
+        self.echo(output.status_cell("error", f"{kind} #{job_id} ({who}) failed after {_took(took)}: {cause.headline}"))
+        lines = cause.text().splitlines()
+        for line in lines[:25]:
+            self.echo(output.color(f"      {line}", "red"))
+        if len(lines) > 25:
+            self.echo(output.color(f"      ... ({len(lines) - 25} more lines: summary.log)", "red"))
+        self.echo(output.color(f"    its log:     {path or 'none'}", "yellow"))
+        if self.summary is not None:
+            self.echo(output.color(f"    summary.log: {self.summary.path}", "yellow"))
+        return {**(result or {}), "failure": account}
 
     def _do(self, run, kind, params):
         from core.models.rounds import HostJob
@@ -222,12 +277,15 @@ class LocalJobs:
         self.count += 1
         name = f"{self.count:03d}-{kind}"
         quiet = kind == "observe"  # every minute of a gameplan: its file only, unless it fails
-        state, result, error, interrupted = HostJob.State.FAILED, {}, "", None
+        state, result, error, interrupted, cause, path = HostJob.State.FAILED, {}, "", None, None, ""
+        began = time.monotonic()
         try:
             self.executor.log_dir = str(self.folder(run))
             with self.executor.job_log(name, kind, job.id) as job_log:
+                path = str(job_log.path or "")
                 if not quiet:
-                    self.echo(output.color(f"  ▸ {kind} (#{job.id}; {job_log.path or 'no log file'})", "bold"))
+                    # Where its log goes, absolute, before it starts (and again when it ends: _ended).
+                    self.echo(output.color(f"  ▸ {kind} #{job.id} ({self._who(run)}) — its log: {path or 'no log file'}", "bold"))
                     note = job_log.note
 
                     def both(text, note=note):
@@ -242,12 +300,15 @@ class LocalJobs:
                     job_log.note("done")
                 except self.validation.Invalid as exc:
                     error = f"invalid: {exc}"
+                    cause = self.failure.Cause(headline=error[:400], blocks=[error])
                     job_log.note(f"rejected: {exc}")
                 except Exception as exc:  # noqa: BLE001  (its message and the log say why)
-                    error = f"{type(exc).__name__}: {exc}"
+                    error = str(exc) if isinstance(exc, self.CommandError) else f"{type(exc).__name__}: {exc}"
+                    cause = self.failure.from_exception(exc)
                     job_log.note(f"failed: {error}")
-                    if quiet:
-                        self.echo(output.color(f"  ▸ {kind} (#{job.id}) failed: {error} ({job_log.path})", "red"))
+                    # The file only: the whole traceback, and what of the output says why.
+                    job_log.write(traceback.format_exc())
+                    job_log.write(f"what says why (scripts/round_agent/failure.py):\n{cause.text()}\n")
                 except BaseException as exc:  # Ctrl-C twice, SIGTERM, SIGHUP (_end_on_signals)
                     job_log.note(f"interrupted: {type(exc).__name__} {exc}".rstrip())
                     raise
@@ -258,6 +319,10 @@ class LocalJobs:
             raise
         finally:
             self._beating(job.pk, False)
+            try:
+                result = self._ended(run, kind, job.id, state, result, error, cause, path, quiet, time.monotonic() - began)
+            except Exception:  # noqa: BLE001  (what is said of a step never changes how it ends)
+                log.exception("host job #%s: its end not said", job.pk)
             try:
                 HostJob.objects.filter(pk=job.pk).update(state=state, result=json.loads(json.dumps(result, default=str)),
                                                          error=error[:4000], finished_at=timezone.now(), heartbeat_at=timezone.now())  # fmt: skip
@@ -303,11 +368,15 @@ class KeyAgent:
 
 class Session:
     def __init__(self, config, round_, yes=False):
+        from worms_cli.summary import Summary
+
         self.config, self.round, self.yes = config, round_, yes
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.dir = directory() / f"{round_.id}-{stamp}"
         self.dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(self.dir.parent, 0o700)
+        # The one file that says what failed, why and where the rest is (worms_cli/summary.py).
+        self.summary = Summary(self.dir, f"round {round_.id} {round_.name!r}", " ".join(["worms", *sys.argv[1:]]))
         self.conductor = None
         self.jobs = None
         self.interrupts = 0
@@ -378,7 +447,10 @@ def _chosen(session, args):
         return []
     failed = [run for run in chosen if run.state == S.FAILED]
     for run in failed:
-        print(f"{run.team.name}'s attempt {run.attempt} failed: {(run.error or '')[:200]}")
+        account = run.failure or {}
+        print(f"{run.team.name}'s attempt {run.attempt} failed {run.failure_phase()}: {(account.get('headline') or run.error or '')[:300]}")
+        if account.get("log") or account.get("summary"):
+            print(output.color(f"    its log: {account.get('log') or '—'}; that session's summary.log: {account.get('summary') or '—'}", "dim"))
     if failed and not ask(f"Run a new attempt of {', '.join(run.team.name for run in failed)}?", True, session.yes):
         return None
     return chosen
@@ -605,24 +677,55 @@ def _run(session, runs) -> list:
             continue
         problem = conductor.preflight(run)
         if problem:
+            then = f"mend it, then `worms round start {session.round.id} --resume` runs the teams still to come"
+            last = session.jobs.last if session.jobs.last.get("kind") == "preflight" else {}
+            session.summary.failure(f"before {run.team.name}'s attempt {run.attempt}: the preflight; the round stopped "
+                                    "there (no attempt used up)", problem, "", last.get("log", ""), (), then,
+                                    refers=last.get("entry"))  # fmt: skip
             print(output.status_cell("error", f"before {run.team.name}'s attempt: {problem}"))
-            print("The round stops here: no attempt was used up. Mend it, then `worms round start "
-                  f"{session.round.id} --resume` runs the teams still to come.")  # fmt: skip
+            print(f"The round stops here: no attempt was used up. {then[0].upper()}{then[1:]}.")
+            print(output.color(f"    the preflight's log: {last.get('log') or '(none)'}\n    summary.log: {session.summary.path}", "yellow"))
             break
         began = time.monotonic()
         run = conductor.attempt(run)
         _count()
         took = timedelta(seconds=int(time.monotonic() - began))
-        if run.state == S.FINISHED:
-            print(output.status_cell("ok", f"{run.team.name}: finished in {took}" + (f" ({run.error})" if run.error else "")))
-        else:
-            print(output.status_cell("error", f"{run.team.name}: {run.state} after {took}: {run.error}"))
-            print(output.color(f"    its steps: {session.folder(run)}", "dim"))
+        _attempt_ended(session, run, took)
         ended.append(run)
         if run.state == S.FAILED and _prepare_failed(run):
             _after_failed_prepare(session, run)
             break
     return ended
+
+
+def _attempt_ended(session, run, took):
+    """An attempt's end, said: on the terminal (how, why, the log with the rest, summary.log) and
+    in summary.log. A failure a host step caused names that step's entry instead of repeating it."""
+    from core.models.rounds import RoundRun
+
+    S = RoundRun.State
+    who = f"{run.team.name}, attempt {run.attempt}"
+    failure = run.failure or {}
+    phase = run.failure_phase() or "(its phase not recorded)"
+    log_file = failure.get("log") or str(session.dir / "round.log")
+    if run.state == S.FINISHED and not run.error:
+        print(output.status_cell("ok", f"{run.team.name}: finished in {took}"))
+        session.summary.note(f"✓ {who}: finished in {took}")
+        return
+    if run.state == S.FINISHED:
+        what = f"{who}: finished in {took}, its results stand, but its teardown failed"
+        then = "the host may hold leftovers of it: `worms vm` lists them; `worms round teardown` destroys the sandbox"
+        print(output.status_cell("warn", f"{run.team.name}: finished in {took}, but its teardown failed: {failure.get('headline') or run.error}"))
+    else:
+        what = f"{who}: {run.state} after {took}, {phase}"
+        then = (f"mend the cause, then `worms round start {session.round.id} --resume` runs a new attempt (a change to "
+                "Ansible, the gameplans or the host's code goes to the host with `worms apply round-agent` first)")  # fmt: skip
+        print(output.status_cell("error", f"{run.team.name}: {run.state} after {took}, {phase}"))
+        print(output.color(f"    why:  {failure.get('headline') or run.error}", "red"))
+    print(output.color(f"    log:  {log_file}" + (f" (step {failure['step']} #{failure.get('job')})" if failure.get("step") else ""), "yellow"))
+    print(output.color(f"    summary.log: {session.summary.path}", "yellow"))
+    session.summary.failure(what, failure.get("headline") or run.error, failure.get("detail") or run.error, log_file,
+                            failure.get("logs") or (), then, refers=failure.get("entry"))  # fmt: skip
 
 
 def _prepare_failed(run) -> bool:
@@ -651,15 +754,27 @@ def _after_failed_prepare(session, run):
                 output.error(f"not destroyed: {exc}; later: `worms round teardown`")
     else:
         print("  The sandbox is whole (every VM has its clean snapshot): `--resume` rolls it back.")
-    print(f"  Mend the cause (its steps: {session.folder(run)}). A change to Ansible, the gameplans or the host's code "
-          f"goes to the host with `worms apply round-agent`. Then: `worms round start {session.round.id} --resume`.")  # fmt: skip
+    print(f"  Mend the cause (what failed and why: {session.summary.path}; its steps: {session.folder(run)}). A change "
+          "to Ansible, the gameplans or the host's code goes to the host with `worms apply round-agent`. Then: "
+          f"`worms round start {session.round.id} --resume`.")  # fmt: skip
+    session.summary.note(f"the round stopped: {run.team.name}'s prepare failed (the next team's would fail the same way)")
     session.stopped_on_prepare = True
 
 
 def _summary(session):
     print(output.heading(f"round {session.round.name!r}: where each team stands"))
-    _say_round(session.round, _latest_runs(session.round))
-    print(output.color(f"this session's log and every step's: {session.dir} (`worms log round {session.round.id}`)", "dim"))
+    latest = _latest_runs(session.round)
+    _say_round(session.round, latest)
+    session.summary.end(_tally(latest) or "nothing ran")
+    print(output.color(f"this session's folder: {session.dir} (`worms log round {session.round.id}`)", "dim"))
+    _say_summary(session)
+
+
+def _say_summary(session):
+    """Where summary.log is, and how many failures it holds."""
+    count = len(session.summary.failures)
+    print(output.status_cell("error" if count else "ok", f"summary.log: {session.summary.path} "
+                             f"({count} failure(s); `worms log round {session.round.id} summary`)"))  # fmt: skip
 
 
 def _offer_publish(session):
@@ -800,7 +915,9 @@ def start(config, args) -> int:
     key = None
     _end_on_signals()
     try:
-        print(output.color(f"this session's log: {session.dir}/round.log", "dim"))
+        print(output.color(f"this session's folder: {session.dir} (round.log: what this terminal shows)", "dim"))
+        print(output.color(f"what failed, why, and in which file the rest is: {session.summary.path} (always the "
+                           f"newest: {directory() / 'latest' / 'summary.log'})", "bold"))  # fmt: skip
         if not (os.environ.get("TMUX") or os.environ.get("STY")):
             print(output.color("not inside tmux or screen: a dropped SSH connection ends this session, and the attempt "
                                "under way fails (`tmux new -s round`, then this command, keeps it)", "yellow"))  # fmt: skip
@@ -823,7 +940,7 @@ def start(config, args) -> int:
         _say_round(round_, _latest_runs(round_))
 
         # The round agent's environment and code, as the service has them.
-        repo_root, session.jobs, key = _host_steps(config, session.folder)
+        repo_root, session.jobs, key = _host_steps(config, session.folder, session.summary)
         _same_code(config, repo_root, args.yes)
         settings.PROXMOX["node"] = config.proxmox_node()
         session.conductor = Conductor(jobs=session.jobs, power=ProxmoxPower(api=Pvesh()), on_watch=_count)
@@ -850,6 +967,8 @@ def start(config, args) -> int:
         problem = session.conductor.pin(round_)
         if problem:
             output.error(f"round {round_.name!r}: {problem}")
+            session.summary.failure("the gameplan: not fixed for the round's attempts, nothing ran", problem,
+                                    log=session.jobs.last.get("log", ""), refers=session.jobs.last.get("entry"))  # fmt: skip
             return 1
         pinned = RoundRun.objects.filter(round=round_).exclude(gameplan_sha256="").values_list("gameplan_sha256", flat=True).first()
         print(output.status_cell("ok", f"{round_.gameplan}, version {pinned[:12]}: valid at {round_.team_duration} s per team"))
@@ -870,6 +989,11 @@ def start(config, args) -> int:
             problem = session.conductor.preflight(RoundRun.objects.select_related("round", "team").get(pk=first.pk))
             if problem:
                 output.error(problem)
+                last = session.jobs.last if session.jobs.last.get("kind") == "preflight" else {}
+                session.summary.failure("the host's preflight: the round did not start", problem, log=last.get("log", ""),
+                                        next_step="mend it (memory, disk: its log says which check), then the same command again",
+                                        refers=last.get("entry"))  # fmt: skip
+                print(output.color(f"    its log: {last.get('log') or '(none)'}\n    summary.log: {session.summary.path}", "yellow"))
                 return 1
             print(output.status_cell("ok", "the host is ready (memory, disk, the sandbox's needs)"))
         minutes = sum(run.duration or round_.team_duration for run in runs if run.upload_id) // 60
@@ -890,19 +1014,39 @@ def start(config, args) -> int:
         _summary(session)
         _offer_publish(session)
         _afterwards(session)
+        _say_summary(session)
         return 0
     except KeyboardInterrupt:
+        session.summary.end("out at once (Ctrl-C twice): what was under way may be left as it was")
         print(output.color("\nout at once: what was under way may be left as it was. `worms round` and `worms vm` say "
                            "what is; `worms round start` again fails an attempt left under way.", "red"))  # fmt: skip
         return 130
     except SystemExit as exc:  # _end_on_signals
+        session.summary.end(f"{exc}: the step under way is marked failed")
         try:
             print(output.color(f"\n{exc}: the step under way is marked failed. `worms round start {round_.id} --resume` "
                                "fails an attempt left under way and goes on.", "red"))  # fmt: skip
         except OSError:
             pass  # no terminal any more: round.log has it
         raise
+    except Exception as exc:
+        # The session's own error (a BuildError says what to do; anything else, where it was raised).
+        headline, detail = str(exc), ""
+        if not isinstance(exc, BuildError):
+            try:
+                from round_agent import failure
+
+                cause = failure.from_exception(exc)
+                headline, detail = cause.headline, cause.text()
+            except ImportError:  # before the host's steps were set up
+                headline, detail = f"{type(exc).__name__}: {exc}", traceback.format_exc()[-3000:]
+        session.summary.failure("the session itself stopped", headline, detail, str(session.dir / "round.log"))
+        session.summary.end("stopped by an error")
+        print(output.color(f"summary.log: {session.summary.path}", "yellow"), file=sys.stderr)
+        raise
     finally:
+        if session.summary.status == "running":
+            session.summary.end("ended before the round ran: a question answered no, or a check failed (round.log has it)")
         if key is not None:
             key.stop()
         tee.stop()
@@ -947,9 +1091,10 @@ def _system_path() -> None:
         raise BuildError(f"the host lacks {', '.join(missing)} on its own PATH (the round agent's role installs them)")
 
 
-def _host_steps(config, folder):
+def _host_steps(config, folder, summary=None):
     """The round agent's environment and code, as the service has them, and an ssh-agent with the
-    WORMS key: (repo_root, LocalJobs, KeyAgent). The KeyAgent is the caller's to stop."""
+    WORMS key: (repo_root, LocalJobs, KeyAgent). The KeyAgent is the caller's to stop. `summary`:
+    the session's summary.log, which each step's end goes to."""
     _python_for_host_steps()
     environment = _agent_environment()
     os.environ.update({k: v for k, v in environment.items() if k not in ("PWD", "SHLVL", "_")})
@@ -959,7 +1104,7 @@ def _host_steps(config, folder):
     if scripts not in sys.path:
         sys.path.insert(0, scripts)
     key = KeyAgent(os.environ.get("SSH_KEY", "/etc/worms/ssh/worms"))
-    return repo_root, LocalJobs(repo_root, folder), key
+    return repo_root, LocalJobs(repo_root, folder, summary=summary), key
 
 
 def teardown(config, yes=False) -> int:
@@ -971,14 +1116,17 @@ def teardown(config, yes=False) -> int:
     from orchestrator.rounds.conductor import Conductor
     from orchestrator.rounds.power import ProxmoxPower
     from worms_cli import power
+    from worms_cli.summary import Summary
 
     if os.geteuid() != 0:
         raise BuildError("on the host itself, as root")
     sandbox = sorted(vm["name"] for vm in power.Power(config).runner.vms() if vm.get("pool") == "sandbox")
     folder = directory() / f"teardown-{datetime.now():%Y%m%d-%H%M%S}"
     folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    summary = Summary(folder, "the round's sandbox destroyed", "worms round teardown")
+    print(output.color(f"its steps: {folder}; what failed and why: {summary.path}", "dim"))
     _end_on_signals()
-    _repo_root, jobs, key = _host_steps(config, lambda run=None: folder)
+    _repo_root, jobs, key = _host_steps(config, lambda run=None: folder, summary)
     try:
         record = jobs.handlers.unfinished_build(jobs.cfg)
         try:
@@ -996,12 +1144,17 @@ def teardown(config, yes=False) -> int:
         settings.PROXMOX["node"] = config.proxmox_node()
         Conductor(jobs=jobs, power=ProxmoxPower(api=Pvesh())).destroy_sandbox()
     except BuildError:
+        summary.end("stopped by an error")
         raise
     except Exception as exc:  # noqa: BLE001  (its step's file says more)
-        raise BuildError(f"not destroyed: {exc} (its steps: {folder})") from None
+        summary.end("not destroyed")
+        raise BuildError(f"not destroyed: {exc} (what failed and why: {summary.path})") from None
     finally:
+        if summary.status == "running":
+            summary.end("nothing destroyed")
         key.stop()
-    print(output.status_cell("ok", f"destroyed (its steps: {folder})"))
+    summary.end("destroyed")
+    print(output.status_cell("ok", f"destroyed (its steps: {folder}; {summary.path})"))
     return 0
 
 
@@ -1038,8 +1191,32 @@ def sessions(round_id=None) -> list[Path]:
     return sorted(found, key=lambda path: path.name.split("-", 1)[1], reverse=True)
 
 
+def _attempt_folders(session: Path) -> list[Path]:
+    """A session's attempts' folders (NN-<team>-attemptK), not its VMs' Ansible logs (round/)."""
+    return sorted(p for p in session.iterdir() if p.is_dir() and re.fullmatch(r"\d\d-.+-attempt\d+", p.name))
+
+
+def _failures_in(session: Path) -> str:
+    """How many failures a session's summary.log holds ("—" without one: a session from before it)."""
+    try:
+        with open(session / "summary.log") as handle:
+            for _ in range(20):
+                found = re.match(r"FAILURES: (\d+|none)", handle.readline())
+                if found:
+                    return "0" if found.group(1) == "none" else found.group(1)
+    except OSError:
+        pass
+    return "—"
+
+
 def show_logs(round_word=None, team=None, lines=100, follow=False) -> int:
-    """`worms log round [<r>] [<team>]`."""
+    """`worms log round [<r>] [<team>|summary]`; `worms log round summary`: the newest session's."""
+    if round_word == "summary" and team is None:
+        latest = directory() / "latest"  # the newest session's, a teardown's too (worms_cli/summary.py)
+        found = [latest.resolve()] if latest.is_symlink() and latest.resolve().is_dir() else sessions()
+        if not found:
+            raise BuildError(f"no session here ({directory()})")
+        return _show_summary(found[0])
     if round_word is None:
         found = sessions()
         if not found:
@@ -1048,25 +1225,40 @@ def show_logs(round_word=None, team=None, lines=100, follow=False) -> int:
         rows = []
         for path in found[:30]:
             round_id, stamp = path.name.split("-", 1)
-            attempts = sorted(p.name for p in path.iterdir() if p.is_dir())
-            rows.append([round_id, datetime.strptime(stamp, "%Y%m%d-%H%M%S").strftime("%Y-%m-%d %H:%M"), str(len(attempts)), str(path)])
-        print(output.table(rows, headers=["Round", "Session (local time)", "Attempts", "Folder"]))
-        print(output.color("one: `worms log round <round> [<team>]`", "dim"))
+            rows.append([round_id, datetime.strptime(stamp, "%Y%m%d-%H%M%S").strftime("%Y-%m-%d %H:%M"),
+                         str(len(_attempt_folders(path))), _failures_in(path), str(path)])  # fmt: skip
+        print(output.table(rows, headers=["Round", "Session (local time)", "Attempts", "Failures", "Folder"]))
+        print(output.color("one: `worms log round <round> [<team>|summary]`; the newest session's summary: "
+                           f"`worms log round summary` ({directory() / 'latest' / 'summary.log'})", "dim"))  # fmt: skip
         return 0
     found = sessions(round_word if round_word.isdigit() else None)
     if not found:
         raise BuildError(f"no session of round {round_word} here ({directory()}); `worms log round` lists them")
     session = found[0]
+    if team == "summary":
+        return _show_summary(session)
     if team is None:
         target = [str(session / "round.log")]
+        print(output.color(f"what failed and why: {session / 'summary.log'} (`worms log round {round_word} summary`)", "dim"))
     else:
-        attempts = sorted(p for p in session.iterdir() if p.is_dir() and p.name.split("-", 1)[1].lower().startswith(f"{team.lower()}-"))
+        attempts = [p for p in _attempt_folders(session) if p.name.split("-", 1)[1].lower().startswith(f"{team.lower()}-")]
         if not attempts:
             raise BuildError(f"no attempt of {team!r} in {session}")
         target = sorted(str(f) for f in attempts[-1].glob("*.log"))
         print(output.color(f"{attempts[-1]}: {', '.join(Path(t).name for t in target)}", "dim"))
     argv = ["tail", "-n", str(int(lines)), *(["-F"] if follow else []), *target]
     return subprocess.call(argv)
+
+
+def _show_summary(session: Path) -> int:
+    """A session's summary.log, whole: its failures come first."""
+    path = session / "summary.log"
+    if not path.exists():
+        raise BuildError(f"{session} has no summary.log (a session from before 2026-11-24): its round.log, "
+                         "and each attempt's step files, say what happened")  # fmt: skip
+    print(output.color(str(path), "dim"))
+    sys.stdout.write(path.read_text(errors="replace"))
+    return 0
 
 
 def node_name() -> str:

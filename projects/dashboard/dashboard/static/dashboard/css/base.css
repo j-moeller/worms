@@ -257,6 +257,17 @@ html[data-env="dev"] .envtoggle__label--sandbox { opacity: 0; }
     overflow: hidden;
 }
 .panel--accent { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+.panel--alert { border-color: color-mix(in srgb, var(--bad) 55%, var(--border)); }
+/* A failure's account (staff/_failure.html): why, where on the host, what its output said. */
+.failure + .failure { margin-top: 18px; padding-top: 18px; border-top: var(--border-w) solid var(--border); }
+.failure__title { margin: 0 0 6px; font-size: .95rem; }
+.failure__why { margin: 0 0 10px; color: var(--bad); font-family: var(--font-mono); font-size: .85rem; overflow-wrap: anywhere; }
+.failure__where { margin-bottom: 10px; }
+.failure__where dd { overflow-wrap: anywhere; }
+.failure__detail > summary, .failure--job > summary { cursor: pointer; }
+.failure__detail .code { margin-top: 8px; max-height: 32rem; overflow-y: auto; }
+.failure--job > summary { max-width: 60ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.failure--job[open] { min-width: min(70ch, 80vw); }
 .panel__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 14px 18px; border-bottom: var(--border-w) solid var(--border); }
 .panel__title { font-family: var(--title-family); font-size: 1rem; font-weight: 700; letter-spacing: .01em; }
 .panel__meta { color: var(--faint); font-size: .76rem; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: .08em; }

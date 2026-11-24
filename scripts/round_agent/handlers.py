@@ -60,6 +60,11 @@ INTERNET_FLAG = "/run/worms/internet-allowed"
 # The VMs a sandbox reaches, which a new round's sandbox is built on after a rollback; their
 # snapshot is `worms apply`'s (src/worms_cli/pipeline.py).
 SERVICE_POOLS = ("ephemeral", "private_internet")
+# The parts of the private internet a round cannot run without: the build installs from apt-cache,
+# and the check requires DNS, apt and PyPI (devpi) to answer. Any other may be off, the operator
+# accepting it at the preflight (worms_cli/rounds.py); the ephemeral ones (scoring, logging,
+# monitor) never.
+ROUND_NEEDS = ("dns", "apt-cache", "devpi")
 # The agent's own records on the host (root only).
 STATE_DIR = "/var/lib/worms"
 # Team code is assumed hostile and root on its VM. This CPU offers it no hardware virtualisation,
@@ -383,15 +388,22 @@ def _destroy_sandbox(ex, cfg):
 
 def _reset_services(ex, cfg):
     """The service VMs back to the snapshot `worms apply` took of them, all or none. Returns
-    what happened, for the run's record: without a snapshot on each, they stay as they are."""
+    what happened, for the run's record: without a snapshot on each, they stay as they are. One
+    that was off (a part of the private internet the operator turned off, accepted at the
+    preflight) is rolled back too, and off again afterwards."""
     vms = [vm for pool in SERVICE_POOLS for vm in snapshots.pool_vms(ex, pool)]
     missing = sorted(vm["name"] for vm in vms if not snapshots.has_clean(ex, vm))
     if not vms or missing:
         return f"not reset: no clean snapshot on {', '.join(missing) or 'any service VM'} (`worms vm rebuild services`)"
+    off = {vm["vmid"] for vm in vms if vm.get("status") != "running"}
     snapshots.roll_back(ex, vms)
     snapshots.wait_for_ssh(ex, cfg.get("service_hosts") or [cfg["scoring_host"], cfg["logging_host"]])
     _restore_devbox_map(ex, cfg)
-    return f"reset: {len(vms)} VMs back to their clean snapshot"
+    if not off:
+        return f"reset: {len(vms)} VMs back to their clean snapshot"
+    again = [vm for pool in SERVICE_POOLS for vm in snapshots.pool_vms(ex, pool) if vm["vmid"] in off]
+    snapshots.shut_down(ex, again)
+    return f"reset: {len(vms)} VMs back to their clean snapshot; off again, as they were: {', '.join(vm['name'] for vm in again)}"
 
 
 def _unsafe_tree(value):
@@ -1045,9 +1057,12 @@ def preflight(ex, cfg, params):
     resources = _resources(ex)
     states = _live_states(ex, resources)
     services = sorted((vm for vm in resources if vm.get("pool") in SERVICE_POOLS), key=lambda vm: vm["name"])
+    optional = []  # a part of the private internet that is off: the operator may run the round without it
     for vm in services:
         status = _status(vm, states)
         record(f"services:{vm['name']}:running", status == "running", status)
+        if status != "running" and vm.get("pool") == "private_internet" and vm["name"] not in ROUND_NEEDS:
+            optional.append(f"services:{vm['name']}:running")
     for kind in ("scoring", "logging"):
         host = cfg.get(f"{kind}_host")
         command = ["sh", "-c", f"systemctl is-active {' '.join(SANDBOX_API_UNITS)} || true"]
@@ -1103,7 +1118,7 @@ def preflight(ex, cfg, params):
                                 "(`worms vm rebuild services`)")  # fmt: skip
     failures = [r["check"] for r in results if not r["ok"]]
     return {
-        "ok": not failures, "failures": failures, "checks": results, "warnings": warnings,
+        "ok": not failures, "failures": failures, "checks": results, "warnings": warnings, "optional": optional,
         "memory": {"available_mb": available, "needed_mb": needed, "reserve_mb": reserve, "total_mb": memory["total_mb"]},
     }  # fmt: skip
 

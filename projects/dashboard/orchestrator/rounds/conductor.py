@@ -585,6 +585,9 @@ class Conductor:
         # The team whose preflight passed last, with no attempt since: its attempt needs no other
         # (the session's preflight before the build covers the first).
         self.checked = None
+        # The preflight's failures the operator accepted this session (parts of the private
+        # internet that are off): later preflights do not ask again.
+        self.accepted = set()
         gameplans.framework()  # the framework's modules, for what follows
 
     def now(self):
@@ -688,9 +691,12 @@ class Conductor:
 
     # -- before an attempt ----------------------------------------------------
 
-    def preflight(self, run):
+    def preflight(self, run, ask=None):
         """The host's checks before an attempt (a preflight job; it changes nothing): None if they
-        pass, else every one that failed."""
+        pass, else every one that failed. A part of the private internet that is off (the host's
+        `optional`: not DNS, apt-cache or devpi) does not fail it once the operator accepted it:
+        `ask([(check, detail), ...])` is asked once those are the only failures, and its yes holds
+        for the session's later preflights (`accepted`). Without `ask` they fail it."""
         from gameplan.definition import RoundError
 
         name = run.round.name
@@ -709,10 +715,18 @@ class Conductor:
         checks = [check for check in result.get("checks") or [] if isinstance(check, dict)]
         failed = [str(check) for check in result.get("failures") or []]
         failed += [str(check.get("check")) for check in checks if not check.get("ok") and str(check.get("check")) not in failed]
-        if result.get("ok") is True and not failed:
+        detail = {str(check.get("check")): str(check.get("detail") or "")[:200] for check in checks}
+        optional = {str(check) for check in result.get("optional") or []}
+        unasked = [check for check in failed if check in optional and check not in self.accepted]
+        if unasked and ask is not None and all(check in optional for check in failed) and ask([(check, detail.get(check, "")) for check in unasked]):
+            self.accepted.update(unasked)
+        waived = [check for check in failed if check in self.accepted]
+        for check in waived:
+            log.warning("round %s: preflight: %s (%s): accepted by the operator", name, check, detail.get(check, ""))
+        failed = [check for check in failed if check not in self.accepted]
+        if not failed and (result.get("ok") is True or waived):
             self.checked = run.team_id
             return None
-        detail = {str(check.get("check")): str(check.get("detail") or "")[:200] for check in checks}
         named = [f"{check} ({detail[check]})" if detail.get(check) else check for check in failed]
         return "preflight checks failed: " + ("; ".join(named) or "not ok, and no check named")
 

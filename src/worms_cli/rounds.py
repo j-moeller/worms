@@ -714,7 +714,7 @@ def _run(session, runs) -> list:
             continue
         # Its preflight: the session's, before the build, covers the first attempt (after a new
         # snapshot its sandbox runs, as the snapshot left it); every other one has its own.
-        problem = None if conductor.fresh or conductor.checked == run.team_id else conductor.preflight(run)
+        problem = None if conductor.fresh or conductor.checked == run.team_id else conductor.preflight(run, ask=_without(session))
         if problem:
             then = f"mend it, then `worms round start {session.round.id} --resume` runs the teams still to come"
             last = session.jobs.last if session.jobs.last.get("kind") == "preflight" else {}
@@ -736,6 +736,25 @@ def _run(session, runs) -> list:
             _after_failed_attempt(session, run, runs[index:])
             break
     return ended
+
+
+def _without(session):
+    """The preflight's question when parts of the private internet are off (all its other checks
+    passed): run the round without them? Asked once a session; its yes holds for the later
+    preflights (the conductor's `accepted`). Never DNS, apt-cache or devpi: those fail it."""
+
+    def ask_it(missing):
+        names = [check.removeprefix("services:").removesuffix(":running") for check, _detail in missing]
+        print(output.status_cell("warn", f"the private internet: {', '.join(names)} not running ("
+                                 + "; ".join(f"{name}: {detail or 'off'}" for name, (_c, detail) in zip(names, missing)) + ")"))
+        print("  The round can run without them: teams' worms cannot reach what they serve. They stay off: the "
+              "sandbox's build rolls them back to their snapshot with the other service VMs and turns them off again.")  # fmt: skip
+        says(f"worms vm start {' '.join(names)}")
+        yes = ask(f"Run the round without {', '.join(names)}?", False, session.yes)
+        session.summary.note(f"the preflight: {', '.join(names)} off, " + ("accepted by the operator" if yes else "not accepted"))
+        return yes
+
+    return ask_it
 
 
 def _attempt_ended(session, run, took):
@@ -1067,7 +1086,8 @@ def start(config, args) -> int:
         print(output.heading("5. the host's preflight"))
         first = next((run for run in runs if run.upload_id is not None), None)
         if first is not None:
-            problem = session.conductor.preflight(RoundRun.objects.select_related("round", "team").get(pk=first.pk))
+            problem = session.conductor.preflight(RoundRun.objects.select_related("round", "team").get(pk=first.pk),
+                                                 ask=_without(session))
             if problem:
                 output.error(problem)
                 last = session.jobs.last if session.jobs.last.get("kind") == "preflight" else {}

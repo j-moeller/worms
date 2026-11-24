@@ -20,9 +20,18 @@ one that undoes it:
 then checks that each is so, the host's preflight (its memory and disk), and asks once more. A
 "no" anywhere: the round does not start, and nothing more is changed.
 
-Then, team after team: the host's steps (prepare, check, the gameplan, teardown), run in this
-process as the round agent ran them (scripts/round_agent/handlers.py), with the round agent's
-environment and the WORMS key in an ssh-agent of its own (as worms-host-run gives the agent).
+Then the host's steps, run in this process as the round agent ran them
+(scripts/round_agent/handlers.py), with the round agent's environment and the WORMS key in an
+ssh-agent of its own (as worms-host-run gives the agent):
+
+    build, snapshot                    the round's sandbox, once (none when it is there with its snapshot)
+    for each team:
+        rollback                       back to the snapshot (not for the first team after it)
+        prepare, check, the gameplan   (deploy, flags, files, observe), the attempt's end
+    delete_snapshot, teardown          once every team's attempt is over without an error (asked)
+
+A failure never starts it over: a failed build is kept (asked) and the next session goes on
+after OpenTofu's apply; a failed attempt leaves the sandbox and its snapshot for `--resume`.
 Each step's commands and output go to its own file in the session's folder, ~/.worms/rounds/; the
 terminal shows what each step does, its log's path when it starts and when it ends, and how it
 ends. What failed, why (scripts/round_agent/failure.py: the cause in the step's whole output) and
@@ -227,7 +236,24 @@ class LocalJobs:
 
     @staticmethod
     def _who(run) -> str:
-        return f"{run.team.name}, attempt {run.attempt}" if run is not None else "the session"
+        return f"{run.team.name}, attempt {run.attempt}" if run is not None else "the round"
+
+    # What each of a round's steps does, said as it starts (the conductor: build_sandbox, run_attempt).
+    STEPS = {
+        "build": "build(): the round's sandbox, OpenTofu's apply and the configuration (once per round)",
+        "snapshot": "snapshot(): every sandbox VM's clean snapshot, before any team's code",
+        "rollback": "load_snapshot(): every sandbox VM back to its clean snapshot",
+        "prepare": "prepare(): this team's secrets, files and flags",
+        "check": "check(): the host, and probes inside every VM",
+        "delete_snapshot": "delete_snapshot(): the sandbox's clean snapshots deleted",
+    }
+
+    @classmethod
+    def _what(cls, kind, params) -> str:
+        if kind == "teardown":
+            return ("the attempt's end: its secrets gone, its VMs off, the sandbox and its snapshot kept" if params.get("keep")
+                    else "teardown(): the round's sandbox destroyed")  # fmt: skip
+        return cls.STEPS.get(kind, "")
 
     def _ended(self, run, kind, job_id, state, result, error, cause, path, quiet, took, caught=None) -> dict:
         """A step's end, said: on the terminal (how it ended, how long it took, its log again, and
@@ -287,7 +313,9 @@ class LocalJobs:
                 path = str(job_log.path or "")
                 if not quiet:
                     # Where its log goes, absolute, before it starts (and again when it ends: _ended).
-                    self.echo(output.color(f"  ▸ {kind} #{job.id} ({self._who(run)}) — its log: {path or 'no log file'}", "bold"))
+                    what = self._what(kind, params)
+                    self.echo(output.color(f"  ▸ {kind} #{job.id} ({self._who(run)}){f': {what}' if what else ''} — its log: "
+                                           f"{path or 'no log file'}", "bold"))  # fmt: skip
                     note = job_log.note
 
                     def both(text, note=note):
@@ -664,7 +692,9 @@ def _end_on_signals():
 
 
 def _run(session, runs) -> list:
-    """Each attempt in turn; the runs as they ended."""
+    """Each attempt in turn, on the round's sandbox (built and snapshotted before: _build): the
+    first after the snapshot as it is, every other one rolled back to it first (the conductor's
+    run_attempt). The runs as they ended."""
     from core.models.rounds import RoundRun
 
     S = RoundRun.State
@@ -682,7 +712,9 @@ def _run(session, runs) -> list:
             print(output.status_cell("skipped", f"{run.team.name}: no upload before the round's start"))
             ended.append(run)
             continue
-        problem = conductor.preflight(run)
+        # Its preflight: the session's, before the build, covers the first attempt (after a new
+        # snapshot its sandbox runs, as the snapshot left it); every other one has its own.
+        problem = None if conductor.fresh or conductor.checked == run.team_id else conductor.preflight(run)
         if problem:
             then = f"mend it, then `worms round start {session.round.id} --resume` runs the teams still to come"
             last = session.jobs.last if session.jobs.last.get("kind") == "preflight" else {}
@@ -699,7 +731,7 @@ def _run(session, runs) -> list:
         took = timedelta(seconds=int(time.monotonic() - began))
         _attempt_ended(session, run, took)
         ended.append(run)
-        if run.state == S.FAILED and _prepare_failed(run):
+        if run.state == S.FAILED and _sandbox_step_failed(run):
             _after_failed_prepare(session, run)
             break
     return ended
@@ -735,37 +767,70 @@ def _attempt_ended(session, run, took):
                             failure.get("logs") or (), then, refers=failure.get("entry"))  # fmt: skip
 
 
-def _prepare_failed(run) -> bool:
+def _sandbox_step_failed(run) -> bool:
+    """The attempt's rollback or prepare failed: the next team's would fail the same way."""
     from core.models.rounds import HostJob
 
-    return run.jobs.filter(kind=HostJob.Kind.PREPARE).exclude(state=HostJob.State.DONE).exists()
+    kinds = (HostJob.Kind.ROLLBACK, HostJob.Kind.PREPARE)
+    return run.jobs.filter(kind__in=kinds).exclude(state=HostJob.State.DONE).exists()
 
 
 def _after_failed_prepare(session, run):
-    """A prepare that failed stops the round: the next team's would fail the same way. A sandbox
-    build it left unfinished is kept, asked, for `--resume` to continue once the cause is mended."""
-    record = session.jobs.handlers.unfinished_build(session.jobs.cfg)
-    print(output.heading("the prepare failed: the round stops here"))
-    if record:
-        print(f"  The sandbox build begun {record['began']} stopped before its end; no worm has run on it. Its VMs "
-              "are kept, powered off. Kept, `--resume` continues the build on them: OpenTofu's apply and the "
-              "configuration run again, not the whole build.")  # fmt: skip
-        if ask("Keep them, to continue the build once the cause is mended?", True, session.yes):
-            print(output.color("    later: worms round start {0} --resume (continues it); worms round teardown (destroys it)"
-                               .format(session.round.id), "dim"))  # fmt: skip
-        else:
-            try:
-                session.conductor.destroy_sandbox()
-                print(output.status_cell("ok", "the unfinished sandbox is destroyed: the next attempt builds it anew"))
-            except Exception as exc:  # noqa: BLE001
-                output.error(f"not destroyed: {exc}; later: `worms round teardown`")
-    else:
-        print("  The sandbox is whole (every VM has its clean snapshot): `--resume` rolls it back.")
+    """A rollback or a prepare that failed stops the round: the next team's would fail the same
+    way. The sandbox and its snapshot stay: `--resume` starts from the snapshot, not a build."""
+    print(output.heading("the sandbox's rollback or the prepare failed: the round stops here"))
+    print("  The sandbox and its snapshot are kept: `--resume` rolls it back and goes on, it is not built again.")
     print(f"  Mend the cause (what failed and why: {session.summary.path}; its steps: {session.folder(run)}). A change "
           "to Ansible, the gameplans or the host's code goes to the host with `worms apply round-agent`. Then: "
           f"`worms round start {session.round.id} --resume`.")  # fmt: skip
-    session.summary.note(f"the round stopped: {run.team.name}'s prepare failed (the next team's would fail the same way)")
+    session.summary.note(f"the round stopped: {run.team.name}'s attempt failed preparing its sandbox (the next team's would "
+                         "fail the same way)")  # fmt: skip
     session.stopped_on_prepare = True
+
+
+def _build(session, run) -> bool:
+    """build(), then snapshot(): once, before the first attempt (the conductor's build_sandbox).
+    True once the sandbox is there with its snapshot; else the round stops here, no attempt
+    used up, and an unfinished build is kept (asked) for the next session to continue."""
+    from gameplan.definition import RoundError
+
+    print(output.heading("7. the round's sandbox: build, then its snapshot (once; every team starts from the snapshot)"))
+    try:
+        built = session.conductor.build_sandbox(run)
+    except RoundError as error:
+        session.summary.failure("the round's sandbox: its build or its snapshot; the round did not start (no attempt "
+                                "used up)", str(error), log=session.jobs.last.get("log", ""), refers=session.jobs.last.get("entry"),
+                                next_step=f"mend the cause, then `worms round start {session.round.id} --resume`: it goes on "
+                                          "after OpenTofu's apply (asked)")  # fmt: skip
+        _after_failed_build(session)
+        return False
+    print(output.status_cell("ok", f"the round's sandbox: {built.get('sandbox', 'ready')}"
+                             + ("; its snapshot taken" if session.conductor.fresh else "")))  # fmt: skip
+    session.summary.note(f"✓ the round's sandbox: {built.get('sandbox', 'ready')}" + ("; its snapshot taken" if session.conductor.fresh else ""))
+    return True
+
+
+def _after_failed_build(session):
+    """The build or the snapshot failed: the VMs it made are kept (asked), for the next session to
+    go on after OpenTofu's apply once the cause is mended; else destroyed."""
+    record = session.jobs.handlers.unfinished_build(session.jobs.cfg)
+    print(output.heading("the round's sandbox was not finished: the round does not start"))
+    if record:
+        done = "configured, its snapshot not taken" if record.get("configured") else "not configured to its end"
+        print(f"  The build begun {record['began']} is {done}; no worm has run on it. Its VMs are kept. Kept, "
+              "`--resume` goes on with it: OpenTofu's apply (nothing to change) and the configuration again, or "
+              "only its snapshot, never a build from nothing.")  # fmt: skip
+        if ask("Keep them, to go on with the build once the cause is mended?", True, session.yes):
+            print(output.color(f"    later: worms round start {session.round.id} --resume (goes on with it); worms round "
+                               "teardown (destroys it)", "dim"))  # fmt: skip
+        else:
+            try:
+                session.conductor.destroy_sandbox(session.round.id)
+                print(output.status_cell("ok", "the unfinished sandbox is destroyed: the next session builds it anew"))
+            except Exception as exc:  # noqa: BLE001
+                output.error(f"not destroyed: {exc}; later: `worms round teardown`")
+    print(f"  Mend the cause (what failed and why: {session.summary.path}). A change to Ansible, the gameplans or the "
+          f"host's code goes to the host with `worms apply round-agent`. Then: `worms round start {session.round.id} --resume`.")  # fmt: skip
 
 
 def _summary(session):
@@ -866,18 +931,27 @@ def _afterwards(session):
         print(f"  an unfinished build (begun {record['began']}), kept: `worms round start {session.round.id} --resume` "
               "continues it, `worms round teardown` destroys it")  # fmt: skip
     elif sandbox:
-        print(output.heading("the round's sandbox"))
-        print(f"  kept, powered off, for another attempt: {len(sandbox)} VM(s). Another `worms round start` of the "
-              "same gameplan rolls it back instead of building it (minutes instead of an hour).")  # fmt: skip
+        # delete_snapshot(), teardown(): once every team's attempt is over without an error. Before,
+        # the sandbox and its snapshot stay for `--resume`, which starts from the snapshot.
+        print(output.heading("the round's sandbox: its snapshot deleted, then destroyed"))
+        complete = _complete(_latest_runs(session.round))
+        if complete:
+            print(f"  Every team's attempt is over without an error: the sandbox ({len(sandbox)} VMs) and its snapshot are "
+                  "not needed any more.")  # fmt: skip
+        else:
+            print(f"  Not every team's attempt is over without an error: the sandbox ({len(sandbox)} VMs, powered off) and "
+                  f"its snapshot are kept, `worms round start {session.round.id} --resume` starts from the snapshot "
+                  "(minutes), not from a new build (an hour).")  # fmt: skip
         says("worms round teardown")
-        if ask("Destroy the round's sandbox now?", False, False):
+        if ask("Delete the sandbox's snapshot and destroy the sandbox now?", complete, yes and complete):
             try:
-                session.conductor.destroy_sandbox()
-                print(output.status_cell("ok", "destroyed"))
+                session.conductor.destroy_sandbox(session.round.id)
+                print(output.status_cell("ok", "the snapshot deleted, the sandbox destroyed"))
+                session.summary.note("✓ the round's sandbox: its snapshot deleted, the sandbox destroyed")
             except Exception as exc:  # noqa: BLE001
                 output.error(f"not destroyed: {exc}; later: `worms round teardown`")
         else:
-            print("  later: worms round teardown")
+            print("  kept; later: worms round teardown")
     print(output.heading("start again what was stopped"))
     for question, command, act in (
         ("Start the devboxes again?", "worms vm start devboxes", lambda: power.Power(session.config).start(["devboxes"])),
@@ -982,9 +1056,12 @@ def start(config, args) -> int:
         record = session.jobs.handlers.unfinished_build(session.jobs.cfg)
         if record:
             print(output.heading("an unfinished sandbox build"))
-            print(f"  begun {record['began']} for {record['gameplan']}; no worm has run on it. Continued: its VMs are kept, "
-                  "OpenTofu's apply and the configuration run again (minutes, not the whole build). Not: it is "
-                  "destroyed and built anew.")  # fmt: skip
+            print(f"  begun {record['began']} for {record['gameplan']}"
+                  + (f", configured {record['configured']}" if record.get("configured") else "")
+                  + "; no worm has run on it. Continued: its VMs are kept, "
+                  + ("only its snapshot is taken" if record.get("configured") else
+                     "OpenTofu's apply and the configuration run again (minutes, not the whole build)")
+                  + ". Not: it is destroyed and built anew.")  # fmt: skip
             if ask("Continue that build?", True, args.yes):
                 session.conductor.resume_build = True
 
@@ -1006,16 +1083,24 @@ def start(config, args) -> int:
         minutes = sum(run.duration or round_.team_duration for run in runs if run.upload_id) // 60
         print(output.heading("6. the round"))
         print(f"  {len(runs)} team(s): {', '.join(run.team.name for run in runs)}; the gameplan about {minutes} min, "
-              "plus the sandbox (about an hour to build, minutes to roll back) and about 15 min per team")  # fmt: skip
+              "plus the sandbox (built once, about an hour; a rollback to its snapshot before every team but the "
+              "first, minutes) and about 15 min per team")  # fmt: skip
         if not ask(f"Run round {round_.name!r} now? This terminal stays with it to the end.", False, args.yes):
             return 1
         _interrupt(session)
+        if not _build(session, RoundRun.objects.select_related("round", "team").get(pk=first.pk)):  # pinned since
+            signal.signal(signal.SIGINT, signal.default_int_handler)
+            _summary(session)
+            _afterwards(session)
+            _say_summary(session)
+            return 1
         ended = _run(session, runs)
         failed = [run for run in ended if run.state == RoundRun.State.FAILED]
         if failed and not session.conductor.stopping and not session.stopped_on_prepare:
             print(f"failed: {', '.join(run.team.name for run in failed)} (each attempt's steps: {session.dir})")
             says(f"worms round start {round_.id} --resume")
-            if ask("Run a new attempt of each of them now (the sandbox is kept: a rollback, not a build)?", False, False):
+            if ask("Run each of them again now? A new attempt starts from the sandbox's snapshot (minutes), not from a "
+                   "new build.", False, False):  # fmt: skip
                 _run(session, failed)
         signal.signal(signal.SIGINT, signal.default_int_handler)
         _summary(session)

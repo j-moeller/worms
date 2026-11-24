@@ -47,10 +47,16 @@
     <div class="panel__body prose">{% if version.description %}{{ version.description|linebreaks }}{% elif round.gameplan %}<p class="muted">The gameplan has no description: teams see only the round's times.</p>{% else %}<p class="muted">No gameplan yet.</p>{% endif %}</div>
 </section>
 
-{% if failures %}
+{% if failures or step_failures %}
 <section class="panel panel--alert" aria-labelledby="failures-title">
-    <header class="panel__head"><h2 class="panel__title" id="failures-title">Failures</h2><p class="panel__meta">{{ failures|length }} attempt(s), the newest first: what failed, why, and where the rest is on the host (each session's <code>summary.log</code> has them all: <code>worms log round {{ round.id }} summary</code>)</p></header>
+    <header class="panel__head"><h2 class="panel__title" id="failures-title">Failures</h2><p class="panel__meta">{% if step_failures %}{{ step_failures|length }} of the round's own steps (its sandbox's build and snapshot), {% endif %}{{ failures|length }} attempt(s), the newest first: what failed, why, and where the rest is on the host (each session's <code>summary.log</code> has them all: <code>worms log round {{ round.id }} summary</code>)</p></header>
     <div class="panel__body">
+        {% for job in step_failures %}
+        <article class="failure" id="failure-job-{{ job.id }}">
+            <h3 class="failure__title">the round's {{ job.kind }} step failed <span class="muted">· {{ job.finished_at|date:"Y-m-d H:i:s" }} UTC; no attempt was used up</span></h3>
+            {% if job.result.failure %}{% include "staff/_failure.html" with f=job.result.failure open=forloop.first %}{% else %}<p class="failure__why">{{ job.error }}</p>{% endif %}
+        </article>
+        {% endfor %}
         {% for run in failures %}
         <article class="failure" id="failure-{{ run.uuid }}">
             <h3 class="failure__title">#{{ run.position }} {{ run.team.name }}, attempt {{ run.attempt|add:1 }}: {% if run.state == "failed" %}failed{% else %}{{ run.state }}, with an error{% endif %} {{ run.failure_phase }}{% if run.finished_at %} <span class="muted">· {{ run.finished_at|date:"Y-m-d H:i:s" }} UTC</span>{% endif %}</h3>
@@ -94,7 +100,7 @@
             <thead><tr><th scope="col">Job</th><th scope="col">Team</th><th scope="col">State</th><th scope="col">Requested</th><th scope="col">Finished</th><th scope="col">Error</th></tr></thead>
             <tbody>
                 {% for job in jobs %}
-                <tr><td class="mono">{{ job.kind }}</td><td>{{ job.run.team.name }}</td><td><span class="badge badge--state">{{ job.state }}</span></td><td>{{ job.requested_at|date:"H:i:s" }}</td><td>{{ job.finished_at|date:"H:i:s"|default:"—" }}</td><td>{% if job.result.failure %}<details class="failure failure--job"><summary class="mono">{{ job.result.failure.headline|default:job.error|truncatechars:160 }}</summary>{% include "staff/_failure.html" with f=job.result.failure open=True %}</details>{% else %}<span class="mono truncate">{{ job.error|truncatechars:160 }}</span>{% endif %}</td></tr>
+                <tr><td class="mono">{{ job.kind }}</td><td>{{ job.run.team.name|default:"the round" }}</td><td><span class="badge badge--state">{{ job.state }}</span></td><td>{{ job.requested_at|date:"H:i:s" }}</td><td>{{ job.finished_at|date:"H:i:s"|default:"—" }}</td><td>{% if job.result.failure %}<details class="failure failure--job"><summary class="mono">{{ job.result.failure.headline|default:job.error|truncatechars:160 }}</summary>{% include "staff/_failure.html" with f=job.result.failure open=True %}</details>{% else %}<span class="mono truncate">{{ job.error|truncatechars:160 }}</span>{% endif %}</td></tr>
                 {% empty %}
                 <tr><td colspan="6" class="empty">No host jobs yet.</td></tr>
                 {% endfor %}

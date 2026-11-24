@@ -32,12 +32,14 @@ OPEN = RoundRun.OPEN_STATES
 
 # An attempt's steps, as the stepper shows them.
 STEPS = [
-    (S.PREPARING, "Build", "the sandbox built, or rolled back to its snapshot; the run's flags and files"),
+    (S.PREPARING, "Prepare", "the sandbox rolled back to its snapshot (but for the first attempt after the round's build "
+                             "and snapshot, which come before any attempt); the run's secrets, files and flags"),
     (S.CHECKING, "Checks", "the host's firewalls; every VM and the gateway started in this attempt and came up (cloud-init, "
                            "boot, addresses, route, sshd, users, services; the gateway's rules); then each VM probed from inside"),
     (S.RUNNING, "Gameplan", "the gameplan's execute(): the worm deployed, flags, power, files"),
     (S.ENDING, "Drain", "every VM stopped; the monitor catches up"),
-    (S.TEARING_DOWN, "Teardown", "the sandbox destroyed, or kept for the next team"),
+    (S.TEARING_DOWN, "End", "the run's secrets gone, its VMs off; the sandbox and its snapshot kept for the next team "
+                            "(the round's teardown comes after its last attempt)"),
     (S.FINISHED, "Done", "the attempt's flags count"),
 ]
 

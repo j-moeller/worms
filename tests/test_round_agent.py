@@ -231,13 +231,18 @@ def test_a_gameplan_is_named_by_a_plain_file_name_only(name):
 
 def test_validate_prepare():
     clean = validation.validate("prepare", {"gameplan": "round_one.py", "gameplan_sha256": "a" * 64, "run_uuid": RUN})
-    assert clean == {"gameplan": "round_one.py", "gameplan_sha256": "a" * 64, "run_uuid": RUN, "resume_build": False}
+    assert clean == {"gameplan": "round_one.py", "gameplan_sha256": "a" * 64, "run_uuid": RUN}
     with pytest.raises(validation.Invalid):
         validation.validate("prepare", {"gameplan": "round_one.py", "gameplan_sha256": "nothex", "run_uuid": RUN})
-    # An unfinished sandbox build continued: the operator's yes, a boolean (worms_cli/rounds.py).
-    assert validation.validate("prepare", {**clean, "resume_build": True})["resume_build"] is True
+    # The round's build (once, before the attempts: no run), its rollback; an unfinished build
+    # continued: the operator's yes, a boolean (worms_cli/rounds.py).
+    version = {"gameplan": "round_one.py", "gameplan_sha256": "a" * 64}
+    assert validation.validate("build", {**version, "round": 3}) == {**version, "resume_build": False}
+    assert validation.validate("build", {**version, "resume_build": True})["resume_build"] is True
     with pytest.raises(validation.Invalid):
-        validation.validate("prepare", {**clean, "resume_build": "yes"})
+        validation.validate("build", {**version, "resume_build": "yes"})
+    assert validation.validate("rollback", {**version, "run_uuid": RUN}) == version
+    assert validation.validate("snapshot", {"round": 3}) == {} == validation.validate("delete_snapshot", {})
     # The jobs around it: preflight names the gameplan too, check the run (or nothing: the host only).
     flight = {"gameplan": "round_one.py", "gameplan_sha256": "a" * 64}
     assert validation.validate("preflight", flight) == {**flight, "hold_devboxes": False}
@@ -568,13 +573,30 @@ DEVBOX_VMS = [{"vmid": 116, "name": "devbox-t1-a", "node": "n", "status": "runni
               {"vmid": 117, "name": "devbox-t1-b", "node": "n", "status": "stopped", "pool": "devbox"}]  # fmt: skip
 
 
+def _sandbox(ex, cfg=None):
+    """What an attempt's sandbox gets before its prepare, as `worms round start` asks for it (the
+    conductor's build_sandbox, run_attempt): built and snapshotted when this gameplan's sandbox
+    with its snapshot is not there (build, snapshot), else rolled back to that snapshot. The
+    build job's result."""
+    version = {"gameplan": PREPARE["gameplan"], "gameplan_sha256": PREPARE["gameplan_sha256"]}
+    built = handlers.build(ex, cfg or CFG, validation.validate("build", version))
+    if built["snapshot_due"]:
+        built["snapshot"] = handlers.snapshot(ex, cfg or CFG, validation.validate("snapshot", {}))
+    else:
+        built["rollback"] = handlers.rollback(ex, cfg or CFG, validation.validate("rollback", version))
+    return built
+
+
 def _prepare(ex, cfg=None, booted=None):
-    """The run's prepare job. With `booted` (the test's tmp_path): it begins when the host has been
-    up 1000 s, its sandbox's VMs and gateway boot 10 to 19 s later (each a QEMU of its own), and
-    the check comes 300 s after it began."""
+    """The run's prepare job, on its sandbox (_sandbox). With `booted` (the test's tmp_path): the
+    attempt begins (its sandbox's reset: the snapshot or the rollback) when the host has been up
+    1000 s, its sandbox's VMs and gateway boot 10 to 19 s later (each a QEMU of its own), and the
+    check comes 300 s after it began."""
     if booted is None:
+        ex.built = _sandbox(ex, cfg)
         return handlers.prepare(ex, cfg or CFG, validation.validate("prepare", PREPARE))
     (_host(booted)["PROC"] / "uptime").write_text("1000.00 3600.00\n")
+    ex.built = _sandbox(ex, cfg)
     result = handlers.prepare(ex, cfg or CFG, validation.validate("prepare", PREPARE))
     for vmid in SANDBOX_VMIDS:
         _fake_qemu(booted, vmid, 4000 + vmid, started=1010 + vmid % 10)
@@ -617,7 +639,7 @@ def test_prepare_builds_the_gameplans_sandbox_and_reports_its_topology(tmp_path)
     # The sandbox as a graph, for the replay; nothing of the gameplan's files, commands or rules.
     assert any(n["type"] == "network" for n in result["topology"]["nodes"])
     assert "sandbox_definition" not in result and "alice" not in json.dumps(result)
-    assert result["sandbox"] == "built and snapshotted"
+    assert result["sandbox"] == "as its snapshot holds it" and ex.built["sandbox"] == "built and configured" and ex.built["snapshot"]["taken"]
 
 
 def test_a_failed_build_tells_the_database_nothing_of_the_gameplan():
@@ -635,7 +657,7 @@ def test_a_failed_build_tells_the_database_nothing_of_the_gameplan():
     ex.sandbox_built = False
     with pytest.raises(RuntimeError) as caught:
         _prepare(ex)
-    assert str(caught.value).startswith("the prepare job failed: RuntimeError raised at ") and "hunter2" not in str(caught.value)
+    assert str(caught.value).startswith("the build job failed: RuntimeError raised at ") and "hunter2" not in str(caught.value)
     assert any("hunter2" in note for note in ex.notes)
     cause = failure.from_exception(caught.value)
     assert "hunter2" in cause.headline and "hunter2" not in json.dumps(failure.for_database(caught.value, cause))
@@ -750,7 +772,8 @@ def test_the_next_run_of_the_round_rolls_the_sandbox_back():
     result = _prepare(ex)
     assert not any(c[0] in ("tofu", "worms") and c[1:2] != ("output",) and "output" not in c for c in ex.calls)
     assert sorted(ex.qm_steps()) == sorted(f"qm rollback {vmid} clean --start 1" for vmid in SANDBOX_VMIDS)
-    assert result["sandbox"] == "rolled back to its snapshot" and {vm["name"] for vm in result["vms"]} == {"sandbox-a", "sandbox-b"}
+    assert ex.built["sandbox"].startswith("kept") and sorted(ex.built["rollback"]["rolled_back"]) == ["sandbox-a", "sandbox-b", "sandbox-gw"]
+    assert result["sandbox"] == "as its snapshot holds it" and {vm["name"] for vm in result["vms"]} == {"sandbox-a", "sandbox-b"}
 
 
 @pytest.mark.parametrize("change", ["another round", "a missing snapshot"])
@@ -766,7 +789,8 @@ def test_a_sandbox_that_is_not_the_rounds_or_not_whole_is_destroyed_and_built_ag
 
 def test_a_new_sandbox_is_built_on_reset_services_with_the_devboxes_off():
     """What it installs comes from the private internet, which team code may have changed:
-    back to its snapshot first, and no devbox running until the sandbox is snapshotted."""
+    back to its snapshot first, and no devbox running until the sandbox is snapshotted (the
+    build leaves them off, the snapshot step starts them)."""
     ex = FakeExecutor()
     ex.sandbox_built = False
     ex.pools.update(ephemeral=[SERVICE_VMS[0]], private_internet=[SERVICE_VMS[1]], devbox=list(DEVBOX_VMS))
@@ -778,7 +802,8 @@ def test_a_new_sandbox_is_built_on_reset_services_with_the_devboxes_off():
     sandbox_snapshots = [_first_index(steps, f"qm snapshot {vmid} clean") for vmid in SANDBOX_VMIDS]
     assert off < min(rollbacks) and max(rollbacks + sandbox_snapshots) < on
     assert not any("117" in step for step in steps)  # it was off, it stays off
-    assert result["services"].startswith("reset: 2 VMs")
+    assert ex.built["services"].startswith("reset: 2 VMs") and ex.built["snapshot"]["devboxes_started"] == ["devbox-t1-a"]
+    assert result["sandbox"] == "as its snapshot holds it"
 
 
 def test_a_rollback_of_the_services_puts_the_devbox_map_back(tmp_path):
@@ -801,9 +826,10 @@ def test_services_without_a_snapshot_are_left_as_they_are_and_reported():
     ex.sandbox_built = False
     ex.pools.update(ephemeral=[SERVICE_VMS[0]], private_internet=[SERVICE_VMS[1]])
     ex.clean = {111}
-    result = _prepare(ex)
+    _prepare(ex)
     assert not any("rollback" in step for step in ex.qm_steps())
-    assert "not reset" in result["services"] and "apt-cache" in result["services"] and "rebuild services" in result["services"]
+    services = ex.built["services"]
+    assert "not reset" in services and "apt-cache" in services and "rebuild services" in services
 
 
 def test_the_devboxes_come_back_when_the_build_fails():
@@ -811,7 +837,7 @@ def test_the_devboxes_come_back_when_the_build_fails():
     ex.sandbox_built = False
     ex.pools.update(devbox=list(DEVBOX_VMS))
     ex.fail_on = "apply"
-    with pytest.raises(RuntimeError, match="prepare job failed"):
+    with pytest.raises(RuntimeError, match="build job failed"):
         _prepare(ex)
     assert any("apply failed" in note for note in ex.notes)  # the reason: in the job log
     assert ex.qm_steps()[-1] == "qm start 116"

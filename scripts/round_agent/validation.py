@@ -71,16 +71,25 @@ def gameplan_file(value):
     return value
 
 
-def prepare(params):
+def build(params):
+    """The round's sandbox, from the gameplan the orchestrator validated; `resume_build`: the
+    operator's yes to continuing a build left unfinished."""
     resume = params.get("resume_build", False)
     if not isinstance(resume, bool):
         raise Invalid("resume_build must be true or false")
+    return {**gameplan_version(params), "resume_build": resume}
+
+
+def gameplan_version(params):
+    """rollback: the gameplan whose sandbox is rolled back (its definition must be the one built)."""
     return {
         "gameplan": gameplan_file(params.get("gameplan")),
         "gameplan_sha256": sha256(params.get("gameplan_sha256"), "gameplan_sha256"),
-        "run_uuid": team_uuid(params.get("run_uuid"), "run_uuid"),
-        "resume_build": resume,
     }
+
+
+def prepare(params):
+    return {**gameplan_version(params), "run_uuid": team_uuid(params.get("run_uuid"), "run_uuid")}
 
 
 def preflight(params):
@@ -324,6 +333,9 @@ def devbox_hold(params):
 VALIDATORS = {
     "gameplans": lambda params: {},
     "preflight": preflight,
+    "build": build,
+    "snapshot": lambda params: {},
+    "rollback": gameplan_version,
     "prepare": prepare,
     "check": check,
     "observe": observe,
@@ -332,6 +344,7 @@ VALIDATORS = {
     "place_flags": flags,
     "write_file": write_file,
     "read_file": read_file,
+    "delete_snapshot": lambda params: {},
     "teardown": teardown,
     "devbox_provision": devbox_provision,
     "devbox_rebuild": devbox_rebuild,

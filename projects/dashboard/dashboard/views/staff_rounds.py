@@ -35,7 +35,7 @@ from dashboard.views.staff import delete_unreferenced
 from dashboard.views.util import render_with_base_info
 from django.contrib import messages
 from django.db import transaction
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.http import HttpRequest
 from django.shortcuts import get_object_or_404, redirect
 from django.views.decorators.http import require_POST
@@ -238,18 +238,23 @@ def round_detail(request: HttpRequest, round_uuid):
     # Why each attempt failed (RoundRun.failure, `worms round start` writes it), the newest first:
     # the step, its phase, the cause, what of its output says it, and its logs on the host.
     failures = sorted((run for run in runs if run.failure), key=lambda run: run.finished_at or run.created_at, reverse=True)
+    # The round's own steps, tied to no attempt (its sandbox's build and snapshot, its end): their
+    # params name the round (orchestrator/rounds/conductor.py build_sandbox, destroy_sandbox).
+    own = Q(run__isnull=True, params__round=round_obj.pk)
+    step_failures = list(HostJob.objects.filter(own, state=HostJob.State.FAILED).order_by("-id")[:10])
     return render_with_base_info(request, "staff/round.html", {
         "round": round_obj,
         "status": _status(round_obj, now),
         "runs": runs,
         "failures": failures,
+        "step_failures": step_failures,
         "form": form,
         "started": started,
         "timing": schedule.timing_defaults(),
         "estimate": _estimate(round_obj, teams),
         # Not the observe jobs that went well: one a minute while an attempt runs, they say
         # nothing staff need (the host's memory is in the orchestrator's journal).
-        "jobs": HostJob.objects.filter(run__round=round_obj).exclude(kind=HostJob.Kind.OBSERVE, state=HostJob.State.DONE)
+        "jobs": HostJob.objects.filter(Q(run__round=round_obj) | own).exclude(kind=HostJob.Kind.OBSERVE, state=HostJob.State.DONE)
         .select_related("run__team").order_by("-id")[:50],
         "version": round_gameplan(round_obj),
         "progress": round_progress.progress(round_obj),

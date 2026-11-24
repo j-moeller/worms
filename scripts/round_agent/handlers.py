@@ -297,9 +297,11 @@ def _reusable_sandbox(ex, hcl):
 
 
 # A sandbox build begun and not finished (state dir): written before the build changes any VM,
-# removed once every VM has its clean snapshot or the sandbox is destroyed. While it is there no
-# worm has run on that sandbox (a worm runs only after a whole prepare), so the operator may have
-# the next prepare continue the build on its VMs (resume_build) instead of building anew.
+# marked `configured` once its configuration ran through, removed once every VM has its clean
+# snapshot (the snapshot step) or the sandbox is destroyed. While it is there no worm has run on
+# that sandbox (prepare refuses a sandbox without its snapshot), so the operator may have the next
+# build continue on its VMs (resume_build) instead of building anew, and a configured one goes
+# straight to its snapshot.
 SANDBOX_BUILD = "sandbox-build.json"
 
 
@@ -326,8 +328,46 @@ def _record_build(cfg, hcl, params):
         json.dump(record, handle)
 
 
+def _build_configured(cfg, devboxes=()):
+    """The build's configuration ran through: what is left of it is its snapshot. `devboxes`: the
+    VMIDs of the devbox VMs it shut down, which the snapshot step starts again once it is taken."""
+    record = unfinished_build(cfg)
+    if record is None:
+        return
+    fd = os.open(str(_build_record_path(cfg)), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        json.dump({**record, "configured": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                   "devboxes": sorted(set(record.get("devboxes") or []) | set(devboxes))}, handle)  # fmt: skip
+
+
 def _build_finished(cfg):
     _build_record_path(cfg).unlink(missing_ok=True)
+
+
+# The sandbox's last reset to its snapshot (state dir): the step that did it (snapshot, rollback)
+# and the host's clock just before it started any VM. The next prepare takes it (and removes it)
+# as when its attempt began: the check's `start` then knows a VM that booted from the snapshot
+# for this attempt from one left running since an earlier one.
+SANDBOX_RESET = "sandbox-reset.json"
+
+
+def _note_reset(cfg, how):
+    path = Path(cfg.get("state_dir", STATE_DIR)) / SANDBOX_RESET
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        json.dump({"how": how, "began": host_state.clock()}, handle)
+
+
+def _take_reset(cfg):
+    """The last reset's record, removed: one reset, one prepare. None without one."""
+    path = Path(cfg.get("state_dir", STATE_DIR)) / SANDBOX_RESET
+    try:
+        record = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    path.unlink(missing_ok=True)
+    return record if isinstance(record, dict) and isinstance(record.get("began"), dict) else None
 
 
 def _destroy_sandbox(ex, cfg):
@@ -365,12 +405,13 @@ def _unsafe_tree(value):
 
 
 def _build_sandbox(ex, cfg, hcl, config, params, resume=False):
-    """A new sandbox, snapshotted before any team's code reaches it. While it is built the
-    devbox VMs are shut down and the service VMs it installs from are back to their snapshot,
-    so nothing in it comes from team code: every later run of the round rolls back to it.
-    `resume` (the operator's choice, `worms round start --resume`): a build of this same
-    definition left unfinished (unfinished_build) is continued on its VMs, OpenTofu's apply and
-    the configuration run again; any other sandbox is destroyed first."""
+    """A new sandbox: OpenTofu's apply and the configuration, its snapshot still to take (the
+    snapshot step) before any team's code reaches it. While it is built the devbox VMs are shut
+    down and the service VMs it installs from are back to their snapshot, so nothing in it comes
+    from team code: every run of the round starts from its snapshot. `resume` (the operator's
+    choice, `worms round start --resume`): a build of this same definition left unfinished
+    (unfinished_build) is continued on its VMs, OpenTofu's apply and the configuration run
+    again; any other sandbox is destroyed first."""
     _refuse_while_internet(cfg, "build a sandbox")
     unfinished = unfinished_build(cfg)
     continued = (resume and unfinished is not None and ex.sandbox_definition() == hcl
@@ -392,7 +433,7 @@ def _build_sandbox(ex, cfg, hcl, config, params, resume=False):
         ex.tofu("sandbox", "init", "-input=false", timeout=600)
         ex.tofu("sandbox", "apply", "-auto-approve", "-input=false", "-parallelism=1", timeout=cfg.get("apply_timeout", 5400))
         if continued:
-            # Kept powered off by the failed attempt's teardown: up again for the configuration.
+            # Kept powered off (the failed session's end): up again for the configuration.
             snapshots.start(ex, [vm for vm in snapshots.pool_vms(ex, "sandbox") if vm.get("status") != "running"])
         snapshots.record(ex, lambda: snapshots.pool_vms(ex, "sandbox"), "created", "the round's sandbox")
         # Refresh the inventory and configure the sandbox: the internal CA (a worm reaches scoring
@@ -401,13 +442,98 @@ def _build_sandbox(ex, cfg, hcl, config, params, resume=False):
             varfile = Path(tmp) / "sandbox-vms.yml"
             varfile.write_text(_unsafe_yaml(_unsafe_tree(config)))
             ex.worms("round-configure-sandbox", timeout=cfg.get("configure_timeout", 1800), args=f"-e @{varfile}")
-        snapshots.take(ex, snapshots.pool_vms(ex, "sandbox"), f"worms round sandbox {hashlib.sha256(hcl.encode()).hexdigest()[:12]}")
-        _build_finished(cfg)
-    finally:
+        # The devboxes it shut down stay off until the snapshot is taken (the snapshot step starts them).
+        _build_configured(cfg, [int(vm["vmid"]) for vm in devboxes])
+    except BaseException:
         if devboxes:
             _refuse_while_internet(cfg, "start the devbox VMs again")
             snapshots.start(ex, devboxes)
+        raise
     return services
+
+
+def _gameplans_sandbox(ex, params):
+    """(spec, loaded, hcl): the gameplan the orchestrator validated, and the sandbox it defines."""
+    spec, loaded = _gameplan(ex, params["gameplan"], params["gameplan_sha256"])
+    return spec, loaded, gameplan_build.hcl(spec, loaded.filename, loaded.sha256)
+
+
+@_quiet
+def build(ex, cfg, params):
+    """build(): the round's sandbox from its gameplan, once per round, before any team's attempt:
+    OpenTofu's apply and the configuration (Ansible: the CA, what the gameplan installs). Its
+    snapshot is the next step's (snapshot). Not built again: the sandbox of this gameplan, every
+    VM with its clean snapshot (a later session of the round rolls it back instead), and a build
+    configured already, whose snapshot failed (the snapshot step is left). A build left
+    unfinished is continued on its VMs when the operator says so (resume_build: OpenTofu's apply
+    and the configuration again), else destroyed and built anew."""
+    spec, _loaded, hcl = _gameplans_sandbox(ex, params)
+    if _reusable_sandbox(ex, hcl):
+        return {"built": False, "snapshot_due": False,
+                "sandbox": "kept: this gameplan's sandbox is there, every VM with its clean snapshot (rolled back for each team)"}  # fmt: skip
+    record = unfinished_build(cfg)
+    if (params.get("resume_build") and record and record.get("configured") and ex.sandbox_definition() == hcl
+            and record["definition"] == hashlib.sha256(hcl.encode()).hexdigest()):  # fmt: skip
+        ex.note(f"the build begun {record['began']} was configured {record['configured']}: only its snapshot is left")
+        return {"built": False, "snapshot_due": True, "sandbox": "configured already: its snapshot is left"}
+    services = _build_sandbox(ex, cfg, hcl, gameplan_build.ansible_vars(spec), params, resume=params.get("resume_build", False))
+    return {"built": True, "snapshot_due": True, "sandbox": "built and configured", "services": services}
+
+
+def snapshot(ex, cfg, params):
+    """snapshot(): every VM of the round's sandbox, its gateway too, its clean snapshot, taken
+    once its build is configured and before any team's code reaches it (each VM shut down
+    first: no guest agent, so a running one would be snapshotted like a power cut), then started
+    again: the first team's attempt begins on it as it is. The build is finished then."""
+    record = unfinished_build(cfg)
+    vms = snapshots.pool_vms(ex, "sandbox")
+    if not vms:
+        raise RuntimeError("no sandbox VM to snapshot: the build step comes first")
+    if record is None:
+        raise RuntimeError("no build of the sandbox is on record: a team's code may have run on it since its build. "
+                           "`worms round teardown` destroys it; the next `worms round start` builds it again")  # fmt: skip
+    if not record.get("configured"):
+        raise RuntimeError(f"the sandbox's build (begun {record['began']}) did not finish its configuration: the build step comes first")
+    definition = hashlib.sha256(ex.sandbox_definition().encode()).hexdigest()
+    if record["definition"] != definition:
+        raise RuntimeError("the sandbox the stack holds is not the one on record as built")
+    _refuse_while_internet(cfg, "start the sandbox after its snapshot")
+    _note_reset(cfg, "snapshot")  # every VM boots from here on: the first attempt's prepare counts from it
+    snapshots.take(ex, vms, f"worms round sandbox {definition[:12]}")
+    _build_finished(cfg)
+    # The devbox VMs the build shut down, up again now that nothing of theirs can reach the snapshot.
+    off, started = set(record.get("devboxes") or []), []
+    for vm in snapshots.pool_vms(ex, "devbox"):
+        if int(vm["vmid"]) in off:
+            try:
+                snapshots.start(ex, [vm])
+                started.append(vm["name"])
+            except Exception as exc:  # noqa: BLE001  (started meanwhile, say: the snapshot stands)
+                ex.note(f"{vm['name']} not started again: {exc}")
+    return {"taken": [vm["name"] for vm in vms], "devboxes_started": started}
+
+
+@_quiet
+def rollback(ex, cfg, params):
+    """load_snapshot(): every VM of the round's sandbox back to its clean snapshot, started, so that
+    nothing of the team before is left (a boot instead of a build). For every attempt but the
+    first after the snapshot was taken."""
+    _spec, _loaded, hcl = _gameplans_sandbox(ex, params)
+    built = _reusable_sandbox(ex, hcl)
+    if not built:
+        raise RuntimeError("no sandbox of this gameplan with every VM's clean snapshot to roll back to: the build and "
+                           "snapshot steps come first")  # fmt: skip
+    _refuse_while_internet(cfg, "start a sandbox")
+    _note_reset(cfg, "rollback")  # every VM boots from here on: the attempt's prepare counts from it
+    snapshots.roll_back(ex, built)
+    snapshots.wait_for_ssh(ex, _sandbox_hosts(ex))
+    return {"rolled_back": [vm["name"] for vm in built]}
+
+
+def delete_snapshot(ex, cfg, params):
+    """delete_snapshot(): the clean snapshot of every VM of the round's sandbox deleted, before
+    the sandbox is destroyed (teardown)."""
+    return {"deleted": snapshots.delete(ex, snapshots.pool_vms(ex, "sandbox"))}
 
 
 # -- a run's secrets and files ---------------------------------------------------------------
@@ -573,22 +699,25 @@ def _remove_flags(ex, vms, names, strict):
 
 @_quiet
 def prepare(ex, cfg, params):
-    """The run's sandbox, from its gameplan, and everything of the run that comes before the
-    worm. The runs of a round share one sandbox: the first builds and snapshots it, every later
-    one rolls it back to that snapshot (a boot instead of a build, nothing left of the team
-    before). Then this run's keys, passwords and files, and a fresh flag on every VM. When it began
-    (the kernel's clock) is kept with the run: the check takes a VM whose QEMU is older for one
-    that did not boot in this attempt."""
-    began = host_state.clock()
-    spec, loaded = _gameplan(ex, params["gameplan"], params["gameplan_sha256"])
-    hcl = gameplan_build.hcl(spec, loaded.filename, loaded.sha256)
+    """prepare(): everything of a team's run that comes before the worm, on the round's sandbox
+    as its snapshot holds it (the build and snapshot steps made it, once; every attempt but the
+    first after them rolled it back: the rollback step). This run's keys, passwords and files,
+    and a fresh flag on every VM. It builds nothing and rolls nothing back: a sandbox that is not
+    this gameplan's, has no snapshot, or has a VM not running is refused, and so is one not reset
+    since the last prepare. When the attempt began is when its reset did (the kernel's clock,
+    before the snapshot or the rollback started a VM: _note_reset), kept with the run: the check
+    takes a VM whose QEMU is older for one that did not boot from the snapshot for this attempt."""
+    reset = _take_reset(cfg)
+    spec, loaded, hcl = _gameplans_sandbox(ex, params)
     built = _reusable_sandbox(ex, hcl)
-    if built:
-        _refuse_while_internet(cfg, "start a sandbox")
-        snapshots.roll_back(ex, built)
-        services = "not reset: a later run of the round (the first one reset them)"
-    else:
-        services = _build_sandbox(ex, cfg, hcl, gameplan_build.ansible_vars(spec), params, resume=params.get("resume_build", False))
+    if not built:
+        raise RuntimeError("no sandbox of this gameplan with every VM's clean snapshot: the build and snapshot steps come first")
+    if reset is None:
+        raise RuntimeError("the sandbox was not reset since the last attempt's prepare: the rollback step (to the snapshot) comes first")
+    began = reset["began"]
+    down = sorted(vm["name"] for vm in built if vm.get("status") != "running")
+    if down:
+        raise RuntimeError(f"sandbox VMs not running: {', '.join(down)}: the rollback step (to the snapshot) comes first")
     snapshots.wait_for_ssh(ex, _sandbox_hosts(ex))
 
     vms = _sandbox_vms(ex)
@@ -607,8 +736,7 @@ def prepare(ex, cfg, params):
     networks = gameplan_build.vm_networks(spec)
     gateway = _ansible_hosts("sandbox", ex.tofu_output("sandbox")).get("sandbox_gw")
     return {
-        "sandbox": "rolled back to its snapshot" if built else "built and snapshotted",
-        "services": services,
+        "sandbox": "as its snapshot holds it",
         "topology": gameplan_build.topology(spec),
         "entrypoint": spec["entrypoint"],
         "gateway": {"name": gateway["name"], "vmid": int(gateway["vm_id"])} if gateway else None,
@@ -1154,8 +1282,9 @@ def read_file(ex, cfg, params):
 
 
 def teardown(ex, cfg, params):
-    """After a run. With `keep` (another run of the round follows) the sandbox stays, powered
-    off, for the next prepare to roll back; else it is destroyed. The run's secrets go."""
+    """With `keep`: an attempt's end. Its VMs powered off, the sandbox and its snapshot kept for
+    the next attempt's rollback. Without (the round's end, after delete_snapshot): the sandbox
+    destroyed. The run's secrets go either way."""
     _clear_current_team(ex, cfg)
     if params.get("run_uuid"):
         _run_state_path(cfg, params["run_uuid"]).unlink(missing_ok=True)
@@ -1596,6 +1725,9 @@ def release_devboxes(ex, cfg, params):
 HANDLERS = {
     "gameplans": gameplans,
     "preflight": preflight,
+    "build": build,
+    "snapshot": snapshot,
+    "rollback": rollback,
     "prepare": prepare,
     "check": check,
     "observe": observe,
@@ -1604,6 +1736,7 @@ HANDLERS = {
     "place_flags": place_flags,
     "write_file": write_file,
     "read_file": read_file,
+    "delete_snapshot": delete_snapshot,
     "teardown": teardown,
     "devbox_provision": devbox_provision,
     "devbox_rebuild": devbox_rebuild,

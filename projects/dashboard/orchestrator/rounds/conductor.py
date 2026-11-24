@@ -2,17 +2,27 @@
 Only `worms round start` runs one (src/worms_cli/rounds.py): on the host, in the operator's
 terminal, one team after another. Nothing here starts, stops, retries or waits by itself.
 
-    for each team (in the round's order), with the devboxes and the orchestrator stopped:
-        preflight          (the host ready, nothing changed; else the round stops here)
-        reset the sandbox  (prepare: built or rolled back, the run's secrets, files, flags)
-        check it           (check: the host, and probes inside every VM)
-        gameplan.execute() (deploy_worm, waits, power, flags), the VMs watched meanwhile
-                           (AttemptBackend)
-        the rest of the run's time, stop every VM, drain, tear down (the sandbox kept, powered
-        off, for the next team; the session destroys it at its end)
+    with the devboxes and the orchestrator stopped:
+    build()                (build_sandbox: OpenTofu's apply and the configuration, once per round;
+    snapshot()              then every VM's clean snapshot, before any team's code)
+    for i, team in enumerate(teams):
+        preflight          (the host ready, nothing changed; else the round stops here; not for
+                           the first attempt after the snapshot: the session's ran before the build)
+        if i > 0:
+            load_snapshot()  (rollback: every VM back to the snapshot; precisely: every attempt
+                           but the first after the snapshot was taken, a later session's first too)
+        prepare()          (the run's secrets, files, flags)
+        check()            (the host, and probes inside every VM)
+        gameplan()         (gameplan.execute(): deploy_worm, waits, power, flags), the VMs watched
+                           meanwhile (AttemptBackend); the rest of the run's time, stop every VM,
+                           drain, the attempt's end (teardown keep: its secrets gone, its VMs off)
+    delete_snapshot()      (destroy_sandbox, once the round is complete: the session asks)
+    teardown()
     any failure: the attempt is thrown away (FAILED, its points never count), written to the
-    round's log, and the round goes on with the next team. The operator decides whether a
-    failed team runs again (`worms round start <r> --team <t>`).
+    round's log, and the round goes on with the next team; the sandbox and its snapshot stay. The
+    operator decides whether a failed team runs again (`worms round start <r> --resume`): it
+    starts from the snapshot, never from a new build. A build that fails is kept (asked), and the
+    next session continues it after OpenTofu's apply.
 
 Errors on our side fail the attempt; nothing a team's worm does can. After the worm is deployed
 every sandbox VM is assumed rooted: what the watch trusts is the host's (Proxmox's VM state, the
@@ -536,8 +546,14 @@ class Conductor:
         self.on_watch = on_watch
         self.stopping = False  # Ctrl-C: the attempt under way fails at its next wait
         # The operator's yes to continuing an unfinished sandbox build (worms_cli/rounds.py): the
-        # next prepare does (scripts/round_agent/handlers.py, _build_sandbox), once.
+        # next build does (scripts/round_agent/handlers.py, build), once.
         self.resume_build = False
+        # The sandbox as its snapshot was just taken (build_sandbox): the next attempt begins on
+        # it without a rollback; every other one rolls it back first.
+        self.fresh = False
+        # The team whose preflight passed last, with no attempt since: its attempt needs no other
+        # (the session's preflight before the build covers the first).
+        self.checked = None
         gameplans.framework()  # the framework's modules, for what follows
 
     def now(self):
@@ -663,6 +679,7 @@ class Conductor:
         failed = [str(check) for check in result.get("failures") or []]
         failed += [str(check.get("check")) for check in checks if not check.get("ok") and str(check.get("check")) not in failed]
         if result.get("ok") is True and not failed:
+            self.checked = run.team_id
             return None
         detail = {str(check.get("check")): str(check.get("detail") or "")[:200] for check in checks}
         named = [f"{check} ({detail[check]})" if detail.get(check) else check for check in failed]
@@ -698,9 +715,34 @@ class Conductor:
         else:
             self.fail(run, "left under way by an earlier `worms round start` (it was stopped)", counts=False)
 
-    def destroy_sandbox(self):
-        """The round's sandbox, kept after its last attempt for one more, destroyed."""
-        return self.jobs.run(None, HostJob.Kind.TEARDOWN, keep=False)
+    def build_sandbox(self, run):
+        """build(), then snapshot(): the round's sandbox from the gameplan `run` (an attempt still
+        to come) has pinned, once, before the round's first attempt; the attempts then start
+        from its snapshot. The host keeps a sandbox of this gameplan that has its snapshot (a
+        later session of the round: nothing is built, each attempt rolls it back), takes the
+        snapshot of a build configured already, and continues a build left unfinished when the
+        operator said so (resume_build): never from the start once OpenTofu has built it.
+        Returns the build step's result; RoundError when a step failed (no attempt is used up)."""
+        resume, self.resume_build = self.resume_build, False
+        params = {"gameplan": run.gameplan, "gameplan_sha256": run.gameplan_sha256, "round": run.round_id}
+        built = self.jobs.run(None, HostJob.Kind.BUILD, **params, **({"resume_build": True} if resume else {}))
+        if built.get("snapshot_due"):
+            self.jobs.run(None, HostJob.Kind.SNAPSHOT, round=run.round_id)
+            self.fresh = True
+        return built
+
+    def destroy_sandbox(self, round_id=None):
+        """delete_snapshot(), then teardown(): the round's sandbox destroyed, its snapshot first
+        (one that will not go is destroyed with its VM)."""
+        from gameplan.definition import RoundError
+
+        self.fresh = False
+        params = {"round": round_id} if round_id is not None else {}
+        try:
+            self.jobs.run(None, HostJob.Kind.DELETE_SNAPSHOT, **params)
+        except RoundError as error:
+            log.warning("the sandbox's snapshots were not deleted (%s): destroying its VMs deletes them", error)
+        return self.jobs.run(None, HostJob.Kind.TEARDOWN, keep=False, **params)
 
     def run_attempt(self, run):
         from gameplan.definition import GameplanError, RoundError
@@ -709,9 +751,13 @@ class Conductor:
         try:
             loaded = gameplans.load(run.gameplan, run.gameplan_sha256)
             self.set_state(run, S.PREPARING)
-            resume, self.resume_build = self.resume_build, False
+            fresh, self.fresh = self.fresh, False  # whatever this attempt does, the next one rolls back
+            self.checked = None  # and has a preflight of its own
+            if not fresh:
+                # load_snapshot(): nothing of the team before is left.
+                self.jobs.run(run, HostJob.Kind.ROLLBACK, gameplan=run.gameplan, gameplan_sha256=run.gameplan_sha256)
             prepared = self.jobs.run(run, HostJob.Kind.PREPARE, gameplan=run.gameplan, gameplan_sha256=run.gameplan_sha256,
-                                     run_uuid=str(run.uuid), **({"resume_build": True} if resume else {}))  # fmt: skip
+                                     run_uuid=str(run.uuid))  # fmt: skip
             self._register(run, prepared)
             self.set_state(run, S.CHECKING)
             # With the run, the host probes inside every VM too: they are ours until the worm.

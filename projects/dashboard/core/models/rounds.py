@@ -30,7 +30,7 @@ class RoundRun(models.Model):
 
     class State(models.TextChoices):
         PENDING = "pending"  # waiting for its turn
-        PREPARING = "preparing"  # host: the sandbox built or rolled back, the run's secrets and flags
+        PREPARING = "preparing"  # host: the sandbox rolled back to its snapshot (but for the first attempt after it), the run's secrets and flags
         CHECKING = "checking"  # host: sanity checks
         RUNNING = "running"  # the gameplan's execute(): the worm is deployed in it
         ENDING = "ending"  # VMs stopped, monitor drains
@@ -40,9 +40,9 @@ class RoundRun(models.Model):
         SKIPPED = "skipped"  # no upload before the deadline
 
     # Where in an attempt a failure happened (its `failure`'s phase: the state it was in), said.
-    PHASES = {"pending": "before it began", "preparing": "while its sandbox was prepared (prepare)",
+    PHASES = {"pending": "before it began", "preparing": "while its sandbox was rolled back or prepared (rollback, prepare)",
               "checking": "while its sandbox was checked (check)", "running": "while the gameplan ran",
-              "ending": "while its VMs were stopped (ending)", "tearing_down": "in its teardown"}  # fmt: skip
+              "ending": "while its VMs were stopped (ending)", "tearing_down": "at its end (its VMs off)"}  # fmt: skip
 
     def failure_phase(self) -> str:
         phase = str((self.failure or {}).get("phase") or "")
@@ -260,7 +260,13 @@ class HostJob(models.Model):
         # held, no sandbox VM running, the memory the gameplan's VMs need, its packages cached.
         # Not ok: the attempt does not start (no attempt is used up).
         PREFLIGHT = "preflight"
-        PREPARE = "prepare"  # the round's sandbox (built or rolled back), the run's secrets, files, flags
+        # Once per round, before its first attempt (`worms round start`): the round's sandbox
+        # (OpenTofu's apply, the configuration), then every VM's clean snapshot. Not tied to an
+        # attempt: params name the round (`round`).
+        BUILD = "build"
+        SNAPSHOT = "snapshot"
+        ROLLBACK = "rollback"  # an attempt's sandbox back to its snapshot (every attempt but the first after it)
+        PREPARE = "prepare"  # the run's secrets, files, flags, on the sandbox as its snapshot holds it
         CHECK = "check"  # sanity checks (firewalls, VMs, services; with run_uuid, probes inside the VMs)
         DEPLOY = "deploy"  # worm artifact to the start VM + start timer
         REMOVE_FLAGS = "remove_flags"  # the gameplan's execute(): flags out, checked
@@ -271,7 +277,11 @@ class HostJob(models.Model):
         # running, from the host's own records), its memory, devboxes running. Read only, but
         # for the OOM priority of the VMs' QEMU processes.
         OBSERVE = "observe"
-        TEARDOWN = "teardown"  # destroy the sandbox, or keep it powered off for the round's next run
+        # The attempt's end (keep: its VMs powered off, its secrets gone, the sandbox and its
+        # snapshot kept for the next team), or the round's (the snapshot deleted, then the
+        # sandbox destroyed).
+        DELETE_SNAPSHOT = "delete_snapshot"
+        TEARDOWN = "teardown"
         # Devbox (docs/04-dev-environment.md): provision/rebuild a team's devbox VMs and
         # (re)write their tokens; run is null (a devbox job is team-scoped,
         # not round-scoped). The team uuid and version are in params.

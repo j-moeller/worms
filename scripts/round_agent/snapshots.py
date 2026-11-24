@@ -118,6 +118,17 @@ def take(ex, vms, description):
         ex.run(["qm", "start", vmid], timeout=120)
 
 
+def delete(ex, vms):
+    """Each VM's clean snapshot deleted (those that have one). Returns the names of those it deleted."""
+    deleted = []
+    for vm in vms:
+        if has_clean(ex, vm):
+            ex.run(["qm", "delsnapshot", str(int(vm["vmid"])), CLEAN], timeout=600)
+            record(ex, [vm], "snapshot_deleted", CLEAN)
+            deleted.append(vm["name"])
+    return deleted
+
+
 def roll_back(ex, vms):
     """Each VM back to its clean snapshot (disk and configuration), started. A running VM is
     stopped first, without a shutdown: nothing on it is kept."""

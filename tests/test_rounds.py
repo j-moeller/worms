@@ -214,6 +214,8 @@ class Agent:
         self.fail, self.hold, self.armed_at = {}, set(), None
         self.after_deploy, self.preflight_failures, self.devboxes_running = [], set(), []
         self.busy_after_deploy, self.busy_from, self.busy, self.queue, self.waited = None, None, None, [], {}
+        # The gameplan (its SHA-256) whose sandbox is there with its snapshot; one built, its snapshot due.
+        self.sandbox = self.snapshot_of = None
         clock.hooks.append(self.tick)
 
     def request(self, run, kind, **params):
@@ -305,11 +307,30 @@ class Agent:
             return {"ok": not failures, "failures": failures, "checks": checks, "warnings": [],
                     "memory": {"available_mb": self.MEMORY["available_mb"], "needed_mb": needed, "reserve_mb": 1024,
                                "total_mb": self.MEMORY["total_mb"]}}  # fmt: skip
+        if job.kind in (K.BUILD, K.ROLLBACK):
+            loaded, spec = self.spec(params["gameplan"])
+            assert loaded.sha256 == params["gameplan_sha256"]  # the host runs only the pinned version
+            if job.kind == K.BUILD and self.sandbox == params["gameplan_sha256"]:
+                return {"built": False, "snapshot_due": False, "sandbox": "kept"}  # this gameplan's, with its snapshot
+            assert job.kind == K.BUILD or self.sandbox == params["gameplan_sha256"]  # a rollback needs its snapshot
+            # Built, or rolled back to its snapshot: every VM runs, the gateway too.
+            self.proxmox.built({**{900 + i: vm["name"] for i, vm in enumerate(spec["vms"])}, 899: "sandbox-gw"})
+            if job.kind == K.ROLLBACK:
+                return {"rolled_back": [vm["name"] for vm in spec["vms"]] + ["sandbox-gw"]}
+            self.snapshot_of = params["gameplan_sha256"]
+            return {"built": True, "snapshot_due": True, "sandbox": "built and configured"}
+        if job.kind == K.SNAPSHOT:
+            self.sandbox, self.snapshot_of = self.snapshot_of, None
+            return {"taken": ["sandbox-vm0", "sandbox-vm1", "sandbox-gw"]}
+        if job.kind == K.DELETE_SNAPSHOT:
+            self.sandbox = None
+            return {"deleted": ["sandbox-vm0", "sandbox-vm1", "sandbox-gw"]}
         if job.kind == K.PREPARE:
             loaded, spec = self.spec(params["gameplan"])
             assert loaded.sha256 == params["gameplan_sha256"]  # the host runs only the pinned version
+            assert self.sandbox == params["gameplan_sha256"]  # on the snapshot of its gameplan's sandbox
             networks = build.vm_networks(spec)
-            # Built, or rolled back to its snapshot: every VM runs, the gateway too.
+            # As the snapshot or the rollback left it: every VM runs, the gateway too.
             self.proxmox.built({**{900 + i: vm["name"] for i, vm in enumerate(spec["vms"])}, 899: "sandbox-gw"})
             return {
                 "topology": build.topology(spec),
@@ -353,6 +374,8 @@ class Agent:
         if job.kind == K.PLACE_FLAGS:
             return {"released": [{"vm": vm, "flag_hash": flag_hash(run.uuid, vm)} for vm in params["vms"]], "failed": []}
         if job.kind == K.TEARDOWN:
+            if not params["keep"]:
+                self.sandbox = None
             return {"destroyed": not params["keep"], "kept": params["keep"]}
         return {}
 
@@ -418,18 +441,29 @@ def make_conductor(gameplans, power=None, clock=None):
 
 def run_round(conductor, round_obj):
     """What `worms round start` does with the conductor (worms_cli/rounds.py): the round's gameplan
-    pinned, then each team's attempt still to come, in order, the host's preflight before each.
+    pinned, the host's preflight, the round's sandbox built and snapshotted (build_sandbox), then
+    each team's attempt still to come, in order, the host's preflight before each but the first.
     Returns (the attempts as they ended, why the round stopped or None)."""
     from core.models.rounds import RoundRun
+    from gameplan.definition import RoundError
 
     pending = RoundRun.objects.filter(round=round_obj, state=RoundRun.State.PENDING)
     problem = conductor.pin(round_obj) if pending.filter(upload__isnull=False).exists() else None  # none to run: no gameplan needed
     if problem:
         return [], problem
+    runs = list(pending.select_related("team", "round").order_by("position", "attempt"))
+    first = next((run for run in runs if run.upload_id is not None), None)
+    if first is not None:
+        problem = conductor.preflight(first)
+        if problem:
+            return [], problem
+        try:
+            conductor.build_sandbox(first)
+        except RoundError as error:
+            return [], str(error)
     ended = []
-    for run in RoundRun.objects.filter(round=round_obj, state=RoundRun.State.PENDING).select_related("team", "round") \
-            .order_by("position", "attempt"):  # fmt: skip
-        if run.upload_id is not None:
+    for run in runs:
+        if run.upload_id is not None and not conductor.fresh and conductor.checked != run.team_id:
             problem = conductor.preflight(run)
             if problem:
                 return ended, problem
@@ -523,8 +557,12 @@ def test_conductor_runs_a_full_round(one_run, gameplans):
     assert run.gameplan_sha256 == sha(GAMEPLAN) and run.duration == 600
     assert Round.objects.get(pk=round_obj.pk).gameplan_status == "ok"
     kinds = list(run.jobs.order_by("id").values_list("kind", flat=True))
-    assert [kind for kind in kinds if kind != "observe"] == ["preflight", "prepare", "check", "remove_flags", "deploy",
-                                                             "place_flags", "teardown"]  # fmt: skip
+    # R2's attempt built the sandbox of two.py and took its snapshot: R1's is not built again, its
+    # attempt starts from that snapshot (a rollback). The preflight before the build is its own.
+    assert [kind for kind in kinds if kind != "observe"] == ["preflight", "rollback", "prepare", "check", "remove_flags",
+                                                             "deploy", "place_flags", "teardown"]  # fmt: skip
+    assert HostJob.objects.filter(kind=HostJob.Kind.BUILD).count() == 2 and HostJob.objects.filter(kind=HostJob.Kind.SNAPSHOT).count() == 1
+    assert [kind for kind in later_run.jobs.order_by("id").values_list("kind", flat=True) if kind != "observe"][:2] == ["preflight", "prepare"]
     # Watched from the check to the run's end (the fuse, then 600 s): an observe job before the
     # gameplan, then one a minute; and one for vm1, found stopped.
     every = run.jobs.filter(kind=HostJob.Kind.OBSERVE, params__vmids=[899, 900, 901])
@@ -702,19 +740,35 @@ def _two_teams(one_run, second_upload=True):
 
 
 def test_the_runs_of_a_round_share_its_sandbox(one_run, gameplans):
-    """Built once from the round's gameplan and rolled back for every team: the same sandbox
-    for all, kept by every teardown; the session destroys it at its end, asked."""
+    """build(), snapshot(), then for each team: load_snapshot() (but for the first), prepare(),
+    check(), the gameplan; at the end delete_snapshot(), teardown(). Built once from the round's
+    gameplan, before any attempt and tied to none; the same sandbox for all, kept by every
+    attempt's end; the session destroys it at its end, asked."""
     from core.models.rounds import HostJob
 
     first, second = _two_teams(one_run)
     conductor, agent, clock = make_conductor(gameplans)
     assert [run.state for run in run_round(conductor, one_run["round"])[0]] == ["finished", "finished"]
+    [build] = HostJob.objects.filter(kind=HostJob.Kind.BUILD)
+    [snapshot] = HostJob.objects.filter(kind=HostJob.Kind.SNAPSHOT)
+    assert build.run is None and snapshot.run is None and build.id < snapshot.id < first.jobs.order_by("id").last().id
+    assert build.params == {"gameplan": "two.py", "gameplan_sha256": sha(GAMEPLAN), "round": one_run["round"].id}
+    # The first attempt starts on the sandbox as its snapshot left it; the second rolls it back.
+    assert [job.run_id for job in HostJob.objects.filter(kind=HostJob.Kind.ROLLBACK)] == [second.id]
+    assert not first.jobs.filter(kind=HostJob.Kind.PREFLIGHT).exclude(id__lt=build.id).exists()  # the session's covers it
+    assert second.jobs.filter(kind=HostJob.Kind.PREFLIGHT).count() == 1
     prepares = HostJob.objects.filter(kind=HostJob.Kind.PREPARE).order_by("id")
     assert [(job.params["gameplan"], job.params["gameplan_sha256"]) for job in prepares] == [("two.py", sha(GAMEPLAN))] * 2
     teardowns = HostJob.objects.filter(kind=HostJob.Kind.TEARDOWN).order_by("id")
     assert [(job.run_id, job.params["keep"]) for job in teardowns] == [(first.id, True), (second.id, True)]
     conductor.destroy_sandbox()
-    assert HostJob.objects.filter(kind=HostJob.Kind.TEARDOWN).order_by("-id").first().params == {"keep": False}
+    [deleted] = HostJob.objects.filter(kind=HostJob.Kind.DELETE_SNAPSHOT)
+    last = HostJob.objects.filter(kind=HostJob.Kind.TEARDOWN).order_by("-id").first()
+    assert deleted.id < last.id and last.params == {"keep": False} and agent.sandbox is None
+    # A later session of the round builds nothing: a sandbox of this gameplan with its snapshot is kept.
+    agent.sandbox = sha(GAMEPLAN)
+    second.refresh_from_db()  # pinned since
+    assert conductor.build_sandbox(second) == {"built": False, "snapshot_due": False, "sandbox": "kept"} and not conductor.fresh
 
 
 def test_run_without_upload_is_skipped(one_run, gameplans):

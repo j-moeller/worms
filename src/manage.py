@@ -1851,6 +1851,7 @@ SECTIONS = (
         ("db backup", "a dump of the database, here"),
         ("db restore <dump>", "DANGER: the database back to a dump"),
         ("db reset", "DANGER: an empty database, initialised"),
+        ("db dev-reset", "DEV: an empty database with admin, alpha (TeamA), beta (TeamB); upload zips asked"),
         ("team", "the teams, their members and devboxes"),
         ("team delete <name>", "a team and what it owns (its users stay)"),
         ("key", "every team's SSH keys, as its VMs have them"),
@@ -1931,7 +1932,7 @@ def _command_name(usage: str) -> str:
     """`vm reset <team>...` -> `vm reset`, `show job <n>` -> `show`: a noun and its verb, else the
     command's first word."""
     words = usage.split(" ")
-    return " ".join(words[:2]) if words[0] in NOUNS and len(words) > 1 and words[1].isalpha() else words[0]
+    return " ".join(words[:2]) if words[0] in NOUNS and len(words) > 1 and words[1][:1].isalpha() and words[1].replace("-", "").isalpha() else words[0]
 
 
 def _rows_of(command: str) -> list[tuple[str, str]]:
@@ -2157,6 +2158,7 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
                                           "~/.worms/backups/<system>-<db>-<time>.dump)")  # fmt: skip
     _yes(_add(verbs, "db restore")).add_argument("file", metavar="dump", help="a dump `worms db backup` wrote (~/.worms/backups/)")
     _yes(_add(verbs, "db reset"))
+    _add(verbs, "db dev-reset")  # no --yes: always asked
     p, verbs = _noun(sub, "team")
     _yes(_add(verbs, "team delete")).add_argument("name")
     p, verbs = _noun(sub, "key")
@@ -2421,6 +2423,14 @@ def verb_init(config, args) -> int:
     return code or cmd_trust_host(config, args)
 
 
+def db_dev_reset(config, args) -> int:
+    """`worms db dev-reset` (worms_cli/dev_reset.py): a known start for the development system."""
+    _with_db(config)
+    from worms_cli import dev_reset
+
+    return dev_reset.run(config, _console())
+
+
 def db_restore(config, args) -> int:
     from worms_cli import database
 
@@ -2443,7 +2453,7 @@ HANDLERS = {
     "jobs": list_jobs, "jobs pause": jobs_pause, "jobs resume": jobs_resume, "jobs cancel": jobs_cancel,
     "round": list_rounds, "round start": round_start, "round publish": round_publish, "round unpublish": round_publish, "round teardown": round_teardown,
     "service": list_services, "service restart": cmd_restart, "service stop": service_power, "service start": service_power,
-    "db": list_tables, "db backup": cmd_backup, "db restore": db_restore, "db reset": lambda config, args: cmd_reset(
+    "db": list_tables, "db backup": cmd_backup, "db restore": db_restore, "db dev-reset": db_dev_reset, "db reset": lambda config, args: cmd_reset(
         config, _with(args, what="database")),
     "team": list_teams, "team delete": cmd_delete_team,
     "key": list_keys, "key add": cmd_devbox_add_key, "key remove": cmd_devbox_remove_key, "key sync": cmd_devbox_sync_keys,
@@ -2531,13 +2541,13 @@ HOST_ONLY = {"round start", "round teardown"}
 # `round start` writes its own, in its session's folder (worms_cli/rounds.py).
 LOGGED = {"apply", "destroy", "internet", "vm start", "vm stop", "vm restart", "vm reset", "vm rebuild", "vm kill",
           "jobs pause", "jobs resume", "jobs cancel", "round publish", "round unpublish", "round teardown",
-          "service restart", "service stop", "service start", "db restore", "db reset", "team delete", "key add", "key remove", "key sync", "step"}
+          "service restart", "service stop", "service start", "db restore", "db reset", "db dev-reset", "team delete", "key add", "key remove", "key sync", "step"}
 
 # The commands that change the platform: one at a time, by the host's lock (worms_cli/lock.py); a round's
 # session holds it to its end. Never `vm kill`, `jobs ...`, `round publish`: they must work meanwhile.
 LOCKED = {"apply", "destroy", "internet", "vm start", "vm stop", "vm restart", "vm reset", "vm rebuild", "service restart",
           "service stop", "service start", "round start", "round teardown",
-          "db restore", "db reset", "key sync", "step"}
+          "db restore", "db reset", "db dev-reset", "key sync", "step"}
 
 
 def _changes_nothing(args, command) -> bool:

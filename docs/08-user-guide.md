@@ -41,7 +41,7 @@ The status banner in the header shows the next round's countdown, a running roun
 ### How it runs
 
 ```
-bash main.sh        # cwd /home/debian/worm, user debian (passwordless sudo), started 15 s (devbox: 10 s) after deploy
+bash main.sh        # cwd /root/worm, user root (HOME=/root), started 15 s (devbox: 10 s) after deploy
 ```
 
 - **Unpacking.** The zip is unpacked with Python's `zipfile`: absolute paths and `..` are stripped, links become files, and **file modes are lost**. Run other files through their interpreter, or `chmod +x` them first.

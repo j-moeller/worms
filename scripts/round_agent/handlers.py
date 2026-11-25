@@ -28,14 +28,15 @@ from gameplan import build as gameplan_build
 from gameplan import loader as gameplan_loader
 from gameplan import render as gameplan_render
 from gameplan import runtime as gameplan_runtime
-from gameplan.definition import SECRET_MARKER, GameplanError
+from gameplan.definition import AGENT_SOCKET, SECRET_MARKER, GameplanError
 from generate_devbox import team_addressing
 from round_agent import failure, host_state, probe, snapshots, startup, validation
 
 FLAG_PATH = "/etc/worms/flag"
 # The gameplan files, in the agent's workspace (synced from the controller's checkout).
 GAMEPLANS = "gameplans"
-WORM_DIR = "/home/debian"
+# Root's home: the worm starts as root on the entry VM (and a devbox's VM A).
+WORM_DIR = "/root"
 WORM_ZIP = "user-worm.zip"
 # The zip is unpacked here; the worm is `bash main.sh` run in this
 # directory (docs/08-user-guide.md).
@@ -610,9 +611,60 @@ def _ssh_dir(ex, ip, user):
     ex.ssh(ip, ["sudo", "install", "-d", "-m", "0700", "-o", user, "-g", user, f"{_home(user)}/.ssh"])
 
 
+# add_private_ssh_key (gameplan/definition.py): the user's ssh-agent holds its keys that have no
+# passphrase. A service of the VM: it starts at every boot (a worm may restart the VM) and loads
+# them again from their files, listed in AGENT_KEYS/<user>; a stale socket (a crash, a reboot)
+# would keep it from binding. ssh, scp and sftp as the user offer the keys (IdentityAgent,
+# AGENT_CLIENT), and a login shell has SSH_AUTH_SOCK (AGENT_LOGIN). `$$` is systemd's `$`.
+AGENT_KEYS = "/etc/worms/ssh-agent"
+AGENT_UNIT_PATH = "/etc/systemd/system/worms-ssh-agent@.service"
+AGENT_UNIT = f"""[Unit]
+Description=ssh-agent of %i, holding the keys the gameplan gave it (worms)
+
+[Service]
+Type=forking
+User=%i
+ExecStart=/bin/sh -c 'rm -f "$$HOME/.ssh/{AGENT_SOCKET}"; exec /usr/bin/ssh-agent -a "$$HOME/.ssh/{AGENT_SOCKET}" >/dev/null'
+ExecStartPost=-/bin/sh -c 'SSH_AUTH_SOCK="$$HOME/.ssh/{AGENT_SOCKET}" xargs -r ssh-add -q < {AGENT_KEYS}/%i'
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+"""
+AGENT_CLIENT = "/etc/ssh/ssh_config.d/worms-agent.conf"
+AGENT_LOGIN = "/etc/profile.d/worms-agent.sh"
+AGENT_LOGIN_TEXT = f"""# worms: a login shell of a user with an ssh-agent (a gameplan's add_private_ssh_key) has it
+if [ -z "$SSH_AUTH_SOCK" ] && [ -S "$HOME/.ssh/{AGENT_SOCKET}" ]; then export SSH_AUTH_SOCK="$HOME/.ssh/{AGENT_SOCKET}"; fi
+"""
+
+
+def _agent_script(agents):
+    """The shell script that gives each user of `agents` ({user: [key paths]}) its ssh-agent,
+    then checks that the agent holds all of them. Users and key names are the gameplan's,
+    checked (USER, KEY_NAME); the paths are quoted all the same."""
+    client = "".join(f"Match localuser {user}\n    IdentityAgent {_home(user)}/.ssh/{AGENT_SOCKET}\n" for user in agents)
+    lines = ["set -e", f"install -d -m 0755 {AGENT_KEYS}"]
+    for path, text in ((AGENT_UNIT_PATH, AGENT_UNIT), (AGENT_CLIENT, client), (AGENT_LOGIN, AGENT_LOGIN_TEXT)):
+        lines += [f"cat > {path} <<'WORMS_EOF'", text.rstrip("\n"), "WORMS_EOF"]
+    for user, paths in agents.items():
+        lines.append(f"printf '%s\\n' {shlex.join(paths)} > {AGENT_KEYS}/{user}")
+    lines.append("systemctl daemon-reload")
+    for user, paths in agents.items():
+        socket = f"{_home(user)}/.ssh/{AGENT_SOCKET}"
+        lines += [
+            f"systemctl enable --quiet worms-ssh-agent@{user}",
+            f"systemctl restart worms-ssh-agent@{user}",
+            f"held=$(runuser -u {user} -- env SSH_AUTH_SOCK={socket} ssh-add -l 2>/dev/null | grep -c SHA256: || true)",
+            f'[ "$held" -eq {len(paths)} ] || {{ echo "the ssh-agent of {user} holds $held of its {len(paths)} keys" >&2; exit 1; }}',
+        ]
+    return "\n".join(lines) + "\n"
+
+
 def _apply_setup(ex, vms, spec, values):
-    """Before the worm: every key and password of the run, as the gameplan placed them."""
+    """Before the worm: every key and password of the run, as the gameplan placed them; then the
+    ssh-agents of the users given private keys."""
     keys = {s["id"]: s for s in spec["secrets"]}
+    agents = {}  # VM name -> {user: [its keys without a passphrase]}
     for step in spec["setup"]:
         ip = vms[step["vm"]]["maintenance_ip"]
         secret = values[step["secret"]]
@@ -622,8 +674,12 @@ def _apply_setup(ex, vms, spec, values):
         elif step["op"] == "private_key":
             user = step["user"]
             _ssh_dir(ex, ip, user)
-            ex.ssh(ip, ["sudo", "install", "-m", "0600", "-o", user, "-g", user, "/dev/stdin", f"{_home(user)}/.ssh/{step['name']}"],
-                   input=secret["private"])  # fmt: skip
+            path = f"{_home(user)}/.ssh/{step['name']}"
+            ex.ssh(ip, ["sudo", "install", "-m", "0600", "-o", user, "-g", user, "/dev/stdin", path], input=secret["private"])
+            if not keys[step["secret"]].get("passphrase"):  # an agent would hold it unlocked
+                held = agents.setdefault(step["vm"], {}).setdefault(user, [])
+                if path not in held:
+                    held.append(path)
         elif step["op"] == "public_key":
             user = step["user"]
             _ssh_dir(ex, ip, user)
@@ -633,6 +689,8 @@ def _apply_setup(ex, vms, spec, values):
             ex.ssh(ip, ["sudo", "chmod", "0600", path])
         else:
             raise validation.Invalid(f"unknown setup step {step['op']!r}")
+    for name, users in agents.items():
+        ex.ssh(vms[name]["maintenance_ip"], ["sudo", "sh", "-s"], input=_agent_script(users))
 
 
 def _write_gameplan_file(ex, ip, entry, values):
@@ -1199,19 +1257,19 @@ def deploy(ex, cfg, params):
 
 
 def _place_worm(ex, cfg, ip, artifact):
-    """The verified zip onto a VM, unpacked."""
+    """The verified zip onto a VM, unpacked, root's (the worm's own: it starts as root)."""
     raw = _fetch_artifact(ex, cfg, artifact)
     # base64 over stdin so the binary survives the text channel and never appears on a command line.
     ex.ssh(
         ip,
-        ["/bin/sh", "-c", f"base64 -d > {WORM_DIR}/{WORM_ZIP}"],
+        ["sudo", "/bin/sh", "-c", f"base64 -d > {WORM_DIR}/{WORM_ZIP}"],
         input=base64.b64encode(raw).decode("ascii"),
     )
     # Unpack it now, so a broken upload fails the deploy with a reason
     # instead of a worm that never starts.
     ex.ssh(
         ip,
-        ["/bin/sh", "-c", UNPACK.format(dir=WORM_DIR, code=WORM_CODE, zip=WORM_ZIP, entry=WORM_ENTRY)],
+        ["sudo", "/bin/sh", "-c", UNPACK.format(dir=WORM_DIR, code=WORM_CODE, zip=WORM_ZIP, entry=WORM_ENTRY)],
     )
 
 
@@ -1226,14 +1284,15 @@ def _stop_worm(ex, ip):
 
 
 def _arm_worm(ex, ip, delay, *properties):
-    """Arm a one-shot systemd timer on the VM: after `delay` it runs the worm as the login user,
-    in its directory. No shell: fixed literals. Returns when the fuse was lit (the host's clock):
-    the worm's start is dated from this, not from when anyone noticed the job was done."""
+    """Arm a one-shot systemd timer on the VM: after `delay` it runs the worm as root (User=root:
+    HOME=/root), in its directory. No shell: fixed literals. Returns when the fuse was lit (the
+    host's clock): the worm's start is dated from this, not from when anyone noticed the job was
+    done."""
     ex.ssh(
         ip,
         [
             "sudo", "systemd-run", f"--on-active={delay}", f"--unit={WORM_UNIT}", *properties,
-            "--working-directory", f"{WORM_DIR}/{WORM_CODE}", "--uid", ex.ssh_user,
+            "--working-directory", f"{WORM_DIR}/{WORM_CODE}", "--uid", "root",
             "/bin/bash", WORM_ENTRY,
         ],
     )

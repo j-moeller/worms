@@ -19,7 +19,7 @@ from worms_cli import jobs as host_jobs
 from worms_cli import output
 from worms_cli.build import BuildError
 
-WORM_DIR = "/home/debian/worm"  # scripts/round_agent/handlers.py: WORM_DIR/WORM_CODE, from WORM_ZIP
+WORM_DIR = "/root/worm"  # scripts/round_agent/handlers.py: WORM_DIR/WORM_CODE, from WORM_ZIP
 MARK = {"ok": ("✓", "green"), "wait": ("⏸", "yellow"), "error": ("✗", "red"), "todo": ("·", "dim"), "run": ("▶", "green")}
 
 

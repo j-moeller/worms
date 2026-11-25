@@ -63,7 +63,7 @@ The 9 event tables are append-only for every role.
   - Zeek keeps only `CAP_NET_RAW`/`CAP_NET_ADMIN`.
 - **Root:** auditd and rsyslog, nginx masters, the monitor's NIC one-shot, and on the host the agent, mirror, host firewall and watchdog.
 - **Untrusted by design:**
-  - sandbox VMs: the worm runs as `debian` with sudo;
+  - sandbox VMs: the worm runs as root;
   - devbox VMs: teams are root;
   - both kinds of gateway: assumed compromised, and bound by the host's and the VMs' firewalls.
 

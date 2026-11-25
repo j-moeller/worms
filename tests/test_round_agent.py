@@ -690,12 +690,19 @@ def test_a_run_gets_its_own_keys_password_files_and_flags_before_the_worm():
     password = next(c for c in calls if c["argv"] == ["sudo", "chpasswd"])
     assert password["host"] == "10.4.0.11" and password["input"].startswith("alice:")
     secret = password["input"].strip().split(":", 1)[1]
-    private = next(c for c in calls if c["argv"][-1] == "/home/debian/.ssh/id_ed25519")
+    # Root's, as the gameplan names no user: the worm starts as root.
+    private = next(c for c in calls if c["argv"][-1] == "/root/.ssh/id_ed25519")
     assert private["host"] == "10.4.0.10" and "PRIVATE KEY" in private["input"] and "0600" in private["argv"]
-    public = next(c for c in calls if c["argv"] == ["sudo", "tee", "-a", "/home/debian/.ssh/authorized_keys"])
+    # ...and held by root's ssh-agent there, a service of the VM, checked to hold it.
+    agent = next(c for c in calls if c["argv"] == ["sudo", "sh", "-s"])
+    assert agent["host"] == "10.4.0.10" and "systemctl enable --quiet worms-ssh-agent@root" in agent["input"]
+    assert "printf '%s\\n' /root/.ssh/id_ed25519 > /etc/worms/ssh-agent/root" in agent["input"]
+    assert "Match localuser root\n    IdentityAgent /root/.ssh/agent.sock" in agent["input"]
+    assert calls.index(agent) > calls.index(private)
+    public = next(c for c in calls if c["argv"] == ["sudo", "tee", "-a", "/root/.ssh/authorized_keys"])
     assert public["host"] == "10.4.0.11" and public["input"] == "ssh-ed25519 AAAAPUBLIC worms-gameplan\n"
-    note = next(c for c in calls if c["argv"][-1] == "/home/debian/note")
-    assert note["input"] == f"alice {secret}" and note["argv"][note["argv"].index("-o") + 1] == "debian"
+    note = next(c for c in calls if c["argv"][-1] == "/root/note")
+    assert note["input"] == f"alice {secret}" and note["argv"][note["argv"].index("-o") + 1] == "root"
     assert not any(c["argv"][-1:] == ["/root/later"] for c in calls)  # declared for later only
     # A flag on every VM, read back.
     assert {r["vm"] for r in result["released"]} == {"sandbox-a", "sandbox-b"}
@@ -1022,11 +1029,11 @@ def test_check_reports_ok_when_everything_is_up(tmp_path):
                               ["maintenance", "10.4.0.11", 22]]  # fmt: skip
     assert a["dns"] == {"scoring.worms.internal": "10.2.0.14", "logging.worms.internal": "10.2.0.15",
                         "apt-cache.worms.internal": "10.2.0.20", "pypi.worms.internal": "10.2.0.21"}  # fmt: skip
-    assert b["files"] == [["0", "/home/debian/note", "debian", "0644"]] and a["files"] == [] and "services" not in b  # init's
+    assert b["files"] == [["0", "/root/note", "root", "0644"]] and a["files"] == [] and "services" not in b  # init's
     assert a["pypi"] == ["pypi.worms.internal", 3141, "/root/pypi/+simple/requests/"]
     # The database (which the dashboard reads) gets none of the gameplan: no path, user, unit or rule.
     text = json.dumps(result)
-    assert "/home/debian/note" not in text and "alice" not in text and "cron" not in text and address["sandbox-b"] not in text
+    assert "/root/note" not in text and "alice" not in text and "cron" not in text and address["sandbox-b"] not in text
     # A gateway built before a deploy changed its template (the round's sandbox is not rebuilt for that;
     # here: built before nf_conntrack_max was set): read against the cloud-init it was built with, its
     # snippet on the host, not against the template in the workspace.
@@ -1230,7 +1237,7 @@ def test_check_flags_a_down_vm_and_dead_service(tmp_path, monkeypatch):
 
     def broken(host, params, reply):
         if host == "10.4.0.11":  # sandbox-b
-            reply["files"]["0"] = "owner root, mode 0600"
+            reply["files"]["0"] = "owner debian, mode 0600"
             reply["forbidden"]["database"] = "refused"  # an answer: it got there
             reply["apt"] = [False, "E: Failed to fetch http://apt-cache.worms.internal:3142/... 503"]
         else:  # sandbox-a: b's SSH does not answer where the gameplan lets it in
@@ -1253,8 +1260,8 @@ def test_check_flags_a_down_vm_and_dead_service(tmp_path, monkeypatch):
     assert detail["vm:sandbox-b:init:boot"] == "degraded: 1 of the gameplan's services failed (the job log on the host names them)"
     # What is wrong, in the job log; the database gets numbers and the platform's names only.
     text = json.dumps(result)
-    assert "/home/debian/note" not in text and "cron" not in text
-    assert any("file 0 (/home/debian/note, debian 0644): owner root, mode 0600" in note for note in ex.notes)
+    assert "/root/note" not in text and "cron" not in text
+    assert any("file 0 (/root/note, root 0644): owner debian, mode 0600" in note for note in ex.notes)
     assert any("service cron: failed" in note for note in ex.notes) and "check sandbox-b: cron.service failed" in ex.notes
     assert any("sandbox-b port 22" in note and "open expected, got refused" in note for note in ex.notes)
 
@@ -1637,7 +1644,7 @@ def test_devbox_deploy_puts_the_worm_on_the_teams_vm_a_and_arms_it():
     arm = next(c for c in ex.ssh_calls if "systemd-run" in c["argv"])
     assert arm["argv"] == [
         "sudo", "systemd-run", "--on-active=10", "--unit=worms-start", "--property=RuntimeMaxSec=3600",
-        "--working-directory", "/home/debian/worm", "--uid", "debian", "/bin/bash", "main.sh",
+        "--working-directory", "/root/worm", "--uid", "root", "/bin/bash", "main.sh",
     ]  # fmt: skip
     # Scoring and logging know a devbox by its gateway's address: a round's team file stays out of it.
     assert not [c for c in ex.ssh_calls if "/etc/sandbox-api/current-team" in c["argv"]]
@@ -2483,10 +2490,10 @@ def test_ssh_sends_one_line_the_remote_shell_splits_back_into_argv(monkeypatch):
     ex = Executor("/nonexistent")
     sent = {}
     monkeypatch.setattr(ex, "run", lambda argv, input=None, timeout=None: sent.setdefault("argv", argv))
-    argv = ["/bin/sh", "-c", "base64 -d > /home/debian/user-worm.zip"]
+    argv = ["sudo", "/bin/sh", "-c", "base64 -d > /root/user-worm.zip"]
     ex.ssh("10.4.0.10", argv)
     assert sent["argv"][: len(SSH_OPTS) + 1] == ["ssh", *SSH_OPTS]
-    assert sent["argv"][-2:] == ["--", "/bin/sh -c 'base64 -d > /home/debian/user-worm.zip'"]
+    assert sent["argv"][-2:] == ["--", "sudo /bin/sh -c 'base64 -d > /root/user-worm.zip'"]
     assert shlex.split(sent["argv"][-1]) == argv
 
 
@@ -2513,14 +2520,15 @@ def _deploy_params(ex, delay=120):
 
 def _replay_on_the_vm(ex, home, start_ip="10.4.0.10"):
     """Run the deploy's copy and unpack commands as the start VM would, with
-    the VM's home directory at `home`. Returns the unpack result."""
+    root's home directory at `home`: as root there (sudo), as this test's user here. Returns the
+    unpack result."""
     from round_agent.executor import Executor
 
-    calls = [c for c in ex.ssh_calls if c["host"] == start_ip and c["argv"][0] == "/bin/sh"]
+    calls = [c for c in ex.ssh_calls if c["host"] == start_ip and c["argv"][:2] == ["sudo", "/bin/sh"]]
     copy, unpack = calls
-    result = _remote_shell(Executor.remote_command(copy["argv"]), input=copy["input"])
+    result = _remote_shell(Executor.remote_command(copy["argv"][1:]), input=copy["input"])
     assert result.returncode == 0, result.stderr
-    return _remote_shell(Executor.remote_command(unpack["argv"]))
+    return _remote_shell(Executor.remote_command(unpack["argv"][1:]))
 
 
 def test_the_zip_arrives_intact_and_is_unpacked(tmp_path, monkeypatch):
@@ -2535,12 +2543,12 @@ def test_the_zip_arrives_intact_and_is_unpacked(tmp_path, monkeypatch):
     assert (tmp_path / "worm" / "lib" / "util.py").exists()
     # Nothing outside the worm's directory.
     assert not (tmp_path.parent / "escape").exists() and not (tmp_path / "escape").exists()
-    # The fuse runs `bash main.sh` in that directory as the sandbox user,
+    # The fuse runs `bash main.sh` in that directory as root (the worm always starts as root),
     # after the delay -- no shell, nothing run at deploy time.
     arm = next(c for c in ex.ssh_calls if "systemd-run" in c["argv"])
     assert arm["argv"][:2] == ["sudo", "systemd-run"] and "--on-active=120" in arm["argv"]
     assert arm["argv"][arm["argv"].index("--working-directory") + 1] == f"{tmp_path}/worm"
-    assert arm["argv"][arm["argv"].index("--uid") + 1] == "debian"
+    assert arm["argv"][arm["argv"].index("--uid") + 1] == "root"
     assert arm["argv"][-2:] == ["/bin/bash", "main.sh"]
     # The conductor dates the worm's start from when the fuse was lit.
     from datetime import datetime, timezone

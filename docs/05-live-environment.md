@@ -119,8 +119,8 @@ PENDING → PREPARING → CHECKING → RUNNING → ENDING → TEARING_DOWN → F
 **The worm.** `deploy_worm()` sends a `deploy` job, which:
 1. writes the team's uuid to `/etc/sandbox-api/current-team` on scoring and logging;
 2. fetches the zip from the dashboard VM and checks its SHA-256;
-3. unpacks it into `/home/debian/worm` on the entry VM;
-4. arms `systemd-run --on-active=15 --unit=worms-start --uid debian bash main.sh`.
+3. unpacks it into `/root/worm` on the entry VM;
+4. arms `systemd-run --on-active=15 --unit=worms-start --uid root bash main.sh`: the worm always starts as root.
 
 The run's clock starts at `armed_at + 15 s` and ends after the round's duration per team.
 
@@ -225,6 +225,7 @@ class RoundOne(Gameplan):                       # gameplans/round_one.py
   - `groups`: supplementary groups, made if missing. In `sudo`, the user may sudo with its own password.
   - `sudo`: `True` (anything, no password), or a list of commands run as root without a password (`["/usr/bin/find"]`): a step up for a worm that knows its GTFOBins.
   - Called again for the same user, the groups add up; a different shell or sudo rule is an error. `root` and `debian` are the image's and cannot be changed.
+- **The default user is root.** Where a method takes a user (`user=`, `owner=`) and is given none, it is root: the worm starts as root on the entry VM, `~` is `/root`, keys go to `/root/.ssh`, and a key login logs in as root (sshd lets root in with a key, never with a password). `debian` is the image's login user, which the host's own access (Ansible, the round agent) uses.
 - **`register_network(vms, name=None)`.**
   - The N-th network gets the N-th /24 of 10.64.0.0/10 and bridge `vmbr<1000+N>`.
   - Addresses are .10–.249, in a fixed shuffle.
@@ -248,14 +249,15 @@ class RoundOne(Gameplan):                       # gameplans/round_one.py
 
   | Call | The worm needs |
   |---|---|
-  | `add_ssh_key_login(vms, key, user="debian")` | the private key (`add_public_ssh_key` alone, for an existing user) |
+  | `add_ssh_key_login(vms, key, user="root")` | the private key (`add_public_ssh_key` alone, for an existing user) |
   | `add_ssh_pwd_login(vms, login)` | the password; only these users may use one over SSH |
   | `add_ssh_totp_login(vms, key, totp, user)` | the private key **and** the current code ([`pam_google_authenticator`](https://github.com/google/google-authenticator-libpam), ±8 codes). Only `user` is asked for one |
   | `add_telnet_login(vms, login)` | the password, on port 23 (`inetutils-telnetd` under inetd; PAM service `remote`, with a list of the telnet users) |
   | `add_ftp_login(vms, login)` | the password, on port 21 (`vsftpd`), passive mode on `FTP_PASSIVE_PORTS` (40000–40019: open them too). Read and write wherever the user may, not chrooted: fetch a file, or put `~/.ssh/authorized_keys` and log in over SSH |
   | `add_local_login(vms, login)` | the password, from the VM itself: `su`, and `sudo` for a user in the group `sudo`. No way in from outside |
-  | `add_private_ssh_key(vms, key, user="debian")` | nothing: puts `~/.ssh/<name>` (0600) there for the worm to find |
+  | `add_private_ssh_key(vms, key, user="root")` | nothing: puts `~/.ssh/<name>` (0600) there for the worm to find, and into the user's ssh-agent (below) |
 
+  - **The ssh-agent.** `add_private_ssh_key` also gives the key to the user's ssh-agent on the VM: a service (`worms-ssh-agent@<user>`, enabled), so it is there after every boot and loads the keys again from their files (listed in `/etc/worms/ssh-agent/<user>`). Its socket is `~/.ssh/agent.sock`. `ssh`, `scp` and `sftp` run as the user offer its keys whatever their file names, with no `-i`, however they were started (`IdentityAgent` in `/etc/ssh/ssh_config.d/worms-agent.conf`); a login shell has `SSH_AUTH_SOCK` (`/etc/profile.d/worms-agent.sh`). A key with a passphrase is only the file: the agent would hold it unlocked, and the passphrase is for the worm to find. `prepare` checks that each agent holds its keys.
   - **A key's passphrase** is text: fixed, for a worm to guess from hints, the run's own (`generate_password()`, a login's `pwd`), or both. It may hold the run's passwords and TOTP secrets, not a key; it is one line. The host encrypts the key with it in Python, so the passphrase is never a command's argument there. `key.passphrase` stands for it in a file.
   - **SSH on another port.** `vm.set_ssh_port(2222)` (or `ssh_port = 2222` on a VM class): sshd answers there, and every SSH login of the VM with it. It keeps listening on 22, which the host logs in on over the management NIC; the gameplan's firewall decides which port the sandbox networks see, so open the new one and leave 22 closed. Validation refuses a port one of the VM's services takes (23 for telnet, 21 and 40000–40019 for FTP, 8000 for `DjangoVM`, 5432 for `PostgreVM`).
 
@@ -282,7 +284,7 @@ class RoundOne(Gameplan):                       # gameplans/round_one.py
   self.add_local_login(self.box, admin)                                # 3. su admin, then sudo: root
   ```
 
-- **`vm.write_file(path, content, mode=0o644, owner="debian", at_reset=True)`** (or `self.write_file(vm, path, …)`) returns a `FileHandle`.
+- **`vm.write_file(path, content, mode=0o644, owner="root", at_reset=True)`** (or `self.write_file(vm, path, …)`) returns a `FileHandle`.
   - `~` is the owner's home. The owner is root, debian, or a user of that VM.
   - **Give a file to the user the worm arrives as on that VM.** A home is 0700 on the image, so only its owner can read what is in it. The spec refuses a file or private key in the home of a user nothing logs in as, on a VM that is not the entry point, unless root, debian or a user with sudo logs in there. Root's files and paths outside `/home` are not checked.
   - With `at_reset=False` the file is written only when `execute()` calls `self.write_file(handle)`.

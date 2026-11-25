@@ -96,7 +96,8 @@ Role `apt_updates` (`Site.yml`) masks `apt-daily*` and `apt-listchanges` and pur
 | sandbox-gw, devbox-gw | `worms-llm-route` | oneshot: a /32 route to the LLM endpoint via the host |
 | devbox-ssh-gateway | `sshd` | Port forwarding to the teams' A VMs |
 | sandbox and devbox VMs, both gateways | `systemd-timesyncd` | Asks only the private NTP server, by address (`ntp.worms.internal`); no fallback pool ([`ntp_client`](../ansible/roles/private_internet/ntp_client/)) |
-| sandbox and devbox VMs | `worms-start.timer` / `.service` (transient) | The armed worm: `bash main.sh` as `debian`. On a devbox, `RuntimeMaxSec=3600` |
+| sandbox and devbox VMs | `worms-start.timer` / `.service` (transient) | The armed worm: `bash main.sh` as root, in `/root/worm`. On a devbox, `RuntimeMaxSec=3600` |
+| sandbox VMs a gameplan gives a private key | `worms-ssh-agent@<user>` | The user's ssh-agent with those keys (no passphrase), at every boot; socket `~/.ssh/agent.sock`. Written and started by `prepare` each run ([05](05-live-environment.md)) |
 
 ## Backups
 

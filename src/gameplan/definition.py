@@ -37,10 +37,15 @@ MAINTENANCE_NETWORK = ipaddress.ip_network("10.4.0.0/16")
 MAINTENANCE_FIRST_HOST = 10
 # The OS images a VM can boot from (opentofu/modules/os_images, local.platform.os_images).
 IMAGES = ("debian",)
-# The login user of every image: the worm runs as this user, and Ansible and the agent log in
-# as it.
-DEFAULT_USER = "debian"
+# The login user of every image: the host's own access (Ansible, the round agent) logs in as it,
+# with sudo and no password. Not a gameplan's to give logins or files: it is reserved.
+IMAGE_USER = "debian"
+# Whom a gameplan's files, keys, logins and reads are for when it names no user: root, as the
+# worm starts as root on the entry VM (its home /root, its keys in /root/.ssh).
+DEFAULT_USER = "root"
 FLAG_PATH = "/etc/worms/flag"
+# ~/.ssh/<this> of a user that add_private_ssh_key gave a key: its ssh-agent, which holds the key.
+AGENT_SOCKET = "agent.sock"
 
 LIMITS = {
     "vms": 32,
@@ -67,7 +72,7 @@ PATH_CHARS = re.compile(r"^[A-Za-z0-9._+@/-]+$")
 # Accounts a gameplan cannot create: the image's own, and what the packages above bring.
 RESERVED_USERS = {
     "root", "daemon", "bin", "sys", "sync", "games", "man", "lp", "mail", "news", "uucp", "proxy",
-    "www-data", "backup", "list", "irc", "nobody", "sshd", "messagebus", "postgres", "django", DEFAULT_USER,
+    "www-data", "backup", "list", "irc", "nobody", "sshd", "messagebus", "postgres", "django", IMAGE_USER,
 }  # fmt: skip
 KEY_TYPES = ("ed25519", "rsa", "ecdsa")
 
@@ -390,6 +395,8 @@ class BasicVM:
     The resources are the class's unless given: BasicVM(cores=2, memory=1024, disk=8).
     `install`/`uninstall`, `add_setup` and `add_service` add to them for one VM, and
     `add_user(user, shell=, groups=, sudo=)` makes a user (the owner of files and logins).
+    Where a method takes a user (owner=, user=) and is given none, it is root: the worm starts
+    as root on the entry VM, and ~ is /root.
     `ssh_port` is the port sshd answers on in the sandbox networks (22; `set_ssh_port`).
 
     Per run: `write_file(path, content)`, text or a document, archive or vault (also
@@ -876,22 +883,22 @@ class _Plan:
     def _unreachable_files(self, vm):
         """A file (or private key) in the home of a user nothing logs in as on the VM: a home is
         0700 on the image, so no worm could read it. Not on the entry point (the worm starts
-        there as debian, with sudo), nor where root logs in (a key: sshd lets root in without a
-        password) or a user that logs in can sudo: debian (the image's rule, without a password),
-        a sudo rule, or the group sudo with a password the worm has. Root's files, and files
-        outside /home, are the gameplan's business."""
+        there as root), nor where root logs in (a key: sshd lets root in without a password) or
+        a user that logs in can sudo: debian (the image's rule, without a password), a sudo rule,
+        or the group sudo with a password the worm has. Root's files, and files outside /home,
+        are the gameplan's business."""
         if vm is self.entrypoint:
             return []
         logins = self._login_users(vm)
         passwords = {login.user for login in self.logins.get(vm.name, [])}
         for user in logins:
             account = self._account(vm, user)
-            if user in ("root", DEFAULT_USER) or account["sudo"] or ("sudo" in account["groups"] and user in passwords):
+            if user in ("root", IMAGE_USER) or account["sudo"] or ("sudo" in account["groups"] and user in passwords):
                 return []
         placed = [(handle.path, handle.owner) for handle in self.files if handle.vm is vm]
         placed += [(f"{_home(user)}/.ssh/{key.name}", user)
                    for op, on, key, user in self.setup if op == "private_key" and on is vm]  # fmt: skip
-        homes = {DEFAULT_USER, *self.users.get(vm.name, [])}
+        homes = {IMAGE_USER, *self.users.get(vm.name, [])}
         out = []
         for path, owner in placed:
             parts = path.split("/")
@@ -1023,7 +1030,8 @@ class Gameplan:
         text, so a note can tell it."""
         plan = self._plan
         plan.defining("generate_ssh_key")
-        if not isinstance(name, str) or not KEY_NAME.fullmatch(name) or name in ("authorized_keys", "known_hosts", "config"):
+        reserved = ("authorized_keys", "known_hosts", "config", AGENT_SOCKET)
+        if not isinstance(name, str) or not KEY_NAME.fullmatch(name) or name in reserved:
             raise GameplanError(f"generate_ssh_key: {name!r} is not a key file name")
         if type not in KEY_TYPES:
             raise GameplanError(f"generate_ssh_key: the type is one of {', '.join(KEY_TYPES)}")
@@ -1112,9 +1120,9 @@ class Gameplan:
         return totp
 
     def _owner(self, vm, user, what):
-        if user in ("root", DEFAULT_USER) or user in self._plan.users.get(vm.name, []):
+        if user in ("root", IMAGE_USER) or user in self._plan.users.get(vm.name, []):
             return user
-        raise GameplanError(f"{what}: {user!r} is not a user of {vm.name} (root, {DEFAULT_USER}, or one added to it first)")
+        raise GameplanError(f"{what}: {user!r} is not a user of {vm.name} (root, {IMAGE_USER}, or one added to it first)")
 
     def add_user(self, vms, user, *, shell=None, groups=None, sudo=None):
         """A user on each VM, made when the sandbox is built: locked, no key. The logins below
@@ -1185,11 +1193,17 @@ class Gameplan:
         return list(dict.fromkeys(sudo))
 
     def add_private_ssh_key(self, vms, key, user=DEFAULT_USER):
-        """The private key, as ~/.ssh/<name> of `user` (0600)."""
+        """The private key, as ~/.ssh/<name> of `user` (root unless given: /root/.ssh), 0600, and
+        held by `user`'s ssh-agent on the VM: `ssh`, `scp` and `sftp` run as `user` offer it
+        whatever its file name, with no -i, and so does anything given SSH_AUTH_SOCK=
+        ~/.ssh/agent.sock (a login shell has it). The agent is a service of the VM: it starts at
+        every boot and loads the keys again from their files. A key with a passphrase is only
+        the file: the agent would hold it unlocked, and the passphrase is for the worm to find."""
         self._add_key("private_key", vms, key, user)
 
     def add_public_ssh_key(self, vms, key, user=DEFAULT_USER):
-        """The public key, in ~/.ssh/authorized_keys of `user`: the private key logs in as it."""
+        """The public key, in ~/.ssh/authorized_keys of `user` (root unless given): the private key
+        logs in as it."""
         self._add_key("public_key", vms, key, user)
 
     def _add_key(self, op, vms, key, user):
@@ -1276,12 +1290,12 @@ class Gameplan:
     # -- logins built from the methods above ----------------------------------------------
 
     def add_ssh_key_login(self, vms, key, user=DEFAULT_USER):
-        """`user` on each VM (made if it is new) logs in over SSH with the key's private half.
-        Put that half somewhere the worm can find it: add_private_ssh_key, or a file."""
+        """`user` on each VM (root unless given; made if it is new) logs in over SSH with the key's
+        private half. Put that half somewhere the worm can find it: add_private_ssh_key, or a file."""
         plan = self._plan
         plan.defining("add_ssh_key_login")
         for vm in _as_list(vms, "add_ssh_key_login"):
-            if user not in ("root", DEFAULT_USER):
+            if user not in ("root", IMAGE_USER):
                 self.add_user(vm, user)
             self.add_public_ssh_key(vm, key, user)
 
@@ -1297,7 +1311,7 @@ class Gameplan:
             raise GameplanError("add_ssh_totp_login: give a TOTP from self.generate_totp()")
         if totp.algorithm != "SHA1" or totp.digits != 6:
             raise GameplanError("add_ssh_totp_login: pam_google_authenticator takes SHA1 and 6 digits")
-        if user in ("root", DEFAULT_USER):
+        if user in ("root", IMAGE_USER):
             raise GameplanError(f"add_ssh_totp_login: give the login its own user (not {user}: the host logs in as it)")
         for vm in _as_list(vms, "add_ssh_totp_login"):
             self.add_ssh_key_login(vm, key, user)

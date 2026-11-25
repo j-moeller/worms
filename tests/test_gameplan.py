@@ -82,8 +82,12 @@ def test_the_example_round_loads_and_validates():
     assert [n["vms"] for n in spec["networks"]] == [["sandbox-vm0", "sandbox-vm1"], ["sandbox-vm1", "sandbox-vm2"]]
     # vm0 and vm2 share no network: there is no way from one to the other but through vm1.
     assert not set(spec["networks"][0]["vms"]) & {"sandbox-vm2"}
-    note = next(f for f in spec["files"] if f["path"] == "/home/debian/note")
+    note = next(f for f in spec["files"] if f["path"] == "/root/note")  # root's, by default
     assert note["vm"] == "sandbox-vm1" and "@@worms-secret:login1.password@@" in note["content"]
+
+
+def home_of(user):
+    return "/root/" if user == "root" else f"/home/{user}/"
 
 
 def test_every_gameplan_in_the_repository_is_valid_and_its_packages_are_cached():
@@ -108,20 +112,20 @@ def test_every_gameplan_in_the_repository_is_valid_and_its_packages_are_cached()
                                                   for u, a in accounts.items()):  # fmt: skip
                 continue
             placed = [(f["path"], f["owner"]) for f in spec["files"] if f["vm"] == vm["name"]]
-            placed += [(f"/home/{s['user']}/.ssh/{s['name']}", s["user"]) for s in setup if s["op"] == "private_key"]
+            placed += [(f"{home_of(s['user'])}.ssh/{s['name']}", s["user"]) for s in setup if s["op"] == "private_key"]
             for path, owner in placed:
                 home = path.split("/")[2] if path.startswith("/home/") else None
                 if owner != "root" and home in {"debian", *vm["users"]}:
                     assert home in logins, (name, vm["name"], path)
 
     # round_one: the worm arrives by password as these users, so the files there are theirs; on
-    # the hosts it reaches by key, and on A, it is debian.
+    # the hosts it reaches by key, and on A (it starts as root), it is root.
     spec = spec_of(loader.load(GAMEPLANS, "round_one.py").cls)
     owners = {}
     for f in spec["files"]:
         owners.setdefault(f["vm"], set()).add(f["owner"])
-        assert f["path"].startswith(f"/home/{f['owner']}/"), f
-    assert {vm: users for vm, users in owners.items() if users != {"debian"}} == {
+        assert f["path"].startswith(home_of(f["owner"])), f
+    assert {vm: users for vm, users in owners.items() if users != {"root"}} == {
         "sandbox-d1-1-1": {"webops"}, "sandbox-d1-2-1": {"operator"}, "sandbox-d2-1-1": {"kiosk"},
         "sandbox-d2-2-1": {"scanner"}, "sandbox-e1-2-1": {"courier"}, "sandbox-e1-3-1": {"relay"},
         "sandbox-e2-1-1": {"telemetry"}, "sandbox-e2-2-2": {"printer"},

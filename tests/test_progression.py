@@ -493,6 +493,13 @@ def test_the_devbox_progression_shows_an_uploaded_worm_on_vm_a(world):
     assert events["worm_deployed"]["node"] == a and events["worm_started"]["node"] == a and events["worm_started"]["data"] == {}
     assert events["worm_started"]["t"] - events["worm_deployed"]["t"] == 10
     assert run.upload.artifact.content_hash not in "\n".join(walk(doc))
+    # The run, from its deploy: an upload does not reset the devbox, so what came before it (the
+    # submissions of 20, 10 and 5 hours ago and the log of 4: an earlier run's) is not shown, and
+    # its clock starts at 0:00, not where the earlier run began. The submission of 1 hour ago,
+    # at the deploy, is the run's.
+    assert doc["clock"]["t0"] == run.armed_at.isoformat() and events["worm_deployed"]["t"] == 0
+    assert [(e["t"], e["data"]["result"]) for e in tl["events"] if e["kind"] == "flag_submitted"] == [(0.0, "pending")]
+    assert not [e for e in tl["events"] if e["kind"] == "log_received"]
 
 
 def test_a_worm_from_before_a_reset_is_not_shown(world):

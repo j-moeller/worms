@@ -36,10 +36,11 @@ serves it, as JSON and as a zip (`package`).
   (`network.url`).
 
 Live (the competition): the team's run in the round (one RoundRun per round
-and team). Dev (`build_devbox`): the devbox has no rounds and no runs -- it is
-always on -- so its one document is what the team's devbox submitted and logged
-since its last reset, up to now. The monitor does not record devbox traffic, so
-a dev document has no network data (`available: false`).
+and team). Dev (`build_devbox`): the devbox has no rounds -- it is always on --
+so its one document is what the team's devbox submitted and logged since its
+latest dev upload was deployed (else since its last reset), up to now. The
+monitor does not record devbox traffic, so a dev document has no network data
+(`available: false`).
 
 What a team sees (audience "team") is built, not hidden. Live: only the sandbox
 VMs whose flag it scored in the round, and the entry VM from the worm's start on.
@@ -430,11 +431,17 @@ def team_scene(environment, team, infra, devbox_nodes=()):
 
 
 def devbox_start(team):
-    """When the team's devbox version began: the reset that started it, else the
-    devbox's creation. None without a devbox."""
+    """Where the devbox progression begins: when the team's latest dev upload was deployed on
+    the devbox as it is now, else the reset that started this devbox version, else the devbox's
+    creation. None without a devbox. An upload no longer resets the devbox (since 2026-11-24),
+    so one version holds many runs: from the version's start, the clock's zero was the first
+    run's, and a new run opened half an hour in, on the old one's events."""
     devbox = Devbox.objects.filter(team=team).first()
     if devbox is None:
         return None
+    worm = _devbox_worm(team)
+    if worm is not None:
+        return worm.armed_at
     reset = (
         HostJob.objects.filter(
             kind=HostJob.Kind.DEVBOX_REBUILD, params__team_uuid=str(team.uuid), params__devbox_version=team.devbox_version
@@ -447,9 +454,10 @@ def devbox_start(team):
 
 def build_devbox(team, *, now, infra=None):
     """The team's devbox so far (audience "team"): what it submitted and logged since its
-    version began. The devbox has no rounds, so `round` is null, nothing is ever finished
-    and the clock runs up to now. Its zero is just before the first activity, so a replay
-    does not open on a long wait. None without a devbox."""
+    latest dev upload was deployed, else since its version began (devbox_start). The devbox
+    has no rounds, so `round` is null, nothing is ever finished and the clock runs up to now.
+    Its zero is the deploy, else just before the first activity, so a replay does not open on
+    a long wait. None without a devbox."""
     start = devbox_start(team)
     if start is None:
         return None
@@ -478,8 +486,8 @@ def build_devbox(team, *, now, infra=None):
 
 
 def _devbox_worm(team):
-    """The dev upload that was deployed on the devbox as it is now (a run resets the VMs, so
-    there is at most one per version), or None: a team can also run things by hand."""
+    """The latest dev upload deployed on the devbox as it is now (this devbox version: a reset
+    after it starts a new one), or None: a team can also run things by hand."""
     return (
         DevboxRun.objects.filter(team=team, devbox_version=team.devbox_version, armed_at__isnull=False)
         .order_by("-id")

@@ -20,7 +20,7 @@ This page covers:
 |---|---|
 | Leaderboard (`/`, public) | **All**: points per team over finished rounds (Formula 1: 25, 18, 15, 12, 10, 8, 6, 4, 2, 1 by VMs captured; ties share a place; 0 captures, 0 points), ⭐ per round won. One tab per round: VMs captured / sandbox VMs. A round counts only once every team's run has finished |
 | Upload (`/upload/`) | Upload a zip; your uploads in this view (hash: download it again; Live: rounds it ran in; Dev: the run's status) |
-| Progression (`/progression/`) | A replay of each round run (Live) or of your devbox since its last reset (Dev): your VMs, captures, submissions, logs and, in rounds, network traffic. Download as zip or JSON; replay a downloaded file offline |
+| Progression (`/progression/`) | A replay of each round run (Live) or of your devbox's latest dev upload, from its deploy (Dev; with no upload: since the last reset): your VMs, captures, submissions, logs and, in rounds, network traffic. Download as zip or JSON; replay a downloaded file offline |
 | Profile (click your team's name) | Your account, password change, the team's score, **SSH keys** (add/remove), **access tokens** for the team API (after registration closes) |
 | Teams (`/teams/`) | During registration only: join or leave a team |
 | Notifications (the bell, `/notifications/`) | Messages from the organisers to every team or to yours, the most severe first: info, warning, urgent, error. The bell shows how many there are, in the colour of the most severe |
@@ -153,7 +153,7 @@ curl -sf -H "Authorization: Bearer $TOKEN" https://worms.mlsec.tu-berlin.de/api/
 | `GET /api/v1/rounds/<round id>/progression/flows/` | `{count, truncated, available, reason, flows}` |
 | `GET /api/v1/rounds/<round id>/progression/logs/<ref>/` | `{ref, received_at, data}` |
 | `GET /api/v1/rounds/<round id>/progression.zip?logs=0\|1&network=0\|1` | `progression.json`, `logs/<ref>.json`, `network/flows.jsonl` |
-| `GET /api/v1/devbox/progression/`, `…/logs/<ref>/`, `/api/v1/devbox/progression.zip?logs=0\|1` | The same for your devbox since its last reset (no traffic) |
+| `GET /api/v1/devbox/progression/`, `…/logs/<ref>/`, `/api/v1/devbox/progression.zip?logs=0\|1` | The same for your devbox's latest dev upload, from its deploy, else since its last reset (no traffic) |
 
 - **Before a round's run has finished.** `scoring` and `logging` return no items, and the progression is withheld (`timeline.run.withheld: true`).
 - **Paging.** Follow `page.next`, or pass `page.next_cursor` as `?cursor=`, until it is `null`. Items are ordered by time, then id, and a page holds at most 1 MiB.

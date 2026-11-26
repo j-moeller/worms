@@ -35,7 +35,7 @@ from dashboard.views import round_progress
 from dashboard.views.decorators import refuse, staff_required
 from dashboard.views.util import render_with_base_info
 from django.contrib import messages
-from django.db import connection, transaction
+from django.db import transaction
 from django.core.files.storage import default_storage
 from django.db.models import Count, Q
 from django.http import FileResponse, Http404, HttpRequest
@@ -48,18 +48,7 @@ RUNNING = "`worms round start` runs this round now: it can change once that sess
 CHANGED = (" Teams have run: the next `worms round start` runs again, asked, every team whose attempt no longer "
            "matches it (their earlier attempts kept, superseded, no longer counted).")  # fmt: skip
 NOTE_LIMIT = 500
-# What a round's deletion deletes, children first (the foreign keys do not cascade): its attempts'
-# events, flag captures, logs, VMs and host jobs, its attempts, the round. %(r)s: the round's id.
-DELETE_ROUND = (
-    "DELETE FROM run_events WHERE run_id IN (SELECT id FROM round_runs WHERE round_id = %(r)s)"
-    " OR vm_id IN (SELECT id FROM virtual_machines WHERE round_id = %(r)s)",
-    "DELETE FROM flag_captures WHERE round_id = %(r)s OR vm_id IN (SELECT id FROM virtual_machines WHERE round_id = %(r)s)",
-    "DELETE FROM logging WHERE round_id = %(r)s OR run_id IN (SELECT id FROM round_runs WHERE round_id = %(r)s)",
-    "DELETE FROM virtual_machines WHERE round_id = %(r)s OR run_id IN (SELECT id FROM round_runs WHERE round_id = %(r)s)",
-    "DELETE FROM host_jobs WHERE run_id IN (SELECT id FROM round_runs WHERE round_id = %(r)s)",
-    "DELETE FROM round_runs WHERE round_id = %(r)s",
-    "DELETE FROM rounds WHERE id = %(r)s",
-)
+
 
 
 def _status(round_obj, now) -> str:
@@ -307,7 +296,7 @@ def round_delete(request: HttpRequest, round_uuid):
     """A round deleted whenever no `worms round start` runs it: with its attempts and everything
     under them (VMs, events, captures, logs, host jobs) once staff confirmed that too. One
     transaction: the round's row locked (a session writes its mark there), the mark checked
-    again under the lock, then DELETE_ROUND."""
+    again under the lock, then Round.delete_with_records."""
     comp = request.competition
     round_obj = get_object_or_404(Round, uuid=round_uuid, competition=comp)
     if round_obj.session_running(clock.now()):
@@ -325,9 +314,7 @@ def round_delete(request: HttpRequest, round_uuid):
         if attempts and request.POST.get("with_attempts") != "yes":
             messages.error(request, f"{round_obj.name} has {attempts} attempt(s): confirm that they go with it.")
             return redirect("staff_round", round_uuid=round_obj.uuid)
-        with connection.cursor() as cursor:
-            for statement in DELETE_ROUND:
-                cursor.execute(statement, {"r": locked.pk})
+        locked.delete_with_records()
     events.competition("round_deleted", request=request, round_id=round_obj.pk, detail={"name": round_obj.name, "attempts": attempts})
     messages.success(request, f"Round {round_obj.name} deleted" + (f", with its {attempts} attempt(s)." if attempts else "."))
     return redirect("staff_rounds")

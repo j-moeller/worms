@@ -468,6 +468,7 @@ class Session:
         self.jobs = None
         self.interrupts = 0
         self.stopped_on_failure = False  # an attempt ended with an error: the round stopped there (_after_failed_attempt)
+        self.dev_test = False  # `worms round dev-test`'s: Ctrl-C discards its sandbox unasked (_afterwards)
 
     # The folder an attempt's steps go to; the session's own steps (gameplans, preflight) in the session's.
     def folder(self, run=None) -> Path:
@@ -1113,7 +1114,9 @@ def _afterwards(session):
                   f"its snapshot are kept, `worms round start {session.round.id} --resume` starts from the snapshot "
                   "(minutes), not from a new build (an hour).")  # fmt: skip
         says("worms round teardown")
-        if ask("Delete the sandbox's snapshot and destroy the sandbox now?", complete, yes and complete):
+        # `worms round dev-test` stopped by Ctrl-C: everything goes, asked nothing (worms_cli/dev_test.py).
+        discard = session.dev_test and session.interrupts > 0
+        if discard or ask("Delete the sandbox's snapshot and destroy the sandbox now?", complete, yes and complete):
             try:
                 session.conductor.destroy_sandbox(session.round.id)
                 print(output.status_cell("ok", "the snapshot deleted, the sandbox destroyed"))
@@ -1143,6 +1146,7 @@ def start(config, args) -> int:
         raise BuildError(f"another `worms round start` runs round {round_.name!r} (its mark is from "
                          f"{round_.session_seen_at:%H:%M:%S} UTC): one session per round")  # fmt: skip
     session = Session(config, round_, yes=args.yes)
+    session.dev_test = getattr(args, "dev_test", False)
     tee = runlog.Tee("round")
     tee.path = session.dir / "round.log"
     tee.start()
@@ -1275,14 +1279,14 @@ def start(config, args) -> int:
             _summary(session)
             _afterwards(session)
             _say_summary(session)
-            return 1
+            return 130 if session.interrupts else 1
         _run(session, runs)  # it stops at the first attempt that ends with an error (_after_failed_attempt)
         signal.signal(signal.SIGINT, signal.default_int_handler)
         _summary(session)
         _offer_publish(session)
         _afterwards(session)
         _say_summary(session)
-        return 1 if session.stopped_on_failure else 0
+        return 130 if session.interrupts else (1 if session.stopped_on_failure else 0)  # 130: stopped by Ctrl-C
     except KeyboardInterrupt:
         print(output.color("\nout at once: an attempt under way is marked failed, not counted against its team (its VMs "
                            f"stopped, unless Ctrl-C cut that short). `worms round start {round_.id} --resume` goes on; "

@@ -2105,6 +2105,7 @@ SECTIONS = (
         ("round publish <r>", "its results to the teams and the leaderboard"),
         ("round unpublish <r>", "... hidden from them again"),
         ("round teardown", "the round's sandbox, kept after a session, destroyed"),
+        ("round dev-test", "DEV: a quick round (a gameplan, upload zips); Ctrl-C undoes all of it"),
         ("service", "the services and where they run"),
         ("service restart <name>...", "in a safe order (the agent once idle)"),
         ("service stop <name>...", "stopped (orchestrator: all of its services)"),
@@ -2411,6 +2412,7 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     v.add_argument("--anyway", action="store_true", help="even though not every team finished without an error (asked)")
     _yes(_add(verbs, "round unpublish")).add_argument("round", help="its id (`worms round`) or its name")
     _yes(_add(verbs, "round teardown"))
+    _add(verbs, "round dev-test")  # no --yes: its three questions are the point
     p, verbs = _noun(sub, "service")
     v = _add(verbs, "service restart")
     v.add_argument("services", nargs="+", metavar="name", help="agent, processor, api, topology, dashboard, scoring, "
@@ -2617,6 +2619,16 @@ def round_start(config, args) -> int:
     return _control(config, act)
 
 
+def round_dev_test(config, args) -> int:
+    """`worms round dev-test` (worms_cli/dev_test.py): a quick round of its own teams, run at once."""
+    def act(control):
+        from worms_cli import dev_test
+
+        return dev_test.run(config)
+
+    return _control(config, act)
+
+
 def round_publish(config, args) -> int:
     """`worms round publish|unpublish <r>` (worms_cli/rounds.py)."""
     def act(control):
@@ -2720,6 +2732,7 @@ HANDLERS = {
     "vm rebuild": vm_rebuild, "vm kill": cmd_emergency_stop,
     "jobs": list_jobs, "jobs pause": jobs_pause, "jobs resume": jobs_resume, "jobs cancel": jobs_cancel,
     "round": list_rounds, "round start": round_start, "round publish": round_publish, "round unpublish": round_publish, "round teardown": round_teardown,
+    "round dev-test": round_dev_test,
     "service": list_services, "service restart": cmd_restart, "service stop": service_power, "service start": service_power,
     "db": list_tables, "db backup": cmd_backup, "db restore": db_restore, "db dev-reset": db_dev_reset, "db reset": lambda config, args: cmd_reset(
         config, _with(args, what="database")),

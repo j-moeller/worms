@@ -822,6 +822,67 @@ def test_a_round_changed_after_its_attempts_runs_its_teams_again(one_run, gamepl
     assert RoundRun.objects.filter(round=round_obj, state="superseded").count() == 4
 
 
+def test_a_dev_test_makes_its_teams_and_round_and_ctrl_c_takes_them_away(db_clean, gameplans, tmp_path, monkeypatch):
+    """`worms round dev-test`: a gameplan, two zips; a user, a team and an upload per zip, a round of
+    those teams only, run at once. Ctrl-C in the round: all of it goes, nothing else."""
+    sys.path.insert(0, str(REPO / "src"))
+    from core.models.competition import ApplicationSetting, Competition, Round
+    from core.models.rounds import RoundRun
+    from core.models.team import Team
+    from core.models.user import User
+    from core.models.worms import Upload
+    from django.utils import timezone
+    from orchestrator.rounds.planner import plan_round
+    from worms_cli import dev_reset, dev_test, rounds, session
+
+    competition = Competition.objects.create(name="c", registration_starts_at=timezone.now(), registration_ends_at=timezone.now())
+    ApplicationSetting.objects.create(key="current", current_competition=competition)
+    other = make_team(competition, "other", upload_before=timezone.now() - timezone.timedelta(minutes=5))
+    repo = tmp_path / "repo"
+    (repo / "gameplans").mkdir(parents=True)
+    (repo / "gameplans" / "two.py").write_text(GAMEPLAN)
+    zips = []
+    for name in ("a.zip", "b.zip"):
+        with __import__("zipfile").ZipFile(tmp_path / name, "w") as archive:
+            archive.writestr("main.sh", f"echo {name}\n")
+        zips.append(str(tmp_path / name))
+    answers, asked = iter(["1", *zips]), iter([True, False])
+    monkeypatch.setattr(dev_test, "PROMPT", lambda text: next(answers))
+    monkeypatch.setattr(dev_test, "ASK", lambda question, default: next(asked))
+    monkeypatch.setattr(session, "for_config", lambda config: SimpleNamespace(environment=lambda: {"name": "development"}))
+    monkeypatch.setattr(dev_reset, "_store", lambda config, data: (sha(data.decode("latin-1")), f"k/{len(data)}.zip"))
+    monkeypatch.setattr(dev_test, "_remove_uploads", lambda config, uploads: Upload.objects.filter(pk__in=[u.pk for u in uploads]).delete())
+    torn = []
+    monkeypatch.setattr(rounds, "teardown", lambda config, yes=False: torn.append(yes))
+    monkeypatch.setattr(rounds, "stopped_record", lambda: {})
+    seen = {}
+
+    def start(config, args):  # the session: its runs planned, then Ctrl-C in an attempt
+        round_obj = Round.objects.get(pk=int(args.round))
+        plan_round(round_obj)
+        seen.update(round=round_obj, yes=args.yes, dev_test=args.dev_test,
+                    teams=set(RoundRun.objects.filter(round=round_obj).values_list("team__name", flat=True)))  # fmt: skip
+        return 130
+
+    monkeypatch.setattr(rounds, "start", start)
+    config = SimpleNamespace(repo_root=repo)
+    assert dev_test.run(config) == 130
+    made = seen["round"]
+    assert (made.gameplan, made.team_duration, seen["yes"], seen["dev_test"]) == ("two.py", 600, True, True)
+    assert len(seen["teams"]) == 2 and "other" not in seen["teams"]  # its entrants only
+    assert torn == [True] and not Round.objects.filter(pk=made.pk).exists()
+    assert not RoundRun.objects.filter(round_id=made.pk).exists()
+    assert list(Team.objects.values_list("name", flat=True)) == ["other"]
+    assert not User.objects.filter(username__startswith="devtest-").exists()
+    assert list(Upload.objects.values_list("team__name", flat=True)) == [other.name]
+
+    # Run to its end: all of it is kept.
+    answers, asked = iter(["two.py", zips[0]]), iter([False])
+    monkeypatch.setattr(rounds, "start", lambda config, args: 0)
+    assert dev_test.run(config) == 0
+    assert Round.objects.filter(name__startswith="dev-test").count() == 1 and Team.objects.count() == 2
+
+
 def test_a_session_marks_its_round_while_it_runs(one_run):
     """`worms round start` marks its round (Round.session_seen_at) from its start to its end: the
     dashboard refuses changes while the mark is fresh; a killed session's goes stale."""

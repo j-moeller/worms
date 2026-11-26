@@ -118,21 +118,23 @@ def version_summary(checkout: str, deployed: dict, expected, snapshots: dict, ru
     deployed.json ({component: {commit}}), `expected` the components it should name (a missing
     one reads "unknown"); `snapshots`: {service VM: its `clean` snapshot's commit}; `running`:
     {app: the commit its units started with (T8)}. On one commit only when every one of them,
-    and the checkout, agree and the checkout is clean. A service VM without a snapshot: "no
-    snapshot" (the attention block's `snapshots` row says what to do). `same`: the (component,
+    and the checkout, agree and the checkout is clean. A service VM without a snapshot adds no
+    commit (what runs there is its entry's): the attention block's `snapshots` row names it, and
+    says what to do. `same`: the (component,
     commit) pairs nothing of that component changed for since, up to the checkout
     (changes.same_as_checkout): they run what the checkout would give, and count as on it."""
     groups: dict[str, list[str]] = {}
 
-    def add(commit, label, name, missing="unknown"):
+    def add(commit, label, name):
         commit = checkout if commit and (name, commit) in same else commit
-        groups.setdefault(commit or missing, []).append(label)
+        groups.setdefault(commit or "unknown", []).append(label)
 
     for name in expected:
         entry = deployed.get(name) if isinstance(deployed, dict) else None
         add(entry.get("commit", "") if isinstance(entry, dict) else "", name, name)
     for vm, commit in sorted(snapshots.items()):
-        add(commit, f"{vm} (snapshot)", vm, "no snapshot")
+        if commit:
+            add(commit, f"{vm} (snapshot)", vm)
     for app, commit in sorted(running.items()):
         add(commit, f"{app} (running)", app)
     if len(groups) == 1 and checkout in groups and not checkout.endswith("-dirty"):
@@ -142,7 +144,7 @@ def version_summary(checkout: str, deployed: dict, expected, snapshots: dict, ru
     def said(labels):
         return ", ".join(labels) if len(labels) <= 5 else f"{len(labels)} components"
 
-    order = sorted(groups.items(), key=lambda item: (item[0] in ("unknown", "no snapshot"), -len(item[1]), item[0]))
+    order = sorted(groups.items(), key=lambda item: (item[0] == "unknown", -len(item[1]), item[0]))
     return state, [f"system: {state}", *(f"  {commit}: {said(labels)}" for commit, labels in order), f"  checkout: {checkout}"]
 
 

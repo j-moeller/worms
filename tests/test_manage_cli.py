@@ -688,9 +688,9 @@ def test_a_component_without_a_record_reads_unknown():
     assert state == "mixed" and lines[-2] == "  unknown: scoring"
 
 
-def test_a_service_vm_without_a_snapshot_is_said_so():
-    state, lines = _version(snapshots={"dns": "a3a66c9", "ntp": ""})
-    assert state == "mixed" and lines[-2] == "  no snapshot: ntp (snapshot)"
+def test_a_service_vm_without_a_snapshot_adds_no_commit():
+    # What runs there is its entry's; the attention block's `snapshots` row names it.
+    assert _version(snapshots={"dns": "a3a66c9", "ntp": ""}) == ("on", ["system: on a3a66c9"])
 
 
 def test_a_record_at_an_older_commit_with_nothing_changed_since_counts_as_on_the_checkout():

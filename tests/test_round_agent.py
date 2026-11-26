@@ -2346,6 +2346,10 @@ def test_values_the_caller_reads_stay_out_of_the_log(logged, tmp_path, monkeypat
     )
     fake_tofu.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    published = [tmp_path / "platform.json", tmp_path / "firewall.json"]  # what a host stack's apply needs (T2)
+    for path in published:
+        path.write_text("{}")
+    monkeypatch.setattr(type(ex), "OUTPUTS", tuple(map(str, published)))
     assert ex.tofu_output("devbox") == {"token": "sensitive-output"}
     ex.tofu("devbox", "apply", "-auto-approve")
 

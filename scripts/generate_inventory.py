@@ -61,6 +61,9 @@ from pathlib import Path
 
 # Stacks whose state lives on the host (the round agent's workspace).
 HOST_STACKS = {"sandbox", "devbox"}
+# The controller's platform and firewall outputs, published on the host (worms_cli/pipeline.py
+# publish_outputs, T2): the round agent's workspace has no state of those stacks.
+OUTPUTS_DIR = Path("/var/lib/worms/outputs")
 HOST_RUN = "/usr/local/sbin/worms-host-run"
 # The one key: the agent's, never a key file (~/.ssh/id_*).
 ONE_KEY = ["-o", "IdentityFile=none", "-o", "IdentityAgent=SSH_AUTH_SOCK"]
@@ -127,8 +130,11 @@ def load_outputs(
     `override` lets callers feed a pre-dumped `tofu output -json` file (testing /
     offline); otherwise `tofu` is invoked in `stack_dir`.
     """
+    published = OUTPUTS_DIR / f"{stack_dir.name}.json"
     if override is not None:
         outputs = json.loads(override.read_text())
+    elif not (stack_dir / "terraform.tfstate").exists() and published.is_file():  # the host's workspace
+        outputs = json.loads(published.read_text()).get("outputs", {})
     else:
         outputs = tofu_output(stack_dir, tofu_bin)
     entry = outputs.get(name)

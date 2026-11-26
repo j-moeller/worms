@@ -100,7 +100,7 @@ Every stack keeps its state locally, in `terraform.tfstate` next to it, and runs
 | `devbox` | per-team bridges, VMs, gateways; the SSH gateway | the round agent, in `/opt/worms` on the host |
 | `sandbox` | one round's networks and VMs, generated from the gameplan | the round agent, in `/opt/worms` on the host |
 
-Order: `platform` → `firewall` → the VM stacks. The VM stacks read the first two through `terraform_remote_state`.
+Order: `platform` → `firewall` → the VM stacks. The controller's VM stacks read the first two through `terraform_remote_state`; the host's own (sandbox, devbox, in `/opt/worms`) read their outputs from `/var/lib/worms/outputs/{platform,firewall}.json` (`variable "outputs_dir"`), which the CLI writes after every successful apply of either (`{stack, serial, lineage, commit, outputs}`; `worms step outputs` writes them without applying). `worms status` compares their `serial` with the states'. Before 2026-11-26 those stacks read copies of the two states, refreshed only by the agent's workspace sync.
 
 Sources: [`src/worms_cli/pipeline.py`](../src/worms_cli/pipeline.py), [`src/worms_cli/session.py`](../src/worms_cli/session.py) (`HOST_STACKS`).
 

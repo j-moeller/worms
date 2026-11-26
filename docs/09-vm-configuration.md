@@ -33,7 +33,7 @@ In phases 2 and 3 a role whose files, variables and sources did not change since
 
 - `SetupHostNetwork.yml` → `host_network` (24): nftables (the host firewall, NAT, the published ports: dashboard 443, the SSH gateway), sysctls, nested virtualisation off, the firewall watchdog, the traffic mirror for the monitor.
 - `Internet.yml`: the internet window's state (the flag `/run/worms/internet-allowed`, a runtime nft set, the `provisioning` security group).
-- `SetupRoundAgent.yml` → `round_agent` (12): the agent's Python libraries, its workspace (a copy of the checkout, the CA certificate, the platform and firewall states, the host's stacks initialised), the WORMS key, its environment, the service; the host's events account, `worms-audit`, the SSH gateway login collector, the least-privilege Proxmox roles. `--tags agent-sync`: the workspace alone.
+- `SetupRoundAgent.yml` → `round_agent` (12): the agent's Python libraries, its workspace (a copy of the checkout, the CA certificate (no state of the platform or firewall: the host's stacks read their published outputs, `/var/lib/worms/outputs`), the host's stacks initialised), the WORMS key, its environment, the service; the host's events account, `worms-audit`, the SSH gateway login collector, the least-privilege Proxmox roles. `--tags agent-sync`: the workspace alone.
 
 ## dns
 

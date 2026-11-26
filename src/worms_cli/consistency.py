@@ -250,3 +250,17 @@ def drift_rows(plans: dict) -> list[Row]:
     if failed:
         rows.append(Row("drift", "unknown", f"no plan for {', '.join(failed)}", "`worms apply --plan` says why"))
     return rows
+
+
+def outputs_rows(controller: dict, published: dict) -> list[Row]:
+    """The platform's and the firewall's outputs the host's stacks read (T2), against this
+    checkout's states: `controller` {stack: its state's serial}, `published` {stack: the serial
+    published on the host, "" for none}. A checkout without the state (a laptop that never
+    applied it) compares nothing."""
+    stale = sorted(stack for stack, serial in controller.items()
+                   if serial is not None and str(published.get(stack, "")) != str(serial))  # fmt: skip
+    if not stale:
+        return []
+    said = ", ".join(f"{stack} (state serial {controller[stack]}, published {published.get(stack) or 'none'})" for stack in stale)
+    return [Row("host outputs", "warn", f"the host's stacks read older outputs of {said}", "`worms step outputs`")]
+

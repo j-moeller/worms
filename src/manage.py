@@ -234,9 +234,10 @@ cat /opt/worms/opentofu/stacks/devbox/terraform.tfstate 2>/dev/null; echo; echo 
 grep -c '^resource' /opt/worms/opentofu/stacks/sandbox/generated_vms.tf 2>/dev/null; echo '#--'
 test -e /var/lib/worms/sandbox-build.json && echo yes; echo '#--'
 pvesh get /cluster/backup --output-format json 2>/dev/null; echo; echo '#--'
+for s in platform firewall; do printf '%s %s\n' $s "$(sed -n 's/^ "serial": \([0-9]*\).*/\1/p' /var/lib/worms/outputs/$s.json 2>/dev/null)"; done; echo '#--'
 """
 PROBED = ("held", "window", "clean", "active", "ledger", "meta", "stopped", "session", "deployed", "map", "sandbox_state",
-          "devbox_state", "generated", "build", "backup")  # fmt: skip
+          "devbox_state", "generated", "build", "backup", "outputs")  # fmt: skip
 
 
 def _host_probe(config) -> dict:
@@ -466,6 +467,15 @@ def _consistency_rows(config, vms, probe, facts) -> list:
         except ValueError:
             jobs = []
         rows += consistency.backup_rows(jobs, vms)
+    published = dict(line.split(" ", 1) for line in probe.get("outputs", "").splitlines() if " " in line)
+    controller = {}
+    for stack in published:
+        try:
+            controller[stack] = json.loads((Path(config.repo_root) / "opentofu" / "stacks" / stack / "terraform.tfstate")
+                                           .read_text()).get("serial")  # fmt: skip
+        except (OSError, ValueError):
+            continue
+    rows += consistency.outputs_rows(controller, {stack: serial.strip() for stack, serial in published.items()})
     rows += consistency.drift_rows(facts.get("plans") or {})
     return rows
 
@@ -1142,6 +1152,8 @@ def _apply_changed(config, args) -> int:
             print(output.heading(f"OpenTofu: {stack.stack}"), flush=True)
             try:
                 pipe.runner.tofu(stack.stack, "apply", "-input=false", stack.file)
+                if stack.stack in pipeline.PUBLISHED_STACKS:  # what the host's stacks read (T2)
+                    pipe.publish_outputs(stack.stack)
             except build.BuildError as exc:
                 output.error(f"{stack.stack}: {exc}; nothing after it was applied")
                 return 1

@@ -765,3 +765,13 @@ def test_the_drift_row_when_a_plan_has_changes():
     rows = c.drift_rows({"platform": 0, "firewall": 2, "private_internet": 1})
     assert [(r.name, r.state) for r in rows] == [("drift", "warn"), ("drift", "unknown")]
     assert "OpenTofu would change firewall" in rows[0].text and "private_internet" in rows[1].text
+
+
+def test_the_host_outputs_row_when_what_the_host_reads_is_older_than_the_state():
+    c = _consistency()
+    assert c.outputs_rows({"platform": 7, "firewall": 42}, {"platform": "7", "firewall": "42"}) == []
+    assert c.outputs_rows({}, {"platform": "", "firewall": ""}) == []  # no state here: nothing to compare
+    [row] = c.outputs_rows({"platform": 7, "firewall": 43}, {"platform": "7", "firewall": "42"})
+    assert "firewall (state serial 43, published 42)" in row.text and row.repair == "`worms step outputs`"
+    [row] = c.outputs_rows({"platform": 7}, {"platform": ""})
+    assert "published none" in row.text

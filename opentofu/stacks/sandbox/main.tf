@@ -28,31 +28,23 @@ provider "proxmox" {
   }
 }
 
-data "terraform_remote_state" "platform" {
-  backend = "local"
-
-  config = {
-    path = "../platform/terraform.tfstate"
-  }
-}
-
-data "terraform_remote_state" "firewall" {
-  backend = "local"
-
-  config = {
-    path = "../firewall/terraform.tfstate"
-  }
+variable "outputs_dir" {
+  description = "Where the controller publishes the platform's and the firewall's outputs (worms step outputs)."
+  type        = string
+  default     = "/var/lib/worms/outputs"
 }
 
 locals {
-  platform = data.terraform_remote_state.platform.outputs.platform
+  platform_out  = jsondecode(file("${var.outputs_dir}/platform.json")).outputs
+  firewall_out  = jsondecode(file("${var.outputs_dir}/firewall.json")).outputs
+  platform      = local.platform_out.platform.value
+  sg            = local.firewall_out.security_groups.value
+  llm_access_ip = local.firewall_out.llm_access_ip.value
 }
 
 locals {
-  sg = data.terraform_remote_state.firewall.outputs.security_groups
-  # What the firewall stack allows; its gateways have to agree (sandbox-gw.tftpl).
-  llm_access_ip = data.terraform_remote_state.firewall.outputs.llm_access_ip
-  nw            = local.platform.networks
+  # llm_access_ip: what the firewall stack allows; its gateways have to agree (sandbox-gw.tftpl).
+  nw = local.platform.networks
 
   # The router takes the first host address (.1) of every generated network;
   # the generator hands out .1 as the sandbox VMs' gateway.

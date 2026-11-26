@@ -309,8 +309,15 @@ class Executor:
             timeout=120,
         )
 
+    # What the host's stacks read: the controller's platform and firewall outputs (T2).
+    OUTPUTS = ("/var/lib/worms/outputs/platform.json", "/var/lib/worms/outputs/firewall.json")
+
     def tofu(self, stack, *args, timeout=3600):
         path = self.repo_root / "opentofu" / "stacks" / stack
+        if stack in ("sandbox", "devbox") and args[:1] in (("plan",), ("apply",), ("destroy",)):
+            missing = [p for p in self.OUTPUTS if not Path(p).is_file()]
+            if missing:  # before OpenTofu says the same less plainly
+                raise RuntimeError(f"no {', '.join(missing)}: the controller publishes them (`worms step outputs`)")
         if args[:1] == ("init",):
             # From the host's provider mirror first, the registry only for a version it lacks: a
             # plain init needs the internet even for installed providers (scripts/tofu-init).

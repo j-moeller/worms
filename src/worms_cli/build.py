@@ -249,6 +249,31 @@ class Runner:
             return None
         raise BuildError(f"could not read {path} on {self.config.ssh}: {err.strip()[:200]}")
 
+    def tofu_output_json(self, stack: str) -> dict:
+        """`tofu output -json` of a controller stack (this checkout's state), parsed."""
+        stack_dir = self.repo_root / "opentofu" / "stacks" / stack
+        done = subprocess.run(["tofu", f"-chdir={stack_dir}", "output", "-json"], capture_output=True, text=True,
+                              env=self.session.tofu_env())  # fmt: skip
+        if done.returncode != 0:
+            raise BuildError(f"tofu output of {stack}: {done.stderr.strip()[-300:]}")
+        return json.loads(done.stdout or "{}")
+
+    def host_write(self, path: str, text: str) -> None:
+        """A file on the host, root's (0600), written whole: under another name, then renamed."""
+        import base64
+
+        folder = os.path.dirname(path)
+        script = (f"install -d -m 0700 {shlex.quote(folder)} && umask 077 && base64 -d > {shlex.quote(path)}.new && "
+                  f"mv {shlex.quote(path)}.new {shlex.quote(path)}")  # fmt: skip
+        encoded = base64.b64encode(text.encode()).decode()
+        if not self.session.laptop:
+            done = subprocess.run(["sh", "-c", script], input=encoded, capture_output=True, text=True)
+            code, err = done.returncode, done.stderr
+        else:
+            code, _out, err = self.session.host_run(["sh", "-c", f"printf %s {shlex.quote(encoded)} | {{ {script}; }}"])
+        if code != 0:
+            raise BuildError(f"could not write {path} on the host: {err.strip()[-200:]}")
+
     def vm_run(self, name: str, argv: list[str], input: str | None = None) -> None:
         """A command on a platform VM, by name, over its management SSH (as `worms run` reaches
         it): raises when it fails."""

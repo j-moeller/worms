@@ -27,6 +27,7 @@ OpenTofu gets its Proxmox credentials from the vault, through the Runner
 
 from __future__ import annotations
 
+import json
 import shlex
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -50,6 +51,11 @@ INTERNET = "internet window"
 SCOPES = (DEVBOXES_OFF, INTERNET)
 
 # Stacks that get `tofu init` (order matters only for readability).
+# The controller stacks the host's stacks (sandbox, devbox) read: their outputs, published on the
+# host after every apply (publish_outputs), where those stacks' HCL reads them (T2).
+PUBLISHED_STACKS = ("platform", "firewall")
+OUTPUTS_DIR = "/var/lib/worms/outputs"
+
 INIT_STACKS = [
     "platform",
     "firewall",
@@ -309,6 +315,29 @@ class Pipeline:
         finally:  # a failed apply may have created some
             if before is not None:
                 self._changed(before)
+        if stack in PUBLISHED_STACKS:  # applied: what the host's stacks read is published at once
+            self.publish_outputs(stack)
+
+    def publish_outputs(self, stack: str) -> None:
+        """A controller stack's outputs where the host's stacks read them (T2): OUTPUTS_DIR/<stack>.json,
+        {stack, serial, lineage, commit, outputs}, root's, written whole. Before 2026-11-26 the host's
+        stacks read copies of the platform and firewall states that only the agent's workspace sync
+        refreshed, so a devbox rebuild could build against stale security groups."""
+        outputs = self.runner.tofu_output_json(stack)
+        try:
+            state = json.loads((self.runner.repo_root / "opentofu" / "stacks" / stack / "terraform.tfstate").read_text())
+        except (OSError, ValueError) as exc:
+            raise BuildError(f"{stack}: no state to publish ({exc})") from None
+        record = {"stack": stack, "serial": state.get("serial"), "lineage": state.get("lineage"),
+                  "commit": self.runner.commit(), "outputs": outputs}  # fmt: skip
+        self.runner.host_write(f"{OUTPUTS_DIR}/{stack}.json", json.dumps(record, indent=1, sort_keys=True) + "\n")
+        print(output.color(f"{stack}'s outputs published for the host's stacks ({OUTPUTS_DIR}/{stack}.json, serial "
+                           f"{record['serial']})", "dim"))  # fmt: skip
+
+    def outputs(self) -> None:
+        """`worms step outputs`: the platform's and the firewall's outputs published, nothing applied."""
+        for stack in PUBLISHED_STACKS:
+            self.publish_outputs(stack)
 
     def _destroy(self, stack: str):
         self._facts_fresh = False
@@ -891,6 +920,7 @@ STEPS: dict[str, tuple[str, str]] = {
     "ping": ("ping", "one line per VM: can Ansible reach it?"),
     "offline": ("offline", "switch DNS and the caches to offline (internet denied)"),
     "devbox-map": ("devbox_map", "push the host's devbox map onto scoring and logging again (no rollback, no host job)"),
+    "outputs": ("outputs", "publish the platform's and the firewall's outputs for the host's stacks (nothing applied)"),
     "snapshot-services": ("snapshot_services",
                           "snapshot the service VMs as they are, as what a reset returns to (no team VM may exist)"),
     "round-configure-sandbox": ("round_configure_sandbox", "configure a round's freshly built sandbox VMs (round agent)"),

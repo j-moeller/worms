@@ -49,22 +49,23 @@ provider "proxmox" {
   }
 }
 
-data "terraform_remote_state" "platform" {
-  backend = "local"
-  config  = { path = "../platform/terraform.tfstate" }
-}
-
-data "terraform_remote_state" "firewall" {
-  backend = "local"
-  config  = { path = "../firewall/terraform.tfstate" }
+variable "outputs_dir" {
+  description = "Where the controller publishes the platform's and the firewall's outputs (worms step outputs)."
+  type        = string
+  default     = "/var/lib/worms/outputs"
 }
 
 locals {
-  platform = data.terraform_remote_state.platform.outputs.platform
-  sg       = data.terraform_remote_state.firewall.outputs.security_groups
-  # What the firewall stack allows; the gateways have to agree (devbox-gw.tftpl).
-  llm_access_ip = data.terraform_remote_state.firewall.outputs.llm_access_ip
-  nw            = local.platform.networks
+  platform_out  = jsondecode(file("${var.outputs_dir}/platform.json")).outputs
+  firewall_out  = jsondecode(file("${var.outputs_dir}/firewall.json")).outputs
+  platform      = local.platform_out.platform.value
+  sg            = local.firewall_out.security_groups.value
+  llm_access_ip = local.firewall_out.llm_access_ip.value
+}
+
+locals {
+  # llm_access_ip: what the firewall stack allows; the gateways have to agree (devbox-gw.tftpl).
+  nw = local.platform.networks
 
   ssh_public_keys = [trimspace(file(pathexpand(var.ssh_public_key)))]
 

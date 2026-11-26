@@ -55,8 +55,23 @@ def build(pipe, names, rebuild=False, missing=()):
     pipe.build_components(plan)
 
 
+def _published_states():
+    """A checkout with the platform's and the firewall's state, for publish_outputs (T2)."""
+    import json
+    import tempfile
+    from pathlib import Path
+
+    root = Path(tempfile.mkdtemp(prefix="worms-recorder-"))
+    for stack in ("platform", "firewall"):
+        (root / "opentofu" / "stacks" / stack).mkdir(parents=True)
+        (root / "opentofu" / "stacks" / stack / "terraform.tfstate").write_text(json.dumps({"serial": 1, "lineage": "L"}))
+    return root
+
+
 class Recorder:
     """Stands in for worms_cli.build.Runner; records the tool steps."""
+
+    repo_root = _published_states()
 
     fail_on = None
     host_vms = []  # what the host reports: see the `host` fixture
@@ -83,6 +98,12 @@ class Recorder:
     def host_sh(self, command, **_kwargs):
         self.calls.append(("host", command))
         return 0
+
+    def tofu_output_json(self, stack):
+        return {}
+
+    def host_write(self, path, text):
+        self.calls.append(("host_write", path))
 
     def host_read(self, path):
         assert path == "/var/lib/worms/devbox-teams"
@@ -145,7 +166,8 @@ def test_component_steps(run, name):
 
 
 def test_every_step_is_covered():
-    assert set(pipeline.STEPS) - set(EXPECTED) <= {"init", "inventory", "show-config", "ping", "snapshot-services", "devbox-map"}
+    assert set(pipeline.STEPS) - set(EXPECTED) <= {"init", "inventory", "show-config", "ping", "snapshot-services", "devbox-map",
+                                                    "outputs"}
     # The round agent's own steps, by hand without its variable file, would write every team's
     # key files empty (the roles' defaults): refused, and the agent's call still passes.
     for step in pipeline.AGENT_VARFILE_STEPS:
@@ -575,3 +597,30 @@ def test_a_first_build_does_not_warn_about_snapshots(host, monkeypatch):
     monkeypatch.setattr(Recorder, "host_snapshots", {})
     host.build_all()
     assert warnings == [] and host.rolled_back == []
+
+
+def test_an_apply_of_platform_or_firewall_publishes_its_outputs_for_the_hosts_stacks(host, monkeypatch, tmp_path):
+    """The host's sandbox and devbox stacks read the platform's and the firewall's outputs from
+    /var/lib/worms/outputs (T2): written whole after each successful apply of them, never after
+    a failed one, and never for another stack."""
+    import json
+
+    written = {}
+    state = tmp_path / "opentofu" / "stacks" / "firewall"
+    state.mkdir(parents=True)
+    (state / "terraform.tfstate").write_text(json.dumps({"serial": 42, "lineage": "L1"}))
+    monkeypatch.setattr(Recorder, "repo_root", tmp_path, raising=False)
+    monkeypatch.setattr(Recorder, "tofu_output_json", lambda self, stack: {"llm_access_ip": {"value": "192.0.2.34"}},
+                        raising=False)  # fmt: skip
+    monkeypatch.setattr(Recorder, "host_write", lambda self, path, text: written.update({path: json.loads(text)}), raising=False)
+    host._apply("firewall")
+    assert written == {"/var/lib/worms/outputs/firewall.json": {
+        "stack": "firewall", "serial": 42, "lineage": "L1", "commit": "abc1234",
+        "outputs": {"llm_access_ip": {"value": "192.0.2.34"}}}}  # fmt: skip
+    written.clear()
+    host._apply("infrastructure/persistent")
+    assert written == {}
+    monkeypatch.setattr(Recorder, "fail_on", ("tofu", "firewall"))
+    with pytest.raises(BuildError):
+        host._apply("firewall")
+    assert written == {}

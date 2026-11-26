@@ -140,24 +140,26 @@
     mode: "0644"
   when: round_agent_definitions.results[1].matched == 0
 
-- name: Create the directories for the controller's outputs
+- name: Create the directory for the controller's CA certificate
   ansible.builtin.file:
-    path: "{{ round_agent_repo_root }}/{{ item }}"
+    path: "{{ round_agent_repo_root }}/ansible/pki/worms"
     state: directory
     mode: "0700"
-  loop: [ansible/pki/worms, opentofu/stacks/platform, opentofu/stacks/firewall]
 
-# State only (outputs for terraform_remote_state), no code: the host cannot
-# apply these stacks.
-- name: Copy the CA certificate and the platform and firewall state
+- name: Copy the CA certificate
   ansible.builtin.copy:
-    src: "{{ item.src }}"
-    dest: "{{ round_agent_repo_root }}/{{ item.dest }}"
+    src: "{{ pki_ca_cert_path }}"
+    dest: "{{ round_agent_repo_root }}/ansible/pki/worms/ca.crt"
     mode: "0600"
-  loop:
-    - { src: "{{ pki_ca_cert_path }}", dest: ansible/pki/worms/ca.crt }
-    - { src: "{{ round_agent_controller_repo }}/opentofu/stacks/platform/terraform.tfstate", dest: opentofu/stacks/platform/terraform.tfstate }
-    - { src: "{{ round_agent_controller_repo }}/opentofu/stacks/firewall/terraform.tfstate", dest: opentofu/stacks/firewall/terraform.tfstate }
+
+# The host's stacks read the platform's and the firewall's outputs from /var/lib/worms/outputs,
+# published by the controller after every apply of them (`worms step outputs`): no copy of their
+# state here any more, which only this sync refreshed (until 2026-11-26).
+- name: Remove the copies of the platform and firewall state
+  ansible.builtin.file:
+    path: "{{ round_agent_repo_root }}/opentofu/stacks/{{ item }}"
+    state: absent
+  loop: [platform, firewall]
 
 # Without internet too (scripts/tofu-init): a plain `tofu init` asks the registry even for a
 # provider it has installed, and the host may have no outbound connection at all.

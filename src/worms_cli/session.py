@@ -388,6 +388,12 @@ class Session:
     def infrastructure(self) -> dict:
         """The platform stack's `infrastructure` output (addresses)."""
         stack = Path(self.config.repo_root) / "opentofu" / "stacks" / "platform"
+        published = Path("/var/lib/worms/outputs/platform.json")  # the host's workspace: no platform state (T2)
+        if not (stack / "terraform.tfstate").exists() and published.is_file():
+            try:
+                return json.loads(published.read_text())["outputs"]["infrastructure"]["value"]
+            except (OSError, ValueError, KeyError) as exc:
+                raise SessionError(f"{published} has no `infrastructure` output ({exc}): `worms step outputs`") from None
         proc = subprocess.run(["tofu", f"-chdir={stack}", "output", "-json", "infrastructure"],
                               capture_output=True, text=True)  # fmt: skip
         if proc.returncode != 0:

@@ -9,7 +9,9 @@ Three questions, nothing else (and, not on worms-dev, whether to run a developme
 Then, for each zip, a user (devtest-<time>-<n>@example.org, no password: nobody logs in as it) in a
 team of its own (DevTest <time> #<n>), the zip its upload, and a round of those teams only
 (Round.entrants), starting now, which runs at once: `worms round start <it> --yes`
-(worms_cli/rounds.py), every question of it answered yes.
+(worms_cli/rounds.py), every question of it answered yes. Its session syncs this checkout to the
+host's workspace first, every time and uncommitted changes too (rounds._sync_workspace, force):
+the gameplan runs as it is on disk, not as an earlier sync left it.
 
 Ctrl-C, whenever: everything it made goes, as if the round never was. The attempt under way fails
 (its VMs stopped) and the session ends; the sandbox is destroyed (`worms round teardown`); what the

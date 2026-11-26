@@ -1187,7 +1187,7 @@ def start(config, args) -> int:
 
         # This checkout's code in the host's workspace, before anything is stopped (T10); then the
         # round agent's environment and code, as the service has them.
-        _sync_workspace(config)
+        _sync_workspace(config, force=session.dev_test)  # a dev test: the gameplans as they are on disk
         repo_root, session.jobs, key = _host_steps(config, session.folder, session.summary)
         settings.PROXMOX["node"] = config.proxmox_node()
         session.conductor = Conductor(jobs=session.jobs, power=ProxmoxPower(api=Pvesh()), on_watch=_count)
@@ -1491,24 +1491,26 @@ def teardown(config, yes=False) -> int:
     return 0
 
 
-def _sync_workspace(config, runner=None, check=None, record=None) -> None:
+def _sync_workspace(config, runner=None, check=None, record=None, force=False) -> None:
     """The host's workspace (playbooks, gameplans, the sandbox stack: /opt/worms) at this checkout's
     commit, before anything is stopped: synced here when it is not (`SetupRoundAgent.yml --tags
     agent-sync`, which leaves the generated definitions and OpenTofu's state alone), then the
     host's gameplans checked, and the workspace recorded in deployed.json. A round runs committed
     code only: a checkout with changes to tracked files is refused. Until 2026-11-26 the session
     asked whether to run on mixed code, and `worms apply round-agent gameplans` was yours to
-    remember."""
+    remember. `force` (`worms round dev-test`): synced every time, uncommitted changes and all:
+    the commit says nothing of an untracked gameplan edited since the last sync, and a dev test
+    runs the gameplans as they are on disk."""
     from worms_cli import changes
 
     runner = runner or build_runner(config)
     here = runner.commit()
-    if here.endswith("-dirty"):
+    if here.endswith("-dirty") and not force:
         raise BuildError(f"this checkout has uncommitted changes ({here}): commit or stash them first; a round runs committed "
                          "code only")  # fmt: skip
     marker = Path(HOST_WORKSPACE) / ".worms-commit"
     there = marker.read_text().strip() if marker.exists() else "(unknown)"
-    if there == here:
+    if there == here and not force:
         print(output.status_cell("ok", f"the host's workspace runs this checkout's code ({here})"))
         return
     says("worms apply gameplans")  # what does the same

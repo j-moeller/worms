@@ -1383,6 +1383,20 @@ def test_a_round_brings_the_hosts_workspace_to_the_checkouts_commit(tmp_path, mo
     assert (f"workspace synced: {there} → {here}" in capsys.readouterr().out) is synced
 
 
+@pytest.mark.parametrize("here", ["a3a66c9", "a3a66c9-dirty"])
+def test_a_dev_test_syncs_the_workspace_from_disk_every_time(tmp_path, monkeypatch, here):
+    # `worms round dev-test` (force): at the same commit too (an untracked gameplan edited since the
+    # last sync does not change it), and with uncommitted changes.
+    from worms_cli import rounds
+
+    (tmp_path / ".worms-commit").write_text("a3a66c9\n")
+    monkeypatch.setattr(rounds, "HOST_WORKSPACE", str(tmp_path))
+    runner, checked, recorded = _SyncRunner(here), [], []
+    rounds._sync_workspace(None, runner=runner, check=checked.append, record=lambda s, names, commit: recorded.append(commit),
+                           force=True)  # fmt: skip
+    assert runner.calls == [("SetupRoundAgent.yml", "--tags", "agent-sync")] and checked == [None] and recorded == [here]
+
+
 def test_a_round_refuses_a_checkout_with_uncommitted_changes_before_anything(tmp_path, monkeypatch):
     from worms_cli import rounds
     from worms_cli.build import BuildError

@@ -519,9 +519,8 @@ def test_a_rounds_note_is_staffs_own(staff_site):
 
 
 def test_a_round_is_deleted_with_its_attempts_unless_a_session_runs_it(staff_site):
-    """Deleted from its staff page with its attempts and their records (worms_delete_round, as the
-    dashboard's own role: it may delete none of those rows itself), once staff confirm that; not
-    while `worms round start` runs it; the audit keeps that it was."""
+    """Deleted from its staff page with its attempts and their records, as the dashboard's own
+    role, once staff confirm that; not while `worms round start` runs it."""
     from core import clock
     from core.models.competition import Round
     from core.models.rounds import HostJob, RoundRun, RunEvent
@@ -553,8 +552,8 @@ def test_a_round_is_deleted_with_its_attempts_unless_a_session_runs_it(staff_sit
     assert not Round.objects.filter(pk=r1.pk).exists() and not RoundRun.objects.filter(pk=run.pk).exists()
     assert not VirtualMachine.objects.filter(pk=vm.pk).exists() and not HostJob.objects.filter(pk=job.pk).exists()
     assert not RunEvent.objects.filter(run_id=run.pk).exists()
-    # (Its round_deleted event: the events role's, which these tests do not have.) The dashboard's
-    # role cannot delete what is under a round itself, and no other role may call the function.
+    # (Its round_deleted event: the events role's, which these tests do not have.) The dashboard
+    # deletes a round and what is under it; the orchestrator, which runs no session, does not.
     from django.db import connection
 
     with as_role("postgres"):
@@ -563,10 +562,10 @@ def test_a_round_is_deleted_with_its_attempts_unless_a_session_runs_it(staff_sit
     post(staff_site, f"/staff/rounds/{r2.uuid}/delete/")
     assert Round.objects.filter(pk=r2.pk).exists()
     with as_role("django_dashboard"), connection.cursor() as cursor:
-        cursor.execute("SELECT has_table_privilege('django_dashboard', 'public.round_runs', 'DELETE'), "
-                       "has_function_privilege('django_dashboard', 'public.worms_delete_round(bigint)', 'EXECUTE'), "
-                       "has_function_privilege('django_orchestrator', 'public.worms_delete_round(bigint)', 'EXECUTE')")  # fmt: skip
-        assert cursor.fetchone() == (False, True, False)
+        cursor.execute("SELECT has_table_privilege('django_dashboard', 'public.rounds', 'DELETE'), "
+                       "has_table_privilege('django_dashboard', 'public.round_runs', 'DELETE'), "
+                       "has_table_privilege('django_orchestrator', 'public.rounds', 'DELETE')")  # fmt: skip
+        assert cursor.fetchone() == (True, True, False)
 
 
 def test_staff_download_the_upload_an_attempt_runs(staff_site):

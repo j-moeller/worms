@@ -15,8 +15,7 @@ Round.session_running): fully before its runs are planned, then all but its seed
 teams' order). A change after teams ran is the next session's to carry out: it runs again,
 asked, every team whose attempt no longer matches the round, and keeps the earlier attempts
 as superseded (orchestrator/rounds/conductor.py, stale and replan). It is deleted, with its
-attempts and their records, whenever no session runs it (public.worms_delete_round: the
-dashboard may delete none of those rows itself). Where a round is, its annotated timeline, is read
+attempts and their records, whenever no session runs it (round_delete). Where a round is, its annotated timeline, is read
 from its runs (round_progress.py); every staff page warns of a round whose gameplan is
 missing or not valid (round_progress.warnings, through render_with_base_info).
 """
@@ -49,6 +48,18 @@ RUNNING = "`worms round start` runs this round now: it can change once that sess
 CHANGED = (" Teams have run: the next `worms round start` runs again, asked, every team whose attempt no longer "
            "matches it (their earlier attempts kept, superseded, no longer counted).")  # fmt: skip
 NOTE_LIMIT = 500
+# What a round's deletion deletes, children first (the foreign keys do not cascade): its attempts'
+# events, flag captures, logs, VMs and host jobs, its attempts, the round. %(r)s: the round's id.
+DELETE_ROUND = (
+    "DELETE FROM run_events WHERE run_id IN (SELECT id FROM round_runs WHERE round_id = %(r)s)"
+    " OR vm_id IN (SELECT id FROM virtual_machines WHERE round_id = %(r)s)",
+    "DELETE FROM flag_captures WHERE round_id = %(r)s OR vm_id IN (SELECT id FROM virtual_machines WHERE round_id = %(r)s)",
+    "DELETE FROM logging WHERE round_id = %(r)s OR run_id IN (SELECT id FROM round_runs WHERE round_id = %(r)s)",
+    "DELETE FROM virtual_machines WHERE round_id = %(r)s OR run_id IN (SELECT id FROM round_runs WHERE round_id = %(r)s)",
+    "DELETE FROM host_jobs WHERE run_id IN (SELECT id FROM round_runs WHERE round_id = %(r)s)",
+    "DELETE FROM round_runs WHERE round_id = %(r)s",
+    "DELETE FROM rounds WHERE id = %(r)s",
+)
 
 
 def _status(round_obj, now) -> str:
@@ -294,25 +305,29 @@ def round_note(request: HttpRequest, round_uuid):
 @require_POST
 def round_delete(request: HttpRequest, round_uuid):
     """A round deleted whenever no `worms round start` runs it: with its attempts and everything
-    under them (VMs, events, captures, logs, host jobs) once staff confirmed that too. The
-    database does it (public.worms_delete_round, privileges.sql.j2), checking the session's mark
-    again with the row locked; the dashboard may delete none of those rows itself."""
+    under them (VMs, events, captures, logs, host jobs) once staff confirmed that too. One
+    transaction: the round's row locked (a session writes its mark there), the mark checked
+    again under the lock, then DELETE_ROUND."""
     comp = request.competition
     round_obj = get_object_or_404(Round, uuid=round_uuid, competition=comp)
     if round_obj.session_running(clock.now()):
         messages.error(request, RUNNING)
         return redirect("staff_round", round_uuid=round_obj.uuid)
-    with serialized_resource("round-plan", round_obj.pk):
-        attempts = RoundRun.objects.filter(round=round_obj).count()
+    with serialized_resource("round-plan", round_obj.pk):  # one transaction, against a session planning it
+        locked = Round.objects.select_for_update().filter(pk=round_obj.pk).first()
+        if locked is None:
+            messages.error(request, f"{round_obj.name} is gone already.")
+            return redirect("staff_rounds")
+        if locked.session_running(clock.now()):
+            messages.error(request, RUNNING)
+            return redirect("staff_round", round_uuid=round_obj.uuid)
+        attempts = RoundRun.objects.filter(round=locked).count()
         if attempts and request.POST.get("with_attempts") != "yes":
             messages.error(request, f"{round_obj.name} has {attempts} attempt(s): confirm that they go with it.")
             return redirect("staff_round", round_uuid=round_obj.uuid)
         with connection.cursor() as cursor:
-            cursor.execute("SELECT public.worms_delete_round(%s)", [round_obj.pk])
-            outcome = cursor.fetchone()[0]
-    if outcome == "running":
-        messages.error(request, RUNNING)
-        return redirect("staff_round", round_uuid=round_obj.uuid)
+            for statement in DELETE_ROUND:
+                cursor.execute(statement, {"r": locked.pk})
     events.competition("round_deleted", request=request, round_id=round_obj.pk, detail={"name": round_obj.name, "attempts": attempts})
     messages.success(request, f"Round {round_obj.name} deleted" + (f", with its {attempts} attempt(s)." if attempts else "."))
     return redirect("staff_rounds")

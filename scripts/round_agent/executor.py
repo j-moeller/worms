@@ -27,6 +27,8 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
+from round_agent import child
+
 log = logging.getLogger("round-agent")
 
 DEFAULT_JOB_LOG_DIR = "/var/log/worms/jobs"
@@ -233,7 +235,8 @@ class Executor:
             if stream:
                 returncode, stdout, stderr = self._stream(argv, cwd, timeout)
             else:
-                proc = subprocess.run(
+                # In a session of its own: an interrupt of this process stops it (child.stop), not kills it.
+                proc = child.run(
                     argv,
                     cwd=str(cwd or self.repo_root),
                     input=input,
@@ -241,6 +244,7 @@ class Executor:
                     text=True,
                     timeout=timeout,
                     env=self._environment(),
+                    say=self._log.note,
                 )
                 returncode, stdout, stderr = proc.returncode, proc.stdout, proc.stderr
         except subprocess.TimeoutExpired:
@@ -253,7 +257,7 @@ class Executor:
 
     def _stream(self, argv, cwd, timeout):
         """Run argv, capturing its output and copying each line to the log as it comes."""
-        proc = subprocess.Popen(
+        proc = child.start(
             argv,
             cwd=str(cwd or self.repo_root),
             stdin=subprocess.DEVNULL,
@@ -275,9 +279,8 @@ class Executor:
             thread.start()
         try:
             proc.wait(timeout=timeout)
-        except BaseException:  # its timeout, or this process ending (Ctrl-C, SIGTERM): no command left running
-            proc.kill()
-            proc.wait()
+        except BaseException:  # its timeout, or this process ending (Ctrl-C, SIGTERM): no command left running,
+            child.stop(proc, say=self._log.note)  # and none killed in the middle of what it does (child.py)
             raise
         finally:
             for thread in pumps:

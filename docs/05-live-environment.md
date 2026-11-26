@@ -141,6 +141,7 @@ The run's clock starts at `armed_at + 15 s` and ends after the round's duration 
   - A team sees nothing of a run before: its progression is `withheld`, and the API returns no submissions or logs.
   - Points of failed attempts are discarded.
 - **Ctrl-C** in the session fails the attempt under way at its next step (its VMs stopped, its sandbox kept); twice, out, with the attempt closed first (failed, not counted; SIGTERM and SIGHUP alike). Only a SIGKILL leaves one under way: it fails as the next session starts, or at `worms round teardown` (ENDING and TEARING_DOWN are completed).
+- **A command under way is never killed half-way.** OpenTofu, Ansible and the CLI's steps run in a session of their own ([`child.py`](../scripts/round_agent/child.py)): Ctrl-C reaches only the CLI (or the round agent), which sends the command one SIGINT (it finishes the operation under way and exits), waits up to 120 s, then sends SIGTERM, then SIGKILL, saying so (`worms status` then looks for what is left, orphan VMs among it); Ctrl-C again moves on to the next signal. On an interrupt in an attempt, the session first stops the sandbox's VMs and clears scoring's team without the database (`LocalJobs.stop_now`), then closes the attempt; `fail()` stops an attempt's VMs before it writes anything.
 
 ### Scoring
 

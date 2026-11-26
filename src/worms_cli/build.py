@@ -22,6 +22,22 @@ class BuildError(RuntimeError):
     pass
 
 
+def round_agent_module(name: str):
+    """scripts/round_agent/<name>.py of this checkout: what the CLI and the round agent share
+    (devbox_map, child), one implementation for both."""
+    import importlib
+
+    scripts = str(Path(__file__).resolve().parents[2] / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    return importlib.import_module(f"round_agent.{name}")
+
+
+def _child():
+    """scripts/round_agent/child.py: the CLI's commands, interrupt-safe (Runner._run)."""
+    return round_agent_module("child")
+
+
 class Runner:
     def __init__(self, config):
         self.config = config
@@ -49,7 +65,9 @@ class Runner:
             label = label if len(label) < 100 else label[:97] + "..."
             print(output.color(f"$ {label}  [{where}]", "dim"))
         try:  # argv and env may be callables: computed only when run
-            proc = subprocess.run(argv() if callable(argv) else argv, env=env() if callable(env) else env)
+            # In a session of its own: Ctrl-C reaches this process, which stops it (child.stop: one
+            # SIGINT, OpenTofu and Ansible finish what they do), never kills it mid-operation.
+            proc = _child().run(argv() if callable(argv) else argv, env=env() if callable(env) else env)
         except SessionError as exc:
             raise BuildError(str(exc)) from exc
         if check and proc.returncode != 0:

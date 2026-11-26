@@ -759,6 +759,14 @@ class Conductor:
         why = f"the round session ended during {run.state} ({said})"
         log.warning("run %s (%s, attempt %s): %s: closing it (its VMs stopped, the teardown)", run.uuid, run.team.name,
                     run.attempt, why)  # fmt: skip
+        # First what matters on the host, with no database (it may be what failed): the session's
+        # steps (worms_cli/rounds.py LocalJobs.stop_now). Then the attempt's own closing.
+        stop_now = getattr(self.jobs, "stop_now", None)
+        try:
+            if callable(stop_now):
+                stop_now()
+        except BaseException as again:  # noqa: BLE001  (Ctrl-C again: the closing below still marks it over)
+            log.warning("run %s: stopping its VMs at once was cut short (%s)", run.uuid, type(again).__name__)
         try:
             self.abandon(run, why)
         except BaseException as again:  # noqa: BLE001  (Ctrl-C again: out, but not with the run marked active)
@@ -910,6 +918,13 @@ class Conductor:
         from gameplan.definition import RoundError
 
         log.warning("run %s (%s, attempt %s) failed: %s", run.uuid, run.team.name, run.attempt, message)
+        built = run.state not in (S.PENDING,)
+        if built:  # its VMs stopped first, before anything is written: the worm stops counting at once
+            for vm in run.virtual_machines.all():
+                try:
+                    self.power.stop(vm)
+                except Exception:  # noqa: BLE001  (best effort; the teardown follows)
+                    log.warning("run %s: could not stop %s", run.uuid, vm.vm_identifier)
         deploy = run.jobs.filter(kind=HostJob.Kind.DEPLOY).order_by("-id").values_list("state", flat=True).first()
         before_worm = deploy is None
         ours = counts and (ours or before_worm)
@@ -921,15 +936,8 @@ class Conductor:
         headline = (message.splitlines() or [""])[0][:400]
         failure = self._where(run, failure or {"phase": run.state, "headline": headline})
         fields = {"error": message[:2000], "finished_at": now, "failure": failure}
-        built = run.state not in (S.PENDING,)
-        if built:
-            for vm in run.virtual_machines.all():
-                try:
-                    self.power.stop(vm)
-                except Exception:  # noqa: BLE001  (best effort; the teardown follows)
-                    log.warning("run %s: could not stop %s", run.uuid, vm.vm_identifier)
-            if run.ends_at is None or run.ends_at > now:
-                fields["ends_at"] = now
+        if built and (run.ends_at is None or run.ends_at > now):
+            fields["ends_at"] = now
         self.set_state(run, S.FAILED, **fields)
         if built:
             try:

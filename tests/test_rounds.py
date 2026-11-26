@@ -1013,6 +1013,39 @@ def test_an_implausible_armed_at_is_ignored(one_run, gameplans, armed_at):
     assert run.worm_start_at == start + clock_delta(10)
 
 
+def test_ctrl_c_during_the_gameplan_stops_the_vms_and_clears_the_team_at_once(one_run, gameplans, monkeypatch):
+    """Ctrl-C twice (or SIGTERM, SIGHUP) while the gameplan runs: the session's host steps stop
+    the sandbox's VMs and clear scoring's team at once, with no database (LocalJobs.stop_now);
+    then the attempt is closed (failed, not counted, its VMs stopped before the database is
+    written, the teardown), and the interrupt goes on up."""
+    from core.models.rounds import HostJob, RoundRun, RunEvent
+    from gameplan import runtime
+
+    power = fake_power()
+    conductor, agent, clock = make_conductor(gameplans, power)
+    stopped_now = []
+    agent.stop_now = lambda: stopped_now.append(1)
+
+    original = runtime.Runner.run
+
+    def interrupted(self):
+        from orchestrator.rounds.conductor import AttemptBackend
+
+        if isinstance(self.backend, AttemptBackend):  # the attempt's gameplan, not the round's check of it
+            raise KeyboardInterrupt
+        return original(self)
+
+    monkeypatch.setattr(runtime.Runner, "run", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        run_round(conductor, one_run["round"])
+    [first] = attempts(one_run["round"], one_run["team"])
+    assert stopped_now == [1]
+    assert first.state == RoundRun.State.FAILED and "the round session ended during running (KeyboardInterrupt)" in first.error
+    assert first.events.get(kind=RunEvent.Kind.ERROR).data["conductor_stopped"] is True  # not counted against the team
+    assert set(power.api().stopped) == {"sandbox-vm0", "sandbox-vm1"}
+    assert first.jobs.get(kind=HostJob.Kind.TEARDOWN).params["keep"] is True
+
+
 def test_a_failed_run_stops_its_vms_and_scores_no_more(one_run, gameplans):
     """Power control fails during execute(): the attempt is thrown away, its VMs stopped and
     its window closed; what it captured never counts."""

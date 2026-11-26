@@ -2393,6 +2393,76 @@ def test_a_failed_commands_error_is_its_cause_not_the_warnings():
     assert error.cause.logs == ["/r/round/sandbox-a.log"] and "DEPRECATION" not in error.detail
 
 
+# --- children in a session of their own (child.py) ---------------------------------------------
+
+
+def _interrupt_when_ready(marks):
+    """The terminal's Ctrl-C, once the child runs: it reaches this process alone (the child has a
+    session of its own), as SIGINT to the process."""
+    import os
+    import signal
+    import threading
+    import time
+
+    def interrupt():
+        for _ in range(200):
+            if marks.exists() and "READY" in marks.read_text():
+                break
+            time.sleep(0.05)
+        os.kill(os.getpid(), signal.SIGINT)
+
+    threading.Thread(target=interrupt, daemon=True).start()
+
+
+def test_an_interrupt_stops_the_child_with_one_sigint_and_waits_for_it(tmp_path):
+    """OpenTofu and Ansible finish what they do on one SIGINT: the CLI sends it once and waits."""
+    import os
+    import sys
+
+    from round_agent import child
+
+    marks = tmp_path / "marks"
+    script = (
+        "import os, signal, sys, time\n"
+        f"marks = open({str(marks)!r}, 'a', buffering=1)\n"
+        "def on_int(signum, frame):\n"
+        "    marks.write('INT\\n'); time.sleep(0.5); marks.write('EXIT\\n'); sys.exit(0)\n"
+        "signal.signal(signal.SIGINT, on_int)\n"
+        "marks.write(f'READY {os.getsid(0)}\\n')\n"
+        "time.sleep(30)\n"
+    )
+    _interrupt_when_ready(marks)
+    with pytest.raises(KeyboardInterrupt):
+        child.run([sys.executable, "-c", script], grace=10, say=lambda text: None)
+    lines = marks.read_text().splitlines()
+    assert lines.count("INT") == 1 and lines[-1] == "EXIT"  # one SIGINT; it finished before the parent went on
+    assert int(lines[0].split()[1]) != os.getsid(0)  # its own session: the terminal's Ctrl-C is not its
+
+
+def test_a_child_that_ignores_sigint_gets_sigterm_after_the_grace(tmp_path):
+    import sys
+
+    from round_agent import child
+
+    marks = tmp_path / "marks"
+    script = (
+        "import signal, sys, time\n"
+        f"marks = open({str(marks)!r}, 'a', buffering=1)\n"
+        "signal.signal(signal.SIGINT, signal.SIG_IGN)\n"
+        "def on_term(signum, frame):\n"
+        "    marks.write('TERM\\n'); sys.exit(0)\n"
+        "signal.signal(signal.SIGTERM, on_term)\n"
+        "marks.write('READY\\n')\n"
+        "time.sleep(30)\n"
+    )
+    said = []
+    _interrupt_when_ready(marks)
+    with pytest.raises(KeyboardInterrupt):
+        child.run([sys.executable, "-c", script], grace=0.5, say=said.append)
+    assert marks.read_text().splitlines()[-1] == "TERM"
+    assert said and said[0].startswith("stopping ") and "Ctrl-C again" in said[0]
+
+
 def test_a_timed_out_build_is_killed_and_noted(logged):
     ex, job_log = logged
     with pytest.raises(subprocess.TimeoutExpired):

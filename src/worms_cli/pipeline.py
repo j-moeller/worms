@@ -28,15 +28,13 @@ OpenTofu gets its Proxmox credentials from the vault, through the Runner
 from __future__ import annotations
 
 import shlex
-import sys
 from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial
-from pathlib import Path
 from typing import Callable
 
 from worms_cli import output
-from worms_cli.build import BuildError, Runner
+from worms_cli.build import BuildError, Runner, round_agent_module
 
 INTERNET_FLAG = "/run/worms/internet-allowed"
 
@@ -92,16 +90,6 @@ def _stopping(cleanup: str) -> None:
     """Said before the cleanup that runs after a failed step, so that its commands do not
     read as the build going on. The step's own error ends the build: `build stopped: ...`."""
     output.error(f"a step failed, stopping the build: {cleanup} first")
-
-
-def _devbox_map_module():
-    """scripts/round_agent/devbox_map.py of this checkout: the one push of the devbox map."""
-    scripts = str(Path(__file__).resolve().parents[2] / "scripts")
-    if scripts not in sys.path:
-        sys.path.insert(0, scripts)
-    from round_agent import devbox_map
-
-    return devbox_map
 
 
 @dataclass(frozen=True)
@@ -497,7 +485,7 @@ class Pipeline:
         again (scripts/round_agent/devbox_map.py, the round agent's push too), their snapshot
         being older than it. No database, no host job: a reset needs neither. No map on the host
         (no devbox job has run yet): nothing to push. A failure is said, and the rollback stands."""
-        devbox_map = _devbox_map_module()
+        devbox_map = round_agent_module("devbox_map")
         holders = [name for name in devbox_map.HOLDERS if name in {vm["name"] for vm in vms}]  # the others keep theirs
         if not holders:
             return

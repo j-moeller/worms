@@ -186,6 +186,19 @@ class LocalJobs:
         self._running = set()  # the rows of the steps under way: the heartbeat's
         self._beat = None
 
+    def stop_now(self) -> None:
+        """The session ends in an attempt (Conductor.interrupted): what its teardown does on the
+        host, at once and with no database (it may be what failed): the sandbox's VMs stopped and
+        scoring's and logging's current team cleared. Each part on its own: one that fails does
+        not keep the other from running."""
+        h, ex = self.handlers, self.executor
+        for what, act in (("the sandbox's VMs", lambda: h.snapshots.stop(ex, h.snapshots.pool_vms(ex, "sandbox"))),
+                          ("scoring's and logging's current team", lambda: h._clear_current_team(ex, self.cfg))):  # fmt: skip
+            try:
+                act()
+            except Exception as exc:  # noqa: BLE001  (said; the conductor's closing tries again)
+                self.echo(output.color(f"  not done at once: {what} ({exc})", "yellow"))
+
     def _beating(self, job_id, on=True):
         if on:
             self._running.add(job_id)

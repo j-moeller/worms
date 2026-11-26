@@ -518,6 +518,41 @@ def test_a_rounds_note_is_staffs_own(staff_site):
     assert shown == ["staff/rounds.html"], shown
 
 
+def test_staff_download_the_upload_an_attempt_runs(staff_site):
+    """The round page's Upload column: each attempt's zip, byte for byte, for staff only."""
+    import hashlib
+    from pathlib import Path
+
+    from core.models.competition import Round
+    from core.models.rounds import RoundRun
+    from core.models.team import Team
+    from core.models.user import User
+    from core.models.worms import MalwareArtifact, Upload
+    from django.conf import settings
+
+    post(staff_site, "/staff/rounds/", round_data(name="R1"), page="/staff/rounds/")
+    r1 = Round.objects.get(name="R1")
+    data = b"PK\x03\x04 a worm"
+    content_hash = hashlib.sha256(data).hexdigest()
+    key = f"malware-artifacts/{content_hash[:2]}/{content_hash[2:4]}/{content_hash}.zip"
+    (Path(settings.MEDIA_ROOT) / key).parent.mkdir(parents=True, exist_ok=True)
+    (Path(settings.MEDIA_ROOT) / key).write_bytes(data)
+    with as_role("postgres"):
+        team = Team.objects.create(name="Blue Team", competition=competition())
+        artifact = MalwareArtifact.objects.create(content_hash=content_hash, storage_key=key)
+        upload = Upload.objects.create(artifact=artifact, user=User.objects.create(username="blue"), team=team)
+        run = RoundRun.objects.create(round=r1, team=team, position=0, seed=1, duration=3000, upload=upload)
+        bare = RoundRun.objects.create(round=r1, team=team, position=0, attempt=1, seed=1, duration=3000)
+    page = get(staff_site, f"/staff/rounds/{r1.uuid}/").content.decode()
+    assert f"/staff/runs/{run.uuid}/upload/" in page and f"/staff/runs/{bare.uuid}/upload/" not in page
+    response = get(staff_site, f"/staff/runs/{run.uuid}/upload/")
+    assert response.status_code == 200 and b"".join(response.streaming_content) == data
+    assert f'filename="worm-blue-team-{content_hash[:12]}.zip"' in response["Content-Disposition"]
+    assert get(staff_site, f"/staff/runs/{bare.uuid}/upload/").status_code == 404
+    staff_site.force_login(User.objects.create(username="student-dl"))
+    assert get(staff_site, f"/staff/runs/{run.uuid}/upload/").status_code == 302
+
+
 def test_round_parameters_reach_the_runs_and_the_conductor(db_clean):
     from core.models.competition import Competition, Round
     from core.models.team import Team

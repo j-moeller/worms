@@ -37,10 +37,12 @@ from dashboard.views.staff import delete_unreferenced
 from dashboard.views.util import render_with_base_info
 from django.contrib import messages
 from django.db import transaction
+from django.core.files.storage import default_storage
 from django.db.models import Count, Q
-from django.http import HttpRequest
+from django.http import FileResponse, Http404, HttpRequest
 from django.shortcuts import get_object_or_404, redirect
-from django.views.decorators.http import require_POST
+from django.utils.text import slugify
+from django.views.decorators.http import require_GET, require_POST
 
 ACTIVE_STATES = [s for s in RoundRun.State.values if s not in ("pending", "finished", "failed", "skipped", "superseded")]
 RUNNING = "`worms round start` runs this round now: it can change once that session has ended."
@@ -250,6 +252,26 @@ def round_detail(request: HttpRequest, round_uuid):
         "version": round_gameplan(round_obj),
         "progress": round_progress.progress(round_obj),
     })  # fmt: skip
+
+
+@staff_required
+@require_GET
+def run_upload(request: HttpRequest, run_uuid):
+    """The zip a team's attempt ran (or is to run), byte for byte, for staff: the round page's
+    Upload column. By the attempt, so it is the upload the round took for that team (the latest
+    before its start), not merely the team's newest."""
+    run = get_object_or_404(RoundRun.objects.select_related("upload__artifact", "team"), uuid=run_uuid,
+                            round__competition=request.competition)  # fmt: skip
+    if run.upload is None:
+        raise Http404("This attempt has no upload.")
+    try:
+        stream = default_storage.open(run.upload.artifact.storage_key, "rb")
+    except OSError:
+        raise Http404("That upload is no longer stored.") from None
+    name = f"worm-{slugify(run.team.name) or f'team-{run.team_id}'}-{run.upload.artifact.content_hash[:12]}.zip"
+    response = FileResponse(stream, as_attachment=True, filename=name, content_type="application/zip")
+    response["Cache-Control"] = "private, no-store"
+    return response
 
 
 @staff_required

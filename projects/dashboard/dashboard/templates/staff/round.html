@@ -79,7 +79,7 @@
                     <td class="num">{{ run.attempt|add:1 }}</td>
                     <th scope="row"><a href="{% url 'staff_team' run.team.uuid %}">{{ run.team.name }}</a></th>
                     <td><span class="badge badge--state">{{ run.state }}</span>{% if run.failure %}<br><a class="muted truncate" href="#failure-{{ run.uuid }}" title="{{ run.failure.headline }}">{{ run.failure.headline|default:run.error|truncatechars:120 }}</a>{% elif run.error %}<br><span class="muted truncate">{{ run.error|truncatechars:120 }}</span>{% endif %}</td>
-                    <td class="mono">{% if run.upload %}{{ run.upload.artifact.content_hash|slice:":12" }}{% else %}<span class="muted">none</span>{% endif %}</td>
+                    <td>{% if run.upload %}<span class="mono" title="uploaded {{ run.upload.created_at|date:'Y-m-d H:i' }} UTC">{{ run.upload.artifact.content_hash|slice:":12" }}</span> <a class="btn btn--ghost btn--sm" href="{% url 'staff_run_upload' run.uuid %}" title="the zip this attempt runs, as {{ run.team.name }} uploaded it">Download</a>{% else %}<span class="muted">none</span>{% endif %}</td>
                     <td>{{ run.worm_start_at|date:"H:i:s"|default:"—" }}</td>
                     <td>{% if run.vm_count %}{{ run.vm_count }} VMs{% if run.network_count %}, {{ run.network_count }} networks{% endif %}{% else %}<span class="muted">—</span>{% endif %}</td>
                     <td class="num">{{ run.captured }}</td>

@@ -113,6 +113,7 @@ urlpatterns = [
     path("staff/rounds/<uuid:round_uuid>/", staff_rounds.round_detail, name="staff_round"),
     path("staff/rounds/<uuid:round_uuid>/delete/", staff_rounds.round_delete, name="staff_round_delete"),
     path("staff/rounds/<uuid:round_uuid>/note/", staff_rounds.round_note, name="staff_round_note"),
+    path("staff/runs/<uuid:run_uuid>/upload/", staff_rounds.run_upload, name="staff_run_upload"),
     # Every version of every gameplan, by SHA-256, and the rounds that ran it.
     path("staff/gameplans/", staff_gameplans.gameplans, name="staff_gameplans"),
     # How a gameplan plays out, simulated on the orchestrator (dashboard/views/staff_simulations.py).

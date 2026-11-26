@@ -105,17 +105,38 @@ def _note(ex, text):
             pass
 
 
+# The one spelling of a clean snapshot's commands (T6): the round agent runs them one after the
+# other (below); the CLI (worms_cli/pipeline.py) the same lines, VM by VM in parallel on the host.
+
+
+def rollback_argv(vm, snapshot=CLEAN):
+    """Back to the snapshot (disk and configuration), started; a running VM is stopped first,
+    without a shutdown: nothing on it is kept."""
+    return ["qm", "rollback", str(int(vm["vmid"])), snapshot, "--start", "1"]
+
+
+def delete_argv(vm, snapshot=CLEAN):
+    return ["qm", "delsnapshot", str(int(vm["vmid"])), snapshot]
+
+
+def take_argvs(vm, description, had, snapshot=CLEAN):
+    """The present state the snapshot, replacing the old one (`had`), then started again. Shut
+    down first (forced after SHUTDOWN_TIMEOUT): these VMs run no guest agent, so a snapshot of a
+    running one would hold only what a power cut leaves on the disk."""
+    vmid = str(int(vm["vmid"]))
+    return [*([delete_argv(vm, snapshot)] if had else []),
+            *([["qm", "shutdown", vmid, "--timeout", str(SHUTDOWN_TIMEOUT), "--forceStop", "1"]] if vm.get("status") == "running" else []),
+            ["qm", "snapshot", vmid, snapshot, "--description", description], ["qm", "start", vmid]]  # fmt: skip
+
+
 def take(ex, vms, description):
     """Make each VM's present state its clean snapshot (replacing an older one), and start it
     again. The caller vouches that no team code or key has reached these VMs yet."""
     for vm in vms:
-        vmid = str(int(vm["vmid"]))
-        shut_down(ex, [vm])
-        if has_clean(ex, vm):
-            ex.run(["qm", "delsnapshot", vmid, CLEAN], timeout=600)
-        ex.run(["qm", "snapshot", vmid, CLEAN, "--description", description], timeout=600)
-        record(ex, [vm], "snapshot", description)
-        ex.run(["qm", "start", vmid], timeout=120)
+        for argv in take_argvs(vm, description, had=has_clean(ex, vm)):
+            ex.run(argv, timeout=SHUTDOWN_TIMEOUT + 60 if argv[1] == "shutdown" else 600)
+            if argv[1] == "snapshot":
+                record(ex, [vm], "snapshot", description)
 
 
 def delete(ex, vms):
@@ -123,7 +144,7 @@ def delete(ex, vms):
     deleted = []
     for vm in vms:
         if has_clean(ex, vm):
-            ex.run(["qm", "delsnapshot", str(int(vm["vmid"])), CLEAN], timeout=600)
+            ex.run(delete_argv(vm), timeout=600)
             record(ex, [vm], "snapshot_deleted", CLEAN)
             deleted.append(vm["name"])
     return deleted
@@ -133,7 +154,7 @@ def roll_back(ex, vms):
     """Each VM back to its clean snapshot (disk and configuration), started. A running VM is
     stopped first, without a shutdown: nothing on it is kept."""
     for vm in vms:
-        ex.run(["qm", "rollback", str(int(vm["vmid"])), CLEAN, "--start", "1"], timeout=600)
+        ex.run(rollback_argv(vm), timeout=600)
         record(ex, [vm], "rolled_back", CLEAN)
 
 

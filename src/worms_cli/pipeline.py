@@ -559,7 +559,8 @@ class Pipeline:
 
     def _rollback(self, vms: list[dict], detail: str = SERVICE_SNAPSHOT) -> None:
         """These VMs back to their snapshot, started: all at once. `detail`: the VM history's."""
-        codes = self.runner.host_parallel([[f"qm rollback {vm['vmid']} {SERVICE_SNAPSHOT} --start 1"] for vm in vms])
+        snapshots = round_agent_module("snapshots")  # the commands' one spelling (T6), run here VM by VM in parallel
+        codes = self.runner.host_parallel([[shlex.join(snapshots.rollback_argv(vm, SERVICE_SNAPSHOT))] for vm in vms])
         done = [vm for vm, code in zip(vms, codes) if code == 0]
         self.data["rolled_back"] = sorted({*self.data["rolled_back"], *(vm["name"] for vm in done)})
         self._history(done, "rolled_back", detail)
@@ -571,10 +572,9 @@ class Pipeline:
         """Their snapshot taken again (`old`: the one there is goes first), all at once. Shut down
         first: these VMs run no guest agent, so a snapshot of a running one would hold only what a
         power cut leaves on the disk."""
-        description = shlex.quote(f"worms {self.runner.commit()}")
-        chains = [[*([f"qm delsnapshot {vm['vmid']} {SERVICE_SNAPSHOT}"] if had else []),
-                   *([f"qm shutdown {vm['vmid']} --timeout 120 --forceStop 1"] if vm.get("status") == "running" else []),
-                   f"qm snapshot {vm['vmid']} {SERVICE_SNAPSHOT} --description {description}", f"qm start {vm['vmid']}"]
+        snapshots = round_agent_module("snapshots")  # the commands' one spelling (T6), as the round agent's
+        description = f"worms {self.runner.commit()}"
+        chains = [[shlex.join(argv) for argv in snapshots.take_argvs(vm, description, had, SERVICE_SNAPSHOT)]
                   for vm, had in zip(vms, old)]  # fmt: skip
         codes = self.runner.host_parallel(chains)
         self._history([vm for vm, code in zip(vms, codes) if code == 0], "snapshot", SERVICE_SNAPSHOT)

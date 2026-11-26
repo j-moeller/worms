@@ -185,25 +185,41 @@ def origin_of(list_name: str) -> str:
     return f"apt ({site.replace('_', '/')}{where})"
 
 
-def lists_index(lists_dir: str) -> dict:
+INDEX_FIELDS = {"Package", "Version", "Architecture", "SHA256", "Filename", "Maintainer", "Homepage", "Source"}
+
+
+def lists_index(lists_dir: str, wanted=None) -> dict:
     """{(package, version, arch): {sha256, filename, maintainer, homepage, source, origin}} from the
-    Packages indexes of an apt lists directory (plain, .gz or .xz)."""
+    Packages indexes of an apt lists directory (plain, .gz or .xz), of the `wanted` keys only
+    when given. Read line by line: Debian's index has some 70,000 packages, and a service VM
+    has 300 MB of memory (the whole of it parsed at once: the collector was killed)."""
     index = {}
     for path in sorted(glob.glob(os.path.join(lists_dir, "*_Packages*"))):
         opener = gzip.open if path.endswith(".gz") else lzma.open if path.endswith(".xz") else open if path.endswith("_Packages") else None
         if opener is None:
             continue
+        origin = origin_of(path)
+
+        def keep(r):
+            key = (r.get("Package", ""), r.get("Version", ""), r.get("Architecture", ""))
+            if key[0] and key[1] and (wanted is None or key in wanted) and key not in index:
+                index[key] = {"sha256": r.get("SHA256", ""), "filename": r.get("Filename", ""), "maintainer": r.get("Maintainer", ""),
+                              "homepage": r.get("Homepage", ""), "source": r.get("Source", "").split(" ")[0], "origin": origin}  # fmt: skip
+
         try:
             with opener(path, "rt", encoding="utf-8", errors="replace") as fh:
-                records = parse_control(fh.read())
+                record = {}
+                for line in fh:
+                    if not line.strip():
+                        keep(record)
+                        record = {}
+                    elif line[0] not in " \t":
+                        key, _, value = line.partition(":")
+                        if key in INDEX_FIELDS:
+                            record[key] = value.strip()
+                keep(record)
         except (OSError, EOFError, lzma.LZMAError):
             continue
-        origin = origin_of(path)
-        for r in records:
-            if "Package" in r and "Version" in r:
-                index.setdefault((r["Package"], r["Version"], r.get("Architecture", "")), {
-                    "sha256": r.get("SHA256", ""), "filename": r.get("Filename", ""), "maintainer": r.get("Maintainer", ""),
-                    "homepage": r.get("Homepage", ""), "source": r.get("Source", "").split(" ")[0], "origin": origin})  # fmt: skip
     return index
 
 
@@ -222,16 +238,15 @@ def os_info() -> dict:
 def dpkg_installed(names=None) -> list[dict]:
     """The installed packages (all, or those named), with their license and author from
     /usr/share/doc/<package>/copyright and the .deb's SHA256 from this machine's apt lists."""
-    index = lists_index("/var/lib/apt/lists")
     wanted = set(names) if names else None
-    out = []
+    installed = []
     for line in run(["dpkg-query", "-W", "-f", DPKG_FORMAT]).splitlines():
         fields = line.split("\t")
-        if len(fields) < 7 or not fields[6].startswith(("ii", "hi")):
-            continue
-        name, version, arch, maintainer, homepage, source = fields[:6]
-        if wanted is not None and name not in wanted:
-            continue
+        if len(fields) >= 7 and fields[6].startswith(("ii", "hi")) and (wanted is None or fields[0] in wanted):
+            installed.append(fields[:6])
+    index = lists_index("/var/lib/apt/lists", {(f[0], f[1], f[2]) for f in installed})
+    out = []
+    for name, version, arch, maintainer, homepage, source in installed:
         lic, author = copyright_info(read_text(f"/usr/share/doc/{name}/copyright"))
         found = index.get((name, version, arch), {})
         out.append({"name": name, "version": version, "arch": arch, "maintainer": maintainer, "homepage": homepage,
@@ -383,30 +398,35 @@ def resolve(request: dict, served: list[dict]) -> dict:
         status = os.path.join(work, "status")
         with open(status, "w") as fh:
             fh.write(request["status"])
-        index = lists_index(lists)
-        cached = {p["file"]: p for p in served}
-        sets = {}
+        chosen, errors = {}, {}
         for name, packages in request["sets"].items():
+            chosen[name] = []
             if not packages:
-                sets[name] = []
                 continue
             done = subprocess.run(["apt-get", "-s", "install", "--no-install-recommends", *options,
                                    "-o", f"Dir::State::Lists={lists}", "-o", f"Dir::State::status={status}",
                                    "-o", "Debug::NoLocking=true", *packages], capture_output=True, text=True, timeout=600)  # fmt: skip
+            chosen[name] = re.findall(r"^Inst (\S+) (?:\[\S+\] )?\((\S+) .*?\[(\S+)\]\)", done.stdout, re.M)
+            if done.returncode != 0:
+                errors[name] = (done.stderr or done.stdout).strip()[-400:]
+        lookups = [tuple(key) for key in request.get("lookup", [])]
+        index = lists_index(lists, {key for keys in chosen.values() for key in keys} | set(lookups))
+        cached = {p["file"]: p for p in served}
+        sets = {}
+        for name, keys in chosen.items():
             got = []
-            for match in re.finditer(r"^Inst (\S+) (?:\[\S+\] )?\((\S+) .*?\[(\S+)\]\)", done.stdout, re.M):
-                pkg, version, arch = match.groups()
+            for pkg, version, arch in keys:
                 found = index.get((pkg, version, arch), {})
                 deb = cached.get(os.path.basename(found.get("filename", "")), {})
                 got.append({"name": pkg, "version": version, "arch": arch, "maintainer": found.get("maintainer", ""),
                             "homepage": found.get("homepage", ""), "source": found.get("source") or pkg,
                             "license": deb.get("license", ""), "author": deb.get("author", ""),
                             "sha256": found.get("sha256", ""), "origin": found.get("origin", "")})  # fmt: skip
-            if done.returncode != 0:
-                got.append({"error": (done.stderr or done.stdout).strip()[-400:]})
+            if name in errors:
+                got.append({"error": errors[name]})
             sets[name] = got
         lookup = {}
-        for pkg, version, arch in request.get("lookup", []):
+        for pkg, version, arch in lookups:
             found = index.get((pkg, version, arch))
             if found:
                 lookup[f"{pkg} {version} {arch}"] = {"sha256": found["sha256"], "origin": found["origin"]}

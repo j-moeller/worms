@@ -158,7 +158,8 @@ class Sbom:
     def collect(self, argv, env, request, name, timeout=3600) -> dict:
         done = subprocess.run(argv, env=env, input=program(request), capture_output=True, text=True, timeout=timeout)
         if done.returncode != 0:
-            raise BuildError(f"the collector on {name} exited {done.returncode}: {(done.stderr or done.stdout).strip()[-300:]}")
+            said = (done.stderr or done.stdout).strip()[-300:] or "nothing said: ssh failed, or the VM killed it (out of memory?)"
+            raise BuildError(f"the collector on {name} exited {done.returncode}: {said}")
         try:
             data = json.loads(done.stdout)
         except ValueError:

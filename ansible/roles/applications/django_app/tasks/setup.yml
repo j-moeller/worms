@@ -1,8 +1,8 @@
 ---
 # The Django app up to its migrations: packages, code, virtualenv, settings, static files. No
 # database connection (Site.yml, phase 3: in parallel with the database's own setup). A change
-# that needs a restart is noted (handler "Restart Django after the migrations"); start.yml
-# restarts once the migrations are through, as one play did before.
+# that needs a restart changes the marker of what is deployed ({{ django_source_dir }}/.deployed-commit);
+# start.yml restarts every unit that runs anything else, once the migrations are through.
 - name: Assert required per-host variables are set
   ansible.builtin.assert:
     that:
@@ -106,8 +106,8 @@
       - "--exclude=.pytest_cache"
       - "--exclude=db.sqlite3"
       - "--exclude=staticfiles"
-  notify:
-    - Restart Django after the migrations
+      - "--exclude=.deployed-commit"
+  register: django_code_sync
 
 - name: Set Django application ownership
   ansible.builtin.file:
@@ -157,8 +157,6 @@
     - { src: "{{ playbook_dir }}/../src/gameplan/", dest: "{{ django_gameplan_lib }}/gameplan/" }
   loop_control:
     label: "{{ item.dest }}"
-  notify:
-    - Restart Django after the migrations
 
 - name: Make the gameplans root's, readable by the application only (orchestrator only)
   when: django_variant == "orchestrator"
@@ -213,8 +211,43 @@
     group: root
     mode: "0600"
   no_log: "{{ hide_secrets }}"
-  notify:
-    - Restart Django after the migrations
+
+# What is deployed, for start.yml to restart every unit that runs anything else (T8: replaces the
+# handler "Restart Django after the migrations", whose restart was lost when phase 4 did not run:
+# a failed migration, or another VM failing phase 3; the role stamp said done, gunicorn ran the
+# old code). The commit, the settings' checksum and, when this run synced code or gameplans (or the
+# Proxmox CA changed), the time: a dirty checkout keeps its commit string. Kept when nothing changed.
+- name: Look at the settings deployed
+  ansible.builtin.stat:
+    path: "{{ django_env_file }}"
+    get_checksum: true
+  register: django_env_stat
+  tags: [gameplans]
+
+- name: Read the marker of what is deployed
+  ansible.builtin.slurp:
+    src: "{{ django_source_dir }}/.deployed-commit"
+  register: django_marker_old
+  failed_when: false
+  tags: [gameplans]
+
+- name: Write the marker of what is deployed
+  ansible.builtin.copy:
+    dest: "{{ django_source_dir }}/.deployed-commit"
+    content: "{{ django_marker_new }}\n"
+    owner: root
+    group: "{{ django_app_group }}"
+    mode: "0644"
+  vars:
+    django_marker_base: "{{ worms_commit | default('unknown') }} {{ django_env_stat.stat.checksum | default('-') }}"
+    django_marker_was: "{{ (django_marker_old.content | default('') | b64decode).strip() }}"
+    django_synced: >-
+      {{ (django_code_sync | default({})) is changed or (django_gameplans_sync | default({})) is changed
+         or (django_proxmox_ca_installed | default({})) is changed }}
+    django_marker_new: >-
+      {{ django_marker_base ~ ' ' ~ (now(utc=true).timestamp() | int) if django_synced | bool
+         else (django_marker_was if django_marker_was.startswith(django_marker_base) else django_marker_base) }}
+  tags: [gameplans]
 
 # The dashboard's CSS/JS (and the admin's) as plain files for nginx: the app
 # never serves /static/ itself. Settings are imported, so it needs the same

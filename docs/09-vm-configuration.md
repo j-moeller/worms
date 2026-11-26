@@ -52,7 +52,7 @@ In phases 2 and 3 a role whose files, variables and sources did not change since
 ## orchestrator
 
 - **Phase 3:** `apt_updates` (3), `timesync` (6), `sshd_listen` (3), `ca_distribute` (4); `nginx_tls` (18): nginx from nginx.org, its TLS certificate (signed on the controller only when missing, expiring or no longer matching). `nginx_tls_django` (3): the site, HTTPS only. `django_app`, its setup (25): packages, the Proxmox CA (from the host), the user, the code (rsync, owner and modes set by it), the gameplans and their framework (root's, readable by the app), the virtualenv, the environment file, static files; a change only notes the restart that is due. `auditd` (5), `log_limits` (7).
-- **Phase 4:** `django_app`, its start (12): `migrate --check`; only if the database lacks migrations: the services stopped, `migrate`; the post-migration commands (`init`); the units and timers enabled and started; the restart noted in phase 3.
+- **Phase 4:** `django_app`, its start (12): `migrate --check`; only if the database lacks migrations: the services stopped, `migrate`; the post-migration commands (`init`); the units and timers enabled and started; then every unit restarted whose start is not what is deployed. Phase 3 writes `/opt/<app>/src/.deployed-commit` (the commit, the settings' checksum, and the time when code, gameplans or the Proxmox CA changed); each unit records what it started with in `/run/worms-django/running-<unit>` (`ExecStartPost`). A restart lost to a failed phase 4 is made by the next run, and a run with nothing new restarts nothing.
 
 ## dashboard
 

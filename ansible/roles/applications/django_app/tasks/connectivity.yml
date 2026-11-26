@@ -24,8 +24,7 @@
         owner: root
         group: root
         mode: "0644"
-      register: django_proxmox_ca_installed
-      notify: Restart Django after the migrations
+      register: django_proxmox_ca_installed  # a change is a new marker of what is deployed (setup.yml)
 
     # Apply before starting collectors or daemons, including on first install.
     - name: Refresh certificate trust for Proxmox clients

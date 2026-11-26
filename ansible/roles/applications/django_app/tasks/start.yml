@@ -201,12 +201,26 @@
   loop_control:
     label: "{{ item.name }}"
 
-# What setup.yml changed (code, settings, the gameplans, the Proxmox CA), now that the migrations
-# are through: the restart its handler noted (Site.yml runs setup.yml in an earlier play).
-- name: Restart Django, its code or settings changed
-  ansible.builtin.debug:
-    msg: "restarting {{ django_app_name }} and its daemons"
-  changed_when: true
-  notify: Restart Django
-  when: django_restart_due | default(false) | bool
+# Now that the migrations are through: every unit whose start (/run/worms-django/running-<unit>,
+# its ExecStartPost) is not what is deployed (setup.yml's marker) is restarted. Whatever stopped
+# an earlier run before this point (a failed migration, another VM's failure in phase 3), the
+# next run restarts it, and one with nothing new restarts nothing.
+- name: Find the units that run anything but what is deployed
+  ansible.builtin.shell: |
+    deployed=$(cat {{ django_source_dir | quote }}/.deployed-commit 2>/dev/null)
+    for unit in {{ django_units | map('quote') | join(' ') }}; do
+      [ "$(cat /run/worms-django/running-$unit 2>/dev/null)" = "$deployed" ] || echo "$unit"
+    done
+  vars:
+    django_units: "{{ [django_app_name] + (django_daemons | map(attribute='name') | map('regex_replace', '^', django_app_name ~ '-') | list) }}"
+  register: django_stale
+  changed_when: false
+  tags: [gameplans]
+
+- name: Restart them
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: restarted
+    daemon_reload: true
+  loop: "{{ django_stale.stdout_lines }}"
   tags: [gameplans]

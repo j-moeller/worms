@@ -17,6 +17,9 @@ ExecStart={{ django_venv_dir }}/bin/gunicorn \
     --access-logfile - \
     --error-logfile - \
     {{ django_wsgi_module }}
+# What it started with (setup.yml's marker), for start.yml to see what runs (T8). As root (+), once
+# started; a missing marker is no failure (-).
+ExecStartPost=-+/bin/sh -c 'mkdir -p /run/worms-django && cat {{ django_source_dir }}/.deployed-commit > /run/worms-django/running-%N 2>/dev/null || echo none > /run/worms-django/running-%N'
 
 Restart=always
 RestartSec=5

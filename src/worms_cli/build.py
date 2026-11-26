@@ -174,7 +174,8 @@ class Runner:
             return self._host_workspace(
                 "ansible", f"python3 ../scripts/generate_inventory.py --quiet && ansible-playbook {playbook}{extra}"
             )
-        base = "ansible-playbook"
+        # The commit every playbook deploys (django_app's marker of what is deployed, T8).
+        base = f"ansible-playbook -e worms_commit={shlex.quote(self.commit())}"
         if vault and self.session.has_vault():
             base += " -e @group_vars/vault.yml"
         if self.session.laptop:
@@ -280,7 +281,7 @@ class Runner:
         when neither says."""
         if getattr(self, "_commit", None) is None:
             git = ["git", "-C", str(self.repo_root)]
-            commit = subprocess.run([*git, "rev-parse", "--short=7", "HEAD"], capture_output=True, text=True).stdout.strip()
+            commit = (subprocess.run([*git, "rev-parse", "--short=7", "HEAD"], capture_output=True, text=True).stdout or "").strip()
             if commit:
                 if subprocess.run([*git, "diff", "--quiet", "HEAD"], capture_output=True).returncode == 1:
                     commit += "-dirty"

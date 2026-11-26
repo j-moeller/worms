@@ -74,6 +74,7 @@ def recorded(monkeypatch):
     rec = Recorded()
     monkeypatch.setattr(build, "subprocess", types.SimpleNamespace(run=rec))
     monkeypatch.setattr(build, "_child", lambda: types.SimpleNamespace(run=rec))  # Runner._run (child.run)
+    monkeypatch.setattr(build.Runner, "commit", lambda self: "abc1234")  # every playbook gets it: -e worms_commit
     monkeypatch.setattr(Session, "check_host", lambda self: None)
     monkeypatch.setattr(Session, "internet_allowed", lambda self: True)
     monkeypatch.setattr(Session, "worms_agent", lambda self: {"SSH_AUTH_SOCK": WORMS_AGENT, "SSH_AGENT_PID": "1"})
@@ -224,7 +225,7 @@ def test_init_of_the_hosts_stacks_happens_on_the_host(checkout, recorded):
 def test_laptop_playbooks_get_the_vault_and_the_hosts_internet_flag(checkout, recorded):
     runner(checkout).ansible("Site.yml")
     (argv, _env), = recorded.calls
-    assert "ansible-playbook -e @group_vars/vault.yml -e internet_enabled=true Site.yml" in argv[2]
+    assert "ansible-playbook -e worms_commit=abc1234 -e @group_vars/vault.yml -e internet_enabled=true Site.yml" in argv[2]
 
 
 def test_laptop_refuses_an_inventory_written_on_the_host(checkout, recorded):
@@ -274,7 +275,7 @@ def test_on_the_host_without_a_vault_the_environment_is_used(tmp_path, recorded,
     r.ansible("SetupSandbox.yml")
     (tofu_argv, tofu_env), (ansible_argv, _) = recorded.calls
     assert tofu_argv[:2] == ["sh", "-c"] and tofu_env["TF_VAR_proxmox_api_token"] == "from-the-agent-env"
-    assert "ansible-playbook SetupSandbox.yml" in ansible_argv[2] and "vault.yml" not in ansible_argv[2]
+    assert "ansible-playbook -e worms_commit=abc1234 SetupSandbox.yml" in ansible_argv[2] and "vault.yml" not in ansible_argv[2]
     assert tofu_env["SSH_AUTH_SOCK"] == OPERATOR_AGENT and "WORMS_SSH_AUTH_SOCK" not in tofu_env
 
 

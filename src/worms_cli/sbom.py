@@ -111,8 +111,10 @@ def row(name, version="", supplier="", author="", purl="", digest="", license=""
 def deb_namespace(origin: str) -> str:
     """The purl namespace of a Debian package: debian, or the vendor of the repository it is from
     (download.proxmox.com: proxmox)."""
-    site = re.search(r"\(([^/ )]+)", origin or "")
-    host = site.group(1) if site else ""
+    where = re.search(r"\(([^ )]+)", origin or "")
+    # Behind the apt cache the index's URL starts with its address (10.2.0.20:3142/deb.debian.org/...).
+    hosts = [h for h in (where.group(1).split("/") if where else []) if h and not re.fullmatch(r"[\d.]+(:\d+)?", h)]
+    host = hosts[0].split(":")[0] if hosts else ""
     if not host or "debian" in host:
         return "debian"
     parts = host.split(".")
@@ -282,7 +284,7 @@ class Sbom:
             rows.append(deb_row(p, distro, system, "served (apt-cacher-ng: what sandbox and devbox VMs install from)"))
         for d in data.get("devpi_served", []):
             source = f"pypi.org via devpi {d['index']} (a mirror)" if d["index"] == "root/pypi" else f"devpi {d['index']}"
-            rows.append(pypi_row(d, system, f"served (devpi {d['index']}: what devbox VMs pip install from)", source, d["file"]))
+            rows.append(pypi_row(d, system, f"served (devpi {d['index']}: the PyPI mirror)", source, d["file"]))
         return rows
 
     def vm(self, catalogue, deployed, name, request) -> tuple[list[dict], dict]:

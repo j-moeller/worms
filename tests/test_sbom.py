@@ -48,6 +48,9 @@ def test_a_free_text_copyright_file_gives_what_it_names():
         == "GPL-2.0-only AND LGPL-2.1-only"  # fmt: skip
     text = "Python Software Foundation License ... GNU GENERAL PUBLIC LICENSE\n Version 2, June 1991"
     assert sbom_collect.guess_license(text) == "PSF-2.0 AND GPL-2.0"
+    agpl = "GNU AFFERO GENERAL PUBLIC LICENSE\n Version 3 ... the GNU General Public License ..."
+    assert sbom_collect.guess_license(agpl) == "AGPL-3.0"  # its text names the GPL: not a second license
+    assert sbom_collect.guess_license(text, single=True) == "PSF-2.0"  # a project's LICENSE file: one
     assert sbom_collect.copyright_info("") == ("", "")
     assert sbom_collect.spdx("LGPL-2.1+") == "LGPL-2.1-or-later" and sbom_collect.spdx("GPL-3") == "GPL-3.0-only"
 
@@ -91,6 +94,8 @@ def test_a_debian_package_is_identified_by_its_purl_with_its_vendor():
     assert row["Component hash"] == "sha256:ff" and row["Supplier"] == "GNU Libc Maintainers"
     proxmox = sbom.deb_row({**p, "origin": "apt (download.proxmox.com/debian/pve trixie/pve-no-subscription)"}, "debian-13", "host", "x")
     assert proxmox["Unique identifier"].startswith("pkg:deb/proxmox/")
+    cached = sbom.deb_row({**p, "origin": "apt (10.2.0.20:3142/deb.debian.org/debian trixie/main)"}, "debian-13", "devpi", "x")
+    assert cached["Unique identifier"].startswith("pkg:deb/debian/")  # the index through the apt cache: still Debian's
     assert sbom.deb_row({**p, "name": "tofu", "origin": ""}, "debian-13", "host", "x")["License"] == "MPL-2.0"
 
 

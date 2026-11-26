@@ -128,24 +128,25 @@ LICENSE_WORDS = (  # what names a license in a free-text license or copyright fi
 )  # fmt: skip
 
 
-def guess_license(text: str) -> str:
+def guess_license(text: str, single: bool = False) -> str:
     """The licenses a free-text file names: its /usr/share/common-licenses/<name> references
     (Debian's way), else each of LICENSE_WORDS in it (GPL and LGPL with their version when it
-    follows); "" if none."""
+    follows; not GPL beside AGPL or LGPL, whose texts name it); with `single` (a project's own
+    LICENSE file) the first only; "" if none."""
     named = list(dict.fromkeys(spdx(n) for n in re.findall(r"/usr/share/common-licenses/([A-Za-z0-9.+_-]+)", text)))
     if named:
         return " AND ".join(named[:6])
     found, lower = [], text.lower()
     for words, name in LICENSE_WORDS:
         at = lower.find(words.lower())
-        if at < 0:
+        if at < 0 or name == "GPL" and any(f.startswith(("AGPL", "LGPL")) for f in found):
             continue
         if name in ("GPL", "LGPL"):
             version = re.search(r"Version (\d)", text[at:at + 400])
             name = f"{name}-{version.group(1)}.0" if version else name
         if name not in found:
             found.append(name)
-    return " AND ".join(found[:4])
+    return " AND ".join(found[:1] if single else found[:4])
 
 
 def copyright_info(text: str) -> tuple[str, str]:
@@ -334,7 +335,7 @@ def git_checkouts() -> list[dict]:
         license_text = "".join(read_text(f, 8000) for f in sorted(glob.glob(os.path.join(path, "LICEN[CS]E*")) +
                                                                    glob.glob(os.path.join(path, "COPYING*")))[:1])  # fmt: skip
         out.append({"path": path, "commit": git_head(gitdir), "url": url.group(1) if url else "",
-                    "license": guess_license(license_text)})  # fmt: skip
+                    "license": guess_license(license_text, single=True)})  # fmt: skip
     return out
 
 

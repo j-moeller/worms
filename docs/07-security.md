@@ -83,7 +83,7 @@ Account rules ([`core/accounts.py`](../projects/dashboard/core/accounts.py), [`m
   - Django's validators apply (minimum 8 characters, not common, not numeric).
   - A change ends the user's other sessions.
 - **Resets.** Staff reset students; only the superuser resets staff. Every reset writes `password_resets` and a password event.
-- **Removal.** Accounts are deactivated, never deleted. Teams are deleted only when empty, or with `worms team delete`.
+- **Removal.** Accounts are deactivated, never deleted. Teams are deleted only when empty, or with `worms team delete`. A round is deleted from its staff page whenever no `worms round start` runs it, with its attempts and their records once staff confirm that too: through one database function, `public.worms_delete_round` (the migrator's, `SECURITY DEFINER`, a fixed `search_path`; only `postgresql_round_delete_roles` may call it). It refuses a round whose session's mark is fresh, with the row locked. The dashboard's role still deletes none of those rows itself, and the audit log keeps its rows.
 - **View as.**
   - The superuser only, by POST.
   - Session-bound and checked on every request; read-only.

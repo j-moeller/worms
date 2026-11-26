@@ -61,8 +61,9 @@ postgresql_table_privileges:
     # username, is_staff and is_superuser are never updated here, and the
     # accounts it inserts can be neither (postgresql_account_guard_roles);
     # staff accounts are made on the console (`worms user add`).
-    # Teams and rounds are deleted only while nothing refers to them (the
-    # foreign keys refuse it otherwise; no cascade rights).
+    # Teams are deleted only while nothing refers to them (the foreign keys refuse
+    # it otherwise; no cascade rights); a round with what is under it only through
+    # public.worms_delete_round (postgresql_round_delete_roles, privileges.sql.j2).
     - privs: INSERT
       tables: [users]
     - privs: UPDATE (first_name, last_name, email, is_active)
@@ -75,7 +76,7 @@ postgresql_table_privileges:
     # registration window only.
     - privs: UPDATE (name, registration_starts_at, registration_ends_at)
       tables: [competitions]
-    - privs: INSERT, DELETE
+    - privs: INSERT
       tables: [rounds]
     # A round names its gameplan by file only (docs/05-live-environment.md); editing one clears the
     # check of it (gameplan_status), which the next check redoes. Whether its results are published
@@ -240,6 +241,11 @@ postgresql_restricted_columns:
   gameplan_versions:
     columns: [content]
     readers: []
+
+# Roles that may delete a round with its attempts and their records, through the one function that
+# does it (public.worms_delete_round, privileges.sql.j2: refused while `worms round start` runs it).
+# They may delete none of those rows themselves.
+postgresql_round_delete_roles: [django_dashboard]
 
 # Roles whose INSERT into users is refused when the row is staff or superuser
 # (a trigger, privileges.sql.j2): the public dashboard creates student

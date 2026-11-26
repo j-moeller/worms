@@ -289,7 +289,10 @@ def test_orchestrator_requests_host_jobs_but_cannot_fake_results(database):
     run(database, "django_orchestrator",
         "INSERT INTO host_jobs (uuid, kind, params, state, result, error) "
         "VALUES (gen_random_uuid(), 'check', '{}', 'queued', '{}', '')")  # fmt: skip
-    denied(database, "django_orchestrator", "UPDATE host_jobs SET state = 'done'")
+    # It may fail a dev upload's deploy job the round agent never took (state, finished_at, error:
+    # devbox_runs._finished), never write a result or remove a job.
+    run(database, "django_orchestrator", "UPDATE host_jobs SET state = 'failed', finished_at = now(), error = 'never claimed'")
+    denied(database, "django_orchestrator", "UPDATE host_jobs SET result = '{\"ok\": true}'")
     denied(database, "django_orchestrator", "DELETE FROM host_jobs")
 
 

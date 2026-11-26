@@ -14,8 +14,9 @@ A round can change whenever no `worms round start` runs it (the session's mark,
 Round.session_running): fully before its runs are planned, then all but its seed (the
 teams' order). A change after teams ran is the next session's to carry out: it runs again,
 asked, every team whose attempt no longer matches the round, and keeps the earlier attempts
-as superseded (orchestrator/rounds/conductor.py, stale and replan). It is deleted only
-before its runs exist. Where a round is, its annotated timeline, is read
+as superseded (orchestrator/rounds/conductor.py, stale and replan). It is deleted, with its
+attempts and their records, whenever no session runs it (public.worms_delete_round: the
+dashboard may delete none of those rows itself). Where a round is, its annotated timeline, is read
 from its runs (round_progress.py); every staff page warns of a round whose gameplan is
 missing or not valid (round_progress.warnings, through render_with_base_info).
 """
@@ -33,10 +34,9 @@ from core.models.team import Team
 from dashboard.forms import RoundForm, overlapping_round
 from dashboard.views import round_progress
 from dashboard.views.decorators import refuse, staff_required
-from dashboard.views.staff import delete_unreferenced
 from dashboard.views.util import render_with_base_info
 from django.contrib import messages
-from django.db import transaction
+from django.db import connection, transaction
 from django.core.files.storage import default_storage
 from django.db.models import Count, Q
 from django.http import FileResponse, Http404, HttpRequest
@@ -241,6 +241,7 @@ def round_detail(request: HttpRequest, round_uuid):
         "step_failures": step_failures,
         "form": form,
         "running": running,
+        "attempts": len(runs),
         "planned": planned,
         "ran": _ran(runs),
         "timing": schedule.timing_defaults(),
@@ -292,12 +293,26 @@ def round_note(request: HttpRequest, round_uuid):
 @staff_required
 @require_POST
 def round_delete(request: HttpRequest, round_uuid):
+    """A round deleted whenever no `worms round start` runs it: with its attempts and everything
+    under them (VMs, events, captures, logs, host jobs) once staff confirmed that too. The
+    database does it (public.worms_delete_round, privileges.sql.j2), checking the session's mark
+    again with the row locked; the dashboard may delete none of those rows itself."""
     comp = request.competition
     round_obj = get_object_or_404(Round, uuid=round_uuid, competition=comp)
+    if round_obj.session_running(clock.now()):
+        messages.error(request, RUNNING)
+        return redirect("staff_round", round_uuid=round_obj.uuid)
     with serialized_resource("round-plan", round_obj.pk):
-        if RoundRun.objects.filter(round=round_obj).exists() or not delete_unreferenced(Round, round_obj.pk):
-            messages.error(request, f"{round_obj.name} has runs and is kept.")
+        attempts = RoundRun.objects.filter(round=round_obj).count()
+        if attempts and request.POST.get("with_attempts") != "yes":
+            messages.error(request, f"{round_obj.name} has {attempts} attempt(s): confirm that they go with it.")
             return redirect("staff_round", round_uuid=round_obj.uuid)
-    events.competition("round_deleted", request=request, round_id=round_obj.pk, detail={"name": round_obj.name})
-    messages.success(request, f"Round {round_obj.name} deleted.")
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT public.worms_delete_round(%s)", [round_obj.pk])
+            outcome = cursor.fetchone()[0]
+    if outcome == "running":
+        messages.error(request, RUNNING)
+        return redirect("staff_round", round_uuid=round_obj.uuid)
+    events.competition("round_deleted", request=request, round_id=round_obj.pk, detail={"name": round_obj.name, "attempts": attempts})
+    messages.success(request, f"Round {round_obj.name} deleted" + (f", with its {attempts} attempt(s)." if attempts else "."))
     return redirect("staff_rounds")

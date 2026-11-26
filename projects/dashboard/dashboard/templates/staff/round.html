@@ -128,6 +128,7 @@
         <div class="form__actions"><button type="submit" class="btn btn--primary">Save</button></div>
     </form>
 </section>
+{% endif %}
 
 <section class="panel" aria-labelledby="delete-title">
     <header class="panel__head"><h2 class="panel__title" id="delete-title">Delete</h2></header>
@@ -135,11 +136,13 @@
         <details class="confirm">
             <summary class="btn btn--danger">Delete round</summary>
             <div class="confirm__body">
-                <p>{{ round.name }} is deleted. Possible only while it has no runs.</p>
-                <form method="post" action="{% url 'staff_round_delete' round.uuid %}">{% csrf_token %}<button type="submit" class="btn btn--primary btn--danger btn--sm">Delete {{ round.name }}</button></form>
+                {% if running %}<p><code>worms round start</code> runs {{ round.name }} now: it can be deleted once that session has ended.</p>
+                {% else %}<p>{{ round.name }} is deleted for good{% if attempts %}, with its {{ attempts }} attempt{{ attempts|pluralize }} and everything under them: their VMs, events, flag captures, logs and host jobs (its scores go with them){% endif %}. The audit log keeps that it was. A sandbox the round kept on the host stays until <code>worms round teardown</code>.</p>
+                <form method="post" action="{% url 'staff_round_delete' round.uuid %}">{% csrf_token %}
+                    {% if attempts %}<div class="field field--check"><input type="checkbox" id="with-attempts" name="with_attempts" value="yes" required><label class="field__label" for="with-attempts">Delete its {{ attempts }} attempt{{ attempts|pluralize }} and their records too</label></div>{% endif %}
+                    <button type="submit" class="btn btn--primary btn--danger btn--sm">Delete {{ round.name }}</button></form>{% endif %}
             </div>
         </details>
     </div>
 </section>
-{% endif %}
 {% endblock %}

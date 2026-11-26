@@ -518,6 +518,57 @@ def test_a_rounds_note_is_staffs_own(staff_site):
     assert shown == ["staff/rounds.html"], shown
 
 
+def test_a_round_is_deleted_with_its_attempts_unless_a_session_runs_it(staff_site):
+    """Deleted from its staff page with its attempts and their records (worms_delete_round, as the
+    dashboard's own role: it may delete none of those rows itself), once staff confirm that; not
+    while `worms round start` runs it; the audit keeps that it was."""
+    from core import clock
+    from core.models.competition import Round
+    from core.models.rounds import HostJob, RoundRun, RunEvent
+    from core.models.team import Team
+    from core.models.user import User
+    from core.models.vm import VirtualMachine
+
+    post(staff_site, "/staff/rounds/", round_data(name="R1"), page="/staff/rounds/")
+    r1 = Round.objects.get(name="R1")
+    with as_role("postgres"):
+        team = Team.objects.create(name="t", competition=competition())
+        run = RoundRun.objects.create(round=r1, team=team, position=0, seed=1, duration=3000, state=RoundRun.State.FINISHED)
+        vm = VirtualMachine.objects.create(vm_identifier="sandbox-a", vm_maintenance_ip="10.4.0.10", round=r1, run=run)
+        RunEvent.objects.create(run=run, kind=RunEvent.Kind.STATE, data={"state": "finished"})
+        RunEvent.objects.create(run=run, kind=RunEvent.Kind.VM_STOPPED, vm=vm)
+        job = HostJob.objects.create(kind=HostJob.Kind.PREPARE, run=run)
+        Round.objects.filter(pk=r1.pk).update(session_seen_at=clock.now())
+    page = f"/staff/rounds/{r1.uuid}/"
+    assert "can be deleted once that session has ended" in text(get(staff_site, page))
+    post(staff_site, f"{page}delete/", {"with_attempts": "yes"}, page=page)
+    assert Round.objects.filter(pk=r1.pk).exists()  # a session runs it
+    with as_role("postgres"):
+        Round.objects.filter(pk=r1.pk).update(session_seen_at=None)
+    assert "with its 1 attempt and everything under them" in text(get(staff_site, page))
+    post(staff_site, f"{page}delete/", page=page)
+    assert RoundRun.objects.filter(pk=run.pk).exists()  # its attempts not confirmed
+    deleted = post(staff_site, f"{page}delete/", {"with_attempts": "yes"}, page=page)
+    assert deleted.status_code == 302 and deleted["Location"] == "/staff/rounds/"
+    assert not Round.objects.filter(pk=r1.pk).exists() and not RoundRun.objects.filter(pk=run.pk).exists()
+    assert not VirtualMachine.objects.filter(pk=vm.pk).exists() and not HostJob.objects.filter(pk=job.pk).exists()
+    assert not RunEvent.objects.filter(run_id=run.pk).exists()
+    # (Its round_deleted event: the events role's, which these tests do not have.) The dashboard's
+    # role cannot delete what is under a round itself, and no other role may call the function.
+    from django.db import connection
+
+    with as_role("postgres"):
+        r2 = Round.objects.create(name="R2", seed=1, competition=competition())
+    staff_site.force_login(User.objects.create(username="student-del"))
+    post(staff_site, f"/staff/rounds/{r2.uuid}/delete/")
+    assert Round.objects.filter(pk=r2.pk).exists()
+    with as_role("django_dashboard"), connection.cursor() as cursor:
+        cursor.execute("SELECT has_table_privilege('django_dashboard', 'public.round_runs', 'DELETE'), "
+                       "has_function_privilege('django_dashboard', 'public.worms_delete_round(bigint)', 'EXECUTE'), "
+                       "has_function_privilege('django_orchestrator', 'public.worms_delete_round(bigint)', 'EXECUTE')")  # fmt: skip
+        assert cursor.fetchone() == (False, True, False)
+
+
 def test_staff_download_the_upload_an_attempt_runs(staff_site):
     """The round page's Upload column: each attempt's zip, byte for byte, for staff only."""
     import hashlib

@@ -74,6 +74,44 @@ BEGIN
 END
 $guard$;
 DROP TRIGGER IF EXISTS worms_users_guard ON public.users;
+{# A round deleted with everything under it (its attempts; their VMs, events, captures, logs and
+   host jobs) for a role that may delete none of those rows itself: the dashboard (Staff -> Rounds,
+   dashboard/views/staff_rounds.py round_delete). This one operation and nothing else: it refuses
+   a round a `worms round start` session runs (its mark, rounds.session_seen_at, younger than
+   Round.SESSION_STALE, 120 s), the row locked against a session starting. It runs as the
+   tables' owner, the migrator; only postgresql_round_delete_roles may call it. The audit
+   (competition_events) keeps its rows. 'deleted', 'running' or 'gone'. #}
+CREATE OR REPLACE FUNCTION public.worms_delete_round(target bigint) RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $delete$
+DECLARE
+  seen timestamptz;
+BEGIN
+  SELECT session_seen_at INTO seen FROM public.rounds WHERE id = target FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN 'gone';
+  END IF;
+  IF seen IS NOT NULL AND seen > now() - interval '120 seconds' THEN
+    RETURN 'running';
+  END IF;
+  DELETE FROM public.run_events WHERE run_id IN (SELECT id FROM public.round_runs WHERE round_id = target)
+    OR vm_id IN (SELECT id FROM public.virtual_machines WHERE round_id = target);
+  DELETE FROM public.flag_captures WHERE round_id = target
+    OR vm_id IN (SELECT id FROM public.virtual_machines WHERE round_id = target);
+  DELETE FROM public.logging WHERE round_id = target
+    OR run_id IN (SELECT id FROM public.round_runs WHERE round_id = target);
+  DELETE FROM public.virtual_machines WHERE round_id = target
+    OR run_id IN (SELECT id FROM public.round_runs WHERE round_id = target);
+  DELETE FROM public.host_jobs WHERE run_id IN (SELECT id FROM public.round_runs WHERE round_id = target);
+  DELETE FROM public.round_runs WHERE round_id = target;
+  DELETE FROM public.rounds WHERE id = target;
+  RETURN 'deleted';
+END
+$delete$;
+ALTER FUNCTION public.worms_delete_round(bigint) OWNER TO "{{ postgres_migrator_name | default('django_migrator') }}";
+REVOKE ALL ON FUNCTION public.worms_delete_round(bigint) FROM PUBLIC;
+{% for role in postgresql_round_delete_roles | default([]) %}
+GRANT EXECUTE ON FUNCTION public.worms_delete_round(bigint) TO "{{ role }}";
+{% endfor %}
 {% if postgresql_account_guard_roles %}
 CREATE TRIGGER worms_users_guard BEFORE INSERT ON public.users FOR EACH ROW
   EXECUTE FUNCTION public.worms_users_guard({{ postgresql_account_guard_roles | map('regex_replace', '^(.*)$', "'\\1'") | join(', ') }});

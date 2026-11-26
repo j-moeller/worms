@@ -17,3 +17,6 @@ __pycache__/
 # The host's stacks' generated definitions: runtime state of the round agent's workspace.
 opentofu/stacks/sandbox/generated_vms*.tf
 opentofu/stacks/devbox/generated_devboxes.tf
+
+# worms-sbom's output (docs/03-manage-py.md#worms-sbom)
+/sbom/

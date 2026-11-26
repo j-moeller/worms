@@ -12,6 +12,7 @@ There are two `manage.py` files:
 ```sh
 worms() { /root/app/.venv-test/bin/python /root/app/src/manage.py "$@"; }
 worms-gui() { /root/app/.venv-test/bin/python /root/app/src/worms_gui.py "$@"; }   # the dashboard below
+worms-sbom() { /root/app/.venv-test/bin/python /root/app/src/worms_sbom.py "$@"; }  # the SBOM below
 eval "$(worms completion bash)"   # tab completion; or once: worms completion bash > /etc/bash_completion.d/worms
 worms --help              # the commands, grouped by purpose
 worms apply --help        # the components, what each needs
@@ -334,6 +335,42 @@ worms-gui --tab teams      # start on a tab: platform, teams, jobs, rounds, serv
   start, cancel; Components: apply or plan; `i` the internet window. What changes something asks
   first, naming its targets; on production the destructive ones want a typed `yes`. Login, apply,
   reset and rebuild run on the terminal and come back to the GUI; the rest run in the background.
+
+<a id="worms-sbom"></a>
+## worms-sbom
+
+A software bill of materials of the platform ([`sbom.py`](../src/worms_cli/sbom.py), the collector
+[`sbom_collect.py`](../src/worms_cli/sbom_collect.py)): one CSV per component in `sbom/` of this checkout
+(git-ignored), and all of them in `sbom/sbom.csv`. It changes nothing anywhere.
+
+```sh
+worms-sbom                       # every component (about 10 minutes: the caches hash what they serve)
+worms-sbom host dashboard devpi  # these only; sbom.csv then holds these only
+worms-sbom --out /tmp/sbom       # elsewhere
+```
+
+| Component (file) | What is in it | Read how |
+|---|---|---|
+| `host` (the root) | Proxmox VE (the packages `pveversion -v` names), Ansible, OpenTofu, Python (Debian packages); every OpenTofu provider version the stacks' lock files pin; the worms CLI's virtualenv | `python3 -` on the host; the lock files; the provider's `h1:` computed from the installed copy and checked against the lock files |
+| `dashboard`, `orchestrator`, `database`, `scoring`, `logging`, each private-internet VM | every Debian package, every virtualenv's Python packages, every git checkout (cve-search) | the collector, piped to `sudo -n python3 -` over the VM's management SSH, as `worms run` |
+| `apt-cache` | also **every .deb it serves** (what sandbox and devbox VMs install from): its control fields, its SHA256, the license of its copyright file | `dpkg-deb` on each cached file |
+| `devpi` | also **every file the PyPI mirror serves** (what devbox VMs pip install from): its SHA256, the metadata inside the wheel or sdist | each file under `+files` |
+| `devbox-vm`, `sandbox-vm` | the VM image (its SHA256), its packages, and what is installed on top: `SetupDevbox.yml`'s packages, or the gameplans' (their union, named per gameplan), with their dependencies | not from a team's VM (assumed rooted): the image file with libguestfs (`virt-cat`, `virt-tar-out`, read-only), and `apt-get -s` on the apt cache against the image's dpkg status, as a fresh VM gets them |
+
+**Columns.** `Component Name`, `Version`, `Supplier`, `Component author`, `Unique identifier`, `Component hash`,
+`License`, `Source information`, `Timestamp` (the run's, UTC), and where it is in WORMS: `System component`
+(the file it is in) and `Relationship` (installed, served, in the VM image, installed by a role or gameplan;
+each component's first row is the component itself, `part of WORMS`, the host's the `root`). Empty when not known.
+
+| Kind | Supplier, author | Unique identifier | Component hash | License |
+|---|---|---|---|---|
+| Debian package | the package's Maintainer; the copyright file's Upstream-Contact or first copyright holder | `pkg:deb/<debian or the repository's vendor>/<name>@<version>?arch=&distro=` | `sha256:` of the .deb (the apt index's, or the served file's) | the copyright file's `License:` fields (DEP-5), else what it names |
+| Python package | Maintainer (else Author); Author | `pkg:pypi/<name>@<version>` (`?file_name=` for a served file) | `sha256:` of the served file; installed: only when pip recorded it | License-Expression, License, or the classifiers |
+| OpenTofu provider | its namespace | `pkg:generic/<registry>/<namespace>/<type>@<version>` | `h1:` of the installed copy | known ones (bpg/proxmox: MPL-2.0) |
+| git checkout | the GitHub owner | `pkg:github/<owner>/<repo>@<commit>` | `sha1:` the commit | its LICENSE or COPYING file |
+
+The sandbox VM's file names the packages each gameplan installs: like the gameplans, not for the teams. A VM
+that is not running, or does not answer, is left out and said (exit 1); the others are written.
 
 ## Django's management commands
 

@@ -252,8 +252,11 @@ def _step(ops, name, record, target, how, bundle, yes) -> int | None:
         problems = ops.blockers()
         if ops.git("diff", "--quiet", "HEAD")[0] != 0:
             problems.append("this checkout has uncommitted changes: commit or stash them")
-        if _head(ops) != target and how == "rev" and ops.git("merge-base", "--is-ancestor", "HEAD", target)[0] != 0:
-            problems.append(f"{target} is not ahead of this checkout: no fast-forward (an upgrade never merges)")
+        if _head(ops) != target:
+            # A bundle's main fetched into FETCH_HEAD alone (no branch moves) to be compared before the backup.
+            there = target if how == "rev" else ("FETCH_HEAD" if ops.git("fetch", "-q", bundle, "main")[0] == 0 else "")
+            if not there or ops.git("merge-base", "--is-ancestor", "HEAD", there)[0] != 0:
+                problems.append(f"{target} is not ahead of this checkout: no fast-forward (an upgrade never merges)")
         for line in problems:
             print(output.status_cell("error", line))
         return 1 if problems else None

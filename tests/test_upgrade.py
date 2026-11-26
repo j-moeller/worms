@@ -23,7 +23,7 @@ class NewCode(Exception):
 class FakeOps:
     def __init__(self, blockers=(), verified=True):
         self.head, self.calls, self.progress = A, [], {}
-        self._blockers, self.verified, self.interrupt = list(blockers), verified, False
+        self._blockers, self.verified, self.interrupt, self.behind = list(blockers), verified, False, False
 
     def git(self, *args):
         self.calls.append(("git", *args[:2]))
@@ -31,6 +31,8 @@ class FakeOps:
             return 0, B
         if args[:1] == ("rev-parse",):
             return 0, self.head
+        if args[:2] == ("merge-base", "--is-ancestor"):
+            return (1 if self.behind else 0), ""
         if args[:2] == ("merge", "--ff-only"):
             self.head = B
             return 0, "Fast-forward"
@@ -148,3 +150,20 @@ def test_the_cli_it_runs_is_waited_for_on_ctrl_c_never_killed(monkeypatch, tmp_p
     monkeypatch.setattr(upgrade.subprocess, "Popen", Child)
     assert upgrade.Ops(SimpleNamespace(repo_root=tmp_path)).worms("apply") == 130
     assert Child.waits == 2 and not Child.killed
+
+
+def test_a_bundle_that_is_no_fast_forward_is_refused_before_the_backup(capsys, tmp_path):
+    bundle = tmp_path / "worms-update.bundle"
+    bundle.write_text("")
+
+    class Bundled(FakeOps):
+        def git(self, *args):
+            if args[:2] == ("bundle", "list-heads"):
+                return 0, f"{B}9999 refs/heads/main"
+            return super().git(*args)
+
+    ops = Bundled()
+    ops.behind = True
+    assert upgrade.run(None, str(bundle), yes=True, ops=ops) == 1
+    assert ("git", "fetch", "-q") in ops.calls and _steps(ops) == [] and ops.progress == {}
+    assert "no fast-forward" in capsys.readouterr().out

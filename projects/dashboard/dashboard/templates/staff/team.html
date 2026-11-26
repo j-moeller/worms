@@ -66,6 +66,8 @@
                 <div><dt>Source address</dt><dd class="mono">{{ devbox.services_source_ip|default:"—" }}</dd></div>
                 <div><dt>VMs</dt><dd>{% for vm in devbox.vms.all %}{{ vm.vm_identifier }}{% if not forloop.last %}, {% endif %}{% empty %}not built yet{% endfor %}</dd></div>
                 <div><dt>Version</dt><dd>{{ team.devbox_version }}</dd></div>
+                <div><dt>Latest dev upload</dt><dd>{% if dev_run %}#{{ dev_run.upload_id }}: {{ dev_run.get_state_display }}, {{ dev_run.updated_at|default:dev_run.created_at|date:"Y-m-d H:i" }} UTC{% if dev_run.armed_at %} (armed {{ dev_run.armed_at|date:"H:i:s" }}){% endif %}{% else %}none{% endif %}</dd></div>
+                {% if dev_run.error %}<div><dt>Why it failed</dt><dd class="mono">{{ dev_run.error }}</dd></div>{% endif %}
             </dl>
             {% else %}
             <p class="empty">No devbox yet. {{ devbox_hint }}</p>

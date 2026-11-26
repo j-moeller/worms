@@ -127,6 +127,10 @@ postgresql_table_privileges:
       tables: [rounds]
     - privs: INSERT
       tables: [host_jobs, run_events]
+    # A dev upload's deploy job the round agent never took, off the queue (devbox_runs._finished:
+    # queued, never claimed, failed with why). Less than it may do already: it requests any job.
+    - privs: UPDATE (state, finished_at, error)
+      tables: [host_jobs]
     # Processing of the sandbox APIs' attempts into captures / logs.
     - privs: UPDATE (processed, processed_at)
       tables: [flag_capture_attempts, logging_attempts]

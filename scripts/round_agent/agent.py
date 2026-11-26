@@ -215,8 +215,31 @@ class Agent:
         self.run_job(*row)
         return True
 
+    def close_left_behind(self):
+        """Before anything is claimed: the jobs this agent took that are still marked running ran
+        nowhere since it stopped (killed, or stopped by systemd in the middle of one): it runs one
+        job at a time, its observer the observe jobs, and both start with it. A `worms round
+        start` session's own jobs (an `owner` in their result) are not this agent's. Until
+        2026-11-26 such a job stayed running: a team's devbox rebuild held up its uploads and
+        resets (devbox_runs.deploy_waits_for) until `worms jobs cancel`. Returns their ids."""
+        try:
+            with self.conn().cursor() as cur:
+                cur.execute(
+                    "UPDATE host_jobs SET state = 'failed', finished_at = now(), error = 'the round agent stopped while "
+                    "it ran this (killed, or stopped in the middle of it); it ran nowhere since' WHERE state = 'running' "
+                    "AND NOT (coalesce(result, '{}'::jsonb) ? 'owner') RETURNING id, kind"
+                )  # fmt: skip
+                rows = cur.fetchall()
+        except Exception:  # noqa: BLE001  (the database down: the loop reconnects; `worms jobs cancel` can close them)
+            log.exception("could not close the jobs an earlier run of the agent left running")
+            return []
+        for job_id, kind in rows:
+            log.warning("job %s (%s): left running when the agent stopped: marked failed", job_id, kind)
+        return [job_id for job_id, _kind in rows]
+
     def run_forever(self):
         code = LoadedCode(self.env.get("REPO_ROOT", os.getcwd()))
+        self.close_left_behind()
         observer = self.observer()
         watching = threading.Thread(target=observer.serve, name="observer", daemon=True)
         watching.start()

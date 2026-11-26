@@ -73,10 +73,10 @@ any of them ─▶ FAILED, or REPLACED (a newer upload, or a reset by hand)
 1. Only a team's newest upload runs; older ones are replaced.
 2. It **waits** while a round's attempt is under way, or a reset of the team's devbox is not done (`deploy_waits_for`: the processor's log says it once, the dashboard shows the team, `worms trace <team>` too); during a round the processor is stopped anyway.
 3. **No reset** (since 2026-11-24; RESETTING is an older run's): the devbox as it is, the dev score going on. The team resets it by hand for fresh VMs and a new score; a reset after the upload began replaces it.
-4. **Deploying:** a `devbox_deploy` job: an earlier upload's worm on VM A stopped, the zip onto VM A, the fuse lit (10 s), a run time of an hour.
-5. Armed, running, finished: the VMs stay as the worm left them.
+4. **Deploying:** a `devbox_deploy` job: VM A must be running (the host's word, else the reason, not a bare SSH error), an earlier upload's worm on it stopped, the zip onto it, the fuse lit (10 s) and checked armed, as a round's deploy is, a run time of an hour.
+5. Armed, running, finished: the VMs stay as the worm left them. These follow the clock once the fuse is checked armed; nothing reads `main.sh`'s own state.
 
-A queued devbox job never times out here (unlike an attempt's).
+A deploy job **still queued** after `job_timeout` (30 min; the round agent stopped, paused, or held up) is taken off the queue and the run fails with why (needs the orchestrator's UPDATE on `host_jobs` state: `worms apply database`). **Why a run failed** is on the team's staff page (Staff → Teams), never the team's: it can name internals. A job the round agent was running when it was killed or stopped is marked failed when the agent starts again (`Agent.close_left_behind`): before, a team's devbox rebuild left that way held up its uploads and resets until `worms jobs cancel`.
 
 ## The gameplans
 

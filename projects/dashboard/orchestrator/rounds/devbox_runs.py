@@ -24,7 +24,7 @@ from datetime import timedelta
 from core.models.devbox import Devbox, DevboxRun
 from core.models.rounds import HostJob, RoundRun
 from core.models.worms import Upload
-from django.db import transaction
+from django.db import DatabaseError, transaction
 from django.utils import timezone
 
 from orchestrator.rounds.conductor import config, parse_armed_at
@@ -152,7 +152,10 @@ def _armed(run, now, cfg):
 
 def _finished(run, job, now, cfg) -> bool:
     """True once the job is done; fails the run if it failed or stopped reporting. A job still
-    queued has not timed out: the agent runs one job at a time, so it may simply be waiting."""
+    queued waits its turn (the agent runs one job at a time) for up to job_timeout; then nothing
+    takes it (the agent stopped, paused, or held up by a job that does not end): it is taken off
+    the queue, and the run fails with why. Until 2026-11-26 it waited for ever, the team told
+    "queued behind other work"."""
     if job is None:
         _fail(run, "its host job is gone")
         return False
@@ -160,6 +163,25 @@ def _finished(run, job, now, cfg) -> bool:
         return True
     if job.state == HostJob.State.FAILED:
         _fail(run, f"{job.kind} job failed: {job.error}")
+        return False
+    if job.state == HostJob.State.QUEUED:
+        if now - job.requested_at > timedelta(seconds=cfg["job_timeout"]):
+            why = (f"{job.kind} job not taken by the round agent within {cfg['job_timeout'] // 60} min: it is stopped, "
+                   "paused (`worms jobs resume`) or held up by another job (`worms status`)")  # fmt: skip
+            # Off the queue first, unless the agent took it meanwhile: run later, it would put an
+            # upload the team was told had failed onto its VM. The orchestrator's grant for it
+            # (UPDATE on host_jobs' state) comes with `worms apply database`; until then it waits.
+            try:
+                with transaction.atomic():  # a refused UPDATE leaves an enclosing transaction usable
+                    taken_off = HostJob.objects.filter(pk=job.pk, state=HostJob.State.QUEUED).update(
+                        state=HostJob.State.FAILED, finished_at=now, error=f"cancelled: {why}"
+                    )
+            except DatabaseError as error:
+                log.warning("devbox run of upload %s: its %s job could not be taken off the queue (%s): `worms apply "
+                            "database`", run.upload_id, job.kind, str(error).strip()[:200])  # fmt: skip
+                return False
+            if taken_off:
+                _fail(run, why)
         return False
     reference = job.heartbeat_at or job.started_at
     if reference and now - reference > timedelta(seconds=cfg["job_timeout"]):

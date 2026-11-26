@@ -13,7 +13,7 @@ from __future__ import annotations
 from core import events
 from core.membership import membership_change
 from core.models.competition import Competition
-from core.models.devbox import Devbox, DevboxSSHKey
+from core.models.devbox import Devbox, DevboxRun, DevboxSSHKey
 from core.models.notification import Notification
 from core.models.rounds import RoundRun
 from core.models.team import AccessTokens, Team, TeamMembership
@@ -120,6 +120,9 @@ def team_detail(request: HttpRequest, uuid):
         "full": team.users.count() >= team.max_members,
         "devbox": devbox,
         "devbox_hint": DEVBOX_HINT,
+        # Its latest dev upload's run: a team whose upload failed is told to ask an organiser,
+        # and why it failed (it can name internals) is for staff alone.
+        "dev_run": DevboxRun.objects.filter(team=team).order_by("-id").first(),
         "uploads": team_uploads(team).select_related("user", "artifact").order_by("-created_at")[:10],
         "runs": RoundRun.objects.filter(team=team).select_related("round").order_by("-round__round_start"),
         "history": _history(team),

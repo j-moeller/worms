@@ -1648,7 +1648,16 @@ def test_devbox_deploy_puts_the_worm_on_the_teams_vm_a_and_arms_it():
     ]  # fmt: skip
     # Scoring and logging know a devbox by its gateway's address: a round's team file stays out of it.
     assert not [c for c in ex.ssh_calls if "/etc/sandbox-api/current-team" in c["argv"]]
-    assert ex.calls == [("run", "qm", "config", "100")], "it only reads this VM's config, and does not touch OpenTofu"
+    assert ex.calls == [("run", "qm", "config", "100"), ("run", "qm", "status", "100")], \
+        "it only reads this VM's config and state, and does not touch OpenTofu"
+    # Armed, checked as a round's deploy checks it.
+    assert ex.ssh_calls[-1]["argv"] == ["sh", "-c", "systemctl is-active worms-start.timer worms-start.service || true"]
+    # VM A powered off: said, before anything is copied (not a bare SSH error).
+    ex = DevboxExecutor()
+    ex.qm["100"] = "status: stopped"
+    with pytest.raises(RuntimeError, match="devbox-t1-a is stopped, not running"):
+        handlers.devbox_deploy(ex, CFG, _devbox_deploy(ex))
+    assert ex.ssh_calls == []
 
 
 @pytest.mark.parametrize("config", ["cpu: host", "cpu: max", "cpu: x86-64-v3,flags=+nested-virt", ""])

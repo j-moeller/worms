@@ -202,6 +202,15 @@ def test_a_failures_reason_stays_with_staff(site, team):  # noqa: F811
     _dev_view(site)
     page = _page(site)
     assert "Could not be started" in page and "ERRSECRET" not in page and "10.6.0.11" not in page
+    # The organiser the team is told to ask sees why, on the team's staff page (until 2026-11-26
+    # only the CLI said it).
+    from django.test import Client
+    from test_dashboard_login import login
+
+    staff = Client()
+    login(staff, HOST, f"https://{HOST}")
+    page = re.sub(r"\s+", " ", staff.get(f"/staff/teams/{team.uuid}/", **proxied(HOST)).content.decode())
+    assert "Why it failed" in page and "ERRSECRET ssh debian@10.6.0.11" in page
 
 
 # ---- Separate from the rounds
@@ -416,7 +425,7 @@ def test_a_failed_job_fails_the_run(site, team):  # noqa: F811
     assert run.state == "failed" and "it broke" in run.error
 
 
-def test_a_job_that_stops_reporting_fails_the_run_but_a_queued_one_waits(site, team):  # noqa: F811
+def test_a_job_that_stops_reporting_fails_the_run_and_so_does_one_never_taken(site, team):  # noqa: F811
     from core.models.rounds import HostJob
     from django.utils import timezone
 
@@ -424,8 +433,8 @@ def test_a_job_that_stops_reporting_fails_the_run_but_a_queued_one_waits(site, t
     _advance()
     later = timezone.now() + timedelta(hours=5)
 
-    # Queued behind a round's jobs: still its turn to come.
-    _advance(later)
+    # Queued behind other work: still its turn to come.
+    _advance(timezone.now() + timedelta(minutes=5))
     assert _run(upload).state == "deploying"
 
     started = timezone.now()
@@ -434,3 +443,13 @@ def test_a_job_that_stops_reporting_fails_the_run_but_a_queued_one_waits(site, t
     assert _run(upload).state == "deploying"
     _advance(later)
     assert _run(upload).state == "failed" and "timed out" in _run(upload).error
+
+    # One the round agent never takes (stopped, paused): after job_timeout off the queue, so that it
+    # never runs later, and the run failed with why (until 2026-11-26 it waited for ever).
+    upload = _dev_upload(team)
+    _advance()
+    job = _run(upload).deploy_job
+    _advance(timezone.now() + timedelta(hours=1))
+    assert _run(upload).state == "failed" and "not taken by the round agent within" in _run(upload).error
+    job.refresh_from_db()
+    assert job.state == "failed" and job.error.startswith("cancelled: ")

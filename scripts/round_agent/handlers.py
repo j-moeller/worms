@@ -1249,11 +1249,24 @@ def deploy(ex, cfg, params):
     _place_worm(ex, cfg, start_ip, params["artifact"])
     delay = params["worm_delay"]
     armed_at = _arm_worm(ex, start_ip, delay)
-    # Armed: the timer waits, or (a short fuse) the worm runs already.
-    states = ex.ssh(start_ip, ["sh", "-c", f"systemctl is-active {WORM_UNIT}.timer {WORM_UNIT}.service || true"], timeout=60)
-    if not {"active", "activating"} & set(states.split()):
-        raise RuntimeError(f"the worm's timer on {start} is not armed ({' '.join(states.split()) or 'no unit'})")
+    _check_armed(ex, start_ip, start)
     return {"start_vm": start, "worm_delay": delay, "team_uuid": params["team_uuid"], "armed_at": armed_at}
+
+
+def _check_armed(ex, ip, name):
+    """Armed: the worm's timer waits, or (a short fuse) the worm runs already."""
+    states = ex.ssh(ip, ["sh", "-c", f"systemctl is-active {WORM_UNIT}.timer {WORM_UNIT}.service || true"], timeout=60)
+    if not {"active", "activating"} & set(states.split()):
+        raise RuntimeError(f"the worm's timer on {name} is not armed ({' '.join(states.split()) or 'no unit'})")
+
+
+def _check_running(ex, vmid, name):
+    """The VM runs (the host's word): one powered off would fail the deploy with a bare SSH error."""
+    said = ex.run(["qm", "status", str(vmid)], check=False, timeout=60).strip()
+    status = said.removeprefix("status:").strip()
+    if status != "running":
+        raise RuntimeError(f"{name} is {status or 'unknown to the host'}, not running: the worm cannot go onto it (the "
+                           f"team's devbox reset starts it again, or `worms vm start {name}`)")  # fmt: skip
 
 
 def _place_worm(ex, cfg, ip, artifact):
@@ -1552,10 +1565,12 @@ def devbox_deploy(ex, cfg, params):
         raise validation.Invalid(f"{start} is not a VM of team {params['team_slug']}")
     if not _has_team_vm_cpu(ex, vm["vmid"]):
         raise validation.Invalid(f"{start} does not have the CPU a team's VM must have: {TEAM_VM_CPU}")
+    _check_running(ex, vm["vmid"], start)
     _stop_worm(ex, vm["maintenance_ip"])
     _place_worm(ex, cfg, vm["maintenance_ip"], params["artifact"])
     delay = params["worm_delay"]
     armed_at = _arm_worm(ex, vm["maintenance_ip"], delay, f"--property=RuntimeMaxSec={params['run_duration']}")
+    _check_armed(ex, vm["maintenance_ip"], start)  # as a round's deploy: Running on the dashboard means it was
     return {"start_vm": start, "worm_delay": delay, "team_uuid": params["team_uuid"], "armed_at": armed_at}
 
 

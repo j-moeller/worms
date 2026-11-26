@@ -54,7 +54,7 @@ laptop ──22 (prod) / 2222 (dev)──► host DNAT ──► devbox-ssh-gate
 | Reset | team: **Reset devbox** button; operator: `worms vm reset <team>` (a dev upload before 2026-11-24) | `devbox_rebuild` | Rolls A, B and C back to `clean`, their configured snapshot from before any team key (VMs without a snapshot are replaced), then the CA, `capture-vm`, the team's keys and new tokens over SSH, no Ansible; updates the map. A snapshot from before the devbox's setup existed gets it once, without network. What a reset gives is what the snapshot holds: a change of the devbox role needs a rebuild ([11](11-orchestrator.md#the-resets)) |
 | Rebuild | operator: `worms vm rebuild <team>...` or `worms vm rebuild devboxes` | `devbox_rebuild` (`fresh`) | Replaces A, B and C, configures them (`SetupDevbox.yml`, the packages from the apt cache, a missing one named), snapshots them, then the keys and tokens as a reset |
 | Keys | dashboard, on any key or membership change | `devbox_reconfigure` | Pushes the keys alone (no package, no internet) and the attribution map |
-| Dev run | a dev upload | `devbox_deploy` | Places the zip on A and arms `main.sh` |
+| Dev run | a dev upload | `devbox_deploy` | Places the zip on A (it must be running) and arms `main.sh`, checked armed. Not taken within 30 min: the run fails, its reason on the team's staff page |
 
 - **Version.** A reset bumps the team's `devbox_version` at once, so the dev score and logs start over. Nothing is deleted.
 - **Queueing.** A rebuild already queued or running is reused, not stacked ([`orchestrator/rounds/devbox.py`](../projects/dashboard/orchestrator/rounds/devbox.py)).

@@ -93,6 +93,31 @@
     </div>
 </section>
 
+{% with records=logs.0 total=logs.1 %}
+<section class="panel" aria-labelledby="logs-title">
+    <header class="panel__head"><h2 class="panel__title" id="logs-title">Logs</h2><p class="panel__meta">{% if total %}{{ total }} log record{{ total|pluralize }}, the newest first{% if total > records|length %} (the latest {{ records|length }}){% endif %}{% else %}none{% endif %}</p></header>
+    <div class="table-wrap">
+        <table class="table">
+            <thead><tr><th scope="col">Received (UTC)</th><th scope="col">Since the worm's start</th><th scope="col">Team</th><th scope="col" class="num">Attempt</th><th scope="col" class="num">Size</th><th scope="col">Record</th></tr></thead>
+            <tbody>
+                {% for log in records %}
+                <tr>
+                    <td class="mono">{{ log.at|date:"Y-m-d H:i:s" }}</td>
+                    <td class="mono">{{ log.since|default:"—" }}</td>
+                    <th scope="row">{{ log.team.name }}</th>
+                    <td class="num">{% if log.run %}{{ log.run.attempt|add:1 }} <span class="badge badge--state" title="a log counts only once its attempt has finished">{{ log.run.state }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+                    <td class="num">{{ log.size }}</td>
+                    <td><details><summary class="mono truncate">{{ log.preview }}</summary><pre class="code"><code>{{ log.text }}</code></pre>{% if log.cut %}<p class="muted">The first {{ log.text|length }} characters; {% if log.run %}<a href="{% url 'run_progression_log' log.run.uuid log.ref %}">the whole record (JSON)</a>{% else %}the whole record is in the round's progression{% endif %}.</p>{% endif %}</details></td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="6" class="empty">No log record yet: what a worm sends the logging service shows here.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endwith %}
+
 <section class="panel" aria-labelledby="jobs-title">
     <header class="panel__head"><h2 class="panel__title" id="jobs-title">Host jobs</h2><p class="panel__meta">the round agent's work on the Proxmox host</p></header>
     <div class="table-wrap">

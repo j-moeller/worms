@@ -2209,10 +2209,11 @@
         appendFeed(tl);
     }
 
-    // Every event in time order (clicking one seeks there and shows it), following the clock.
+    // Every event, the newest first (clicking one seeks there and shows it), following the clock:
+    // what the playhead has passed is marked (updateFeed). The newest 600.
     function appendFeed(tl) {
         const feed = el("ul", { class: "feed", id: "topo-feed" });
-        const notable = tl.events.filter((e) => e.kind !== "flag_submitted" || e.data.result !== "invalid").slice(0, 600);
+        const notable = tl.events.filter((e) => e.kind !== "flag_submitted" || e.data.result !== "invalid").slice(-600).reverse();
         for (const e of notable) {
             const look = eventLook(e);
             const vm = e.vm ? resolveNode(e.vm) : e.node ? resolveNode(e.node) : null;
@@ -2223,7 +2224,7 @@
                 el("span", null, `${look.label}${who}`));
             feed.appendChild(li);
         }
-        append(side, [el("h4", null, `Events (${tl.events.length})`), feed]);
+        append(side, [el("h4", null, `Events (${tl.events.length}), the newest first`), feed]);
         S.feedIndex = -1;
         updateFeed(S.t);
     }
@@ -2274,14 +2275,16 @@
         appendFeed(tl);
     }
 
+    // The feed is the newest first: the events the playhead has passed are its last ones.
     function updateFeed(t) {
         const feed = document.getElementById("topo-feed");
         if (!feed) return;
         const items = feed.children;
-        const idx = lowerBound(Array.from(items), t + 1e-9, (li) => Number(li.dataset.t));
-        if (idx === S.feedIndex) return;
-        S.feedIndex = idx;
-        for (let i = 0; i < items.length; i++) items[i].classList.toggle("past", i < idx);
+        let passed = 0;
+        for (let i = 0; i < items.length; i++) if (Number(items[i].dataset.t) < t + 1e-9) passed++;
+        if (passed === S.feedIndex) return;
+        S.feedIndex = passed;
+        for (let i = 0; i < items.length; i++) items[i].classList.toggle("past", i >= items.length - passed);
     }
 
     function renderNodeDetails(id) {
@@ -2312,11 +2315,11 @@
             const mine = S.timeline.events.filter((e) => e.vm === info.id || e.node === info.id || (e.data && e.data.source_vm === info.id));
             if (mine.length) {
                 const feed = el("ul", { class: "feed" });
-                for (const e of mine.slice(0, 300)) {
+                for (const e of mine.slice(-300).reverse()) {  // the newest first, as the feed
                     feed.appendChild(el("li", { onclick: () => { seek(e.t); pause(); select({ type: "event", event: e }); } },
                         el("span", { class: "t" }, fmtTime(e.t)), el("span", { class: "sw", style: `background: var(${eventLook(e).color})` }), eventLook(e).label));
                 }
-                append(side, [el("h4", null, `Events of this VM (${mine.length})`), feed]);
+                append(side, [el("h4", null, `Events of this VM (${mine.length}), the newest first`), feed]);
             }
             return;
         }

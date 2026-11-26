@@ -22,11 +22,13 @@ missing or not valid (round_progress.warnings, through render_with_base_info).
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 
 from core import clock, events, schedule
 from core.locking import serialized_resource
 from core.models.competition import Competition, Round
+from core.models.logging import Logging
 from core.models.rounds import GameplanFile, HostJob, RoundRun, round_gameplan
 from core.models.scoring import FlagCapture
 from core.models.team import Team
@@ -48,6 +50,9 @@ RUNNING = "`worms round start` runs this round now: it can change once that sess
 CHANGED = (" Teams have run: the next `worms round start` runs again, asked, every team whose attempt no longer "
            "matches it (their earlier attempts kept, superseded, no longer counted).")  # fmt: skip
 NOTE_LIMIT = 500
+LOG_LIMIT = 100  # the round page's log records, the newest first
+LOG_SHOWN = 4000  # characters of a record's content on the page; the whole of it: its JSON (run_log)
+LOG_PREVIEW = 160
 
 
 
@@ -159,6 +164,27 @@ def rounds(request: HttpRequest):
     })  # fmt: skip
 
 
+def _logs(round_obj) -> tuple[list[dict], int]:
+    """(the round's newest log records, LOG_LIMIT at most, how many it has): what each attempt's
+    worm sent the logging service, with when it came (UTC, and since that attempt's worm start),
+    its team and attempt, its size, and its content (pretty JSON, LOG_SHOWN characters; the
+    whole record is the staff log endpoint's)."""
+    rows = (Logging.objects.filter(round=round_obj).select_related("team", "run", "logging_attempt")
+            .order_by("-logging_attempt__created_at", "-id"))  # fmt: skip
+    out = []
+    for log in rows[:LOG_LIMIT]:
+        attempt, run = log.logging_attempt, log.run
+        text = json.dumps(attempt.log_data, indent=2, ensure_ascii=False, default=str)
+        since = None
+        if run is not None and run.worm_start_at is not None:
+            seconds = int((attempt.created_at - run.worm_start_at).total_seconds())
+            since = f"{'-' if seconds < 0 else ''}{abs(seconds) // 60}:{abs(seconds) % 60:02d}"
+        out.append({"at": attempt.created_at, "since": since, "team": log.team, "run": run, "ref": str(attempt.uuid),
+                    "size": len(text), "preview": " ".join(text.split())[:LOG_PREVIEW], "text": text[:LOG_SHOWN],
+                    "cut": len(text) > LOG_SHOWN})  # fmt: skip
+    return out, rows.count()
+
+
 def _ran(runs) -> bool:
     """Whether a team's attempt has run (or was skipped): a change of the round then reaches it
     only through the next session's question (CHANGED)."""
@@ -251,6 +277,7 @@ def round_detail(request: HttpRequest, round_uuid):
         "jobs": HostJob.objects.filter(Q(run__round=round_obj) | own).exclude(kind=HostJob.Kind.OBSERVE, state=HostJob.State.DONE)
         .select_related("run__team").order_by("-id")[:50],
         "version": round_gameplan(round_obj),
+        "logs": _logs(round_obj),
         "progress": round_progress.progress(round_obj),
     })  # fmt: skip
 

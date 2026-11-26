@@ -568,6 +568,36 @@ def test_a_round_is_deleted_with_its_attempts_unless_a_session_runs_it(staff_sit
         assert cursor.fetchone() == (True, True, False)
 
 
+def test_the_round_page_lists_its_logs_newest_first_with_their_records(staff_site):
+    """Logs: what each attempt's worm sent the logging service, the newest first, with when (since
+    the worm's start too), team, attempt and the record itself (escaped; a long one cut, with
+    the whole one's link)."""
+    from core import clock
+    from core.models.competition import Round
+    from core.models.logging import Logging, LoggingAttempt
+    from core.models.rounds import RoundRun
+    from core.models.team import Team
+
+    post(staff_site, "/staff/rounds/", round_data(name="R1"), page="/staff/rounds/")
+    r1 = Round.objects.get(name="R1")
+    now = clock.now()
+    with as_role("postgres"):
+        team = Team.objects.create(name="Blue", competition=competition())
+        run = RoundRun.objects.create(round=r1, team=team, position=0, seed=1, duration=3000, state=RoundRun.State.FINISHED,
+                                      worm_start_at=now - timedelta(minutes=10))  # fmt: skip
+        attempts = []
+        for minutes, data in ((9, {"msg": "first <b>"}), (2, {"msg": "second", "big": "x" * 5000})):
+            attempt = LoggingAttempt.objects.create(team_uuid=str(team.uuid), log_data=data, created_at=now - timedelta(minutes=minutes))
+            Logging.objects.create(team=team, round=r1, logging_attempt=attempt, run=run)
+            attempts.append(attempt)
+    page = get(staff_site, f"/staff/rounds/{r1.uuid}/").content.decode()
+    assert "2 log records, the newest first" in page
+    assert page.index("second") < page.index("first &lt;b&gt;") and "first <b>" not in page
+    assert ">8:00<" in page and ">1:00<" in page  # since the worm's start
+    assert f"/rounds/{run.uuid}/progression/logs/{attempts[1].uuid}/" in page  # the long one: its whole record
+    assert f"/rounds/{run.uuid}/progression/logs/{attempts[0].uuid}/" not in page
+
+
 def test_staff_download_the_upload_an_attempt_runs(staff_site):
     """The round page's Upload column: each attempt's zip, byte for byte, for staff only."""
     import hashlib

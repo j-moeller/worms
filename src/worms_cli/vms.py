@@ -63,11 +63,13 @@ def shown_aliases(name: str) -> list[str]:
 
 
 class Catalogue:
-    def __init__(self, config):
+    def __init__(self, config, vms=None):
+        """`vms`: the VMs listed already (the Proxmox API's, as `worms status` has them): not
+        listed again."""
         self.config = config
         self.runner = Runner(config)
         self._hosts = None
-        self._vms = None
+        self._vms = None if vms is None else sorted(vms, key=lambda vm: (vm.get("pool") or "", vm["name"]))
         self._teams = None
 
     def vms(self) -> list[dict]:

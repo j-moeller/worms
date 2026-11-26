@@ -344,12 +344,14 @@ def _code_row(config, probe) -> list[str]:
     return ["code", output.status_cell("warn", f"this checkout {here}; {said} (`worms apply --plan` says what differs)")]
 
 
-def _service_states(config) -> tuple[dict, str]:
-    """(services.Units.vm_states' states, what could not be checked, said: "" for nothing)."""
+def _service_states(config, listed=None) -> tuple[dict, str]:
+    """(services.Units.vm_states' states, what could not be checked, said: "" for nothing).
+    `listed`: the VMs listed already (_list_vms), not listed again."""
     try:
         from worms_cli import services
+        from worms_cli.vms import Catalogue
 
-        states, not_asked = services.Units(config).vm_states()
+        states, not_asked = services.Units(config, catalogue=Catalogue(config, vms=listed)).vm_states()
     except Exception as exc:  # noqa: BLE001  (no catalogue, no host: said, not fatal)
         return {}, f"the platform's services ({str(exc).strip()[:60]})"
     if not not_asked:
@@ -453,9 +455,10 @@ def cmd_status(config, args) -> int:
     from concurrent.futures import ThreadPoolExecutor
 
     # The platform's services are asked over SSH, a VM each (seconds): meanwhile, the rest.
+    listing = _list_vms(config)
     with ThreadPoolExecutor(max_workers=1) as pool:
-        services_found = pool.submit(_service_states, config)
-        listing, internet, probe = _list_vms(config), _internet_status(config), _host_probe(config)
+        services_found = pool.submit(_service_states, config, listing[0])
+        internet, probe = _internet_status(config), _host_probe(config)
         attention = _attention(config, listing, internet, probe, services_found.result)
     print(output.heading("attention"))
     print(output.table(attention))

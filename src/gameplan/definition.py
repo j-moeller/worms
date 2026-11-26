@@ -38,11 +38,12 @@ MAINTENANCE_FIRST_HOST = 10
 # The OS images a VM can boot from (opentofu/modules/os_images, local.platform.os_images).
 IMAGES = ("debian",)
 # The login user of every image: the host's own access (Ansible, the round agent) logs in as it,
-# with sudo and no password. Not a gameplan's to give logins or files: it is reserved.
+# with sudo and no password. A gameplan cannot make it (add_user): it exists.
 IMAGE_USER = "debian"
-# Whom a gameplan's files, keys, logins and reads are for when it names no user: root, as the
-# worm starts as root on the entry VM (its home /root, its keys in /root/.ssh).
-DEFAULT_USER = "root"
+# Whom a gameplan's files, keys, logins and reads are for when it names no user: the image's
+# login user (its home /home/debian, its keys in /home/debian/.ssh). The worm starts as root on
+# the entry VM, which reads them there; add_private_ssh_key(add_to_root=True) gives root a key too.
+DEFAULT_USER = IMAGE_USER
 FLAG_PATH = "/etc/worms/flag"
 # ~/.ssh/<this> of a user that add_private_ssh_key gave a key: its ssh-agent, which holds the key.
 AGENT_SOCKET = "agent.sock"
@@ -395,8 +396,8 @@ class BasicVM:
     The resources are the class's unless given: BasicVM(cores=2, memory=1024, disk=8).
     `install`/`uninstall`, `add_setup` and `add_service` add to them for one VM, and
     `add_user(user, shell=, groups=, sudo=)` makes a user (the owner of files and logins).
-    Where a method takes a user (owner=, user=) and is given none, it is root: the worm starts
-    as root on the entry VM, and ~ is /root.
+    Where a method takes a user (owner=, user=) and is given none, it is debian, the image's
+    login user: ~ is /home/debian. (The worm starts as root on the entry VM.)
     `ssh_port` is the port sshd answers on in the sandbox networks (22; `set_ssh_port`).
 
     Per run: `write_file(path, content)`, text or a document, archive or vault (also
@@ -1192,18 +1193,24 @@ class Gameplan:
                                     "(letters, digits, ._+/=:@*-), no commas or quotes")  # fmt: skip
         return list(dict.fromkeys(sudo))
 
-    def add_private_ssh_key(self, vms, key, user=DEFAULT_USER):
-        """The private key, as ~/.ssh/<name> of `user` (root unless given: /root/.ssh), 0600, and
-        held by `user`'s ssh-agent on the VM: `ssh`, `scp` and `sftp` run as `user` offer it
-        whatever its file name, with no -i, and so does anything given SSH_AUTH_SOCK=
+    def add_private_ssh_key(self, vms, key, user=DEFAULT_USER, add_to_root=False):
+        """The private key, as ~/.ssh/<name> of `user` (debian unless given: /home/debian/.ssh),
+        0600, and held by `user`'s ssh-agent on the VM: `ssh`, `scp` and `sftp` run as `user` offer
+        it whatever its file name, with no -i, and so does anything given SSH_AUTH_SOCK=
         ~/.ssh/agent.sock (a login shell has it). The agent is a service of the VM: it starts at
-        every boot and loads the keys again from their files. A key with a passphrase is only
-        the file: the agent would hold it unlocked, and the passphrase is for the worm to find."""
+        every boot and loads the keys again from their files. With add_to_root=True the key is
+        also root's, the same way (/root/.ssh/<name>, root's ssh-agent): the worm, which starts as
+        root on the entry VM, offers it with a plain `ssh`. A key with a passphrase is only the
+        file: the agent would hold it unlocked, and the passphrase is for the worm to find."""
+        if not isinstance(add_to_root, bool):
+            raise GameplanError("add_private_ssh_key: add_to_root is True or False")
         self._add_key("private_key", vms, key, user)
+        if add_to_root and user != "root":
+            self._add_key("private_key", vms, key, "root")
 
     def add_public_ssh_key(self, vms, key, user=DEFAULT_USER):
-        """The public key, in ~/.ssh/authorized_keys of `user` (root unless given): the private key
-        logs in as it."""
+        """The public key, in ~/.ssh/authorized_keys of `user` (debian unless given): the private
+        key logs in as it."""
         self._add_key("public_key", vms, key, user)
 
     def _add_key(self, op, vms, key, user):
@@ -1290,8 +1297,9 @@ class Gameplan:
     # -- logins built from the methods above ----------------------------------------------
 
     def add_ssh_key_login(self, vms, key, user=DEFAULT_USER):
-        """`user` on each VM (root unless given; made if it is new) logs in over SSH with the key's
-        private half. Put that half somewhere the worm can find it: add_private_ssh_key, or a file."""
+        """`user` on each VM (debian unless given; made if it is new) logs in over SSH with the
+        key's private half. Put that half somewhere the worm can find it: add_private_ssh_key, or a
+        file."""
         plan = self._plan
         plan.defining("add_ssh_key_login")
         for vm in _as_list(vms, "add_ssh_key_login"):

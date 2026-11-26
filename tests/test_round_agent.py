@@ -683,6 +683,22 @@ def test_the_gameplans_packages_and_files_reach_ansible_unsafe(monkeypatch):
     assert config["sandbox-b"]["install"] == ["jq"] and config["sandbox-b"]["users"] == ["alice"]
 
 
+def test_a_key_given_to_debian_and_root_is_in_both_homes_and_both_agents():
+    # add_private_ssh_key(add_to_root=True): one private_key step per user (gameplan/definition.py).
+    ex = FakeExecutor()
+    spec = {"secrets": [{"id": "key1"}], "setup": [
+        {"op": "private_key", "vm": "sandbox-a", "secret": "key1", "user": user, "name": "id_ed25519"}
+        for user in ("debian", "root")]}  # fmt: skip
+    handlers._apply_setup(ex, {"sandbox-a": {"maintenance_ip": "10.4.0.10"}}, spec, {"key1": {"private": "PRIVATE KEY\n"}})
+    placed = [c["argv"][-1] for c in ex.ssh_calls if c["argv"][:3] == ["sudo", "install", "-m"]]
+    assert placed == ["/home/debian/.ssh/id_ed25519", "/root/.ssh/id_ed25519"]
+    agent = next(c for c in ex.ssh_calls if c["argv"] == ["sudo", "sh", "-s"])["input"]
+    for user, home in (("debian", "/home/debian"), ("root", "/root")):
+        assert f"systemctl enable --quiet worms-ssh-agent@{user}" in agent
+        assert f"printf '%s\\n' {home}/.ssh/id_ed25519 > /etc/worms/ssh-agent/{user}" in agent
+        assert f"Match localuser {user}\n    IdentityAgent {home}/.ssh/agent.sock" in agent
+
+
 def test_a_run_gets_its_own_keys_password_files_and_flags_before_the_worm():
     ex = FakeExecutor()
     result = _prepare(ex)
@@ -690,19 +706,21 @@ def test_a_run_gets_its_own_keys_password_files_and_flags_before_the_worm():
     password = next(c for c in calls if c["argv"] == ["sudo", "chpasswd"])
     assert password["host"] == "10.4.0.11" and password["input"].startswith("alice:")
     secret = password["input"].strip().split(":", 1)[1]
-    # Root's, as the gameplan names no user: the worm starts as root.
-    private = next(c for c in calls if c["argv"][-1] == "/root/.ssh/id_ed25519")
+    # Debian's, as the gameplan names no user; root has none (no add_to_root).
+    private = next(c for c in calls if c["argv"][-1] == "/home/debian/.ssh/id_ed25519")
     assert private["host"] == "10.4.0.10" and "PRIVATE KEY" in private["input"] and "0600" in private["argv"]
-    # ...and held by root's ssh-agent there, a service of the VM, checked to hold it.
+    assert not any(c["argv"][-1] == "/root/.ssh/id_ed25519" for c in calls)
+    # ...and held by debian's ssh-agent there, a service of the VM, checked to hold it.
     agent = next(c for c in calls if c["argv"] == ["sudo", "sh", "-s"])
-    assert agent["host"] == "10.4.0.10" and "systemctl enable --quiet worms-ssh-agent@root" in agent["input"]
-    assert "printf '%s\\n' /root/.ssh/id_ed25519 > /etc/worms/ssh-agent/root" in agent["input"]
-    assert "Match localuser root\n    IdentityAgent /root/.ssh/agent.sock" in agent["input"]
+    assert agent["host"] == "10.4.0.10" and "systemctl enable --quiet worms-ssh-agent@debian" in agent["input"]
+    assert "printf '%s\\n' /home/debian/.ssh/id_ed25519 > /etc/worms/ssh-agent/debian" in agent["input"]
+    assert "Match localuser debian\n    IdentityAgent /home/debian/.ssh/agent.sock" in agent["input"]
+    assert "worms-ssh-agent@root" not in agent["input"]
     assert calls.index(agent) > calls.index(private)
-    public = next(c for c in calls if c["argv"] == ["sudo", "tee", "-a", "/root/.ssh/authorized_keys"])
+    public = next(c for c in calls if c["argv"] == ["sudo", "tee", "-a", "/home/debian/.ssh/authorized_keys"])
     assert public["host"] == "10.4.0.11" and public["input"] == "ssh-ed25519 AAAAPUBLIC worms-gameplan\n"
-    note = next(c for c in calls if c["argv"][-1] == "/root/note")
-    assert note["input"] == f"alice {secret}" and note["argv"][note["argv"].index("-o") + 1] == "root"
+    note = next(c for c in calls if c["argv"][-1] == "/home/debian/note")
+    assert note["input"] == f"alice {secret}" and note["argv"][note["argv"].index("-o") + 1] == "debian"
     assert not any(c["argv"][-1:] == ["/root/later"] for c in calls)  # declared for later only
     # A flag on every VM, read back.
     assert {r["vm"] for r in result["released"]} == {"sandbox-a", "sandbox-b"}
@@ -1030,11 +1048,11 @@ def test_check_reports_ok_when_everything_is_up(tmp_path):
                               ["maintenance", "10.4.0.11", 22]]  # fmt: skip
     assert a["dns"] == {"scoring.worms.internal": "10.2.0.14", "logging.worms.internal": "10.2.0.15",
                         "apt-cache.worms.internal": "10.2.0.20", "pypi.worms.internal": "10.2.0.21"}  # fmt: skip
-    assert b["files"] == [["0", "/root/note", "root", "0644"]] and a["files"] == [] and "services" not in b  # init's
+    assert b["files"] == [["0", "/home/debian/note", "debian", "0644"]] and a["files"] == [] and "services" not in b  # init's
     assert a["pypi"] == ["pypi.worms.internal", 3141, "/root/pypi/+simple/requests/"]
     # The database (which the dashboard reads) gets none of the gameplan: no path, user, unit or rule.
     text = json.dumps(result)
-    assert "/root/note" not in text and "alice" not in text and "cron" not in text and address["sandbox-b"] not in text
+    assert "/home/debian/note" not in text and "alice" not in text and "cron" not in text and address["sandbox-b"] not in text
     # A gateway built before a deploy changed its template (the round's sandbox is not rebuilt for that;
     # here: built before nf_conntrack_max was set): read against the cloud-init it was built with, its
     # snippet on the host, not against the template in the workspace.
@@ -1238,7 +1256,7 @@ def test_check_flags_a_down_vm_and_dead_service(tmp_path, monkeypatch):
 
     def broken(host, params, reply):
         if host == "10.4.0.11":  # sandbox-b
-            reply["files"]["0"] = "owner debian, mode 0600"
+            reply["files"]["0"] = "owner root, mode 0600"
             reply["forbidden"]["database"] = "refused"  # an answer: it got there
             reply["apt"] = [False, "E: Failed to fetch http://apt-cache.worms.internal:3142/... 503"]
         else:  # sandbox-a: b's SSH does not answer where the gameplan lets it in
@@ -1261,8 +1279,8 @@ def test_check_flags_a_down_vm_and_dead_service(tmp_path, monkeypatch):
     assert detail["vm:sandbox-b:init:boot"] == "degraded: 1 of the gameplan's services failed (the job log on the host names them)"
     # What is wrong, in the job log; the database gets numbers and the platform's names only.
     text = json.dumps(result)
-    assert "/root/note" not in text and "cron" not in text
-    assert any("file 0 (/root/note, root 0644): owner debian, mode 0600" in note for note in ex.notes)
+    assert "/home/debian/note" not in text and "cron" not in text
+    assert any("file 0 (/home/debian/note, debian 0644): owner root, mode 0600" in note for note in ex.notes)
     assert any("service cron: failed" in note for note in ex.notes) and "check sandbox-b: cron.service failed" in ex.notes
     assert any("sandbox-b port 22" in note and "open expected, got refused" in note for note in ex.notes)
 

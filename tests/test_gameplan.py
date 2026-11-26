@@ -82,7 +82,7 @@ def test_the_example_round_loads_and_validates():
     assert [n["vms"] for n in spec["networks"]] == [["sandbox-vm0", "sandbox-vm1"], ["sandbox-vm1", "sandbox-vm2"]]
     # vm0 and vm2 share no network: there is no way from one to the other but through vm1.
     assert not set(spec["networks"][0]["vms"]) & {"sandbox-vm2"}
-    note = next(f for f in spec["files"] if f["path"] == "/root/note")  # root's, by default
+    note = next(f for f in spec["files"] if f["path"] == "/home/debian/note")  # debian's, by default
     assert note["vm"] == "sandbox-vm1" and "@@worms-secret:login1.password@@" in note["content"]
 
 
@@ -119,13 +119,13 @@ def test_every_gameplan_in_the_repository_is_valid_and_its_packages_are_cached()
                     assert home in logins, (name, vm["name"], path)
 
     # round_one: the worm arrives by password as these users, so the files there are theirs; on
-    # the hosts it reaches by key, and on A (it starts as root), it is root.
+    # the hosts it reaches by key, and on A (it starts as root, and reads them), it is debian.
     spec = spec_of(loader.load(GAMEPLANS, "round_one.py").cls)
     owners = {}
     for f in spec["files"]:
         owners.setdefault(f["vm"], set()).add(f["owner"])
         assert f["path"].startswith(home_of(f["owner"])), f
-    assert {vm: users for vm, users in owners.items() if users != {"root"}} == {
+    assert {vm: users for vm, users in owners.items() if users != {"debian"}} == {
         "sandbox-d1-1-1": {"webops"}, "sandbox-d1-2-1": {"operator"}, "sandbox-d2-1-1": {"kiosk"},
         "sandbox-d2-2-1": {"scanner"}, "sandbox-e1-2-1": {"courier"}, "sandbox-e1-3-1": {"relay"},
         "sandbox-e2-1-1": {"telemetry"}, "sandbox-e2-2-2": {"printer"},
@@ -242,6 +242,26 @@ def test_api_misuse_is_refused_where_it_happens():
                       far(owner="webops", path="/home/debian/x", key="add_public_ssh_key", key_user="root"),
                       far(owner="root", path="/home/debian/x"), far(path="/srv/x")):  # fmt: skip
         assert reachable == []
+
+
+def test_a_private_key_is_the_default_users_and_with_add_to_root_roots_too():
+    def keys(**options):
+        class Plan(Chain):
+            def __init__(self):
+                self.a, self.b = BasicVM(), BasicVM()
+                self.key = self.generate_ssh_key()
+                self.add_private_ssh_key(self.a, self.key, **options)
+                self.add_public_ssh_key(self.b, self.key)
+                self.register_network([self.a, self.b])
+                self.set_worm_entrypoint(self.a)
+
+        return [s["user"] for s in spec_of(Plan)["setup"] if s["op"] == "private_key"]
+
+    assert keys() == ["debian"]  # /home/debian/.ssh, debian's ssh-agent
+    assert keys(add_to_root=True) == ["debian", "root"]  # and /root/.ssh, root's ssh-agent
+    assert keys(user="root", add_to_root=True) == ["root"]
+    with pytest.raises(GameplanError, match="add_to_root is True or False"):
+        keys(add_to_root="yes")
 
 
 def test_secrets_belong_in_run_files_not_in_the_build():

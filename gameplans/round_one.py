@@ -101,9 +101,10 @@ class RoundOne(Gameplan):
         self.c1_3.set_ssh_port(2222)
 
         self._noise_i = 0
-        # The user the worm arrives as on each host: a password login's user, else root (keys,
-        # and A, where the worm starts as root). Every file a host carries is that user's, in that
-        # user's home: a home is 0700, so the worm could read no other.
+        # The user the worm arrives as on each host: a password login's user, else debian (a key
+        # login's default user). Every file a host carries is that user's, in that user's home: a
+        # home is 0700, so the worm could read no other. On A the worm starts as root: it reads
+        # debian's files there too.
         self._arrives_as = {}
 
         # == layers 0-2: the fixed opening (the brief) =========================================
@@ -241,9 +242,9 @@ class RoundOne(Gameplan):
         self._arrives_as[vm] = login.user
 
     def _file(self, vm, name, content, mode=0o644):
-        """~/`name` on `vm`, of the user the worm arrives as there (root unless a password login
+        """~/`name` on `vm`, of the user the worm arrives as there (debian unless a password login
         says otherwise), so that the worm can read it."""
-        vm.write_file(f"~/{name}", content, mode=mode, owner=self._arrives_as.get(vm, "root"))
+        vm.write_file(f"~/{name}", content, mode=mode, owner=self._arrives_as.get(vm, "debian"))
 
     def _key_hop(self, parent, child, name, carrier="zip"):
         """parent reaches child over SSH as the default user with a key child authorises; the

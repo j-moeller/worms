@@ -1132,9 +1132,10 @@ def start(config, args) -> int:
             print(f"planned {len(runs)} team(s): each one's latest upload before {round_.round_start:%Y-%m-%d %H:%M} UTC")
         _say_round(round_, _latest_runs(round_))
 
-        # The round agent's environment and code, as the service has them.
+        # This checkout's code in the host's workspace, before anything is stopped (T10); then the
+        # round agent's environment and code, as the service has them.
+        _sync_workspace(config)
         repo_root, session.jobs, key = _host_steps(config, session.folder, session.summary)
-        _same_code(config, repo_root, args.yes)
         settings.PROXMOX["node"] = config.proxmox_node()
         session.conductor = Conductor(jobs=session.jobs, power=ProxmoxPower(api=Pvesh()), on_watch=_count)
 
@@ -1362,6 +1363,7 @@ def teardown(config, yes=False) -> int:
     summary = Summary(folder, "the round's sandbox destroyed", "worms round teardown")
     print(output.color(f"its steps: {folder}; what failed and why: {summary.path}", "dim"))
     _end_on_signals()
+    _sync_workspace(config)  # the sandbox stack it destroys, at this checkout's commit
     _repo_root, jobs, key = _host_steps(config, lambda run=None: folder, summary)
     try:
         settings.PROXMOX["node"] = config.proxmox_node()
@@ -1415,23 +1417,40 @@ def teardown(config, yes=False) -> int:
     return 0
 
 
-def _same_code(config, repo_root, yes):
-    """The round runs this checkout's code against the host's workspace (its OpenTofu state, its
-    gameplans): both must be the same commit, or it is said and asked."""
-    marker = Path(repo_root) / ".worms-commit"
+def _sync_workspace(config, runner=None, check=None, record=None) -> None:
+    """The host's workspace (playbooks, gameplans, the sandbox stack: /opt/worms) at this checkout's
+    commit, before anything is stopped: synced here when it is not (`SetupRoundAgent.yml --tags
+    agent-sync`, which leaves the generated definitions and OpenTofu's state alone), then the
+    host's gameplans checked, and the workspace recorded in deployed.json. A round runs committed
+    code only: a checkout with changes to tracked files is refused. Until 2026-11-26 the session
+    asked whether to run on mixed code, and `worms apply round-agent gameplans` was yours to
+    remember."""
+    from worms_cli import changes
+
+    runner = runner or build_runner(config)
+    here = runner.commit()
+    if here.endswith("-dirty"):
+        raise BuildError(f"this checkout has uncommitted changes ({here}): commit or stash them first; a round runs committed "
+                         "code only")  # fmt: skip
+    marker = Path(HOST_WORKSPACE) / ".worms-commit"
     there = marker.read_text().strip() if marker.exists() else "(unknown)"
-    here = subprocess.run(["git", "-C", str(config.repo_root), "rev-parse", "--short", "HEAD"], capture_output=True,
-                          text=True).stdout.strip()  # fmt: skip
-    dirty = subprocess.run(["git", "-C", str(config.repo_root), "status", "--porcelain", "--untracked-files=no"],
-                           capture_output=True, text=True).stdout.strip()  # fmt: skip
-    here += "-dirty" if dirty else ""
-    if there.removesuffix("-dirty")[:7] == here.removesuffix("-dirty")[:7] and not dirty:
+    if there == here:
         print(output.status_cell("ok", f"the host's workspace runs this checkout's code ({here})"))
         return
-    print(output.status_cell("warn", f"the host's workspace ({repo_root}) is at {there}, this checkout at {here}: "
-                                     "`worms apply round-agent gameplans` brings them together"))  # fmt: skip
-    if not ask("Run the round all the same?", False, yes):
-        raise BuildError("not started: the host's workspace and this checkout differ")
+    says("worms apply gameplans")  # what does the same
+    runner.ansible("SetupRoundAgent.yml", "--tags", "agent-sync")
+    (check or check_gameplans)(config)
+    try:
+        (record or changes.record_deployed)(runner.session, ["workspace"], here)
+    except Exception as exc:  # noqa: BLE001  (the record is no reason to stop)
+        output.warn(f"the record of what runs did not get the workspace: {exc}")
+    print(output.status_cell("ok", f"workspace synced: {there} → {here}"))
+
+
+def build_runner(config):
+    from worms_cli import build
+
+    return build.Runner(config)
 
 
 # -- the logs ------------------------------------------------------------------------------------

@@ -1225,3 +1225,44 @@ def test_the_entry_is_the_teams_own_latest_upload(db_clean):
     runs = {run.team_id: run for run in plan_round(round_obj)}
     assert runs[red.id].upload_id == red_entry.id
     assert runs[blue.id].upload_id == blue_entry.id
+
+
+# --- the host's workspace at the checkout's commit (worms_cli/rounds.py _sync_workspace, T10) --------
+
+
+class _SyncRunner:
+    def __init__(self, commit):
+        self._commit, self.calls, self.session = commit, [], object()
+
+    def commit(self):
+        return self._commit
+
+    def ansible(self, *args):
+        self.calls.append(args)
+
+
+@pytest.mark.parametrize("here, there, synced", [
+    ("a3a66c9", "a3a66c9", False),  # the same: nothing to do
+    ("a3a66c9", "9f1e2d0", True),  # another: synced, checked, recorded
+])  # fmt: skip
+def test_a_round_brings_the_hosts_workspace_to_the_checkouts_commit(tmp_path, monkeypatch, capsys, here, there, synced):
+    from worms_cli import rounds
+
+    (tmp_path / ".worms-commit").write_text(there + "\n")
+    monkeypatch.setattr(rounds, "HOST_WORKSPACE", str(tmp_path))
+    runner, checked, recorded = _SyncRunner(here), [], []
+    rounds._sync_workspace(None, runner=runner, check=checked.append, record=lambda s, names, commit: recorded.append((names, commit)))
+    assert runner.calls == ([("SetupRoundAgent.yml", "--tags", "agent-sync")] if synced else [])
+    assert (checked, recorded) == (([None], [(["workspace"], here)]) if synced else ([], []))
+    assert (f"workspace synced: {there} → {here}" in capsys.readouterr().out) is synced
+
+
+def test_a_round_refuses_a_checkout_with_uncommitted_changes_before_anything(tmp_path, monkeypatch):
+    from worms_cli import rounds
+    from worms_cli.build import BuildError
+
+    monkeypatch.setattr(rounds, "HOST_WORKSPACE", str(tmp_path))
+    runner = _SyncRunner("a3a66c9-dirty")
+    with pytest.raises(BuildError, match="commit or stash them first"):
+        rounds._sync_workspace(None, runner=runner, check=lambda config: None, record=lambda *a: None)
+    assert runner.calls == []

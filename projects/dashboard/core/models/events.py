@@ -138,7 +138,7 @@ class CredentialEvent(Actor):
 class CompetitionEvent(Actor):
     """Staff changes to the competition and its rounds."""
 
-    kind = models.TextField()  # competition_updated, round_created, round_updated, round_deleted
+    kind = models.TextField()  # competition_updated, round_created, round_updated, round_deleted, round_note
     round_id = models.BigIntegerField(null=True)
     detail = models.JSONField(default=dict)
 

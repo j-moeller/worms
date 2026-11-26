@@ -468,6 +468,37 @@ def test_edit_and_delete_before_the_runs_exist(staff_site):
     assert not Round.objects.filter(pk=r9.pk).exists()
 
 
+def test_a_rounds_note_is_staffs_own(staff_site):
+    """A quick note from the rounds panel: saved any time, only the note, shown escaped on the
+    staff page; empty removes it; no one else can write it, and no team template shows it."""
+    from core.models.competition import Round
+    from core.models.user import User
+
+    post(staff_site, "/staff/rounds/", round_data(), page="/staff/rounds/")
+    r1 = Round.objects.get(name="R1")
+    saved = post(staff_site, f"/staff/rounds/{r1.uuid}/note/", {"note": "  check the seed <b>first</b>  "}, page="/staff/rounds/")
+    assert saved.status_code == 302 and saved["Location"] == "/staff/rounds/"
+    r1.refresh_from_db()
+    assert r1.note == "check the seed <b>first</b>" and r1.name == "R1"
+    page = get(staff_site, "/staff/rounds/").content.decode()
+    assert 'value="check the seed &lt;b&gt;first&lt;/b&gt;"' in page and "<b>first</b>" not in page
+    post(staff_site, f"/staff/rounds/{r1.uuid}/note/", {"note": "x" * 600}, page="/staff/rounds/")
+    r1.refresh_from_db()
+    assert r1.note == "x" * 500
+    post(staff_site, f"/staff/rounds/{r1.uuid}/note/", {"note": " "}, page="/staff/rounds/")
+    r1.refresh_from_db()
+    assert r1.note == ""
+
+    student = User.objects.create(username="student")
+    staff_site.force_login(student)
+    assert post(staff_site, f"/staff/rounds/{r1.uuid}/note/", {"note": "mine"}).status_code == 302
+    r1.refresh_from_db()
+    assert r1.note == ""
+    templates = REPO / "projects" / "dashboard" / "dashboard" / "templates"
+    shown = [p.relative_to(templates).as_posix() for p in templates.rglob("*.html") if re.search(r"round\w*\.note\b", p.read_text())]
+    assert shown == ["staff/rounds.html"], shown
+
+
 def test_round_parameters_reach_the_runs_and_the_conductor(db_clean):
     from core.models.competition import Competition, Round
     from core.models.team import Team

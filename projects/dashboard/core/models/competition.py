@@ -116,6 +116,9 @@ class Round(models.Model):
     devboxes_off = models.BooleanField(default=True, db_default=True)
     devbox_hold = models.TextField(blank=True, default="", db_default="")
     on_hold = models.BooleanField(default=False, db_default=False)
+    # Staff's own note on the round, written and shown in the rounds panel only (round_note): no
+    # team page, team API or progression shows it.
+    note = models.TextField(blank=True, default="", db_default="")
 
     class Meta:
         db_table = "rounds"

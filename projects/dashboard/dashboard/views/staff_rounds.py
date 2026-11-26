@@ -41,6 +41,7 @@ from django.shortcuts import get_object_or_404, redirect
 from django.views.decorators.http import require_POST
 
 ACTIVE_STATES = [s for s in RoundRun.State.values if s not in ("pending", "finished", "failed", "skipped")]
+NOTE_LIMIT = 500
 
 
 def _status(round_obj, now) -> str:
@@ -259,6 +260,21 @@ def round_detail(request: HttpRequest, round_uuid):
         "version": round_gameplan(round_obj),
         "progress": round_progress.progress(round_obj),
     })  # fmt: skip
+
+
+@staff_required
+@require_POST
+def round_note(request: HttpRequest, round_uuid):
+    """Staff's quick note on a round, from the rounds panel: any time, a round under way too. Only
+    the note is written (nothing else of the round, which may be changing meanwhile); empty removes
+    it. Shown on the staff pages only, never to a team."""
+    round_obj = get_object_or_404(Round, uuid=round_uuid, competition=request.competition)
+    note = request.POST.get("note", "").strip()[:NOTE_LIMIT]
+    if note != round_obj.note:
+        Round.objects.filter(pk=round_obj.pk).update(note=note)
+        events.competition("round_note", request=request, round_id=round_obj.pk, detail={"name": round_obj.name})
+    messages.success(request, f"Note on {round_obj.name} saved." if note else f"Note on {round_obj.name} removed.")
+    return redirect("staff_rounds")
 
 
 @staff_required

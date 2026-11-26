@@ -196,8 +196,8 @@ def _competition_status(config) -> list[list[str]]:
             rows.append(["round runs", output.status_cell("ok", summary)])
         if runs["queued_jobs"]:
             rows.append(["host jobs", output.status_cell("warn", f"{runs['queued_jobs']} queued")])
-    except Exception:  # noqa: BLE001  (round tables may be empty/new)
-        pass
+    except Exception as exc:  # noqa: BLE001  (said, not a traceback: before 2026-11-26 it was swallowed)
+        rows.append(["round runs", output.status_cell("error", f"could not be read: {str(exc).strip().splitlines()[0][:120] if str(exc).strip() else type(exc).__name__}")])
     return rows
 
 
@@ -221,8 +221,9 @@ tail -n 20000 {ledger} 2>/dev/null; echo '#--'
 grep -H '^meta:' /etc/pve/qemu-server/*.conf 2>/dev/null; echo '#--'
 cat {stopped} 2>/dev/null; echo; echo '#--'
 pid=$(sed -n 's/.*"pid": *\([0-9][0-9]*\).*/\1/p' {stopped} 2>/dev/null); [ -n "$pid" ] && tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null; echo; echo '#--'
+cat {deployed} 2>/dev/null; echo; echo '#--'
 """
-PROBED = ("held", "window", "clean", "active", "ledger", "meta", "stopped", "session")
+PROBED = ("held", "window", "clean", "active", "ledger", "meta", "stopped", "session", "deployed")
 
 
 def _host_probe(config) -> dict:
@@ -237,10 +238,12 @@ def _host_probe(config) -> dict:
     if not config.ssh and not os.path.isdir(PVE_CONFIG_DIR):
         return {"error": "not on it: set WORMS_SSH"}
     units = [unit for service in services.SERVICES.values() if service.where == "host" for unit in service.up_units]
+    from worms_cli.changes import DEPLOYED
     from worms_cli.rounds import STOPPED_RECORD
 
     script = HOST_PROBE.format(held=power.HELD_DEVBOXES, window=power.WINDOW_STOPPED, units=" ".join(map(shlex.quote, units)),
-                               ledger=shlex.quote(history.LEDGER), stopped=shlex.quote(STOPPED_RECORD))  # fmt: skip
+                               ledger=shlex.quote(history.LEDGER), stopped=shlex.quote(STOPPED_RECORD),
+                               deployed=shlex.quote(DEPLOYED))  # fmt: skip
     try:
         code, out, err = for_config(config).host_run(["sh", "-c", script])
     except (SessionError, OSError) as exc:
@@ -251,7 +254,12 @@ def _host_probe(config) -> dict:
     return dict(zip(PROBED, parts + [""] * len(PROBED)))
 
 
-def _round_session_rows(probe, vms) -> list[list[str]]:
+def _session_runs(probe) -> bool:
+    """A `worms round start` runs on the host now (its record's pid, worms_cli/rounds.py)."""
+    return "round start" in probe.get("session", "")
+
+
+def _round_session_rows(probe, vms, service_states=None) -> list[list[str]]:
     """What a round session stopped (worms_cli/rounds.py STOPPED_RECORD): while the session runs,
     said; once it has ended, what it left stopped that still is, and what starts it again."""
     import json
@@ -266,10 +274,13 @@ def _round_session_rows(probe, vms) -> list[list[str]]:
         return []
     names = [name for name in record.get("stopped") or [] if name in START_AGAIN]
     who = f"the session of round {record.get('round')!r} (pid {record.get('pid')}, since {record.get('since', '?')})"
-    if "round start" in probe.get("session", ""):
+    if _session_runs(probe):
         what = ", ".join(START_AGAIN[name][0] for name in START_AGAIN if name in names) or "nothing yet"
-        return [["round session", output.status_cell("running", f"{who} runs: it stopped {what}, and starts them again "
-                                                     "at its end")]]  # fmt: skip
+        return [[ROUND_RUNS_LABEL, output.status_cell("running", f"{who} runs: it stopped {what}, and starts them again "
+                                                      "at its end")]]  # fmt: skip
+    orchestrator = (service_states or {}).get("orchestrator")
+    if isinstance(orchestrator, dict) and all(state == "active" for state in orchestrator.values()):
+        names = [name for name in names if name != "orchestrator"]
     if "worms-round-agent active" in probe.get("active", ""):
         names = [name for name in names if name != "agent"]
     if vms is not None and all(vm.get("status") == "running" for vm in vms if vm.get("pool") == "devbox"):
@@ -278,6 +289,59 @@ def _round_session_rows(probe, vms) -> list[list[str]]:
         return []
     return [["round session", output.status_cell("error", f"{who} has ended, and left stopped: " + "; ".join(
         f"{START_AGAIN[name][0]} (`{START_AGAIN[name][1]}`)" for name in START_AGAIN if name in names))]]  # fmt: skip
+
+
+ROUND_RUNS_LABEL = "round in progress"  # said while a session runs: not a problem (cmd_status's exit)
+
+
+def _service_rows(states, during_round=False) -> list[list[str]]:
+    """The platform's services on their own VMs (services.Units.vm_states) that are not active: one
+    row. During a round the orchestrator is stopped on purpose (its session's row says so)."""
+    from worms_cli import services
+
+    service_of = {(service.where, unit): name for name, service in services.SERVICES.items() for unit in service.up_units}
+    down = []
+    for where, found in states.items():
+        if during_round and where == "orchestrator":
+            continue
+        if isinstance(found, str):
+            down.append(f"{where}: {found}")
+            continue
+        for unit, state in found.items():
+            if state != "active":
+                name = service_of.get((where, unit), unit)
+                down.append(f"{name} on {where} ({unit}: {state}; `worms log {name}`, `worms service start {name}`)")
+    if not down:
+        return []
+    return [["platform services", output.status_cell("error", "not active: " + "; ".join(down))]]
+
+
+def _code_row(config, probe) -> list[str]:
+    """The commit each component was last brought up to (the host's record, worms_cli/changes.py),
+    next to this checkout's: what runs, and whether a deploy would change it."""
+    import json
+
+    from worms_cli.changes import DEPLOYED
+
+    here = build.Runner(config).commit()
+    try:
+        record = json.loads(probe.get("deployed", "").strip() or "{}")
+    except ValueError:
+        record = {}
+    if not isinstance(record, dict) or not record:
+        return ["code", output.status_cell("unknown", f"this checkout {here}; no deploy recorded ({DEPLOYED})")]
+    by_commit: dict[str, list[str]] = {}
+    for name, entry in sorted(record.items()):
+        by_commit.setdefault(entry.get("commit", "?") if isinstance(entry, dict) else "?", []).append(name)
+    if here == "unknown":
+        return ["code", output.status_cell("unknown", "this checkout's commit unknown; " + "; ".join(
+            f"{', '.join(names) if len(names) <= 4 else f'{len(names)} components'} at {commit}" for commit, names in by_commit.items()))]  # fmt: skip
+    other = {commit: names for commit, names in by_commit.items() if commit.removesuffix("-dirty") != here.removesuffix("-dirty")}
+    if not other:
+        return ["code", output.status_cell("ok", f"every component at this checkout ({here})")]
+    said = "; ".join(f"{', '.join(names) if len(names) <= 4 else f'{len(names)} components'} at {commit}"
+                     for commit, names in other.items())  # fmt: skip
+    return ["code", output.status_cell("warn", f"this checkout {here}; {said} (`worms apply --plan` says what differs)")]
 
 
 def _attention(config, listing, internet, probe) -> list[list[str]]:
@@ -290,6 +354,16 @@ def _attention(config, listing, internet, probe) -> list[list[str]]:
     from worms_cli.pipeline import SERVICE_POOLS
 
     rows, unchecked = [], []
+    service_states = {}
+    try:
+        from worms_cli import services
+
+        service_states, not_asked = services.Units(config).vm_states()
+        if not_asked:
+            reasons = sorted(set(not_asked.values()))
+            unchecked.append(f"the services on {', '.join(not_asked)} ({reasons[0]}{' …' if len(reasons) > 1 else ''})")
+    except Exception as exc:  # noqa: BLE001  (no catalogue, no host: said, not fatal)
+        unchecked.append(f"the platform's services ({str(exc).strip()[:60]})")
     if "ALLOWED" in internet[1]:
         rows.append(["internet window", output.status_cell("warn", "OPEN: no team VM may run; `worms internet off`")])
     vms, _ = listing
@@ -316,7 +390,8 @@ def _attention(config, listing, internet, probe) -> list[list[str]]:
         if down:
             rows.append(["host services", output.status_cell("error", f"not active: {', '.join(down)} (`worms log agent`, "
                                                              "`worms log firewall`)")])  # fmt: skip
-        rows += _round_session_rows(probe, vms)
+        rows += _round_session_rows(probe, vms, service_states)
+    rows += _service_rows(service_states, during_round=_session_runs(probe))
     try:
         from worms_cli import django_setup
 
@@ -324,7 +399,26 @@ def _attention(config, listing, internet, probe) -> list[list[str]]:
         from datetime import timedelta
 
         from core import clock
-        from core.models.rounds import HostJob
+        from core.models.rounds import HostJob, RoundRun
+        from worms_cli import services
+
+        # Marked running, run nowhere (services.left_behind: their session ended, the agent is
+        # stopped, or no heartbeat): what they hold up waits until they are closed.
+        agent_stopped = not probe.get("error") and "worms-round-agent active" not in probe.get("active", "")
+        left = [(job, why) for job in HostJob.objects.filter(state=HostJob.State.RUNNING).order_by("id")
+                if (why := services.left_behind(job, agent_stopped))]  # fmt: skip
+        if left:
+            rows.append(["host jobs", output.status_cell("error", f"{len(left)} marked running, but run nowhere: "
+                                                         + "; ".join(f"#{job.id} {job.kind}: {why}" for job, why in left[:3])
+                                                         + f" (`worms jobs cancel {' '.join(str(job.id) for job, _ in left)}`)")])  # fmt: skip
+        # An attempt under way that no session runs (a SIGKILL): every dev upload waits for it.
+        if not probe.get("error") and not _session_runs(probe):
+            done = [RoundRun.State.FINISHED, RoundRun.State.FAILED, RoundRun.State.SKIPPED, RoundRun.State.PENDING]
+            for run in RoundRun.objects.exclude(state__in=done).select_related("team", "round"):
+                rows.append(["round run", output.status_cell("error", f"{run.team.name}'s attempt {run.attempt} in round "
+                                                             f"{run.round.name!r} is {run.state}, but no round session runs: "
+                                                             "every dev upload waits for it; `worms round teardown` closes it "
+                                                             f"(or `worms round start {run.round.id} --resume`)")])  # fmt: skip
 
         failed = list(HostJob.objects.filter(state=HostJob.State.FAILED, finished_at__gte=clock.now() - timedelta(hours=24))
                       .order_by("-id").values_list("id", "kind")[:20])  # fmt: skip
@@ -346,20 +440,23 @@ def _attention(config, listing, internet, probe) -> list[list[str]]:
 
 
 def cmd_status(config, args) -> int:
-    """`worms status`: what needs attention, the platform, every VM, the competition."""
+    """`worms status`: what needs attention, the platform, every VM, the competition. Exits 1 when
+    it found something that needs a look (the attention block: more than a round in progress, or
+    what it could not check), else 0: an unconfigured checkout is not a problem."""
     listing, internet, probe = _list_vms(config), _internet_status(config), _host_probe(config)
+    attention = _attention(config, listing, internet, probe)
     print(output.heading("attention"))
-    print(output.table(_attention(config, listing, internet, probe)))
+    print(output.table(attention))
     print()
     print(output.heading("platform"))
-    print(output.table(_platform_rows(config, internet)))
+    print(output.table(_platform_rows(config, internet) + ([] if probe.get("error") else [_code_row(config, probe)])))
     print()
     print(output.heading("VMs"))
     print(output.table(_vm_rows(config, listing, probe), headers=VM_HEADERS))
     print()
     print(output.heading("competition (database)"))
     print(output.table(_competition_status(config)))
-    return 0
+    return 0 if all(row[0] in ("", ROUND_RUNS_LABEL, "not checked") for row in attention) else 1
 
 
 # -- the lists: a noun alone (`worms jobs`), or `worms show <list>` ---------------------------------

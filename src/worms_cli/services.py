@@ -260,6 +260,45 @@ class Units:
             raise BuildError(f"on {where}: {command}: exit {code}: {(err or out).strip()[-300:]}")
         return code, out
 
+    def vm_states(self) -> tuple[dict, dict]:
+        """`worms status`: the units of every service that runs on a VM of its own (the
+        orchestrator's, the website's, the sandbox APIs', the database's, ...), one SSH command a VM,
+        the VMs at once. ({VM: {unit: state}, or why it has none: its VM not running}, {VM: why
+        it could not be asked}). A VM this system does not have is left out."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        wanted: dict[str, list[str]] = {}
+        for service in SERVICES.values():
+            if service.where != "host":
+                units = wanted.setdefault(service.where, [])
+                units += [unit for unit in service.up_units if unit not in units]
+        self.catalogue.vms()  # listed once, before the threads ask
+
+        def one(where, units):
+            try:
+                vm = self.catalogue.resolve(where)
+            except BuildError:
+                return where, None, None  # not on this system
+            if vm.get("status") != "running":
+                return where, f"its VM is {vm.get('status')}", None
+            try:
+                code, out = self._sh(where, "systemctl is-active " + " ".join(units) + " || true", check=False)
+            except Exception as exc:  # noqa: BLE001  (no address, no answer: not checked, said)
+                return where, None, str(exc).strip().splitlines()[0][:80] if str(exc).strip() else type(exc).__name__
+            states = out.split()
+            if len(states) != len(units):
+                return where, None, f"no answer (exit {code})"
+            return where, dict(zip(units, states)), None
+
+        states, unchecked = {}, {}
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for where, found, why in pool.map(lambda item: one(*item), wanted.items()):
+                if found is not None:
+                    states[where] = found
+                elif why is not None:
+                    unchecked[where] = why
+        return states, unchecked
+
     def active(self, name: str) -> list[str]:
         """The units of a service or group that are active (a VM that is not running: none)."""
         found = []

@@ -65,6 +65,7 @@ STATE_TEXT = {
     S.FINISHED: "finished",
     S.FAILED: "failed",
     S.SKIPPED: "skipped: no upload before the start",
+    S.SUPERSEDED: "superseded: the round changed after it; no longer counted",
 }
 
 

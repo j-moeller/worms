@@ -5,9 +5,9 @@
     <p class="page-head__kicker">Staff · Rounds</p>
     <h1 class="page-head__title">{{ round.name }} <span class="badge{% if status == 'active' %} badge--accent{% endif %}">{{ status }}</span>{% if round.results_published_at %} <span class="badge">published</span>{% endif %}</h1>
     <p class="page-head__lead">{{ round.round_start|date:"Y-m-d H:i" }} – {{ round.round_end|date:"Y-m-d H:i" }} UTC.
-        {% if not form %}It has begun, or is over: it can no longer change.
-        {% elif started %}Started: its end, its gameplan and the duration per team can change until the first attempt starts. Its teams' uploads are those from before its start.{% if not round.gameplan %} It waits for a gameplan, alone: the rounds after it go ahead.{% endif %}
-        {% else %}Nothing is built until it starts.{% if not round.gameplan %} Choose its gameplan before then, or the round waits for one.{% endif %}{% endif %}</p>
+        {% if running %}<code>worms round start</code> runs this round now (seen {{ round.session_seen_at|date:"H:i:s" }} UTC): it can change once that session has ended.
+        {% elif planned %}Its runs are planned: all but its seed (the teams' order) can still change. Its teams' uploads are those from before its start.{% if ran %} Teams have run: the next <code>worms round start</code> runs again, asked, every team whose attempt no longer matches the round (its gameplan, the gameplan's version, the duration per team, the upload its start chooses); their earlier attempts are kept, superseded, no longer counted.{% endif %}{% if not round.gameplan %} <code>worms round start</code> refuses it without a gameplan.{% endif %}
+        {% else %}Nothing is built until <code>worms round start</code> runs it.{% if not round.gameplan %} Choose its gameplan before then.{% endif %}{% endif %}</p>
 </header>
 {% include "staff/_tabs.html" with section="rounds" %}
 
@@ -115,24 +115,16 @@
     <form method="post" class="panel__body form">
         {% csrf_token %}
         {% include "staff/_errors.html" %}
-        {% if started %}
-        <div class="fields">
-            {% include "staff/_field.html" with field=form.round_end %}
-            {% include "staff/_field.html" with field=form.gameplan %}
-            {% include "staff/_field.html" with field=form.team_duration %}
-        </div>
-        {% else %}
         <div class="fields">
             {% include "staff/_field.html" with field=form.name %}
             {% include "staff/_field.html" with field=form.round_start %}
             {% include "staff/_field.html" with field=form.round_end %}
-            {% include "staff/_field.html" with field=form.seed %}
+            {% if not planned %}{% include "staff/_field.html" with field=form.seed %}{% endif %}
         </div>
         <fieldset class="fieldset"><legend>Each team's run</legend><div class="fields">
             {% include "staff/_field.html" with field=form.gameplan %}
             {% include "staff/_field.html" with field=form.team_duration %}
         </div></fieldset>
-        {% endif %}
         <div class="form__actions"><button type="submit" class="btn btn--primary">Save</button></div>
     </form>
 </section>

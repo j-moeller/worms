@@ -74,7 +74,7 @@ CONFIG = {
 }
 
 ACTIVE = [S.PREPARING, S.CHECKING, S.RUNNING, S.ENDING, S.TEARING_DOWN]
-DONE = [S.FINISHED, S.FAILED, S.SKIPPED]
+DONE = [S.FINISHED, S.FAILED, S.SKIPPED, S.SUPERSEDED]
 
 # What a power action leaves a VM in.
 AFTER = {"start": "running", "stop": "stopped", "shutdown": "stopped", "suspend": "paused", "resume": "running"}
@@ -588,6 +588,8 @@ class Conductor:
         # The preflight's failures the operator accepted this session (parts of the private
         # internet that are off): later preflights do not ask again.
         self.accepted = set()
+        # {file: sha256} of the valid gameplans, as stale() checked them: pin() takes them then.
+        self.valid = None
         gameplans.framework()  # the framework's modules, for what follows
 
     def now(self):
@@ -674,20 +676,80 @@ class Conductor:
         if not round_.gameplan:
             Round.objects.filter(pk=round_.pk).update(gameplan_status="", gameplan_checked_at=self.now())
             return "it has no gameplan: staff choose one on its page (Staff -> Rounds)"
-        valid = self.check_gameplans()
+        valid, self.valid = self.valid or self.check_gameplans(), None
         status = gameplans.check_round(round_, valid)
         Round.objects.filter(pk=round_.pk).update(gameplan_status=status, gameplan_checked_at=self.now())
         if status != "ok":
             return f"its gameplan {round_.gameplan!r} is not valid at {round_.team_duration} s per team (`worms show gameplans`)"
         with serialized_resource("round-plan", round_.pk):
-            pinned = RoundRun.objects.filter(round=round_).exclude(gameplan_sha256="").values_list("gameplan_sha256", flat=True).first()
+            counted = RoundRun.objects.filter(round=round_).exclude(state=S.SUPERSEDED)
+            pinned = counted.exclude(gameplan_sha256="").values_list("gameplan_sha256", flat=True).first()
             if pinned and pinned != valid[round_.gameplan]:
                 return (f"its attempts so far ran version {pinned[:12]} of the gameplan, the host now has "
                         f"{valid[round_.gameplan][:12]}: every team must run the same version")  # fmt: skip
-            RoundRun.objects.filter(round=round_, gameplan_sha256="").update(
+            counted.filter(gameplan_sha256="").update(
                 gameplan=round_.gameplan, gameplan_sha256=valid[round_.gameplan],
                 gameplan_version_id=valid[round_.gameplan], duration=round_.team_duration)  # fmt: skip
         return None
+
+    # -- a round staff changed between sessions ----------------------------------
+
+    def stale(self, round_):
+        """Each team's latest attempt that does not match the round as it is now, with why:
+        [(run, [why, ...])], in the round's order. As it is now: the round's gameplan and that
+        file's version on the host (checked here, check_gameplans), its duration per team, and the
+        team's latest Live upload before its start. An attempt that ran (finished or failed) is
+        compared on all of them; one skipped for want of an upload on its upload; one still to
+        come on its upload and what it was pinned to. A team without a run gets one (plan_round)."""
+        from orchestrator.rounds.planner import latest_uploads, plan_round
+
+        round_ = Round.objects.get(pk=round_.pk)
+        if round_.round_start is not None:
+            plan_round(round_)
+        self.valid = self.check_gameplans()
+        current = self.valid.get(round_.gameplan, "")
+        uploads = latest_uploads(round_)
+        latest = {}
+        for run in RoundRun.objects.filter(round=round_).select_related("team").order_by("position", "attempt"):
+            latest[run.team_id] = run
+        out = []
+        for run in sorted(latest.values(), key=lambda r: r.position):
+            if run.state not in (S.PENDING, S.FINISHED, S.FAILED, S.SKIPPED):
+                continue  # under way (an earlier session's, abandoned before this) or superseded
+            why = []
+            if run.upload_id != uploads.get(run.team_id):
+                why.append("another upload is the team's latest before the round's start")
+            if run.state in (S.FINISHED, S.FAILED) or (run.state == S.PENDING and run.gameplan_sha256):
+                if run.gameplan != round_.gameplan:
+                    why.append(f"gameplan {run.gameplan or '(none)'} -> {round_.gameplan or '(none)'}")
+                elif current and run.gameplan_sha256 != current:
+                    why.append(f"{round_.gameplan}: version {run.gameplan_sha256[:12]} -> {current[:12]}")
+                if run.duration != round_.team_duration:
+                    why.append(f"{run.duration // 60} -> {round_.team_duration // 60} min per team")
+            if why:
+                out.append((run, why))
+        return out
+
+    def replan(self, round_, stale):
+        """Each attempt of `stale` (stale()) made to match the round as it is now. One still to come
+        is planned again in place (its upload; pin() pins it again); one that ran or was skipped is
+        kept, superseded (it no longer counts, nothing of it is changed), and its team gets a new
+        attempt (the next number) with the round's gameplan, duration and the team's upload."""
+        from orchestrator.rounds.planner import latest_uploads
+
+        with serialized_resource("round-plan", round_.pk), transaction.atomic():
+            round_ = Round.objects.get(pk=round_.pk)
+            uploads = latest_uploads(round_)
+            for run, _why in stale:
+                upload = uploads.get(run.team_id)
+                if run.state == S.PENDING:
+                    RoundRun.objects.filter(pk=run.pk).update(upload_id=upload, gameplan=round_.gameplan, gameplan_sha256="",
+                                                              gameplan_version=None, duration=round_.team_duration)  # fmt: skip
+                    continue
+                self.set_state(run, S.SUPERSEDED)
+                RoundRun.objects.create(round=round_, team=run.team, upload_id=upload, position=run.position,
+                                        attempt=run.attempt + 1, seed=run.seed, gameplan=round_.gameplan,
+                                        duration=round_.team_duration)  # fmt: skip
 
     # -- before an attempt ----------------------------------------------------
 

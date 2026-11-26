@@ -51,7 +51,7 @@ def run_overview() -> dict:
         by_state[run] = by_state.get(run, 0) + 1
     active = (
         RoundRun.objects.exclude(
-            state__in=[RoundRun.State.FINISHED, RoundRun.State.FAILED, RoundRun.State.SKIPPED, RoundRun.State.PENDING]
+            state__in=[RoundRun.State.FINISHED, RoundRun.State.FAILED, RoundRun.State.SKIPPED, RoundRun.State.PENDING, RoundRun.State.SUPERSEDED]
         )
         .select_related("round", "team")
         .first()

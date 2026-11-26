@@ -563,7 +563,7 @@ def _attention(config, listing, internet, probe, services_found=None, facts=None
                                                          + f" (`worms jobs cancel {' '.join(str(job.id) for job, _ in left)}`)")])  # fmt: skip
         # An attempt under way that no session runs (a SIGKILL): every dev upload waits for it.
         if not probe.get("error") and not _session_runs(probe):
-            done = [RoundRun.State.FINISHED, RoundRun.State.FAILED, RoundRun.State.SKIPPED, RoundRun.State.PENDING]
+            done = [RoundRun.State.FINISHED, RoundRun.State.FAILED, RoundRun.State.SKIPPED, RoundRun.State.PENDING, RoundRun.State.SUPERSEDED]
             for run in RoundRun.objects.exclude(state__in=done).select_related("team", "round"):
                 rows.append(["round run", output.status_cell("error", f"{run.team.name}'s attempt {run.attempt} in round "
                                                              f"{run.round.name!r} is {run.state}, but no round session runs: "

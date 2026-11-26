@@ -414,6 +414,45 @@ class KeyAgent:
 # -- the session ---------------------------------------------------------------------------------
 
 
+class SessionMark:
+    """This session's mark on its round (Round.session_seen_at): while it is fresh, staff cannot
+    change the round on the dashboard. Written at once and every SESSION_BEAT seconds by a thread
+    of its own, whatever the session waits for; cleared when the session ends. A session killed
+    outright leaves a mark that is stale after SESSION_STALE seconds."""
+
+    def __init__(self, round_):
+        self.model, self.pk = type(round_), round_.pk
+        self.done = threading.Event()
+        self.write()
+        self.thread = threading.Thread(target=self._beat, name="round-session-mark", daemon=True)
+        self.thread.start()
+
+    def write(self, alive=True):
+        from django.utils import timezone
+
+        self.model.objects.filter(pk=self.pk).update(session_seen_at=timezone.now() if alive else None)
+
+    def _beat(self):
+        from django.db import connection
+
+        try:
+            while not self.done.wait(self.model.SESSION_BEAT):
+                try:
+                    self.write()
+                except Exception as exc:  # noqa: BLE001  (the database away a moment: the next beat)
+                    log.warning("the round's session mark was not renewed: %s", exc)
+        finally:
+            connection.close()
+
+    def stop(self):
+        self.done.set()
+        self.thread.join(timeout=10)
+        try:
+            self.write(alive=False)
+        except Exception as exc:  # noqa: BLE001  (stale in SESSION_STALE seconds all the same)
+            log.warning("the round's session mark was not cleared: %s", exc)
+
+
 class Session:
     def __init__(self, config, round_, yes=False):
         from worms_cli.summary import Summary
@@ -463,10 +502,11 @@ def _latest_runs(round_):
     return sorted(latest.values(), key=lambda run: run.position)
 
 
-def _chosen(session, args):
+def _chosen(session, args, replanned=False):
     """The attempts this session runs, in order: a first session's every one; --resume, every team
-    that has not finished; --team, the named teams'. A failed one's team gets a new attempt once
-    the round is ready (_run). None: nothing to run, or refused."""
+    that has not finished; --team, the named teams'; after the round changed (`replanned`), every
+    team that has not finished, as --resume. A failed one's team gets a new attempt once the round
+    is ready (_run). None: nothing to run, or refused."""
     from core.models.rounds import RoundRun
 
     S = RoundRun.State
@@ -481,7 +521,7 @@ def _chosen(session, args):
             if run.state not in (S.PENDING, S.FAILED):
                 raise BuildError(f"{run.team.name}'s attempt {run.attempt} is {run.state}: only a pending or failed one runs")
             chosen.append(run)
-    elif args.resume:
+    elif args.resume or replanned:
         chosen = unfinished
     else:
         ran = [run for run in latest if run.state != S.PENDING or run.attempt > 0]
@@ -1095,6 +1135,9 @@ def start(config, args) -> int:
     if os.geteuid() != 0:
         raise BuildError("a round runs as root on the host")
     round_ = control.find_round(args.round)
+    if round_.session_running(timezone.now()):
+        raise BuildError(f"another `worms round start` runs round {round_.name!r} (its mark is from "
+                         f"{round_.session_seen_at:%H:%M:%S} UTC): one session per round")  # fmt: skip
     session = Session(config, round_, yes=args.yes)
     tee = runlog.Tee("round")
     tee.path = session.dir / "round.log"
@@ -1105,9 +1148,11 @@ def start(config, args) -> int:
         logging.getLogger(name).addHandler(handler)
         logging.getLogger(name).setLevel(logging.INFO)
         logging.getLogger(name).propagate = False
-    key = None
+    key = mark = None
     _end_on_signals()
     try:
+        # From here until it ends, staff cannot change the round on the dashboard.
+        mark = SessionMark(round_)
         print(output.color(f"this session's folder: {session.dir} (round.log: what this terminal shows)", "dim"))
         print(output.color(f"what failed, why, and in which file the rest is: {session.summary.path} (always the "
                            f"newest: {directory() / 'latest' / 'summary.log'})", "bold"))  # fmt: skip
@@ -1145,7 +1190,25 @@ def start(config, args) -> int:
             if not ask("Fail it and stop its VMs (its sandbox kept)?", True, args.yes):
                 return 1
             session.conductor.abandon(run)
-        runs = _chosen(session, args)
+        # Staff may have changed the round since its attempts (its gameplan, the gameplan's version,
+        # the duration per team, the start): the teams whose attempt no longer matches, asked.
+        replanned = False
+        stale = session.conductor.stale(round_)
+        if stale:
+            print(output.heading("the round changed since these attempts"))
+            for run, why in stale:
+                print(f"  {run.team.name}, attempt {run.attempt} ({run.state}): {'; '.join(why)}")
+            ran = sum(1 for run, _why in stale if run.state != RoundRun.State.PENDING)
+            if not ask("Run them as the round is now?"
+                       + (f" The {ran} attempt(s) that ran or were skipped are kept as superseded (no longer counted); "
+                          "their teams get a new attempt." if ran else "")
+                       + " Attempts still to come take the round's gameplan and the team's latest upload.", False, args.yes):  # fmt: skip
+                print(output.color("Nothing changed, nothing runs. Set the round back on Staff -> Rounds, or answer yes.", "yellow"))
+                return 1
+            session.conductor.replan(round_, stale)
+            replanned = True
+            _say_round(round_, _latest_runs(round_))
+        runs = _chosen(session, args, replanned)
         if not runs:
             return 0 if runs == [] else 1
         if not any(run.upload_id for run in runs):
@@ -1164,7 +1227,8 @@ def start(config, args) -> int:
             session.summary.failure("the gameplan: not fixed for the round's attempts, nothing ran", problem,
                                     log=session.jobs.last.get("log", ""), refers=session.jobs.last.get("entry"))  # fmt: skip
             return 1
-        pinned = RoundRun.objects.filter(round=round_).exclude(gameplan_sha256="").values_list("gameplan_sha256", flat=True).first()
+        pinned = (RoundRun.objects.filter(round=round_).exclude(gameplan_sha256="").exclude(state=RoundRun.State.SUPERSEDED)
+                  .values_list("gameplan_sha256", flat=True).first())  # fmt: skip
         print(output.status_cell("ok", f"{round_.gameplan}, version {pinned[:12]}: valid at {round_.team_duration} s per team"))
         record = session.jobs.handlers.unfinished_build(session.jobs.cfg)
         if record:
@@ -1251,6 +1315,8 @@ def start(config, args) -> int:
         if session.summary.status == "running":
             session.summary.end("ended before the round ran: a question answered no, or a check failed (round.log has it)")
         _close_record(session)
+        if mark is not None:
+            mark.stop()
         if key is not None:
             key.stop()
         tee.stop()

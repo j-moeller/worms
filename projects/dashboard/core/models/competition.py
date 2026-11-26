@@ -119,6 +119,12 @@ class Round(models.Model):
     # Staff's own note on the round, written and shown in the rounds panel only (round_note): no
     # team page, team API or progression shows it.
     note = models.TextField(blank=True, default="", db_default="")
+    # A `worms round start` session of this round is alive (src/worms_cli/rounds.py): it writes the
+    # time every SESSION_BEAT seconds and clears it when it ends. Staff change a round whenever
+    # none is (session_running); a killed session's mark is stale after SESSION_STALE seconds.
+    session_seen_at = models.DateTimeField(null=True, blank=True)
+    SESSION_BEAT = 30
+    SESSION_STALE = 120
 
     class Meta:
         db_table = "rounds"
@@ -153,6 +159,10 @@ class Round(models.Model):
 
     def __str__(self):
         return f"Round({self.name})"
+
+    def session_running(self, now) -> bool:
+        """Whether `worms round start` runs this round now (its heartbeat is fresh)."""
+        return self.session_seen_at is not None and (now - self.session_seen_at).total_seconds() < self.SESSION_STALE
 
     def is_active(self, now):
         if self.round_start is None or self.round_end is None:

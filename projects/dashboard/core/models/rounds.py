@@ -38,6 +38,10 @@ class RoundRun(models.Model):
         FINISHED = "finished"
         FAILED = "failed"  # see `error`; thrown away, and tried again while attempts are left
         SKIPPED = "skipped"  # no upload before the deadline
+        # Ran (or was skipped) before staff changed the round (its gameplan, the gameplan's version,
+        # the duration per team, or the start, which chooses the upload): kept for the record, never
+        # counted; the team's next attempt runs the round as it is now (`worms round start`).
+        SUPERSEDED = "superseded"
 
     # Where in an attempt a failure happened (its `failure`'s phase: the state it was in), said.
     PHASES = {"pending": "before it began", "preparing": "while its sandbox was rolled back or prepared (rollback, prepare)",
@@ -207,7 +211,8 @@ def round_gameplan(round_) -> dict:
     attempt runs it) once its first attempt starts; before that, the current version of its file,
     which may still change. `recorded`: the version's bytes are in gameplan_versions (a run pinned
     before versions were recorded, whose file is gone, is known by hash only)."""
-    sha = RoundRun.objects.filter(round=round_).exclude(gameplan_sha256="").values_list("gameplan_sha256", flat=True).first()
+    sha = (RoundRun.objects.filter(round=round_).exclude(gameplan_sha256="").exclude(state=RoundRun.State.SUPERSEDED)
+           .values_list("gameplan_sha256", flat=True).first())  # fmt: skip
     pinned = bool(sha)
     if not pinned:
         sha = GameplanFile.objects.filter(filename=round_.gameplan).values_list("version_id", flat=True).first() if round_.gameplan else None

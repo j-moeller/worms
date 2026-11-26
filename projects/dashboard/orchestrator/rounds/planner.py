@@ -22,6 +22,18 @@ from django.db import transaction
 from django.db.models import OuterRef, Subquery
 
 
+def latest_uploads(round) -> dict:
+    """{team id: its latest Live upload before the round's start (its id; None without one)}, for
+    every team of the round's competition: what the round's runs take."""
+    latest_upload = (
+        Upload.objects.filter(team=OuterRef("pk"), devbox=False, created_at__lt=round.round_start)
+        .order_by("-created_at", "-id")
+        .values("id")[:1]
+    )
+    return dict(Team.objects.filter(competition=round.competition).annotate(latest=Subquery(latest_upload))
+                .values_list("id", "latest"))  # fmt: skip
+
+
 def plan_round(round, base_seed=None):
     """Create the missing runs for `round`. Idempotent: existing runs are left
     as they are. Returns the first attempts in running order."""

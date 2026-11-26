@@ -354,7 +354,7 @@ def test_create_a_round(staff_site):
     assert created.competition == competition() and created.seed >= 0
     assert (created.gameplan, created.team_duration) == ("", 3600)
     page = text(get(staff_site, f"/staff/rounds/{created.uuid}/"))
-    assert "Nothing is built until it starts" in page and f"seed {created.seed}" in page
+    assert "Nothing is built until worms round start runs it" in page and f"seed {created.seed}" in page
     assert "Choose its gameplan before then" in page and "none yet" in page
 
     # With a gameplan the orchestrator lists as valid; never one it does not.
@@ -425,8 +425,8 @@ def test_rounds_do_not_overlap_and_there_are_no_dev_rounds(staff_site):
 
 
 def test_edit_and_delete_before_the_runs_exist(staff_site):
-    """Edited fully before it starts; its gameplan can still be chosen once its runs are
-    planned, until the first attempt starts; then it is read-only and kept."""
+    """Edited fully before its runs are planned, then all but its seed: also after attempts ran,
+    whenever no `worms round start` runs it (its mark). Deleted only before its runs exist."""
     from core.models.competition import Round
     from core.models.rounds import RoundRun
     from core.models.team import Team
@@ -451,13 +451,32 @@ def test_edit_and_delete_before_the_runs_exist(staff_site):
     r1.refresh_from_db()
     assert r1.gameplan == "round_one.py"
 
-    # Once an attempt has started it is read-only and kept.
+    # An attempt ran: the round still changes, its start and gameplan too, all but its seed (the
+    # next session runs again, asked, the teams whose attempt no longer matches).
     with as_role("postgres"):
-        RoundRun.objects.filter(pk=run.pk).update(state=RoundRun.State.PREPARING)
-    assert "can no longer change" in text(get(staff_site, f"/staff/rounds/{r1.uuid}/"))
+        RoundRun.objects.filter(pk=run.pk).update(state=RoundRun.State.FINISHED, gameplan_sha256="ab" * 32)
+    page = text(get(staff_site, f"/staff/rounds/{r1.uuid}/"))
+    assert "Teams have run" in page and "Seed" not in page
+    earlier = round_data(name="R1c", team_duration=40, gameplan="", round_start="2020-01-01T10:00", round_end="2020-01-01T23:00")
+    saved = post(staff_site, f"/staff/rounds/{r1.uuid}/", earlier, page=f"/staff/rounds/{r1.uuid}/")
+    assert saved.status_code == 302, text(saved)[:1500]
+    r1.refresh_from_db()
+    assert (r1.name, r1.seed, r1.team_duration, r1.gameplan, r1.round_start.year) == ("R1c", 42, 2400, "", 2020)
+
+    # While `worms round start` runs it (its mark), nothing changes; a killed session's mark goes stale.
+    from core import clock
+
+    with as_role("postgres"):
+        Round.objects.filter(pk=r1.pk).update(session_seen_at=clock.now())
+    assert "runs this round now" in text(get(staff_site, f"/staff/rounds/{r1.uuid}/"))
     post(staff_site, f"/staff/rounds/{r1.uuid}/", round_data(name="nope"), page=f"/staff/rounds/{r1.uuid}/")
     r1.refresh_from_db()
-    assert r1.name == "R1b"
+    assert r1.name == "R1c"
+    with as_role("postgres"):
+        Round.objects.filter(pk=r1.pk).update(session_seen_at=clock.now() - timedelta(seconds=Round.SESSION_STALE + 1))
+    post(staff_site, f"/staff/rounds/{r1.uuid}/", round_data(name="R1d", gameplan="round_one.py"), page=f"/staff/rounds/{r1.uuid}/")
+    r1.refresh_from_db()
+    assert (r1.name, r1.gameplan) == ("R1d", "round_one.py")
     post(staff_site, f"/staff/rounds/{r1.uuid}/delete/")
     assert Round.objects.filter(pk=r1.pk).exists()
 

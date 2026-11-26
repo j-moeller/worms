@@ -775,6 +775,72 @@ def test_the_runs_of_a_round_share_its_sandbox(one_run, gameplans):
     assert conductor.build_sandbox(second) == {"built": False, "snapshot_due": False, "sandbox": "kept"} and not conductor.fresh
 
 
+def test_a_round_changed_after_its_attempts_runs_its_teams_again(one_run, gameplans):
+    """Staff change a round between sessions (conductor.stale, replan): each team whose latest
+    attempt no longer matches the round gets a new attempt, the old one kept as superseded (it no
+    longer counts, nothing of it changes); one still to come is planned again in place. Its
+    gameplan's file edited (a new version), then its start moved before every upload."""
+    from core.models.competition import Round
+    from core.models.rounds import RoundRun
+    from django.utils import timezone
+
+    first, second = _two_teams(one_run)
+    conductor, agent, clock = make_conductor(gameplans)
+    round_obj = Round.objects.get(pk=one_run["round"].pk)
+    assert [run.state for run in run_round(conductor, round_obj)[0]] == ["finished", "finished"]
+    assert conductor.stale(round_obj) == []  # nothing changed
+
+    edited = GAMEPLAN + "\n# a new version\n"
+    (gameplans / "two.py").write_text(edited)
+    stale = conductor.stale(round_obj)
+    assert {run.pk for run, _why in stale} == {first.pk, second.pk}
+    assert all(why == [f"two.py: version {sha(GAMEPLAN)[:12]} -> {sha(edited)[:12]}"] for _run, why in stale)
+    conductor.replan(round_obj, stale)
+    by_attempt = {(run.team_id, run.attempt): run for run in RoundRun.objects.filter(round=round_obj)}
+    for old in (first, second):
+        kept, new = by_attempt[(old.team_id, 0)], by_attempt[(old.team_id, 1)]
+        assert (kept.state, kept.gameplan_sha256, kept.upload_id) == ("superseded", sha(GAMEPLAN), old.upload_id)
+        assert (new.state, new.gameplan_sha256, new.upload_id, new.position) == ("pending", "", old.upload_id, old.position)
+    # Pinned, then the file edited once more before they ran: they are planned again in place.
+    assert conductor.pin(round_obj) is None
+    again = edited + "# and again\n"
+    (gameplans / "two.py").write_text(again)
+    stale = conductor.stale(round_obj)
+    assert [run.state for run, _why in stale] == ["pending", "pending"]
+    conductor.replan(round_obj, stale)
+    assert RoundRun.objects.filter(round=round_obj).count() == 4
+    assert [run.state for run in run_round(conductor, round_obj)[0]] == ["finished", "finished"]
+    assert set(RoundRun.objects.filter(round=round_obj, state="finished").values_list("gameplan_sha256", flat=True)) == {sha(again)}
+    assert conductor.stale(round_obj) == []
+
+    # The start moved before every upload: no team has one now, each runs again and is skipped.
+    Round.objects.filter(pk=round_obj.pk).update(round_start=round_obj.round_start - timezone.timedelta(hours=1))
+    stale = conductor.stale(round_obj)
+    assert [why for _run, why in stale] == [["another upload is the team's latest before the round's start"]] * 2
+    conductor.replan(round_obj, stale)
+    assert [run.state for run in run_round(conductor, round_obj)[0]] == ["skipped", "skipped"]
+    assert RoundRun.objects.filter(round=round_obj, state="superseded").count() == 4
+
+
+def test_a_session_marks_its_round_while_it_runs(one_run):
+    """`worms round start` marks its round (Round.session_seen_at) from its start to its end: the
+    dashboard refuses changes while the mark is fresh; a killed session's goes stale."""
+    sys.path.insert(0, str(REPO / "src"))
+    from core.models.competition import Round
+    from django.utils import timezone
+    from worms_cli.rounds import SessionMark
+
+    round_obj = Round.objects.get(pk=one_run["round"].pk)
+    assert not round_obj.session_running(timezone.now())
+    mark = SessionMark(round_obj)
+    round_obj.refresh_from_db()
+    assert round_obj.session_running(timezone.now())
+    assert not round_obj.session_running(timezone.now() + timezone.timedelta(seconds=Round.SESSION_STALE + 1))
+    mark.stop()
+    round_obj.refresh_from_db()
+    assert round_obj.session_seen_at is None and not mark.thread.is_alive()
+
+
 def test_run_without_upload_is_skipped(one_run, gameplans):
     from core.models.rounds import RoundRun
 

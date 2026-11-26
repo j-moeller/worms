@@ -195,17 +195,17 @@ class RoundForm(StyledForm):
         required=False, min_value=0, max_value=2**62,
         help_text="Empty: random. The order the teams run in derives from it.",
     )  # fmt: skip
-    # A round that has begun: its end, and its gameplan until the first attempt starts.
-    STARTED_FIELDS = ("round_end", "gameplan", "team_duration")
+    # A round whose runs are planned: all but its seed (the order the teams run in, fixed then).
+    PLANNED_FIELDS = ("name", "round_start", "round_end", "gameplan", "team_duration")
 
-    def __init__(self, *args, competition=None, instance=None, started=False, **kwargs):
+    def __init__(self, *args, competition=None, instance=None, planned=False, **kwargs):
         from core.models.rounds import GameplanFile
 
         super().__init__(*args, **kwargs)
-        self.competition, self.instance, self.started = competition, instance, started
-        if started:
+        self.competition, self.instance, self.planned = competition, instance, planned
+        if planned:
             for name in list(self.fields):
-                if name not in self.STARTED_FIELDS:
+                if name not in self.PLANNED_FIELDS:
                     del self.fields[name]
         # The label names the version (the first 12 hex digits of its SHA-256, as Staff → Gameplans
         # and `worms show gameplans` do): `sha256sum gameplans/<file>` tells whether it is the one.
@@ -232,8 +232,10 @@ class RoundForm(StyledForm):
         end = data.get("round_end")
         if start is not None and end is not None and end <= start:
             self.add_error("round_end", "The round must end after it starts.")
-        if not self.started and start is not None and start <= clock.now():
-            self.add_error("round_start", "Start the round in the future (the conductor plans its runs at the start).")
+        # A new round starts in the future (its start is the teams' upload deadline); an existing one
+        # may be moved anywhere, its runs take the uploads from before it (`worms round start`).
+        if self.instance is None and start is not None and start <= clock.now():
+            self.add_error("round_start", "Start the round in the future: its start is the teams' upload deadline.")
         return data
 
     # -- results ---------------------------------------------------------------

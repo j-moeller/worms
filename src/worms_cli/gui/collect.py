@@ -692,7 +692,7 @@ class Database(Collector):
                                "devboxes_off": r.devboxes_off, "devbox_hold": r.devbox_hold, "runs": counts.get(r.id, {}),
                                "published": r.results_published_at is not None,
                                "current": bool(start and start <= now and (end is None or now < end))})  # fmt: skip
-        done = (RoundRun.State.FINISHED, RoundRun.State.FAILED, RoundRun.State.SKIPPED, RoundRun.State.PENDING)
+        done = (RoundRun.State.FINISHED, RoundRun.State.FAILED, RoundRun.State.SKIPPED, RoundRun.State.PENDING, RoundRun.State.SUPERSEDED)
         active = RoundRun.objects.exclude(state__in=done).select_related("round", "team").order_by("-id").first()
         run = None
         if active is not None:

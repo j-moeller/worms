@@ -10,10 +10,12 @@ the host), and snapshots it; every run starts from that snapshot. An attempt the
 infrastructure failed is run again (docs/05-live-environment.md). This page shows how far
 that got: the attempts, their host jobs and errors.
 
-A round is edited fully before it starts. Afterwards its end, its gameplan and its
-duration per team can change until its first attempt starts (the conductor pins the
-gameplan then; a round without one waits, alone, and the rounds after it go ahead). It
-is deleted only before its runs exist. Where a round is, its annotated timeline, is read
+A round can change whenever no `worms round start` runs it (the session's mark,
+Round.session_running): fully before its runs are planned, then all but its seed (the
+teams' order). A change after teams ran is the next session's to carry out: it runs again,
+asked, every team whose attempt no longer matches the round, and keeps the earlier attempts
+as superseded (orchestrator/rounds/conductor.py, stale and replan). It is deleted only
+before its runs exist. Where a round is, its annotated timeline, is read
 from its runs (round_progress.py); every staff page warns of a round whose gameplan is
 missing or not valid (round_progress.warnings, through render_with_base_info).
 """
@@ -40,7 +42,10 @@ from django.http import HttpRequest
 from django.shortcuts import get_object_or_404, redirect
 from django.views.decorators.http import require_POST
 
-ACTIVE_STATES = [s for s in RoundRun.State.values if s not in ("pending", "finished", "failed", "skipped")]
+ACTIVE_STATES = [s for s in RoundRun.State.values if s not in ("pending", "finished", "failed", "skipped", "superseded")]
+RUNNING = "`worms round start` runs this round now: it can change once that session has ended."
+CHANGED = (" Teams have run: the next `worms round start` runs again, asked, every team whose attempt no longer "
+           "matches it (their earlier attempts kept, superseded, no longer counted).")  # fmt: skip
 NOTE_LIMIT = 500
 
 
@@ -118,7 +123,7 @@ def rounds(request: HttpRequest):
         for r in Round.objects.filter(competition=competition).order_by("round_start"):
             runs = list(RoundRun.objects.filter(round=r).only("state", "gameplan_sha256", "upload_id"))
             # As round_gameplan: the version pinned once an attempt started, else the file's now.
-            pinned = next((run.gameplan_sha256 for run in runs if run.gameplan_sha256), "")
+            pinned = next((run.gameplan_sha256 for run in runs if run.gameplan_sha256 and run.state != RoundRun.State.SUPERSEDED), "")
             rows.append({
                 "round": r,
                 "version": pinned or current_versions.get(r.gameplan) or "",
@@ -152,20 +157,10 @@ def rounds(request: HttpRequest):
     })  # fmt: skip
 
 
-def _begun(runs) -> bool:
-    """Whether the round can no longer change: its gameplan is pinned, an attempt has begun, or
-    nothing is left to run. A team skipped for want of an upload began nothing: the round may
-    still wait for its gameplan."""
-    if not runs:
-        return False
-    S = RoundRun.State
-    return any(run.gameplan_sha256 or run.state not in (S.PENDING, S.SKIPPED) for run in runs) or not any(
-        run.state == S.PENDING for run in runs
-    )
-
-
-def _attempt_started(round_obj) -> bool:
-    return _begun(list(RoundRun.objects.filter(round=round_obj).only("state", "gameplan_sha256")))
+def _ran(runs) -> bool:
+    """Whether a team's attempt has run (or was skipped): a change of the round then reaches it
+    only through the next session's question (CHANGED)."""
+    return any(run.state != RoundRun.State.PENDING for run in runs)
 
 
 @staff_required
@@ -185,54 +180,47 @@ def round_detail(request: HttpRequest, round_uuid):
         run.captured = captures.get(run.pk, 0)
         nodes = (run.topology or {}).get("nodes") or []
         run.network_count = sum(1 for node in nodes if isinstance(node, dict) and node.get("type") == "network")
-    # Started, or its runs planned (from its seed and window): only its end, gameplan and
-    # duration per team can still change.
-    started = (round_obj.round_start is not None and round_obj.round_start <= now) or bool(runs)
-    editable = not _begun(runs)
+    # Changed whenever no `worms round start` runs it; once its runs are planned, all but its seed.
+    running = round_obj.session_running(now)
+    planned = bool(runs)
     form = None
-    if editable:
+    if not running:
         initial = RoundForm.initial_from(round_obj)
-        form = RoundForm(initial=initial, competition=comp, instance=round_obj, started=started)
+        form = RoundForm(initial=initial, competition=comp, instance=round_obj, planned=planned)
         if request.method == "POST":
-            form = RoundForm(request.POST, competition=comp, instance=round_obj, started=started)
+            form = RoundForm(request.POST, competition=comp, instance=round_obj, planned=planned)
             if form.is_valid():
                 data = dict(form.cleaned_data)
-                start = data.get("round_start", round_obj.round_start)
-                end = data["round_end"]
+                start, end = data["round_start"], data["round_end"]
                 duration = form.team_duration_seconds()
                 with transaction.atomic():
                     Competition.objects.select_for_update().get(pk=round_obj.competition_id)
                     with serialized_resource("round-plan", round_obj.pk):
-                        # Against the conductor planning the round meanwhile.
+                        # Against `worms round start` beginning meanwhile (it plans the runs under this lock).
                         round_obj = get_object_or_404(Round, pk=round_obj.pk, competition=comp)
-                        if _attempt_started(round_obj):
-                            messages.error(request, "An attempt of the round has started; it can no longer be changed.")
+                        if round_obj.session_running(clock.now()):
+                            messages.error(request, RUNNING)
                             return redirect("staff_round", round_uuid=round_obj.uuid)
-                        if not started and ((round_obj.round_start is not None and round_obj.round_start <= clock.now())
-                                            or RoundRun.objects.filter(round=round_obj).exists()):
-                            messages.error(request, "The round has started meanwhile; reload before editing it.")
+                        if not planned and RoundRun.objects.filter(round=round_obj).exists():
+                            messages.error(request, "Its runs were planned meanwhile; reload before editing it.")
                             return redirect("staff_round", round_uuid=round_obj.uuid)
                         _check_window(form, round_obj.competition, start, end, exclude=round_obj)
                         _check_fit(form, start, end, duration, Team.objects.filter(competition=round_obj.competition).count())
                         if not form.errors:
-                            if started:
-                                round_obj.round_end, round_obj.gameplan = end, data["gameplan"]
-                                round_obj.team_duration, round_obj.gameplan_status = duration, ""
-                                # Runs planned already take both from the round when the conductor
-                                # pins its gameplan (the dashboard cannot write runs).
-                                round_obj.save(update_fields=["round_end", "gameplan", "team_duration", "gameplan_status"])
-                            else:
-                                round_obj.name, round_obj.round_start, round_obj.round_end = data["name"], start, end
-                                round_obj.seed, round_obj.gameplan = form.chosen_seed(), data["gameplan"]
-                                # The orchestrator checks it again against the new values.
-                                round_obj.team_duration, round_obj.gameplan_status = duration, ""
-                                round_obj.save(update_fields=["name", "seed", "round_start", "round_end", "gameplan",
-                                                              "team_duration", "gameplan_status"])  # fmt: skip
+                            round_obj.name, round_obj.round_start, round_obj.round_end = data["name"], start, end
+                            round_obj.gameplan, round_obj.team_duration = data["gameplan"], duration
+                            # The orchestrator checks it again against the new values.
+                            round_obj.gameplan_status = ""
+                            fields = ["name", "round_start", "round_end", "gameplan", "team_duration", "gameplan_status"]
+                            if not planned:
+                                round_obj.seed = form.chosen_seed()
+                                fields.append("seed")
+                            round_obj.save(update_fields=fields)
                             events.competition("round_updated", request=request, round_id=round_obj.pk, detail={"name": round_obj.name})
-                            messages.success(request, f"Saved {round_obj.name}.")
+                            messages.success(request, f"Saved {round_obj.name}." + (CHANGED if _ran(runs) else ""))
                             return redirect("staff_round", round_uuid=round_obj.uuid)
     elif request.method == "POST":
-        messages.error(request, "An attempt of the round has started; it can no longer be changed.")
+        messages.error(request, RUNNING)
         return redirect("staff_round", round_uuid=round_obj.uuid)
 
     teams = Team.objects.filter(competition=round_obj.competition).count()
@@ -250,7 +238,9 @@ def round_detail(request: HttpRequest, round_uuid):
         "failures": failures,
         "step_failures": step_failures,
         "form": form,
-        "started": started,
+        "running": running,
+        "planned": planned,
+        "ran": _ran(runs),
         "timing": schedule.timing_defaults(),
         "estimate": _estimate(round_obj, teams),
         # Not the observe jobs that went well: one a minute while an attempt runs, they say

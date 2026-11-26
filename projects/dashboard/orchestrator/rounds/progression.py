@@ -85,7 +85,7 @@ PI_ROLES = ("dns", "private_internet")
 SERVICE_NODES = {"scoring": "role:scoring", "logging": "role:logging"}
 DEVBOX_LINKS = (("a", "b"), ("b", "c"))
 DEVBOX_ENTRY_ROLE = "a"  # where a dev upload starts (rounds/devbox_runs.py)
-DONE_STATES = {RoundRun.State.FINISHED, RoundRun.State.FAILED, RoundRun.State.SKIPPED}
+DONE_STATES = {RoundRun.State.FINISHED, RoundRun.State.FAILED, RoundRun.State.SKIPPED, RoundRun.State.SUPERSEDED}
 NO_DEVBOX_TRAFFIC = "The monitor records the sandbox only: devbox traffic is not recorded."
 
 # The run events a team sees (anything else -- errors included -- is dropped).

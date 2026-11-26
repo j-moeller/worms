@@ -14,3 +14,6 @@ __pycache__/
 
 # Upload storage of older test runs (before MEDIA_ROOT was set; now projects/dashboard/media/ locally)
 /malware-artifacts/
+# The host's stacks' generated definitions: runtime state of the round agent's workspace.
+opentofu/stacks/sandbox/generated_vms*.tf
+opentofu/stacks/devbox/generated_devboxes.tf

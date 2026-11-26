@@ -1310,6 +1310,38 @@ def _host_steps(config, folder, summary=None):
     return repo_root, LocalJobs(repo_root, folder, summary=summary), key
 
 
+def orphan_sandbox_vms(vms, state_text) -> list:
+    """The sandbox's VMs (its pool, or named `sandbox-`) that its OpenTofu state does not hold:
+    left by an interrupted build, no firewall or record follows them (consistency.orphan_rows)."""
+    from worms_cli import consistency
+
+    managed = consistency.state_vms(state_text)
+    return [vm for vm in consistency.orphans(vms, managed) if vm.get("pool") == "sandbox" or vm["name"].startswith("sandbox-")]
+
+
+def _destroy_orphans(jobs, yes, summary, ask_each=None, state_path=None) -> list:
+    """Each orphan of the sandbox (orphan_sandbox_vms), destroyed when the operator says so, one by
+    one, by name: stopped, then `qm destroy --purge`. Returns the names destroyed."""
+    from worms_cli.session import HOST_WORKSPACE
+
+    ask_each = ask_each or (lambda question: ask(question, False, yes))
+    try:
+        state = Path(state_path or Path(HOST_WORKSPACE) / "opentofu" / "stacks" / "sandbox" / "terraform.tfstate").read_text()
+    except OSError:
+        state = ""
+    destroyed = []
+    for vm in orphan_sandbox_vms(jobs.handlers.snapshots.pool_vms(jobs.executor, "sandbox"), state):
+        says(f"qm stop {vm['vmid']}; qm destroy {vm['vmid']} --purge")
+        if not ask_each(f"{vm['name']} (vmid {vm['vmid']}) is in no OpenTofu state (an interrupted build's): destroy it?"):
+            print(f"  kept: {vm['name']}")
+            continue
+        jobs.executor.run(["qm", "stop", str(vm["vmid"])], check=False, timeout=300)
+        jobs.executor.run(["qm", "destroy", str(vm["vmid"]), "--purge"], timeout=600)
+        summary.note(f"✓ {vm['name']} (vmid {vm['vmid']}), in no OpenTofu state, destroyed")
+        destroyed.append(vm["name"])
+    return destroyed
+
+
 def teardown(config, yes=False) -> int:
     """`worms round teardown`: the round's sandbox destroyed: one a session kept (powered off, for
     another attempt), one whose build stopped half-way, or what OpenTofu still holds of one whose
@@ -1342,6 +1374,12 @@ def teardown(config, yes=False) -> int:
             if ask("Close it (failed, not counted against the team; its VMs stopped)?", True, yes):
                 conductor.abandon(run)
                 summary.note(f"✓ {run.team.name}'s attempt {run.attempt} closed (left {run.state})")
+        # No round runs after this: scoring and logging name no team (a session that ended
+        # without its teardown left one there).
+        try:
+            jobs.handlers._clear_current_team(jobs.executor, jobs.cfg)
+        except Exception as exc:  # noqa: BLE001  (said; `worms status` names it)
+            output.warn(f"scoring's and logging's current team not cleared: {exc}")
         record = jobs.handlers.unfinished_build(jobs.cfg)
         try:
             held = bool(jobs.executor.tofu_output("sandbox"))
@@ -1349,6 +1387,11 @@ def teardown(config, yes=False) -> int:
             held = True
         if not (sandbox or held or record):
             print("No sandbox: nothing to destroy.")
+            # What a sandbox destroyed earlier may have left (before 2026-11-26 every destroy did):
+            # its definition, which an apply there would build again; the runs' secrets.
+            jobs.handlers._forget_sandbox(jobs.executor, jobs.cfg)
+            print(output.status_cell("ok", "its definition empty, no run's secrets, no reset record"))
+            _destroy_orphans(jobs, yes, summary)
             return 0
         print(f"the round's sandbox: {', '.join(sandbox) or 'no VM, but OpenTofu still holds it'}"
               + (f" (an unfinished build, begun {record['began']})" if record else ""))  # fmt: skip
@@ -1356,6 +1399,7 @@ def teardown(config, yes=False) -> int:
         if not ask(f"Destroy it{f' ({len(sandbox)} VMs)' if sandbox else ''}?", False, yes):
             return 1
         conductor.destroy_sandbox()
+        _destroy_orphans(jobs, yes, summary)
     except BuildError:
         summary.end("stopped by an error")
         raise

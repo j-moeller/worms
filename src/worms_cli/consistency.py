@@ -196,7 +196,7 @@ def current_team_rows(teams: dict, round_runs: bool) -> list[Row]:
                 "runs", "`worms round teardown` clears it")]  # fmt: skip
 
 
-def sandbox_rows(pool: set, state: set, generated: int, unfinished: bool) -> list[Row]:
+def sandbox_rows(pool: set, state: set, generated: str, unfinished: bool) -> list[Row]:
     """The round's sandbox, coherent: no VM in the pool, none in its state, no definition and no
     unfinished build; or a kept one, the same VMs in the pool and the state, and its definition."""
     problems = []
@@ -204,9 +204,9 @@ def sandbox_rows(pool: set, state: set, generated: int, unfinished: bool) -> lis
         problems.append(f"VMs in the pool no state holds ({', '.join(map(str, sorted(pool - state)))})")
     if state - pool:
         problems.append(f"VMs its state holds that Proxmox lacks ({', '.join(map(str, sorted(state - pool)))})")
-    if not pool and not state and generated:
-        problems.append(f"generated_vms.tf still defines {generated} VMs with none built: an apply there builds the last "
-                        "round's sandbox again")  # fmt: skip
+    if not pool and not state and generated:  # the gameplan generated_vms.tf was written from
+        problems.append(f"generated_vms.tf still defines {generated}'s sandbox with none built: an apply there builds "
+                        "it again")  # fmt: skip
     if not pool and not state and unfinished:
         problems.append("an unfinished build is recorded with no VM")
     if not problems:
@@ -214,16 +214,21 @@ def sandbox_rows(pool: set, state: set, generated: int, unfinished: bool) -> lis
     return [Row("sandbox", "error", "; ".join(problems), "`worms round teardown`")]
 
 
-def orphan_rows(vms: list, managed: dict) -> list[Row]:
+def orphans(vms: list, managed: dict) -> list:
     """VMs Proxmox has in WORMS's pools (or named like a sandbox's or devbox's) that no OpenTofu
     state holds (`managed`: {vmid: name} of every state): no firewall or record follows them."""
-    orphans = sorted(vm["name"] for vm in vms
-                     if (vm.get("pool") in MANAGED_POOLS or str(vm.get("name", "")).startswith(("sandbox-", "devbox-")))
-                     and int(vm["vmid"]) not in managed)  # fmt: skip
-    if not orphans:
+    return [vm for vm in vms
+            if (vm.get("pool") in MANAGED_POOLS or str(vm.get("name", "")).startswith(("sandbox-", "devbox-")))
+            and int(vm["vmid"]) not in managed]  # fmt: skip
+
+
+def orphan_rows(vms: list, managed: dict) -> list[Row]:
+    """The `orphan VMs` row (`orphans`); `worms round teardown` offers the sandbox's for destruction."""
+    orphans_ = sorted(vm["name"] for vm in orphans(vms, managed))
+    if not orphans_:
         return []
-    sandbox = [name for name in orphans if name.startswith("sandbox-")]
-    return [Row("orphan VMs", "error", f"in no OpenTofu state: {', '.join(orphans)}",
+    sandbox = [name for name in orphans_ if name.startswith("sandbox-")]
+    return [Row("orphan VMs", "error", f"in no OpenTofu state: {', '.join(orphans_)}",
                 ("`worms round teardown` for the sandbox's; " if sandbox else "") + "the rest: look first (`worms show <vm>`)")]  # fmt: skip
 
 

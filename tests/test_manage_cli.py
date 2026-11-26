@@ -727,12 +727,12 @@ def test_the_current_team_row_while_no_round_runs():
 
 
 @pytest.mark.parametrize("pool, state, generated, unfinished, found", [
-    (set(), set(), 0, False, None),  # nothing: coherent
-    ({130, 131}, {130, 131}, 2, False, None),  # a kept sandbox: coherent
-    ({130, 131}, {130}, 2, False, "VMs in the pool no state holds (131)"),
-    ({130}, {130, 131}, 2, False, "VMs its state holds that Proxmox lacks (131)"),
-    (set(), set(), 20, False, "generated_vms.tf still defines 20 VMs"),
-    (set(), set(), 0, True, "an unfinished build is recorded with no VM"),
+    (set(), set(), "", False, None),  # nothing: coherent
+    ({130, 131}, {130, 131}, "round_one.py", False, None),  # a kept sandbox: coherent
+    ({130, 131}, {130}, "round_one.py", False, "VMs in the pool no state holds (131)"),
+    ({130}, {130, 131}, "round_one.py", False, "VMs its state holds that Proxmox lacks (131)"),
+    (set(), set(), "round_one.py", False, "generated_vms.tf still defines round_one.py's sandbox with none built"),
+    (set(), set(), "", True, "an unfinished build is recorded with no VM"),
 ])  # fmt: skip
 def test_the_sandbox_row_when_pool_state_definition_and_record_disagree(pool, state, generated, unfinished, found):
     rows = _consistency().sandbox_rows(pool, state, generated, unfinished)
@@ -775,3 +775,30 @@ def test_the_host_outputs_row_when_what_the_host_reads_is_older_than_the_state()
     assert "firewall (state serial 43, published 42)" in row.text and row.repair == "`worms step outputs`"
     [row] = c.outputs_rows({"platform": 7}, {"platform": ""})
     assert "published none" in row.text
+
+
+# --- `worms round teardown`: the sandbox's orphans (worms_cli/rounds.py, T12) -----------------------
+
+
+def test_teardown_offers_each_orphan_of_the_sandbox_and_destroys_it_only_when_asked(tmp_path):
+    """A VM in the sandbox's pool that its state does not hold (an interrupted build's): listed,
+    by name, and destroyed (stopped, `qm destroy --purge`) only after a yes."""
+    import json
+    from types import SimpleNamespace
+
+    sys.path.insert(0, str(REPO / "src"))
+    from worms_cli import rounds
+
+    vms = [{"vmid": 130, "name": "sandbox-a", "pool": "sandbox"}, {"vmid": 131, "name": "sandbox-b", "pool": "sandbox"}]
+    state = tmp_path / "terraform.tfstate"
+    state.write_text(json.dumps({"resources": [{"type": "proxmox_virtual_environment_vm",
+                                                "instances": [{"attributes": {"vm_id": 130, "name": "sandbox-a"}}]}]}))  # fmt: skip
+    ran, notes = [], []
+    jobs = SimpleNamespace(handlers=SimpleNamespace(snapshots=SimpleNamespace(pool_vms=lambda ex, pool: vms)),
+                           executor=SimpleNamespace(run=lambda argv, **kw: ran.append(argv)))  # fmt: skip
+    summary = SimpleNamespace(note=notes.append)
+    asked = []
+    assert rounds._destroy_orphans(jobs, False, summary, ask_each=lambda q: asked.append(q) or False, state_path=state) == []
+    assert ran == [] and len(asked) == 1 and asked[0].startswith("sandbox-b (vmid 131) is in no OpenTofu state")
+    assert rounds._destroy_orphans(jobs, False, summary, ask_each=lambda q: True, state_path=state) == ["sandbox-b"]
+    assert ran == [["qm", "stop", "131"], ["qm", "destroy", "131", "--purge"]] and "sandbox-b" in notes[0]

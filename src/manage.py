@@ -231,7 +231,7 @@ cat {deployed} 2>/dev/null; echo; echo '#--'
 sha256sum /var/lib/worms/devbox-teams 2>/dev/null | cut -c1-64; echo '#--'
 cat /opt/worms/opentofu/stacks/sandbox/terraform.tfstate 2>/dev/null; echo; echo '#--'
 cat /opt/worms/opentofu/stacks/devbox/terraform.tfstate 2>/dev/null; echo; echo '#--'
-grep -c '^resource' /opt/worms/opentofu/stacks/sandbox/generated_vms.tf 2>/dev/null; echo '#--'
+sed -n 's/^ *gameplan *= *"\(.*\)"/\1/p' /opt/worms/opentofu/stacks/sandbox/generated_vms.tf 2>/dev/null | head -1; echo '#--'
 test -e /var/lib/worms/sandbox-build.json && echo yes; echo '#--'
 pvesh get /cluster/backup --output-format json 2>/dev/null; echo; echo '#--'
 for s in platform firewall; do printf '%s %s\n' $s "$(sed -n 's/^ "serial": \([0-9]*\).*/\1/p' /var/lib/worms/outputs/$s.json 2>/dev/null)"; done; echo '#--'
@@ -458,9 +458,8 @@ def _consistency_rows(config, vms, probe, facts) -> list:
     if vms is not None:
         sandbox_state = consistency.state_vms(probe.get("sandbox_state", ""))
         managed = {**_controller_states(config), **sandbox_state, **consistency.state_vms(probe.get("devbox_state", ""))}
-        generated = probe.get("generated", "").strip()
         rows += consistency.sandbox_rows({int(vm["vmid"]) for vm in vms if vm.get("pool") == "sandbox"}, set(sandbox_state),
-                                         int(generated) if generated.isdigit() else 0, probe.get("build", "").strip() == "yes")  # fmt: skip
+                                         probe.get("generated", "").strip(), probe.get("build", "").strip() == "yes")  # fmt: skip
         rows += consistency.orphan_rows(vms, managed)
         try:
             jobs = json.loads(probe.get("backup", "").strip() or "[]")

@@ -124,20 +124,35 @@
   loop: [sandbox, devbox]
   register: round_agent_definitions
 
-# A new workspace starts from the repository's; the agent replaces them.
-- name: Start with the repository's sandbox definition
+# A new workspace starts with no sandbox and no devbox (the locals the stacks read, empty; the
+# repository has none: until 2026-11-26 it seeded a sample with a fake team t1); the agent writes
+# them from a gameplan, and from the teams (scripts/round_agent/handlers.py NO_SANDBOX).
+- name: Start with no sandbox
   ansible.builtin.copy:
-    src: "{{ item }}"
-    dest: "{{ round_agent_repo_root }}/opentofu/stacks/sandbox/"
+    dest: "{{ round_agent_repo_root }}/opentofu/stacks/sandbox/generated_vms.tf"
     mode: "0644"
-  with_fileglob: "{{ round_agent_controller_repo }}/opentofu/stacks/sandbox/generated_vms*.tf"
+    content: |
+      # No sandbox: written by the workspace's first sync (the round agent writes it from a gameplan when it builds one).
+      locals {
+        gameplan        = ""
+        gameplan_sha256 = ""
+
+        sandbox_bridges = {}
+        sandbox_vms     = {}
+      }
   when: round_agent_definitions.results[0].matched == 0
 
-- name: Start with the repository's devbox definition
+- name: Start with no devbox
   ansible.builtin.copy:
-    src: "{{ round_agent_controller_repo }}/opentofu/stacks/devbox/generated_devboxes.tf"
-    dest: "{{ round_agent_repo_root }}/opentofu/stacks/devbox/"
+    dest: "{{ round_agent_repo_root }}/opentofu/stacks/devbox/generated_devboxes.tf"
     mode: "0644"
+    content: |
+      # No devbox: written by the workspace's first sync (the round agent writes it from the teams).
+      locals {
+        devbox_bridges = {}
+        devbox_gws     = {}
+        devbox_vms     = {}
+      }
   when: round_agent_definitions.results[1].matched == 0
 
 - name: Create the directory for the controller's CA certificate

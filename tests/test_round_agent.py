@@ -1706,8 +1706,15 @@ def test_teardown():
     _prepare(ex)
     state = Path(handlers.STATE_DIR) / "runs" / f"{RUN}.json"
     assert state.exists()
+    other, reset = Path(handlers.STATE_DIR) / "runs" / "an-earlier-run.json", Path(handlers.STATE_DIR) / handlers.SANDBOX_RESET
+    other.write_text("{}")
+    reset.write_text("{}")
     assert handlers.teardown(ex, CFG, validation.validate("teardown", {"run_uuid": RUN}))["destroyed"] is True
     assert not state.exists()  # the run's secrets are gone
+    # Nothing of the sandbox left (T12): no run's secrets, no reset record, and its definition empty,
+    # so that a `tofu apply` there builds nothing (not the last round's sandbox).
+    assert not other.exists() and not reset.exists()
+    assert "No sandbox: written by teardown" in ex.installed_hcl and 'sandbox_vms     = {}' in ex.installed_hcl
     destroy = next(c for c in ex.calls if c[:2] == ("tofu", "sandbox") and "destroy" in c)
     # In parallel, VMs fight over the storage lock and leave volumes that block later VMs.
     assert "-parallelism=1" in destroy

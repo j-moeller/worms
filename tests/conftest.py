@@ -156,6 +156,9 @@ def tofu_copy(tmp_path_factory):
         symlinks=True,  # shared-variables.tf links stay relative, inside the copy
         ignore=shutil.ignore_patterns(".terraform*", "terraform.tfstate*", "images", "iso"),
     )
+    # The host's stacks' generated definitions are runtime state (not in the repository): samples.
+    shutil.copy(FIXTURES / "generated_vms.tf", dest / "stacks" / "sandbox")
+    shutil.copy(FIXTURES / "generated_devboxes.tf", dest / "stacks" / "devbox")
     return dest
 
 

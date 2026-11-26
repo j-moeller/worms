@@ -375,12 +375,26 @@ def _take_reset(cfg):
     return record if isinstance(record, dict) and isinstance(record.get("began"), dict) else None
 
 
+# The sandbox stack's definition with no sandbox (the locals its main.tf reads, empty): what a
+# new workspace starts with (ansible role round_agent, workspace.yml) and what a destroy leaves.
+NO_SANDBOX = """# No sandbox: written by {by} (the round agent writes it from a gameplan when it builds one).
+locals {{
+  gameplan        = ""
+  gameplan_sha256 = ""
+
+  sandbox_bridges = {{}}
+  sandbox_vms     = {{}}
+}}
+"""
+
+
 def _destroy_sandbox(ex, cfg):
     # One at a time: VMs destroyed in parallel fight over the storage lock, and a volume
     # Proxmox gives up on then blocks whichever new VM gets that ID.
     before = snapshots.listed(ex, lambda: snapshots.pool_vms(ex, "sandbox"))  # for the VM history only
     ex.tofu("sandbox", "destroy", "-auto-approve", "-input=false", "-parallelism=1", timeout=cfg.get("apply_timeout", 5400))
     _build_finished(cfg)  # nothing left to continue
+    _forget_sandbox(ex, cfg)
     snapshots.record(ex, lambda: [vm for vm in before if vm["vmid"] not in {v["vmid"] for v in snapshots.pool_vms(ex, "sandbox")}],
                      "destroyed", "the round's sandbox")  # fmt: skip
     ex.worms("inventory", timeout=300)
@@ -549,6 +563,16 @@ def delete_snapshot(ex, cfg, params):
 
 
 # -- a run's secrets and files ---------------------------------------------------------------
+
+
+def _forget_sandbox(ex, cfg):
+    """What a destroyed sandbox left behind (until 2026-11-26): its definition, which a `tofu
+    apply` there would build again (the last round's); the runs' secrets; the reset record."""
+    ex.install_sandbox_definition(NO_SANDBOX.format(by=f"teardown {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC"))
+    state = Path(cfg.get("state_dir", STATE_DIR))
+    for path in (state / "runs").glob("*.json"):
+        path.unlink(missing_ok=True)
+    (state / SANDBOX_RESET).unlink(missing_ok=True)
 
 
 def _run_state_path(cfg, run_uuid):

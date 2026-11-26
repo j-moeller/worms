@@ -713,10 +713,7 @@ def _apply_all(config, args) -> int:
     except (build.BuildError, SessionError, KeyboardInterrupt) as exc:
         output.error(f"build stopped: {exc}" if str(exc) else "build stopped: interrupted")
         code = 130 if isinstance(exc, KeyboardInterrupt) else 1
-    # Also after a failure: a rollback that happened is not undone by one.
-    if pipe.services_rolled_back and pipe.devboxes_exist():
-        code = _restore_devbox_map(config) or code
-    return code
+    return code or (1 if pipe.devbox_map_failed else 0)
 
 
 def _pipeline(config, args):
@@ -894,10 +891,7 @@ def _apply_components(config, args, names, rebuild=False) -> int:
     except (build.BuildError, SessionError, KeyboardInterrupt) as exc:
         output.error(f"stopped: {exc}" if str(exc) else "stopped: interrupted")
         code = 130 if isinstance(exc, KeyboardInterrupt) else 1
-    # Also after a failure: a rollback that happened is not undone by one.
-    if pipe.services_rolled_back and pipe.devboxes_exist():
-        code = _restore_devbox_map(config) or code
-    return code
+    return code or (1 if pipe.devbox_map_failed else 0)
 
 
 def _asked(plan, yes) -> bool:
@@ -1032,9 +1026,7 @@ def _apply_changed(config, args) -> int:
         code = 130 if isinstance(exc, KeyboardInterrupt) else 1
     finally:
         shutil.rmtree(directory, ignore_errors=True)
-    if pipe.services_rolled_back and pipe.devboxes_exist():
-        code = _restore_devbox_map(config) or code
-    return code
+    return code or (1 if pipe.devbox_map_failed else 0)
 
 
 def _print_plan(plan, packages: bool) -> None:
@@ -1117,23 +1109,6 @@ def _record_deployed(pipe, names) -> None:
         output.warn(f"the record of what runs ({changes.DEPLOYED}) did not get {', '.join(kept)}: {exc}")
 
 
-def _request_devbox_reconfigure(config) -> int:
-    """Have the round agent push every team's SSH keys and the source->team map
-    again, from the database. Never from the service VMs: one of them may have
-    been changed by a worm, which is what a reset is there to undo."""
-    _with_db(config)
-    from core.models.competition import ApplicationSetting
-    from orchestrator.rounds.devbox import request_reconfigure
-
-    competition = ApplicationSetting.get_current_competition()
-    job = request_reconfigure(competition) if competition else None
-    if job is None:
-        print("nothing to enqueue: no devbox is provisioned, or the same job is queued")
-    else:
-        print(f"enqueued devbox_reconfigure host job {job.uuid}: the round agent does the work")
-    return 0
-
-
 def cmd_validate(config, args) -> int:
     """`worms check [<team>...]`: can each team work on its devbox, as it does: login
     through the SSH gateway, the flag, scoring, logging, apt, PyPI (worms_cli/validate.py)."""
@@ -1154,21 +1129,6 @@ def cmd_devbox_sync_keys(config, args) -> int:
     from worms_cli import keys
 
     return keys.sync(config)
-
-
-def _restore_devbox_map(config) -> int:
-    """After the service VMs were rolled back or rebuilt: the map on scoring and
-    logging is newer than their snapshot. Whatever goes wrong here must not read as
-    a failed reset."""
-    try:
-        return _request_devbox_reconfigure(config)
-    except (SystemExit, Exception) as exc:  # noqa: BLE001
-        output.error(
-            f"the services are reset, but the devbox map on scoring and logging is empty ({exc}): "
-            "devbox submissions stay unattributed until the round agent writes it again: run `worms vm reset services` "
-            "again once the database answers"
-        )
-        return 1
 
 
 def cmd_step(config, args) -> int:
@@ -1462,17 +1422,11 @@ def cmd_reset(config, args) -> int:
             return 1
         pipe = pipeline.Pipeline(config)
         try:
-            pipe.round_reset_services()
+            pipe.round_reset_services()  # the devbox map pushed again from the host's copy, at once
         except build.BuildError as exc:
             output.error(str(exc))
             return 1
-        finally:
-            if pipe.services_rolled_back and pipe.devboxes_exist():
-                _restore_devbox_map(config)
-        if getattr(args, "wait", False):  # the map, written again by the round agent
-            _with_db(config)
-            return _wait_for_jobs(_open_jobs("devbox_reconfigure"), config)
-        return 0
+        return 1 if pipe.devbox_map_failed else 0
     return _reset_devboxes(config, args)
 
 
@@ -2539,8 +2493,7 @@ def service_power(config, args) -> int:
 
 def vm_reset(config, args) -> int:
     if args.targets == ["services"]:
-        code = cmd_reset(config, _with(args, what="services", wait=not args.detach))
-        return code
+        return cmd_reset(config, _with(args, what="services"))
     if "services" in args.targets:
         output.error("`worms vm reset services` resets the service VMs, all at once: name no team with it")
         return 2

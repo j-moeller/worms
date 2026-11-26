@@ -30,7 +30,7 @@ from gameplan import render as gameplan_render
 from gameplan import runtime as gameplan_runtime
 from gameplan.definition import AGENT_SOCKET, SECRET_MARKER, GameplanError
 from generate_devbox import team_addressing
-from round_agent import failure, host_state, probe, snapshots, startup, validation
+from round_agent import devbox_map, failure, host_state, probe, snapshots, startup, validation
 
 FLAG_PATH = "/etc/worms/flag"
 # The gameplan files, in the agent's workspace (synced from the controller's checkout).
@@ -53,7 +53,6 @@ UNPACK = (
     "test -f {code}/{entry} || {{ echo 'the upload has no {entry} at its top level' >&2; exit 3; }}"
 )
 CURRENT_TEAM_FILE = "/etc/sandbox-api/current-team"
-DEVBOX_TEAMS_FILE = "/etc/sandbox-api/devbox-teams"
 DEVBOX_GENERATED = "opentofu/stacks/devbox/generated_devboxes.tf"
 DEVBOX_ROLES = ("a", "b", "c")
 # While it exists, internet access is allowed (ansible Internet.yml).
@@ -399,7 +398,7 @@ def _reset_services(ex, cfg):
     off = {vm["vmid"] for vm in vms if vm.get("status") != "running"}
     snapshots.roll_back(ex, vms)
     snapshots.wait_for_ssh(ex, cfg.get("service_hosts") or [cfg["scoring_host"], cfg["logging_host"]])
-    _restore_devbox_map(ex, cfg)
+    _push_devbox_map(ex, cfg)
     if not off:
         return f"reset: {len(vms)} VMs back to their clean snapshot"
     again = [vm for pool in SERVICE_POOLS for vm in snapshots.pool_vms(ex, pool) if vm["vmid"] in off]
@@ -1473,40 +1472,39 @@ def _write_devbox_token(ex, maintenance_ip):
     return hashlib.sha256(secret.encode()).hexdigest()
 
 
+def _devbox_map_path(cfg):
+    """The host's devbox map (devbox_map.PATH, under the agent's state_dir)."""
+    return Path(cfg.get("state_dir", STATE_DIR)) / Path(devbox_map.PATH).name
+
+
 def _write_devbox_map(ex, cfg, teams):
-    """Write the source-address -> team-uuid map onto scoring and logging, so a
-    devbox submission is attributed to its team (docs/04-dev-environment.md). The services
-    source of a team is its devbox-gw address from the stack output."""
+    """The source-address -> team-uuid map, so that a devbox submission is attributed to its
+    team (docs/04-dev-environment.md): the services source of a team is its devbox-gw address
+    from the stack output. Written on the host, the one source (root only: the database is not
+    the agent's to read again), then pushed from it onto scoring and logging (devbox_map)."""
     devbox = ex.tofu_output("devbox").get("devbox", {}) or {}
     lines = []
     for team in teams:
         info = devbox.get(team["slug"])
         if info and info.get("services_source_ip"):
             lines.append(f"{info['services_source_ip']} {team['team_uuid']}")
-    body = "".join(f"{line}\n" for line in lines)
-    _push_devbox_map(ex, cfg, body)
-    # Kept on the host too: a rollback of scoring and logging takes the map with it
-    # (_restore_devbox_map), and the database is not the agent's to read.
-    state = Path(cfg.get("state_dir", STATE_DIR))
-    state.mkdir(mode=0o700, parents=True, exist_ok=True)
-    copy = state / "devbox-teams"
-    with open(os.open(copy, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as fh:
-        fh.write(body)
+    path = _devbox_map_path(cfg)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as fh:
+        fh.write("".join(f"{line}\n" for line in lines))
+    _push_devbox_map(ex, cfg)
 
 
-def _push_devbox_map(ex, cfg, body):
-    for host in (cfg.get("scoring_host"), cfg.get("logging_host")):
-        if not host:
-            raise validation.Invalid("scoring_host/logging_host not configured for the round agent")
-        ex.ssh(host, ["sudo", "install", "-m", "0640", "-o", "root", "-g", "www-data", "/dev/stdin", DEVBOX_TEAMS_FILE], input=body)
-
-
-def _restore_devbox_map(ex, cfg):
-    """After scoring and logging are rolled back: their snapshot is older than the map, so
-    devbox submissions would go unattributed until the next devbox job wrote it again."""
-    copy = Path(cfg.get("state_dir", STATE_DIR)) / "devbox-teams"
-    if copy.exists():
-        _push_devbox_map(ex, cfg, copy.read_text())
+def _push_devbox_map(ex, cfg):
+    """The host's map onto scoring and logging (devbox_map.push). After a rollback of them: their
+    snapshot is older than the map. None yet (no devbox job has run): nothing to push."""
+    hosts = [cfg.get("scoring_host"), cfg.get("logging_host")]
+    if not all(hosts):
+        raise validation.Invalid("scoring_host/logging_host not configured for the round agent")
+    try:
+        devbox_map.push(ex.ssh, hosts, path=_devbox_map_path(cfg))
+    except devbox_map.Missing:
+        pass
 
 
 def _devbox_report(ex, teams):

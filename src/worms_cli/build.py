@@ -12,6 +12,7 @@ import os
 import shlex
 import subprocess
 import sys
+from pathlib import Path
 
 from worms_cli import output
 from worms_cli.session import HOST_PLAYBOOKS, HOST_RUN, HOST_STACKS, SessionError, check_known_hosts, for_config
@@ -205,6 +206,35 @@ class Runner:
         if code not in (0, 1):
             raise BuildError(f"could not check {path} on {self.config.ssh} (exit {code})")
         return code == 0
+
+    def host_read(self, path: str) -> str | None:
+        """A file on the host, or None when it is not there."""
+        if not self.session.laptop:
+            try:
+                return Path(path).read_text()
+            except FileNotFoundError:
+                return None
+        try:
+            code, out, err = self.session.host_run(["cat", path])
+        except SessionError as exc:
+            raise BuildError(str(exc)) from exc
+        if code == 0:
+            return out
+        if "No such file" in err:
+            return None
+        raise BuildError(f"could not read {path} on {self.config.ssh}: {err.strip()[:200]}")
+
+    def vm_run(self, name: str, argv: list[str], input: str | None = None) -> None:
+        """A command on a platform VM, by name, over its management SSH (as `worms run` reaches
+        it): raises when it fails."""
+        from worms_cli.vms import Catalogue
+
+        catalogue = Catalogue(self.config)
+        ssh, env = catalogue.ssh_argv(catalogue.resolve(name), shlex.join(argv), interactive=False)
+        done = subprocess.run(ssh, input=input, env=env, capture_output=True, text=True, timeout=120)
+        if done.returncode != 0:
+            raise BuildError(f"on {name}: {shlex.join(argv)}: exit {done.returncode}: "
+                             f"{(done.stderr or done.stdout).strip()[-200:]}")  # fmt: skip
 
     def _host_json(self, *argv: str):
         """A read-only command on the host whose output is JSON."""

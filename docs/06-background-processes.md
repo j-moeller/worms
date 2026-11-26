@@ -20,7 +20,7 @@ This page lists every long-running service, timer and loop, by host. Unit files 
 
 **Run state**
 - `/var/lib/worms/runs/<run>.json` holds one run's secrets, mode 0600.
-- `/var/lib/worms/devbox-teams` is the attribution map, restored after a rollback.
+- `/var/lib/worms/devbox-teams` is the attribution map, the one source of the copies on scoring and logging: pushed onto them again after every rollback of either (`devbox_map.push`, agent and CLI).
 
 ## Orchestrator VM
 

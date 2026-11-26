@@ -61,6 +61,7 @@ class Recorder:
     fail_on = None
     host_vms = []  # what the host reports: see the `host` fixture
     host_snapshots = {}  # vmid -> the snapshot's fields
+    devbox_map = "10.2.0.33 11111111-1111-1111-1111-111111111111\n"  # the host's file, None: not there
 
     def __init__(self, config=None, **_kwargs):
         self.config = config
@@ -82,6 +83,13 @@ class Recorder:
     def host_sh(self, command, **_kwargs):
         self.calls.append(("host", command))
         return 0
+
+    def host_read(self, path):
+        assert path == "/var/lib/worms/devbox-teams"
+        return Recorder.devbox_map
+
+    def vm_run(self, name, argv, input=None):
+        self.calls.append(("vm", name, argv[-1], input))
 
     def host_parallel(self, chains):
         """At once on the host; recorded one command after the other, chain by chain."""
@@ -318,6 +326,40 @@ def steps(pipe):
     return [c for c in pipe.runner.calls if c[0] in ("tofu", "ansible", "host")]
 
 
+def _pushed(pipe):
+    return [c for c in pipe.runner.calls if c[0] == "vm"]
+
+
+def test_a_rollback_of_scoring_pushes_the_devbox_map_once(host):
+    """Their snapshot is older than the map: the host's copy goes back onto the holders rolled
+    back, at once (scripts/round_agent/devbox_map.py), with no database and no host job."""
+    host.round_reset_services()
+    assert _pushed(host) == [("vm", "scoring", "/etc/sandbox-api/devbox-teams", Recorder.devbox_map)]
+    assert not host.devbox_map_failed
+
+
+def test_a_rollback_without_scoring_or_logging_pushes_no_map(host, monkeypatch):
+    monkeypatch.setattr(Recorder, "host_vms", [SERVICES[1]])  # docker-registry alone
+    host.round_reset_services()
+    assert _pushed(host) == []
+
+
+def test_no_map_on_the_host_is_nothing_to_push(host, monkeypatch, capsys):
+    monkeypatch.setattr(Recorder, "devbox_map", None)
+    host.round_reset_services()
+    assert _pushed(host) == [] and not host.devbox_map_failed and "no devbox job has run yet" in capsys.readouterr().out
+
+
+def test_a_failed_push_is_said_and_the_rollback_stands(host, monkeypatch, capsys):
+    def unreachable(self, name, argv, input=None):
+        raise BuildError(f"on {name}: no route to host")
+
+    monkeypatch.setattr(Recorder, "vm_run", unreachable)
+    host.round_reset_services()  # not raised: the services are back at their snapshot
+    assert host.devbox_map_failed and host.rolled_back == ["docker-registry", "scoring"]
+    assert "worms vm reset services" in capsys.readouterr().err
+
+
 def test_a_reset_rolls_back_the_services_and_nothing_else(host):
     """Nothing is destroyed or rebuilt, and no internet window opens."""
     host.round_reset_services()
@@ -469,7 +511,7 @@ def test_a_build_configures_clean_services_and_snapshots_them_again(host):
     assert len(rollbacks) == 2 and max(rollbacks) < configure
     assert retaken == ["qm delsnapshot 100 clean", "qm snapshot 100 clean --description 'worms abc1234'",
                        "qm delsnapshot 111 clean", "qm snapshot 111 clean --description 'worms abc1234'"]  # fmt: skip
-    assert host.services_rolled_back
+    assert host.rolled_back == ["docker-registry", "scoring"]
 
 
 def test_a_vm_up_without_a_snapshot_gets_none_and_the_build_says_why(host, monkeypatch):
@@ -507,4 +549,4 @@ def test_a_first_build_does_not_warn_about_snapshots(host, monkeypatch):
     monkeypatch.setattr(Recorder, "host_vms", [])
     monkeypatch.setattr(Recorder, "host_snapshots", {})
     host.build_all()
-    assert warnings == [] and not host.services_rolled_back
+    assert warnings == [] and host.rolled_back == []

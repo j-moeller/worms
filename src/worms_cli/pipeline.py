@@ -28,9 +28,11 @@ OpenTofu gets its Proxmox credentials from the vault, through the Runner
 from __future__ import annotations
 
 import shlex
+import sys
 from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial
+from pathlib import Path
 from typing import Callable
 
 from worms_cli import output
@@ -92,6 +94,16 @@ def _stopping(cleanup: str) -> None:
     output.error(f"a step failed, stopping the build: {cleanup} first")
 
 
+def _devbox_map_module():
+    """scripts/round_agent/devbox_map.py of this checkout: the one push of the devbox map."""
+    scripts = str(Path(__file__).resolve().parents[2] / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    from round_agent import devbox_map
+
+    return devbox_map
+
+
 @dataclass(frozen=True)
 class Step:
     name: str
@@ -113,18 +125,19 @@ class Pipeline:
             "services_before": None,  # service vmids before the rollback
             "services_reset": None,  # the ones it rolled back to their snapshot
             "devboxes_off": [],  # devbox vmids this run shut down, to start again
-            # Whether the service VMs lost what is newer than their snapshot: the
-            # devbox map on scoring and logging (src/manage.py writes it again).
-            "services_rolled_back": False,
+            # The service VMs rolled back to their snapshot (names): they lost what is newer than
+            # it, the devbox map on scoring and logging among it (_push_devbox_map).
+            "rolled_back": [],
+            "devbox_map_failed": False,  # a rollback of scoring or logging left them without it
         }
 
     @property
-    def services_rolled_back(self) -> bool:
-        return self.data["services_rolled_back"]
+    def rolled_back(self) -> list:
+        return self.data["rolled_back"]
 
-    @services_rolled_back.setter
-    def services_rolled_back(self, value: bool) -> None:
-        self.data["services_rolled_back"] = value
+    @property
+    def devbox_map_failed(self) -> bool:
+        return self.data["devbox_map_failed"]
 
     def _ansible(self, playbook: str, *args: str, vault: bool = True, user_args: bool = True):
         if not self._facts_fresh:
@@ -446,12 +459,28 @@ class Pipeline:
 
     # -- the service VMs: reset, snapshot, rebuild ------------------------------
 
-    def devboxes_exist(self) -> bool:
+    def _push_devbox_map(self, vms: list[dict]) -> None:
+        """After a rollback that took in scoring or logging: the host's devbox map onto both
+        again (scripts/round_agent/devbox_map.py, the round agent's push too), their snapshot
+        being older than it. No database, no host job: a reset needs neither. No map on the host
+        (no devbox job has run yet): nothing to push. A failure is said, and the rollback stands."""
+        devbox_map = _devbox_map_module()
+        holders = [name for name in devbox_map.HOLDERS if name in {vm["name"] for vm in vms}]  # the others keep theirs
+        if not holders:
+            return
         try:
-            return any(vm.get("pool") == "devbox" for vm in self.runner.vms())
-        except BuildError as exc:
-            output.warn(f"cannot tell whether devbox VMs exist ({exc}): their map is written again to be sure")
-            return True
+            text = self.runner.host_read(devbox_map.PATH)
+            if text is None:
+                print(output.color(f"no devbox map on the host ({devbox_map.PATH}): no devbox job has run yet, nothing to "
+                                   "push onto scoring and logging", "dim"))  # fmt: skip
+                return
+            devbox_map.push(self.runner.vm_run, holders, text=text)
+        except Exception as exc:  # noqa: BLE001  (the rollback stands: said, and the command exits 1)
+            self.data["devbox_map_failed"] = True
+            output.error(f"scoring and logging have no devbox map after their rollback ({exc}): devbox submissions are not "
+                         "attributed to a team until it is pushed again (`worms vm reset services`, or any devbox job)")  # fmt: skip
+            return
+        print(output.color(f"the devbox map pushed onto {' and '.join(holders)} again (the host's copy)", "dim"))
 
     def _service_vms(self) -> list[dict]:
         """The service VMs; during a build of some components (build_components), only theirs."""
@@ -474,7 +503,9 @@ class Pipeline:
     def _rollback(self, vms: list[dict]) -> None:
         """These VMs back to their snapshot, started: all at once."""
         codes = self.runner.host_parallel([[f"qm rollback {vm['vmid']} {SERVICE_SNAPSHOT} --start 1"] for vm in vms])
-        self._history([vm for vm, code in zip(vms, codes) if code == 0], "rolled_back", SERVICE_SNAPSHOT)
+        done = [vm for vm, code in zip(vms, codes) if code == 0]
+        self.data["rolled_back"] = sorted({*self.data["rolled_back"], *(vm["name"] for vm in done)})
+        self._history(done, "rolled_back", SERVICE_SNAPSHOT)
         failed = [vm["name"] for vm, code in zip(vms, codes) if code != 0]
         if failed:
             raise BuildError(f"not rolled back to their snapshot: {', '.join(failed)}")
@@ -547,7 +578,7 @@ class Pipeline:
         clean = [vm for vm in self._service_vms() if self.runner.snapshot(vm, SERVICE_SNAPSHOT)]
         self._rollback(clean)
         self._wait_for(clean)
-        self.services_rolled_back = self.services_rolled_back or bool(clean)
+        self._push_devbox_map(clean)  # before the configuration: its play leaves the file be (force: false)
         return {vm["vmid"] for vm in clean}
 
     def _snapshot_services(self, clean) -> None:
@@ -576,8 +607,7 @@ class Pipeline:
         """Return the service VMs to their snapshot, by hand: the round agent does
         it itself before it builds a round's sandbox. Nothing is rebuilt and no
         internet is needed, so devbox VMs can stay. What only lives on these VMs
-        goes with it: the devbox map, which `worms vm reset services` then has the round agent
-        write again (src/manage.py)."""
+        goes with it: the devbox map, pushed again from the host's copy (_push_devbox_map)."""
         self._refuse_vms_in(("sandbox",), "Refusing to reset during a round: sandbox VMs exist")
         vms = self._service_vms()
         snapshots = {vm["name"]: self.runner.snapshot(vm, SERVICE_SNAPSHOT) for vm in vms}
@@ -592,7 +622,7 @@ class Pipeline:
         print(output.color(f"resetting {len(vms)} VMs to their snapshot of {taken} ({oldest.get('description', '').strip()})", "dim"))
         self._rollback(vms)
         self._wait_for(vms)
-        self.services_rolled_back = True
+        self._push_devbox_map(vms)
 
     # -- `worms apply <component>`: some components (worms_cli/components.py) ---
 

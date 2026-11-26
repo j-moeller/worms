@@ -826,7 +826,8 @@ def test_a_rollback_of_the_services_puts_the_devbox_map_back(tmp_path):
     (state / "devbox-teams").write_text("10.2.0.33 11111111-1111-1111-1111-111111111111\n")
     _prepare(ex)
     pushed = [c for c in ex.ssh_calls if "/etc/sandbox-api/devbox-teams" in c["argv"]]
-    assert {c["host"] for c in pushed} == {"10.5.0.14", "10.5.0.15"}
+    # Pushed once onto each, from the host's copy (devbox_map.push): no host job, no database.
+    assert sorted(c["host"] for c in pushed) == ["10.5.0.14", "10.5.0.15"]
     assert all(c["input"] == "10.2.0.33 11111111-1111-1111-1111-111111111111\n" for c in pushed)
 
 
@@ -1963,12 +1964,15 @@ def test_no_devbox_is_rolled_back_while_internet_access_is_allowed(tmp_path):
     assert not any("rollback" in step for step in ex.steps())
 
 
+from round_agent import devbox_map  # noqa: E402
+
+
 def test_a_reconfigure_writes_the_map_before_the_minutes_of_configuration(tmp_path):
     """After a reset of scoring and logging, the map is what is missing. Then only the keys
     (devbox-keys: no package, no internet), not the devbox's whole configuration."""
     ex = DevboxFake(tmp_path, built_before=True)
     order = []
-    ex.ssh = lambda host, argv, input=None, timeout=120: order.append(("map", host)) if handlers.DEVBOX_TEAMS_FILE in argv else None
+    ex.ssh = lambda host, argv, input=None, timeout=120: order.append(("map", host)) if devbox_map.TARGET in argv else None
     ex.worms = lambda component, timeout=3600, args=None: order.append(("configure", component))
     handlers.devbox_reconfigure(ex, CFG, validation.validate("devbox_reconfigure", {"team_uuid": T1, "teams": DEVBOX_TEAMS}))
     assert order == [("map", "10.5.0.14"), ("map", "10.5.0.15"), ("configure", "devbox-keys")]

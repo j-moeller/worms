@@ -532,10 +532,10 @@ def test_the_internet_notice_never_stops_a_command(monkeypatch, capsys):
 # --- a reset of the service VMs brings back the devbox map ---------------------------
 
 
-def _fake_pipeline(run, rolled_back, devboxes=True):
+def _fake_pipeline(run, map_failed=False):
     return lambda *_a, **_k: type("P", (), {
         "build_all": lambda self: run(self), "round_reset_services": lambda self: run(self),
-        "services_rolled_back": rolled_back, "devboxes_exist": lambda self: devboxes,
+        "devbox_map_failed": map_failed,
     })()  # fmt: skip
 
 
@@ -548,76 +548,46 @@ def _run(cli, command, config):
 
 
 @pytest.mark.parametrize("command", ["reset services", "build"])
-def test_a_rollback_asks_the_agent_for_the_devbox_map(monkeypatch, tmp_path, command):
-    """The snapshot predates the devboxes, so the rollback emptied their map."""
+@pytest.mark.parametrize("map_failed", [False, True])
+def test_a_rollback_whose_map_push_failed_exits_1(monkeypatch, tmp_path, command, map_failed):
+    """The pipeline pushes the devbox map itself after a rollback of scoring or logging
+    (worms_cli/pipeline.py, scripts/round_agent/devbox_map.py): no host job, no database. One
+    that did not reach them leaves the reset done, and the command exits 1."""
     cli = _cli_module()
     from worms_cli import pipeline
 
-    done, asked = [], []
-    monkeypatch.setattr(pipeline, "Pipeline", _fake_pipeline(lambda self: done.append(1), rolled_back=True))
-    monkeypatch.setattr(cli, "_request_devbox_reconfigure", lambda config: asked.append(config) or 0)
-    config = argparse.Namespace(repo_root=tmp_path)
-    assert _run(cli, command, config) == 0
-    assert done == [1] and asked == [config]
+    done = []
+    monkeypatch.setattr(pipeline, "Pipeline", _fake_pipeline(lambda self: done.append(1), map_failed=map_failed))
+    assert _run(cli, command, argparse.Namespace(repo_root=tmp_path)) == (1 if map_failed else 0)
+    assert done == [1] and not hasattr(cli, "_request_devbox_reconfigure")
 
 
-def test_a_failure_after_the_rollback_still_asks_for_the_map(monkeypatch, tmp_path):
-    cli = _cli_module()
-    from worms_cli import build, pipeline
-
-    def fails(self):
-        raise build.BuildError("configure failed")
-
-    asked = []
-    monkeypatch.setattr(pipeline, "Pipeline", _fake_pipeline(fails, rolled_back=True))
-    monkeypatch.setattr(cli, "_request_devbox_reconfigure", lambda config: asked.append(config) or 0)
-    config = argparse.Namespace(repo_root=tmp_path)
-    assert _run(cli, "build", config) == 1 and asked == [config]
-
-
-@pytest.mark.parametrize("rolled_back, devboxes", [(False, True), (True, False)])
-def test_no_map_is_asked_for_without_a_rollback_or_a_devbox(monkeypatch, tmp_path, rolled_back, devboxes):
-    """A refused reset rolled nothing back, and a first build has no devbox to map."""
-    cli = _cli_module()
-    from worms_cli import build, pipeline
-
-    def fails(self):
-        raise build.BuildError("refused")
-
-    asked = []
-    monkeypatch.setattr(pipeline, "Pipeline", _fake_pipeline(fails, rolled_back=rolled_back, devboxes=devboxes))
-    monkeypatch.setattr(cli, "_request_devbox_reconfigure", lambda config: asked.append(config) or 0)
-    assert _run(cli, "reset services", argparse.Namespace(repo_root=tmp_path)) == 1 and asked == []
-
-
-@pytest.mark.parametrize("failure", [SystemExit(2), RuntimeError("database down")])
-def test_an_unreachable_database_after_a_reset_says_what_is_left_to_do(monkeypatch, capsys, failure):
-    cli = _cli_module()
-
-    def fails(_config):
-        raise failure
-
-    monkeypatch.setattr(cli, "_request_devbox_reconfigure", fails)
-    assert cli._restore_devbox_map(None) == 1
-    err = capsys.readouterr().err
-    assert "the services are reset" in err and "worms vm reset services" in err
+def _request_reconfigure(cluster):
+    """What the dashboard asks for when a team's keys change (orchestrator/rounds/devbox.py): a
+    reset of the services no longer does (the CLI pushes the host's map itself)."""
+    code = (f"import sys; sys.path.insert(0, {str(MANAGE.parent)!r}); import manage; "
+            "from worms_cli.config import Config; manage._with_db(Config.load()); "
+            "from core.models.competition import ApplicationSetting; "
+            "from orchestrator.rounds.devbox import request_reconfigure; "
+            "job = request_reconfigure(ApplicationSetting.get_current_competition()); "
+            "print('nothing to enqueue' if job is None else f'enqueued {job.uuid}')")  # fmt: skip
+    return worms(cluster, "-c", code, python=True)
 
 
 def test_devbox_reconfigure_enqueues_a_job_the_agent_accepts(initialised):
-    """The agent validates a job's params; one it refuses restores nothing (the map, after a
-    reset of the services)."""
+    """The agent validates a job's params; one it refuses changes nothing (keys, the map)."""
     cluster = initialised
     add_team(cluster, "Mapped")
     cli(cluster, "_build_devboxes(config)")
-    cli(cluster, "_request_devbox_reconfigure(config)")
+    _request_reconfigure(cluster)
     (params,), = sql(cluster, "SELECT params FROM host_jobs WHERE kind = 'devbox_reconfigure' AND state = 'queued'")
     sys.path.insert(0, str(REPO / "scripts"))
     from round_agent import validation
 
     assert validation.devbox_reconfigure(params)["teams"]
     # The same list again: the queued job already covers it.
-    assert "nothing to enqueue" in cli(cluster, "_request_devbox_reconfigure(config)").stdout
+    assert "nothing to enqueue" in _request_reconfigure(cluster).stdout
 
 
 def test_devbox_reconfigure_without_devboxes_enqueues_nothing(initialised):
-    assert "nothing to enqueue" in cli(initialised, "_request_devbox_reconfigure(config)").stdout
+    assert "nothing to enqueue" in _request_reconfigure(initialised).stdout

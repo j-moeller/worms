@@ -78,7 +78,7 @@ PENDING → DEPLOYING → ARMED → RUNNING → FINISHED
 
 ## Scoring and logging
 
-- **Attribution.** By source address: each devbox-gw's services address (10.2.0.32+i) is mapped to its team in `/etc/sandbox-api/devbox-teams` on scoring and logging. The round agent writes this file and restores it after the service VMs roll back.
+- **Attribution.** By source address: each devbox-gw's services address (10.2.0.32+i) is mapped to its team in `/etc/sandbox-api/devbox-teams` on scoring and logging. One source: `/var/lib/worms/devbox-teams` on the host, written by the devbox jobs alone; one push of it onto scoring and logging ([`devbox_map.py`](../scripts/round_agent/devbox_map.py)), after those jobs and after every rollback of scoring or logging, by the round agent and by the CLI alike: no database, no host job, no running agent needed.
 - **Captures.** A capture counts once per team, VM and `devbox_version`, only for the team's own tokens, and with no time window ([`captures.py`](../projects/dashboard/orchestrator/rounds/captures.py)).
 - **Visibility.** Results are visible at once: the devbox has no publication gate.
 

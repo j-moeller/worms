@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import sys
 
 from worms_cli import output, services, teams
 from worms_cli.build import BuildError, Runner
@@ -240,6 +241,16 @@ class Catalogue:
             argv.append(command)
         return argv, self.runner.session.env()
 
+    def service_notice(self, vms) -> None:
+        """For service VMs: their `clean` snapshot is their configuration (every reset and round
+        build returns them to it), so what is changed by hand on them does not last."""
+        from worms_cli.consistency import SERVICE_POOLS
+
+        names = [vm["name"] for vm in vms if vm and vm.get("pool") in SERVICE_POOLS]
+        if names:
+            print(output.color(f"{', '.join(names)}: changes made here are lost at the next reset or round build; make "
+                               "them through Ansible", "dim"), file=sys.stderr, flush=True)  # fmt: skip
+
     def login(self, name: str) -> int:
         if name == "host":
             if not self.runner.session.laptop:
@@ -251,6 +262,7 @@ class Catalogue:
             raise BuildError(f"{vm['name']} is {vm.get('status')}: start it first (`qm start {vm['vmid']}` on the host)")
         if vm.get("pool") in UNTRUSTED_POOLS:
             output.warn(f"{vm['name']} is a team VM, assumed rooted by the team: type nothing secret there")
+        self.service_notice([vm])
         argv, env = self.ssh_argv(vm)
         print(output.color(f"$ {shlex.join(argv)}   (sudo -i for root)", "dim"), flush=True)
         return attached(argv, env)

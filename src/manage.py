@@ -40,7 +40,7 @@ PVE_CONFIG_DIR = "/etc/pve"  # exists only on a Proxmox host
 # ---------------------------------------------------------------------------
 
 
-VM_HEADERS = ["VM", "vmid", "kind", "team", "state", "up", "memory", "created", "updated"]
+VM_HEADERS = ["VM", "vmid", "kind", "team", "state", "up", "memory", "created", "updated", "snapshot"]
 
 
 def _list_vms(config) -> tuple[list | None, str]:
@@ -63,10 +63,16 @@ def _vm_rows(config, listing=None, probe=None) -> list[list[str]]:
     from worms_cli import history, teams
     from worms_cli.vms import KINDS
 
+    import time
+
+    from worms_cli import consistency
+
     vms, problem = listing or _list_vms(config)
     if vms is None:
-        return [["(VMs)", "", "", "", problem, "", "", "", ""]]
+        return [["(VMs)", "", "", "", problem, "", "", "", "", ""]]
     probe = probe or {}
+    # A service VM's `clean` snapshot: what every reset and round build returns it to (its commit, its age).
+    snapshots, now = consistency.parse_snapshots(probe.get("clean", "")), time.time()
     ledger = history.summary(history.parse(probe.get("ledger", "")))
     ctimes = {}
     for line in probe.get("meta", "").splitlines():  # /etc/pve/qemu-server/<vmid>.conf:meta: ...,ctime=<epoch>
@@ -99,7 +105,7 @@ def _vm_rows(config, listing=None, probe=None) -> list[list[str]]:
             output.status_cell("running" if state == "running" else "stopped", state),
             f"{up // 86400} d {up % 86400 // 3600} h" if up >= 86400 else (f"{up // 3600} h {up % 3600 // 60} min" if up else "—"),
             f"{int(vm.get('mem') or 0) >> 20}/{int(vm.get('maxmem') or 0) >> 20} MB" if state == "running" else "—",
-            *changes(vm),
+            *changes(vm), consistency.snapshot_cell(vm, snapshots, now),
         ])  # fmt: skip
     return rows
 
@@ -215,7 +221,7 @@ def _system_status(config) -> list[str]:
 HOST_PROBE = r"""
 cat {held} 2>/dev/null; echo; echo '#--'
 cat {window} 2>/dev/null; echo; echo '#--'
-grep -lx '\[clean\]' /etc/pve/qemu-server/*.conf 2>/dev/null; echo '#--'
+for f in /etc/pve/qemu-server/*.conf; do awk -v f="$f" '/^\[clean\]$/{{p=1;next}} /^\[/{{p=0}} p && /^#/ && d=="" {{d=substr($0,2)}} p && /^snaptime:/{{t=$2}} END{{if (t) print f" "t" "d}}' "$f"; done 2>/dev/null; echo '#--'
 for unit in {units}; do printf '%s %s\n' "$unit" "$(systemctl is-active "$unit")"; done; echo '#--'
 tail -n 20000 {ledger} 2>/dev/null; echo '#--'
 grep -H '^meta:' /etc/pve/qemu-server/*.conf 2>/dev/null; echo '#--'
@@ -400,6 +406,16 @@ def _attention(config, listing, internet, probe, services_found=None) -> list[li
             rows.append(["host services", output.status_cell("error", f"not active: {', '.join(down)} (`worms log agent`, "
                                                              "`worms log firewall`)")])  # fmt: skip
         rows += _round_session_rows(probe, vms, service_states)
+        if vms is not None:
+            from worms_cli import consistency, history
+
+            try:
+                deployed = json.loads(probe.get("deployed", "").strip() or "{}")
+            except ValueError:
+                deployed = {}
+            for row in consistency.snapshot_rows(vms, consistency.parse_snapshots(clean), deployed,
+                                                 history.parse(probe.get("ledger", ""))):  # fmt: skip
+                rows.append([row.name, output.status_cell(row.state, row.said())])
     rows += _service_rows(service_states, during_round=_session_runs(probe))
     try:
         from worms_cli import django_setup

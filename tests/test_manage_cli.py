@@ -591,3 +591,63 @@ def test_devbox_reconfigure_enqueues_a_job_the_agent_accepts(initialised):
 
 def test_devbox_reconfigure_without_devboxes_enqueues_nothing(initialised):
     assert "nothing to enqueue" in _request_reconfigure(initialised).stdout
+
+
+# --- the service VMs' snapshots in `worms status` (worms_cli/consistency.py) -----------------
+
+
+SNAPSHOT_VMS = [
+    {"vmid": 111, "name": "scoring", "pool": "ephemeral", "status": "running"},
+    {"vmid": 100, "name": "dns", "pool": "ephemeral", "status": "running"},
+    {"vmid": 110, "name": "dashboard", "pool": "persistent", "status": "running"},
+]
+SNAPSHOT_LINES = ("/etc/pve/qemu-server/111.conf 1795362982 worms a3a66c9\n"
+                  "/etc/pve/qemu-server/100.conf 1795362982 worms 9f1e2d0\n")  # fmt: skip
+
+
+def _event(vmid, name, event, time):
+    return {"time": time, "vmid": vmid, "name": name, "event": event, "commit": "a3a66c9", "by": "t", "detail": ""}
+
+
+def test_a_service_vm_shows_its_snapshots_commit_and_age():
+    sys.path.insert(0, str(REPO / "src"))
+    from worms_cli import consistency
+
+    snapshots = consistency.parse_snapshots(SNAPSHOT_LINES + "/etc/pve/qemu-server/119.conf 1795125786 worms devbox%3A x\n")
+    assert snapshots[111] == {"time": 1795362982, "commit": "a3a66c9", "description": "worms a3a66c9"}
+    assert snapshots[119]["commit"] == ""  # a devbox's, prose: no commit
+    now = 1795362982 + 2 * 86400 + 60
+    assert [consistency.snapshot_cell(vm, snapshots, now) for vm in SNAPSHOT_VMS] == ["a3a66c9 2 d", "9f1e2d0 2 d", ""]
+    assert consistency.snapshot_cell({"vmid": 105, "name": "ntp", "pool": "private_internet"}, snapshots, now) == "—"
+
+
+@pytest.mark.parametrize("deployed, events, rows", [
+    ({"scoring": {"commit": "a3a66c9"}, "dns": {"commit": "9f1e2d0"}}, [], []),  # as deployed
+    ({"scoring": {"commit": "a3a66c9-dirty"}}, [], []),  # -dirty is the same commit
+    ({}, [], []),  # nothing recorded: unknown, not a finding
+    ({"scoring": {"commit": "b6d380f"}, "dns": {"commit": "9f1e2d0"}}, [], ["snapshot behind deployed"]),
+    ({}, [_event(111, "scoring", "configured", "2026-11-22T10:00:00Z")], []),  # before the snapshot
+    ({}, [_event(111, "scoring", "configured", "2026-11-30T10:00:00Z")], ["configured after its snapshot"]),
+    ({}, [_event(111, "scoring", "rolled_back", "2026-11-30T10:00:00Z")], []),  # a rollback is no configuration
+    ({}, [_event(111, "other-vm", "packages", "2026-11-30T10:00:00Z")], []),  # another VM that had the vmid
+    ({"dns": {"commit": "a3a66c9"}}, [_event(100, "dns", "packages", "2026-11-30T10:00:00Z")],
+     ["snapshot behind deployed", "configured after its snapshot"]),
+])  # fmt: skip
+def test_the_snapshot_rows_appear_exactly_when_they_should(deployed, events, rows):
+    sys.path.insert(0, str(REPO / "src"))
+    from worms_cli import consistency
+
+    found = consistency.snapshot_rows(SNAPSHOT_VMS, consistency.parse_snapshots(SNAPSHOT_LINES), deployed, events)
+    assert [row.name for row in found] == rows
+    assert all("worms apply <component>" in row.said() for row in found)
+
+
+def test_a_login_onto_a_service_vm_says_its_changes_do_not_last(capsys):
+    sys.path.insert(0, str(REPO / "src"))
+    from worms_cli.vms import Catalogue
+
+    catalogue = Catalogue.__new__(Catalogue)
+    catalogue.service_notice([{"name": "dns", "pool": "ephemeral"}])
+    assert "dns: changes made here are lost at the next reset or round build" in capsys.readouterr().err
+    catalogue.service_notice([{"name": "dashboard", "pool": "persistent"}, None])
+    assert capsys.readouterr().err == ""

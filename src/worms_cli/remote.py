@@ -113,6 +113,7 @@ class Remote:
         team = [t.name for t in targets if t.untrusted]
         if team:
             output.warn(f"{', '.join(team)}: a team's VM, assumed rooted by the team: what it prints is escaped")
+        self.catalogue.service_notice([t.vm for t in targets])
         several = len(targets) > 1
         with ThreadPoolExecutor(max_workers=min(8, len(targets))) as pool:
             # One VM may read the input: a platform VM this terminal's, a team's VM only what is piped

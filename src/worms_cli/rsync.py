@@ -177,6 +177,8 @@ class Rsync:
             ssh = ["ssh", *self.catalogue.ssh_options(interactive=False), "-o", "ServerAliveInterval=15"]
             destination, guarded = self.catalogue.destination(vm), vm.get("pool") in UNTRUSTED_POOLS
             side = Spec(side.arg, vm["name"], user, side.path)
+            if not down:  # onto it
+                self.catalogue.service_notice([vm])
         argv = [f"{destination}:{s.path}" if s.remote else s.arg for s in specs]
         guard = (GUARD_DOWN if down else GUARD_UP) if guarded else []
         rsync_path = shlex.join(["sh", "-c", REMOTE, "worms-rsync", user])

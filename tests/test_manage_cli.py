@@ -691,3 +691,77 @@ def test_a_component_without_a_record_reads_unknown():
 def test_a_service_vm_without_a_snapshot_is_said_so():
     state, lines = _version(snapshots={"dns": "a3a66c9", "ntp": ""})
     assert state == "mixed" and lines[-2] == "  no snapshot: ntp (snapshot)"
+
+
+# --- the consistency rows of `worms status` (worms_cli/consistency.py, T11) ---------------------
+
+
+def _consistency():
+    sys.path.insert(0, str(REPO / "src"))
+    from worms_cli import consistency
+
+    return consistency
+
+
+def test_the_versions_row_only_when_the_system_is_mixed():
+    c = _consistency()
+    assert [r.name for r in c.version_row("mixed")] == ["versions"]
+    assert c.version_row("on") == [] and c.version_row("") == []  # "": the host was not read
+
+
+def test_the_devbox_map_row_when_a_holder_differs_from_the_host():
+    c = _consistency()
+    assert c.devbox_map_rows("aa", {"scoring": "aa", "logging": "aa"}) == []
+    assert c.devbox_map_rows("", {"scoring": "bb"}) == []  # no map on the host: no devbox job has run
+    [row] = c.devbox_map_rows("aa", {"scoring": "aa", "logging": ""})
+    assert "logging hold another devbox map" in row.text and "worms step devbox-map" in row.repair
+
+
+def test_the_current_team_row_while_no_round_runs():
+    c = _consistency()
+    teams = {"scoring": "11111111-2222-3333-4444-555555555555", "logging": ""}
+    assert c.current_team_rows(teams, round_runs=True) == []
+    assert c.current_team_rows({"scoring": "", "logging": ""}, round_runs=False) == []
+    [row] = c.current_team_rows(teams, round_runs=False)
+    assert row.text.startswith("scoring still name a round's team (11111111…)") and "worms round teardown" in row.repair
+
+
+@pytest.mark.parametrize("pool, state, generated, unfinished, found", [
+    (set(), set(), 0, False, None),  # nothing: coherent
+    ({130, 131}, {130, 131}, 2, False, None),  # a kept sandbox: coherent
+    ({130, 131}, {130}, 2, False, "VMs in the pool no state holds (131)"),
+    ({130}, {130, 131}, 2, False, "VMs its state holds that Proxmox lacks (131)"),
+    (set(), set(), 20, False, "generated_vms.tf still defines 20 VMs"),
+    (set(), set(), 0, True, "an unfinished build is recorded with no VM"),
+])  # fmt: skip
+def test_the_sandbox_row_when_pool_state_definition_and_record_disagree(pool, state, generated, unfinished, found):
+    rows = _consistency().sandbox_rows(pool, state, generated, unfinished)
+    assert (rows == []) if found is None else (found in rows[0].text and rows[0].repair == "`worms round teardown`")
+
+
+def test_the_orphan_row_for_a_vm_no_state_holds():
+    c = _consistency()
+    vms = [{"vmid": 111, "name": "scoring", "pool": "ephemeral"}, {"vmid": 130, "name": "sandbox-a", "pool": "sandbox"},
+           {"vmid": 900, "name": "someones-test", "pool": None}]  # fmt: skip
+    assert c.orphan_rows(vms, {111: "scoring", 130: "sandbox-a"}) == []
+    [row] = c.orphan_rows(vms, {111: "scoring"})
+    assert row.text == "in no OpenTofu state: sandbox-a" and "worms round teardown" in row.repair  # not someones-test
+    assert c.state_vms('{"resources": [{"type": "proxmox_virtual_environment_vm", "instances": '
+                       '[{"attributes": {"vm_id": 130, "name": "sandbox-a"}}]}]}') == {130: "sandbox-a"}  # fmt: skip
+
+
+def test_the_backup_row_when_a_job_names_a_vm_that_is_gone():
+    c = _consistency()
+    vms = [{"vmid": 107}, {"vmid": 110}]
+    assert c.backup_rows([{"id": "worms-stateful", "pool": "persistent"}], vms) == []
+    assert c.backup_rows([{"id": "worms-stateful", "vmid": "107,110"}], vms) == []
+    [row] = c.backup_rows([{"id": "worms-stateful", "vmid": "107,108,110"}], vms)
+    assert "worms-stateful backs up VM IDs that do not exist (108)" in row.text
+
+
+def test_the_drift_row_when_a_plan_has_changes():
+    c = _consistency()
+    assert c.drift_rows({"platform": 0, "firewall": 0}) == []
+    rows = c.drift_rows({"platform": 0, "firewall": 2, "private_internet": 1})
+    assert [(r.name, r.state) for r in rows] == [("drift", "warn"), ("drift", "unknown")]
+    assert "OpenTofu would change firewall" in rows[0].text and "private_internet" in rows[1].text

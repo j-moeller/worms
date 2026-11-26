@@ -191,7 +191,7 @@ Teams, students and rounds are managed on the dashboard (/staff/); these are the
 | `worms test [-- <pytest args>]` | The offline suite ([Testing](#testing)) |
 | `worms test --live [-- <ansible args>]` | The end-to-end simulation on the deployed platform |
 
-`worms step <name> [-- <ansible args>]` is the round agent's, not in the help: one pipeline step ([`pipeline.py`](../src/worms_cli/pipeline.py), `STEPS`): `init`, `inventory`, `show-config`, `ping`, `offline`, `snapshot-services`, and the round agent's `round-configure-sandbox`, `devbox-apply`, `devbox-configure`, `devbox-keys`. The last two are refused without the agent's `-e @<varfile>`: the roles' defaults would write every team's key files empty (`worms key sync` writes the keys; `worms vm reset <team>` or `worms apply devbox` a devbox). `worms step debug HOST`: why Ansible cannot reach a host (address, TCP 22, SSH, Python, sudo, cloud-init).
+`worms step <name> [-- <ansible args>]` is the round agent's, not in the help: one pipeline step ([`pipeline.py`](../src/worms_cli/pipeline.py), `STEPS`): `init`, `inventory`, `show-config`, `ping`, `offline`, `snapshot-services`, `devbox-map` (the host's devbox map pushed onto scoring and logging again: what `worms status` names when theirs differs), and the round agent's `round-configure-sandbox`, `devbox-apply`, `devbox-configure`, `devbox-keys`. The last two are refused without the agent's `-e @<varfile>`: the roles' defaults would write every team's key files empty (`worms key sync` writes the keys; `worms vm reset <team>` or `worms apply devbox` a devbox). `worms step debug HOST`: why Ansible cannot reach a host (address, TCP 22, SSH, Python, sudo, cloud-init).
 
 <a id="worms-build"></a>
 
@@ -392,6 +392,26 @@ gets it. Without a terminal, a line every 30 s instead, which the run log does g
 file with `vars: worms_live_log: <path>` and writes its output there itself; package installs with
 the apt module follow apt's log without being told ([`live.py`](../src/worms_cli/live.py),
 [`worms_live.py`](../ansible/callback_plugins/worms_live.py)).
+
+## What `worms status` compares
+
+Each fact has one source; `worms status` compares its copies with it, from what it read once (the host probe, the VMs, the database, SSH to the platform VMs it names), and names the repair. Each check is a pure function in [`consistency.py`](../src/worms_cli/consistency.py) (the older ones in `manage.py`). `--deep` adds the slow one; `--json` has them as data.
+
+| Row | Source | Compared with | Repair |
+|---|---|---|---|
+| versions | `deployed.json`, snapshots, running apps (the version block) | this checkout | `worms apply` |
+| migrations | this checkout | the database | `worms apply orchestrator` |
+| snapshot behind deployed / configured after its snapshot | a service VM's `clean` snapshot | `deployed.json`, the VM history | `worms apply <component>` |
+| devbox map | `/var/lib/worms/devbox-teams` | its sha256 on scoring and logging | `worms step devbox-map` |
+| current team | a round session that runs | `/etc/sandbox-api/current-team` on scoring and logging | `worms round teardown` |
+| round run | an attempt in an active state | a round session that runs (its record's pid) | `worms round teardown` |
+| host jobs | `services.left_behind` | jobs marked running | `worms jobs cancel <n>` |
+| round session | `/var/lib/worms/round-stopped.json` | the units and VMs it stopped | the commands it names |
+| sandbox | the `sandbox` pool | the sandbox stack's state, `generated_vms.tf`, the unfinished-build record | `worms round teardown` |
+| orphan VMs | Proxmox's VMs in WORMS's pools (or named `sandbox-`/`devbox-`) | every OpenTofu state (the checkout's, the host's) | the sandbox's: `worms round teardown`; else look first |
+| backup job | Proxmox's backup jobs | the VM IDs they name | `worms apply` |
+| platform services | the units each service VM runs | active | `worms service start <name>` |
+| drift (`--deep`) | the HCL | `tofu plan -detailed-exitcode -lock=false` of each controller stack | `worms apply --plan` |
 
 ## VM history
 

@@ -521,6 +521,13 @@ class Pipeline:
             limit = ",".join(vm["name"].replace("-", "_") for vm in vms)
             self._ansible("WaitForVMs.yml", "--limit", limit, user_args=False)
 
+    def devbox_map(self) -> None:
+        """`worms step devbox-map`: the host's devbox map onto scoring and logging again, as after a
+        rollback (`worms status` names it when theirs differs)."""
+        self._push_devbox_map([vm for vm in self.runner.vms() if vm["name"] in ("scoring", "logging")])
+        if self.devbox_map_failed:
+            raise BuildError("the devbox map did not reach scoring and logging (the error above)")
+
     def _rollback(self, vms: list[dict], detail: str = SERVICE_SNAPSHOT) -> None:
         """These VMs back to their snapshot, started: all at once. `detail`: the VM history's."""
         codes = self.runner.host_parallel([[f"qm rollback {vm['vmid']} {SERVICE_SNAPSHOT} --start 1"] for vm in vms])
@@ -883,6 +890,7 @@ STEPS: dict[str, tuple[str, str]] = {
     "show-config": ("show_config", "print the hosts Ansible will contact"),
     "ping": ("ping", "one line per VM: can Ansible reach it?"),
     "offline": ("offline", "switch DNS and the caches to offline (internet denied)"),
+    "devbox-map": ("devbox_map", "push the host's devbox map onto scoring and logging again (no rollback, no host job)"),
     "snapshot-services": ("snapshot_services",
                           "snapshot the service VMs as they are, as what a reset returns to (no team VM may exist)"),
     "round-configure-sandbox": ("round_configure_sandbox", "configure a round's freshly built sandbox VMs (round agent)"),

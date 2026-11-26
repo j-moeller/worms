@@ -228,8 +228,15 @@ grep -H '^meta:' /etc/pve/qemu-server/*.conf 2>/dev/null; echo '#--'
 cat {stopped} 2>/dev/null; echo; echo '#--'
 pid=$(sed -n 's/.*"pid": *\([0-9][0-9]*\).*/\1/p' {stopped} 2>/dev/null); [ -n "$pid" ] && tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null; echo; echo '#--'
 cat {deployed} 2>/dev/null; echo; echo '#--'
+sha256sum /var/lib/worms/devbox-teams 2>/dev/null | cut -c1-64; echo '#--'
+cat /opt/worms/opentofu/stacks/sandbox/terraform.tfstate 2>/dev/null; echo; echo '#--'
+cat /opt/worms/opentofu/stacks/devbox/terraform.tfstate 2>/dev/null; echo; echo '#--'
+grep -c '^resource' /opt/worms/opentofu/stacks/sandbox/generated_vms.tf 2>/dev/null; echo '#--'
+test -e /var/lib/worms/sandbox-build.json && echo yes; echo '#--'
+pvesh get /cluster/backup --output-format json 2>/dev/null; echo; echo '#--'
 """
-PROBED = ("held", "window", "clean", "active", "ledger", "meta", "stopped", "session", "deployed")
+PROBED = ("held", "window", "clean", "active", "ledger", "meta", "stopped", "session", "deployed", "map", "sandbox_state",
+          "devbox_state", "generated", "build", "backup")  # fmt: skip
 
 
 def _host_probe(config) -> dict:
@@ -355,7 +362,7 @@ def _version_lines(config, listing, probe, running) -> list[str]:
     from worms_cli import components, consistency
 
     if probe.get("error"):
-        return [output.status_cell("unknown", f"the host could not be read ({probe['error']})")]
+        return "", [output.status_cell("unknown", f"the host could not be read ({probe['error']})")]
     try:
         deployed = json.loads(probe.get("deployed", "").strip() or "{}")
     except ValueError:
@@ -366,7 +373,7 @@ def _version_lines(config, listing, probe, running) -> list[str]:
     snapshots = {vm["name"]: by_vmid.get(int(vm["vmid"]), {}).get("commit", "") for vm in vms
                  if vm.get("pool") in consistency.SERVICE_POOLS}  # fmt: skip
     state, lines = consistency.version_summary(build.Runner(config).commit(), deployed, expected, snapshots, running)
-    return [output.status_cell("ok" if state == "on" else "warn", lines[0]), *lines[1:]]
+    return state, [output.status_cell("ok" if state == "on" else "warn", lines[0]), *lines[1:]]
 
 
 def _service_states(config, listed=None) -> tuple[dict, str]:
@@ -385,7 +392,85 @@ def _service_states(config, listed=None) -> tuple[dict, str]:
     return states, f"the services on {', '.join(not_asked)} ({reasons[0]}{' …' if len(reasons) > 1 else ''})"
 
 
-def _attention(config, listing, internet, probe, services_found=None) -> list[list[str]]:
+def _service_files(config, listed=None) -> dict:
+    """{scoring|logging: {"map": the sha256 of its devbox map ("" without one), "team": its
+    current-team}}, read over SSH; a VM not answering is left out."""
+    from worms_cli import services
+    from worms_cli.vms import Catalogue
+
+    try:
+        units = services.Units(config, catalogue=Catalogue(config, vms=listed))
+    except Exception:  # noqa: BLE001
+        return {}
+    found = {}
+    for vm in ("scoring", "logging"):
+        try:
+            code, out = units._sh(vm, "sha256sum /etc/sandbox-api/devbox-teams 2>/dev/null | cut -c1-64; echo '#--'; "
+                                      "cat /etc/sandbox-api/current-team 2>/dev/null; true", check=False)  # fmt: skip
+        except Exception:  # noqa: BLE001
+            continue
+        digest, _, team = out.partition("#--")
+        if code == 0 and "#--" in out:
+            found[vm] = {"map": digest.strip(), "team": team.strip()}
+    return found
+
+
+def _controller_states(config) -> dict:
+    """{vmid: name} of the VMs this checkout's OpenTofu states hold (not the host's stacks: theirs
+    are in /opt/worms, the host probe's)."""
+    from worms_cli import consistency
+    from worms_cli.session import HOST_STACKS
+
+    found = {}
+    stacks = Path(config.repo_root) / "opentofu" / "stacks"
+    for state in stacks.glob("**/terraform.tfstate"):
+        if state.parent.relative_to(stacks).as_posix() not in HOST_STACKS:
+            try:
+                found.update(consistency.state_vms(state.read_text()))
+            except OSError:
+                continue
+    return found
+
+
+def _drift(config) -> dict:
+    """`worms status --deep`: {stack: `tofu plan -detailed-exitcode`'s exit} of each controller
+    stack (0: as planned, 2: changes, else: no plan), read-only (-lock=false)."""
+    from worms_cli.pipeline import INIT_STACKS
+    from worms_cli.session import HOST_STACKS
+
+    runner = build.Runner(config)
+    return {stack: runner.sh("tofu plan -detailed-exitcode -lock=false -input=false -no-color >/dev/null 2>&1",
+                             cwd=f"opentofu/stacks/{stack}", check=False, quiet=True, tofu=True)
+            for stack in INIT_STACKS if stack not in HOST_STACKS}  # fmt: skip
+
+
+def _consistency_rows(config, vms, probe, facts) -> list:
+    """T11: each copy against its source (worms_cli/consistency.py), from what was read once."""
+    import json
+
+    from worms_cli import consistency
+
+    rows = consistency.version_row(facts.get("version", "on"))
+    held = facts.get("held") or {}
+    rows += consistency.devbox_map_rows(probe.get("map", "").strip(), {vm: f["map"] for vm, f in held.items()})
+    rows += consistency.current_team_rows({vm: f["team"] for vm, f in held.items()}, _session_runs(probe))
+    if vms is not None:
+        sandbox_state = consistency.state_vms(probe.get("sandbox_state", ""))
+        managed = {**_controller_states(config), **sandbox_state, **consistency.state_vms(probe.get("devbox_state", ""))}
+        generated = probe.get("generated", "").strip()
+        rows += consistency.sandbox_rows({int(vm["vmid"]) for vm in vms if vm.get("pool") == "sandbox"}, set(sandbox_state),
+                                         int(generated) if generated.isdigit() else 0, probe.get("build", "").strip() == "yes")  # fmt: skip
+        rows += consistency.orphan_rows(vms, managed)
+        try:
+            jobs = json.loads(probe.get("backup", "").strip() or "[]")
+        except ValueError:
+            jobs = []
+        rows += consistency.backup_rows(jobs, vms)
+    rows += consistency.drift_rows(facts.get("plans") or {})
+    return rows
+
+
+def _attention(config, listing, internet, probe, services_found=None, facts=None) -> list[list[str]]:
     """`worms status`'s first block: what needs a look. The internet window open; devbox VMs held
     by a round or stopped by the window; service VMs without a `clean` snapshot; migrations the
     database lacks; host jobs failed in the last 24 h; host services not active. The host's part
@@ -425,6 +510,8 @@ def _attention(config, listing, internet, probe, services_found=None) -> list[li
             rows.append(["host services", output.status_cell("error", f"not active: {', '.join(down)} (`worms log agent`, "
                                                              "`worms log firewall`)")])  # fmt: skip
         rows += _round_session_rows(probe, vms, service_states)
+        rows += [[row.name, output.status_cell(row.state, row.said())]
+                 for row in _consistency_rows(config, vms, probe, facts or {})]  # fmt: skip
         if vms is not None:
             from worms_cli import consistency, history
 
@@ -492,12 +579,14 @@ def cmd_status(config, args) -> int:
     # The platform's services and what its apps run are asked over SSH, a VM each (seconds):
     # meanwhile, the rest.
     listing = _list_vms(config)
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with ThreadPoolExecutor(max_workers=3) as pool:
         services_found = pool.submit(_service_states, config, listing[0])
         running = pool.submit(_running_commits, config, listing[0])
+        held = pool.submit(_service_files, config, listing[0])
         internet, probe = _internet_status(config), _host_probe(config)
-        attention = _attention(config, listing, internet, probe, services_found.result)
-        version = _version_lines(config, listing, probe, running.result())
+        state, version = _version_lines(config, listing, probe, running.result())
+        facts = {"version": state, "held": held.result(), "plans": _drift(config) if getattr(args, "deep", False) else {}}
+        attention = _attention(config, listing, internet, probe, services_found.result, facts)
     print(output.heading("version"))
     print("\n".join(version))
     print()
@@ -2196,7 +2285,8 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     vms = f"\n\n{vm_list}" if vm_list else ""
 
     # -- look
-    _json(_add(sub, "status"))
+    _json(_add(sub, "status")).add_argument("--deep", action="store_true", help="also each controller stack's "
+                                             "`tofu plan` (read-only): what OpenTofu would change (slow)")
     topics = "\n".join(_format_rows([*SHOW_TOPICS.items(), ("<list>", "a list's name (jobs, rounds, teams, keys, ...): as "
                                      "the noun alone (`worms jobs`)")], 12))  # fmt: skip
     p = _json(_add(sub, "show", epilog=topics + vms, **RAW))

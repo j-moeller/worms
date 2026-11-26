@@ -133,9 +133,120 @@ def version_summary(checkout: str, deployed: dict, expected, snapshots: dict, ru
         add(commit, f"{app} (running)")
     if len(groups) == 1 and checkout in groups and not checkout.endswith("-dirty"):
         return "on", [f"system: on {checkout}"]
+    state = "unknown" if checkout == "unknown" else "mixed"  # not a checkout: nothing to compare with
 
     def said(labels):
         return ", ".join(labels) if len(labels) <= 5 else f"{len(labels)} components"
 
     order = sorted(groups.items(), key=lambda item: (item[0] in ("unknown", "no snapshot"), -len(item[1]), item[0]))
-    return "mixed", ["system: mixed", *(f"  {commit}: {said(labels)}" for commit, labels in order), f"  checkout: {checkout}"]
+    return state, [f"system: {state}", *(f"  {commit}: {said(labels)}" for commit, labels in order), f"  checkout: {checkout}"]
+
+
+# -- copies that disagree with their source (T11) -----------------------------------------------
+
+MANAGED_POOLS = ("sandbox", "devbox", "persistent", "ephemeral", "private_internet")
+
+
+def state_vms(text: str) -> dict[int, str]:
+    """{vmid: name} of the Proxmox VMs an OpenTofu state holds (a terraform.tfstate's text)."""
+    import json
+
+    try:
+        state = json.loads(text) if text.strip() else {}
+    except ValueError:
+        return {}
+    found = {}
+    for resource in state.get("resources", []) if isinstance(state, dict) else []:
+        if resource.get("type") != "proxmox_virtual_environment_vm":
+            continue
+        for instance in resource.get("instances", []):
+            attributes = instance.get("attributes") or {}
+            if str(attributes.get("vm_id", "")).isdigit():
+                found[int(attributes["vm_id"])] = str(attributes.get("name", ""))
+    return found
+
+
+def version_row(state: str) -> list[Row]:
+    if state != "mixed":  # "on", or not known (the host not read)
+        return []
+    return [Row("versions", "warn", "the system runs more than one commit (the version block above)",
+                "`worms apply` brings what changed to this checkout; `worms apply <component>` one")]  # fmt: skip
+
+
+def devbox_map_rows(host_hash: str, held: dict) -> list[Row]:
+    """The devbox map on scoring and logging (`held`: {VM: its sha256, "" without one; a VM not
+    asked is left out}) against the host's (devbox_map.PATH: `host_hash`, "" without one)."""
+    if not host_hash:
+        return []
+    other = sorted(vm for vm, digest in held.items() if digest != host_hash)
+    if not other:
+        return []
+    return [Row("devbox map", "error", f"{', '.join(other)} hold another devbox map than the host's: their devbox "
+                "submissions are attributed by an old one, or to no team", "`worms step devbox-map` pushes it again")]  # fmt: skip
+
+
+def current_team_rows(teams: dict, round_runs: bool) -> list[Row]:
+    """`current-team` on scoring and logging (`teams`: {VM: its content}) while no round's attempt
+    runs: their submissions are recorded for a team that is not playing."""
+    named = sorted(vm for vm, team in teams.items() if team.strip())
+    if round_runs or not named:
+        return []
+    team = teams[named[0]].strip()
+    return [Row("current team", "warn", f"{', '.join(named)} still name a round's team ({team[:8]}…) while no round "
+                "runs", "`worms round teardown` clears it")]  # fmt: skip
+
+
+def sandbox_rows(pool: set, state: set, generated: int, unfinished: bool) -> list[Row]:
+    """The round's sandbox, coherent: no VM in the pool, none in its state, no definition and no
+    unfinished build; or a kept one, the same VMs in the pool and the state, and its definition."""
+    problems = []
+    if pool - state:
+        problems.append(f"VMs in the pool no state holds ({', '.join(map(str, sorted(pool - state)))})")
+    if state - pool:
+        problems.append(f"VMs its state holds that Proxmox lacks ({', '.join(map(str, sorted(state - pool)))})")
+    if not pool and not state and generated:
+        problems.append(f"generated_vms.tf still defines {generated} VMs with none built: an apply there builds the last "
+                        "round's sandbox again")  # fmt: skip
+    if not pool and not state and unfinished:
+        problems.append("an unfinished build is recorded with no VM")
+    if not problems:
+        return []
+    return [Row("sandbox", "error", "; ".join(problems), "`worms round teardown`")]
+
+
+def orphan_rows(vms: list, managed: dict) -> list[Row]:
+    """VMs Proxmox has in WORMS's pools (or named like a sandbox's or devbox's) that no OpenTofu
+    state holds (`managed`: {vmid: name} of every state): no firewall or record follows them."""
+    orphans = sorted(vm["name"] for vm in vms
+                     if (vm.get("pool") in MANAGED_POOLS or str(vm.get("name", "")).startswith(("sandbox-", "devbox-")))
+                     and int(vm["vmid"]) not in managed)  # fmt: skip
+    if not orphans:
+        return []
+    sandbox = [name for name in orphans if name.startswith("sandbox-")]
+    return [Row("orphan VMs", "error", f"in no OpenTofu state: {', '.join(orphans)}",
+                ("`worms round teardown` for the sandbox's; " if sandbox else "") + "the rest: look first (`worms show <vm>`)")]  # fmt: skip
+
+
+def backup_rows(jobs: list, vms: list) -> list[Row]:
+    """Each backup job that names VM IDs: every one exists (a rebuilt VM gets a new one)."""
+    there = {int(vm["vmid"]) for vm in vms}
+    rows = []
+    for job in jobs if isinstance(jobs, list) else []:
+        ids = [int(i) for i in str(job.get("vmid") or "").split(",") if i.strip().isdigit()]
+        missing = [i for i in ids if i not in there]
+        if missing:
+            rows.append(Row("backup job", "error", f"{job.get('id', '?')} backs up VM IDs that do not exist "
+                            f"({', '.join(map(str, missing))})", "`worms apply` (the job by pool: T3)"))  # fmt: skip
+    return rows
+
+
+def drift_rows(plans: dict) -> list[Row]:
+    """`worms status --deep`: each controller stack's `tofu plan -detailed-exitcode` (2: changes)."""
+    changed = sorted(stack for stack, code in plans.items() if code == 2)
+    failed = sorted(stack for stack, code in plans.items() if code not in (0, 2))
+    rows = []
+    if changed:
+        rows.append(Row("drift", "warn", f"OpenTofu would change {', '.join(changed)}", "`worms apply --plan` says what"))
+    if failed:
+        rows.append(Row("drift", "unknown", f"no plan for {', '.join(failed)}", "`worms apply --plan` says why"))
+    return rows

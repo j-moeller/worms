@@ -145,7 +145,7 @@ def test_component_steps(run, name):
 
 
 def test_every_step_is_covered():
-    assert set(pipeline.STEPS) - set(EXPECTED) <= {"init", "inventory", "show-config", "ping", "snapshot-services"}
+    assert set(pipeline.STEPS) - set(EXPECTED) <= {"init", "inventory", "show-config", "ping", "snapshot-services", "devbox-map"}
     # The round agent's own steps, by hand without its variable file, would write every team's
     # key files empty (the roles' defaults): refused, and the agent's call still passes.
     for step in pipeline.AGENT_VARFILE_STEPS:

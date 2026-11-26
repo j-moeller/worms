@@ -167,7 +167,8 @@ def test_status_and_leaderboard_with_db(initialised):
     # (The DB is a shared session fixture, so the current competition name may
     # have been set by another test; assert structure, not a specific name.)
     add_team(cluster, "Solo")
-    status = worms(cluster, "status")
+    status = worms(cluster, "status", check=False)  # 1 when it found something (a failed job of another test)
+    assert status.returncode in (0, 1), status.stderr
     assert "competition" in status.stdout
     assert "teams" in status.stdout
 
@@ -269,7 +270,7 @@ def test_worms_db_settings_win_over_a_service_env(initialised):
     old = {k: _os.environ.get(k) for k in stale}
     _os.environ.update(stale)
     try:
-        out = worms(initialised, "status").stdout
+        out = worms(initialised, "status", check=False).stdout  # exit 1: it found something, not an error
         # Reached the test database (192.0.2.1:1 would not answer).
         assert "competition  ● WORMS" in out and "error" not in out.lower()
     finally:

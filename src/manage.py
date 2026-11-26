@@ -1646,6 +1646,18 @@ def cmd_restart(config, args) -> int:
     return 0
 
 
+def cmd_upgrade(config, args) -> int:
+    """`worms upgrade <bundle|rev>` (worms_cli/upgrade.py): not under the lock itself, each `worms
+    apply` it runs takes it."""
+    from worms_cli import upgrade
+
+    try:
+        return upgrade.run(config, args.spec, resume=args.resume, plan=args.plan, yes=args.yes)
+    except build.BuildError as exc:
+        output.error(str(exc))
+        return 1
+
+
 def cmd_backup(config, args) -> int:
     """`worms db backup`: a pg_dump of the platform's database, here (database.backup)."""
     from worms_cli import database
@@ -2057,6 +2069,7 @@ SECTIONS = (
         ("apply", "only what changed, up to this checkout"),
         ("apply <component>...", "these components, built if missing"),
         ("apply --all", "everything in build order: a new host"),
+        ("upgrade <bundle|rev>", "this system to a commit, in order, resumable (--plan, --resume)"),
         ("destroy [--all]", "the VM stacks; --all: everything"),
         ("internet [on|off]", "the internet window, for packages"),
     )),
@@ -2333,6 +2346,10 @@ def build_parser(vm_list: str = "") -> argparse.ArgumentParser:
     p.add_argument("--preview", action="store_true", help="count what would be sent (files, sizes, bytes), send nothing")
 
     # -- deploy
+    p = _yes(_add(sub, "upgrade"))
+    p.add_argument("spec", nargs="?", metavar="bundle|rev", help="a git bundle (its main) or a commit of this checkout")
+    p.add_argument("--resume", action="store_true", help="go on after the last step done (/var/lib/worms/upgrade.json)")
+    p.add_argument("--plan", action="store_true", help="the steps, the commits and what stands in the way, changing nothing")
     p = _yes(_add(sub, "apply", epilog=_components_overview(), **RAW))
     p.add_argument("components", nargs="*", metavar="component", help="components or groups (default: what changed)")
     p.add_argument("--all", action="store_true", help="every component, in build order, packages too")
@@ -2688,7 +2705,7 @@ def db_restore(config, args) -> int:
 HANDLERS = {
     "status": cmd_status, "show": verb_show, "log": verb_log, "check": verb_check, "trace": verb_trace,
     "login": cmd_login, "run": cmd_run, "rsync": cmd_rsync,
-    "apply": cmd_apply, "destroy": cmd_destroy, "internet": cmd_internet,
+    "apply": cmd_apply, "destroy": cmd_destroy, "internet": cmd_internet, "upgrade": cmd_upgrade,
     "vm": list_vms, "vm start": cmd_power, "vm stop": cmd_power, "vm restart": cmd_power, "vm reset": vm_reset,
     "vm rebuild": vm_rebuild, "vm kill": cmd_emergency_stop,
     "jobs": list_jobs, "jobs pause": jobs_pause, "jobs resume": jobs_resume, "jobs cancel": jobs_cancel,

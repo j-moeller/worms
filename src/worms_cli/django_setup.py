@@ -34,6 +34,22 @@ def connected(config) -> None:
         raise
 
 
+def _behind() -> None:
+    """Once a run, before any query: a database behind this checkout's migrations (right after a
+    `git pull`) makes the CLI's newer models fail with a bare ProgrammingError: said first."""
+    try:
+        from django.db import connection
+        from django.db.migrations.executor import MigrationExecutor
+
+        executor = MigrationExecutor(connection)
+        pending = executor.migration_plan(executor.loader.graph.leaf_nodes())
+    except Exception:  # noqa: BLE001  (a database that does not answer says so where it is used)
+        return
+    if pending:
+        print(f"the database is behind this checkout ({len(pending)} migration(s)): `worms upgrade --resume` or `worms "
+              "apply orchestrator`", file=sys.stderr)  # fmt: skip
+
+
 def setup(config) -> None:
     """Configure Django against the database in `config`. Raises NotConfigured
     with a clear message when the database or Django is missing."""
@@ -79,6 +95,7 @@ def setup(config) -> None:
 
     django.setup()
     _READY = True
+    _behind()
 
 
 def _name_the_system(config) -> None:

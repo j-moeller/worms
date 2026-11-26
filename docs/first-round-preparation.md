@@ -6,8 +6,7 @@ should see. If you don't see it, stop at that step: everything before it can sta
 
 Only step 4 needs egress. Every other step runs with the host offline.
 
-**Superseded for the procedure** by [`migrate-on-production.md`](migrate-on-production.md), which uses
-the new commands and covers tonight's offline repair. This page keeps the dev rehearsal's results.
+**Superseded for the procedure** by `worms upgrade` ([03](03-manage-py.md#release)); the one-time procedure of 2026-11-20 is in git history (`docs/migrate-on-production.md`). This page keeps the dev rehearsal's results.
 
 **Rehearsal on worms-dev, 2026-11-19 evening,** with the same code. Dev's cache was broken the
 same way as production's.

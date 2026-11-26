@@ -269,7 +269,7 @@ class Units:
 
         wanted: dict[str, list[str]] = {}
         for service in SERVICES.values():
-            if service.where != "host":
+            if service.where != "host" and service.up_units:  # syslog's audit trail is files alone
                 units = wanted.setdefault(service.where, [])
                 units += [unit for unit in service.up_units if unit not in units]
         self.catalogue.vms()  # listed once, before the threads ask

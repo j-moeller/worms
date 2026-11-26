@@ -344,7 +344,21 @@ def _code_row(config, probe) -> list[str]:
     return ["code", output.status_cell("warn", f"this checkout {here}; {said} (`worms apply --plan` says what differs)")]
 
 
-def _attention(config, listing, internet, probe) -> list[list[str]]:
+def _service_states(config) -> tuple[dict, str]:
+    """(services.Units.vm_states' states, what could not be checked, said: "" for nothing)."""
+    try:
+        from worms_cli import services
+
+        states, not_asked = services.Units(config).vm_states()
+    except Exception as exc:  # noqa: BLE001  (no catalogue, no host: said, not fatal)
+        return {}, f"the platform's services ({str(exc).strip()[:60]})"
+    if not not_asked:
+        return states, ""
+    reasons = sorted(set(not_asked.values()))
+    return states, f"the services on {', '.join(not_asked)} ({reasons[0]}{' …' if len(reasons) > 1 else ''})"
+
+
+def _attention(config, listing, internet, probe, services_found=None) -> list[list[str]]:
     """`worms status`'s first block: what needs a look. The internet window open; devbox VMs held
     by a round or stopped by the window; service VMs without a `clean` snapshot; migrations the
     database lacks; host jobs failed in the last 24 h; host services not active. The host's part
@@ -354,16 +368,9 @@ def _attention(config, listing, internet, probe) -> list[list[str]]:
     from worms_cli.pipeline import SERVICE_POOLS
 
     rows, unchecked = [], []
-    service_states = {}
-    try:
-        from worms_cli import services
-
-        service_states, not_asked = services.Units(config).vm_states()
-        if not_asked:
-            reasons = sorted(set(not_asked.values()))
-            unchecked.append(f"the services on {', '.join(not_asked)} ({reasons[0]}{' …' if len(reasons) > 1 else ''})")
-    except Exception as exc:  # noqa: BLE001  (no catalogue, no host: said, not fatal)
-        unchecked.append(f"the platform's services ({str(exc).strip()[:60]})")
+    service_states, not_asked = services_found() if services_found else _service_states(config)
+    if not_asked:
+        unchecked.append(not_asked)
     if "ALLOWED" in internet[1]:
         rows.append(["internet window", output.status_cell("warn", "OPEN: no team VM may run; `worms internet off`")])
     vms, _ = listing
@@ -443,8 +450,13 @@ def cmd_status(config, args) -> int:
     """`worms status`: what needs attention, the platform, every VM, the competition. Exits 1 when
     it found something that needs a look (the attention block: more than a round in progress, or
     what it could not check), else 0: an unconfigured checkout is not a problem."""
-    listing, internet, probe = _list_vms(config), _internet_status(config), _host_probe(config)
-    attention = _attention(config, listing, internet, probe)
+    from concurrent.futures import ThreadPoolExecutor
+
+    # The platform's services are asked over SSH, a VM each (seconds): meanwhile, the rest.
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        services_found = pool.submit(_service_states, config)
+        listing, internet, probe = _list_vms(config), _internet_status(config), _host_probe(config)
+        attention = _attention(config, listing, internet, probe, services_found.result)
     print(output.heading("attention"))
     print(output.table(attention))
     print()

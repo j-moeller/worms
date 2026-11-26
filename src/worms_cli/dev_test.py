@@ -1,10 +1,11 @@
 """`worms round dev-test`: a whole round, quickly, on the development system (docs/03-manage-py.md).
 
-Three questions, nothing else (and, not on worms-dev, whether to run a development command here):
+A few questions, nothing else (and, not on worms-dev, whether to run a development command here):
 
     1. the gameplan: one of gameplans/ (its round_duration is the round's duration per team)
     2. an upload zip: one of solutions/ (this checkout's, git-ignored), or a path
-    3. another upload zip? [y/N]: another of solutions/, and the same question again
+    3. the list again for the next one, after each: left empty, "Include another upload? [y/N]"
+       (yes: the list again; no: these are the uploads)
 
 Then, for each zip, a user (devtest-<time>-<n>@example.org, no password: nobody logs in as it) in a
 team of its own (DevTest <time> #<n>), the zip its upload, and a round of those teams only
@@ -76,15 +77,19 @@ def _gameplan(folder: Path) -> tuple[str, int]:
     return name, duration
 
 
-def _zip(folder: Path, first: bool) -> tuple[str, bytes]:
+def _zip(folder: Path, first: bool) -> tuple[str, bytes] | None:
     """A zip: one of `folder` (solutions/) by its number or name, or any path; asked until it is one
-    the dashboard takes (dev_reset._zip). Without a zip in `folder`, a path."""
+    the dashboard takes (dev_reset._zip). Without a zip in `folder`, a path. None: left empty (not
+    for the first: a round needs one)."""
     zips = sorted(path.name for path in folder.glob("*.zip")) if folder.is_dir() else []
     for n, name in enumerate(zips, 1):
         print(f"  {n}. {name}")
     choice = f"1-{len(zips)}, its name, or a path" if zips else "its path"
     while True:
-        answer = PROMPT(output.color(f"  {'an' if first else 'another'} upload zip [{choice}]: ", "yellow")).strip()
+        answer = PROMPT(output.color(f"  {'an' if first else 'another'} upload zip [{choice}"
+                                     f"{'' if first else '; empty: no more?'}]: ", "yellow")).strip()  # fmt: skip
+        if not answer and not first:
+            return None
         if answer.isdigit() and 1 <= int(answer) <= len(zips):
             answer = zips[int(answer) - 1]
         path = str(folder / answer) if answer in zips else answer
@@ -210,8 +215,12 @@ def run(config) -> int:
         print(output.heading("the uploads"))
         solutions = Path(config.repo_root) / "solutions"
         zips = [_zip(solutions, first=True)]
-        while ASK("Another upload zip?", False):
-            zips.append(_zip(solutions, first=False))
+        while True:  # the list again after each; left empty, asked whether another comes
+            picked = _zip(solutions, first=False)
+            if picked is not None:
+                zips.append(picked)
+            elif not ASK("Include another upload?", False):
+                break
     except (KeyboardInterrupt, EOFError):
         print("\nnothing made")
         return 130

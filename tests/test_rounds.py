@@ -845,7 +845,8 @@ def test_a_dev_test_makes_its_teams_and_round_and_ctrl_c_takes_them_away(db_clea
     for name in ("a.zip", "b.zip"):
         with __import__("zipfile").ZipFile(repo / "solutions" / name, "w") as archive:
             archive.writestr("main.sh", f"echo {name}\n")
-    answers, asked = iter(["1", "1", "b.zip"]), iter([True, False])  # by number and by name, from solutions/
+    # By number and by name, from solutions/; left empty: "Include another?" yes, the list again; empty, no.
+    answers, asked = iter(["1", "1", "b.zip", "", "", ""]), iter([True, False])
     monkeypatch.setattr(dev_test, "PROMPT", lambda text: next(answers))
     monkeypatch.setattr(dev_test, "ASK", lambda question, default: next(asked))
     monkeypatch.setattr(session, "for_config", lambda config: SimpleNamespace(environment=lambda: {"name": "development"}))
@@ -876,7 +877,7 @@ def test_a_dev_test_makes_its_teams_and_round_and_ctrl_c_takes_them_away(db_clea
     assert list(Upload.objects.values_list("team__name", flat=True)) == [other.name]
 
     # Run to its end: all of it is kept.
-    answers, asked = iter(["two.py", str(repo / "solutions" / "a.zip")]), iter([False])  # a path still does
+    answers, asked = iter(["two.py", "", str(repo / "solutions" / "a.zip"), ""]), iter([False])  # the first needs one; a path
     monkeypatch.setattr(rounds, "start", lambda config, args: 0)
     assert dev_test.run(config) == 0
     assert Round.objects.filter(name__startswith="dev-test").count() == 1 and Team.objects.count() == 2

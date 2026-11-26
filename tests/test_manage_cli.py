@@ -686,3 +686,8 @@ def test_a_dirty_checkout_is_never_on_one_commit():
 def test_a_component_without_a_record_reads_unknown():
     state, lines = _version(deployed={"dns": {"commit": "a3a66c9"}, "workspace": {"commit": "a3a66c9"}})
     assert state == "mixed" and lines[-2] == "  unknown: scoring"
+
+
+def test_a_service_vm_without_a_snapshot_is_said_so():
+    state, lines = _version(snapshots={"dns": "a3a66c9", "ntp": ""})
+    assert state == "mixed" and lines[-2] == "  no snapshot: ntp (snapshot)"

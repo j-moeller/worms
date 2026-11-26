@@ -75,6 +75,10 @@ def recorded(monkeypatch):
     monkeypatch.setattr(build, "subprocess", types.SimpleNamespace(run=rec))
     monkeypatch.setattr(build, "_child", lambda: types.SimpleNamespace(run=rec))  # Runner._run (child.run)
     monkeypatch.setattr(build.Runner, "commit", lambda self: "abc1234")  # every playbook gets it: -e worms_commit
+    from worms_cli import changes
+
+    # A workspace sync records what the host runs (deployed.json): never the real host's, from a test.
+    monkeypatch.setattr(changes, "record_deployed", lambda *a, **k: None)
     monkeypatch.setattr(Session, "check_host", lambda self: None)
     monkeypatch.setattr(Session, "internet_allowed", lambda self: True)
     monkeypatch.setattr(Session, "worms_agent", lambda self: {"SSH_AUTH_SOCK": WORMS_AGENT, "SSH_AGENT_PID": "1"})

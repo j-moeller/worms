@@ -111,26 +111,30 @@ def snapshot_rows(vms: list, snapshots: dict, deployed: dict, events: list) -> l
 # -- which commit this system runs (T7) -------------------------------------------------------
 
 
-def version_summary(checkout: str, deployed: dict, expected, snapshots: dict, running: dict) -> tuple[str, list[str]]:
+def version_summary(checkout: str, deployed: dict, expected, snapshots: dict, running: dict,
+                    same=frozenset()) -> tuple[str, list[str]]:
     """("on" or "mixed", the lines `worms status` shows): one answer to "which commit does this
     system run?". `checkout`: this checkout's HEAD (`-dirty` with changes); `deployed`:
     deployed.json ({component: {commit}}), `expected` the components it should name (a missing
     one reads "unknown"); `snapshots`: {service VM: its `clean` snapshot's commit}; `running`:
     {app: the commit its units started with (T8)}. On one commit only when every one of them,
     and the checkout, agree and the checkout is clean. A service VM without a snapshot: "no
-    snapshot" (the attention block's `snapshots` row says what to do)."""
+    snapshot" (the attention block's `snapshots` row says what to do). `same`: the (component,
+    commit) pairs nothing of that component changed for since, up to the checkout
+    (changes.same_as_checkout): they run what the checkout would give, and count as on it."""
     groups: dict[str, list[str]] = {}
 
-    def add(commit, label):
-        groups.setdefault(commit or "unknown", []).append(label)
+    def add(commit, label, name, missing="unknown"):
+        commit = checkout if commit and (name, commit) in same else commit
+        groups.setdefault(commit or missing, []).append(label)
 
     for name in expected:
         entry = deployed.get(name) if isinstance(deployed, dict) else None
-        add(entry.get("commit", "") if isinstance(entry, dict) else "", name)
+        add(entry.get("commit", "") if isinstance(entry, dict) else "", name, name)
     for vm, commit in sorted(snapshots.items()):
-        groups.setdefault(commit or "no snapshot", []).append(f"{vm} (snapshot)")
+        add(commit, f"{vm} (snapshot)", vm, "no snapshot")
     for app, commit in sorted(running.items()):
-        add(commit, f"{app} (running)")
+        add(commit, f"{app} (running)", app)
     if len(groups) == 1 and checkout in groups and not checkout.endswith("-dirty"):
         return "on", [f"system: on {checkout}"]
     state = "unknown" if checkout == "unknown" else "mixed"  # not a checkout: nothing to compare with

@@ -23,7 +23,7 @@ class NewCode(Exception):
 class FakeOps:
     def __init__(self, blockers=(), verified=True):
         self.head, self.calls, self.progress = A, [], {}
-        self._blockers, self.verified = list(blockers), verified
+        self._blockers, self.verified, self.interrupt = list(blockers), verified, False
 
     def git(self, *args):
         self.calls.append(("git", *args[:2]))
@@ -38,6 +38,9 @@ class FakeOps:
 
     def worms(self, *args):
         self.calls.append(("worms", *args))
+        if args[:1] == ("apply",) and len(args) == 2 and self.interrupt:
+            self.interrupt = False
+            raise KeyboardInterrupt
         return 0
 
     def worms_json(self, *args):
@@ -110,3 +113,38 @@ def test_an_upgrade_that_does_not_verify_ends_failed(capsys):
     assert upgrade.run(None, None, resume=True, yes=True, ops=ops) == 1
     out = capsys.readouterr().out
     assert "system: mixed" in out and "worms upgrade --resume" in out and not ops.progress.get("finished")
+
+
+def test_a_ctrl_c_during_the_apply_stops_there_and_resume_goes_on_from_it(capsys):
+    ops = FakeOps()
+    ops.head, ops.interrupt = B, True
+    ops.progress = {"target": B, "how": "rev", "from": A, "steps_done": ["preflight", "backup", "code"], "kept": ["d", "t"]}
+    assert upgrade.run(None, None, resume=True, yes=True, ops=ops) == 130
+    assert ops.progress["steps_done"] == ["preflight", "backup", "code", "orchestrator"]
+    assert "stopped at apply" in capsys.readouterr().out
+    ops.calls.clear()
+    assert upgrade.run(None, None, resume=True, yes=True, ops=ops) == 0
+    assert _steps(ops) == [("worms", "apply", "--yes"), ("worms", "apply", "round-agent", "gameplans", "--yes")]
+
+
+def test_the_cli_it_runs_is_waited_for_on_ctrl_c_never_killed(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    class Child:
+        waits, killed = 0, False
+
+        def __init__(self, argv):
+            pass
+
+        def wait(self):
+            Child.waits += 1
+            if Child.waits == 1:
+                raise KeyboardInterrupt  # the terminal's Ctrl-C: the child got it too, and stops its work
+            return 130
+
+        def kill(self):
+            Child.killed = True
+
+    monkeypatch.setattr(upgrade.subprocess, "Popen", Child)
+    assert upgrade.Ops(SimpleNamespace(repo_root=tmp_path)).worms("apply") == 130
+    assert Child.waits == 2 and not Child.killed

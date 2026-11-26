@@ -693,6 +693,44 @@ def test_a_service_vm_without_a_snapshot_is_said_so():
     assert state == "mixed" and lines[-2] == "  no snapshot: ntp (snapshot)"
 
 
+def test_a_record_at_an_older_commit_with_nothing_changed_since_counts_as_on_the_checkout():
+    sys.path.insert(0, str(REPO / "src"))
+    from worms_cli import consistency
+
+    deployed = {"dns": {"commit": "9f1e2d0"}, "scoring": {"commit": "a3a66c9"}, "workspace": {"commit": "a3a66c9"}}
+    args = ("a3a66c9", deployed, ["dns", "scoring", "workspace"], {"dns": "9f1e2d0"}, {"dashboard": "1111111"})
+    same = {("dns", "9f1e2d0"), ("dashboard", "1111111")}
+    assert consistency.version_summary(*args, same) == ("on", ["system: on a3a66c9"])
+    state, lines = consistency.version_summary(*args, same - {("dashboard", "1111111")})
+    assert state == "mixed" and "  1111111: dashboard (running)" in lines
+
+
+def test_same_as_checkout_counts_a_commit_only_when_nothing_of_its_component_changed(tmp_path, monkeypatch):
+    import subprocess
+    from types import SimpleNamespace
+
+    sys.path.insert(0, str(REPO / "src"))
+    from worms_cli import changes
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                              capture_output=True, text=True, check=True).stdout.strip()  # fmt: skip
+
+    (tmp_path / "ansible/roles/dns").mkdir(parents=True)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "ansible/roles/dns/main.yml").write_text("a\n")
+    (tmp_path / "src/cli.py").write_text("a\n")
+    git("init", "-q")
+    git("add", ".")
+    git("commit", "-qm", "one")
+    first = git("rev-parse", "--short=7", "HEAD")
+    (tmp_path / "src/cli.py").write_text("b\n")
+    git("commit", "-qam", "two")
+    monkeypatch.setattr(changes, "_made_from", lambda here, name, component: (None, "", [], ["ansible/roles/dns/"]))
+    records = [("dns", first), ("workspace", first), ("dns", "deadbee"), ("dns", f"{first}-dirty"), ("platform", first)]
+    assert changes.same_as_checkout(SimpleNamespace(repo_root=tmp_path), records) == {("dns", first)}
+
+
 # --- the consistency rows of `worms status` (worms_cli/consistency.py, T11) ---------------------
 
 

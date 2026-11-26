@@ -316,10 +316,67 @@ def _claims(path: str, prefixes) -> bool:
     return any(path == p or (p.endswith("/") and path.startswith(p)) for p in prefixes)
 
 
+def _made_from(here: Tree, name: str, component) -> tuple[Reach, str, list[str], list[str]]:
+    """(what component `name` reaches, its inventory group, its playbooks, the file prefixes it is
+    made from: playbooks, roles, group variables, the inventory, the roles' other sources)."""
+    from worms_cli.pipeline import CONFIGURE_PLAYBOOKS
+
+    if component.kind == "devbox":
+        playbooks, group = ["SetupDevbox.yml", "SetupSSHGateway.yml"], "devbox"
+    elif component.kind == "host":
+        playbooks, group = [component.playbook], "proxmox_host"
+    elif component.kind == "gameplans":
+        playbooks, group = [], ""
+    else:
+        playbooks, group = [p for p in CONFIGURE_PLAYBOOKS if p != "SetupRoundAgent.yml"], component.group
+    found = reach(here, group, playbooks) if group else Reach()
+    prefixes = [f"ansible/{p}" for p in found.playbooks] + [f"{d}/" for d in found.roles.values()]
+    prefixes += [f"ansible/group_vars/{g}.yml" for g in found.groups] + (["ansible/inventory.yml"] if group else [])
+    sources = here.yaml(ROLE_SOURCES_FILE) or {}
+    for role in found.roles:
+        prefixes += list(sources.get(role) or ())
+    if name == "gameplans":
+        prefixes += ["gameplans/", "src/gameplan/"]
+    if name == "round-agent":
+        prefixes += list(AGENT_SOURCES)
+    return found, group, playbooks, prefixes
+
+
+def same_as_checkout(config, records) -> set:
+    """Of `records` ((component, commit) pairs: deployed.json's entries, "workspace" the host's
+    copy, the service VMs' snapshots, what the Django apps run), those nothing of whose component
+    changed between that commit and this checkout's HEAD: they run what HEAD would give, the test
+    `worms apply` makes before it leaves a component alone (the version block; `worms upgrade`'s
+    verify). Committed files only; a commit outside this history, or deployed dirty, is not."""
+    from worms_cli import components
+
+    repo = str(config.repo_root)
+    here = Tree(config.repo_root)
+    diffs: dict[str, list[str] | None] = {}
+    made: dict[str, list[str]] = {}
+    same = set()
+    for name, commit in records:
+        component = components.COMPONENTS.get("round-agent" if name == "workspace" else name)
+        if component is None or component.kind == "stack" or not commit or commit.endswith("-dirty"):
+            continue
+        if commit not in diffs:
+            proc = subprocess.run(["git", "-C", repo, "diff", "--name-only", f"{commit}^{{commit}}", "HEAD"],
+                                  capture_output=True, text=True)  # fmt: skip
+            diffs[commit] = proc.stdout.split() if proc.returncode == 0 else None
+        if diffs[commit] is None:
+            continue
+        if name not in made:
+            made[name] = list(WORKSPACE) if name == "workspace" else (
+                _made_from(here, name, component)[3] + (list(WORKSPACE) if name == "round-agent" else []))  # fmt: skip
+        excluded = WORKSPACE_EXCLUDED if name in ("workspace", "round-agent") else ()
+        if not any(_claims(f, made[name]) and not _claims(f, excluded) for f in diffs[commit]):
+            same.add((name, commit))
+    return same
+
+
 def analyse(config, session) -> tuple[list[Change], dict, list[str]]:
     """(the components that changed, with why; {component: base}; files no rule claims)."""
     from worms_cli import components
-    from worms_cli.pipeline import CONFIGURE_PLAYBOOKS
 
     repo = config.repo_root
     here = Tree(repo)
@@ -338,24 +395,7 @@ def analyse(config, session) -> tuple[list[Change], dict, list[str]]:
         if not base and component.kind == "devbox":
             base = _oldest(repo, {c for vm, c in vms.items() if re.fullmatch(r"devbox-t\d+-(a|b|c|gw)", vm)})
         bases[name] = base
-        if component.kind == "devbox":
-            playbooks, group = ["SetupDevbox.yml", "SetupSSHGateway.yml"], "devbox"
-        elif component.kind == "host":
-            playbooks, group = [component.playbook], "proxmox_host"
-        elif component.kind == "gameplans":
-            playbooks, group = [], ""
-        else:
-            playbooks, group = [p for p in CONFIGURE_PLAYBOOKS if p != "SetupRoundAgent.yml"], component.group
-        found = reach(here, group, playbooks) if group else Reach()
-        prefixes = [f"ansible/{p}" for p in found.playbooks] + [f"{d}/" for d in found.roles.values()]
-        prefixes += [f"ansible/group_vars/{g}.yml" for g in found.groups] + (["ansible/inventory.yml"] if group else [])
-        sources = here.yaml(ROLE_SOURCES_FILE) or {}
-        for role in found.roles:
-            prefixes += list(sources.get(role) or ())
-        if name == "gameplans":
-            prefixes += ["gameplans/", "src/gameplan/"]
-        if name == "round-agent":
-            prefixes += list(AGENT_SOURCES)
+        found, group, playbooks, prefixes = _made_from(here, name, component)
         every_prefix += prefixes
         if name == "round-agent":
             prefixes += list(WORKSPACE)  # its workspace: a copy of these, synced whenever it is configured

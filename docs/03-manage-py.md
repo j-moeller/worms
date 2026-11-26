@@ -395,6 +395,14 @@ the apt module follow apt's log without being told ([`live.py`](../src/worms_cli
 
 ## What `worms status` compares
 
+**The version block.** `system: on <commit>` when every record of what runs agrees with this checkout's HEAD:
+each component's entry in `/var/lib/worms/deployed.json` (and `workspace`, the host's copy), each service VM's
+`clean` snapshot, and the commit each Django app's units started with. A record at an older commit counts as on
+HEAD when nothing that component is made from changed since (the test `worms apply` makes before it leaves a
+component alone), so `on <commit>` means `worms apply` has nothing to do; otherwise `system: mixed`, one line per
+commit. A service VM without a snapshot, a component without a record and a dirty checkout are never on one
+commit.
+
 Each fact has one source; `worms status` compares its copies with it, from what it read once (the host probe, the VMs, the database, SSH to the platform VMs it names), and names the repair. Each check is a pure function in [`consistency.py`](../src/worms_cli/consistency.py) (the older ones in `manage.py`). `--deep` adds the slow one; `--json` has them as data.
 
 | Row | Source | Compared with | Repair |

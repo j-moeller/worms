@@ -57,8 +57,16 @@ class Ops:
         return done.returncode, (done.stdout + done.stderr).strip()
 
     def worms(self, *args) -> int:
-        """This checkout's CLI (the new code, after the code step), in this terminal."""
-        return subprocess.run([sys.executable, str(self.repo / "src" / "manage.py"), *args]).returncode
+        """This checkout's CLI (the new code, after the code step), in this terminal. A Ctrl-C
+        reaches it too, and it stops its own work as it does alone (its children get one SIGINT
+        and time, T13): waited for here, never killed (subprocess.run would, at once)."""
+        child = subprocess.Popen([sys.executable, str(self.repo / "src" / "manage.py"), *args])
+        while True:
+            try:
+                return child.wait()
+            except KeyboardInterrupt:
+                print(output.color(f"Ctrl-C: `worms {' '.join(args)}` stops its work; waiting for it", "yellow"),
+                      file=sys.stderr, flush=True)  # fmt: skip
 
     def worms_json(self, *args) -> dict:
         done = subprocess.run([sys.executable, str(self.repo / "src" / "manage.py"), *args, "--json"], capture_output=True, text=True)
@@ -207,7 +215,13 @@ def run(config, spec: str | None, resume=False, plan=False, yes=False, ops=None)
         if name in done:
             continue
         print(output.heading(f"upgrade: {name}"))
-        code = _step(ops, name, record, target, how, bundle, yes)
+        try:
+            code = _step(ops, name, record, target, how, bundle, yes)
+        except KeyboardInterrupt:
+            code = 130
+        except (BuildError, OSError) as exc:
+            output.error(str(exc))
+            code = 1
         if code is not None:
             print(output.color(f"stopped at {name}: mend it, then `worms upgrade --resume`", "red"))
             return code

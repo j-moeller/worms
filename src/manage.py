@@ -373,7 +373,17 @@ def _version_lines(config, listing, probe, running) -> list[str]:
     by_vmid = consistency.parse_snapshots(probe.get("clean", ""))
     snapshots = {vm["name"]: by_vmid.get(int(vm["vmid"]), {}).get("commit", "") for vm in vms
                  if vm.get("pool") in consistency.SERVICE_POOLS}  # fmt: skip
-    state, lines = consistency.version_summary(build.Runner(config).commit(), deployed, expected, snapshots, running)
+    checkout = build.Runner(config).commit()
+    records = {(name, entry["commit"]) for name, entry in deployed.items() if name in expected and isinstance(entry, dict)
+               and entry.get("commit") and entry["commit"] != checkout}  # fmt: skip
+    records |= {(name, commit) for name, commit in [*snapshots.items(), *running.items()] if commit and commit != checkout}
+    try:
+        from worms_cli import changes
+
+        same = changes.same_as_checkout(config, sorted(records))
+    except Exception:  # noqa: BLE001  (not known: compared as they are)
+        same = set()
+    state, lines = consistency.version_summary(checkout, deployed, expected, snapshots, running, same)
     return state, [output.status_cell("ok" if state == "on" else "warn", lines[0]), *lines[1:]]
 
 

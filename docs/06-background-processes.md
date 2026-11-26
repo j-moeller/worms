@@ -103,6 +103,6 @@ Role `apt_updates` (`Site.yml`) masks `apt-daily*` and `apt-listchanges` and pur
 
 | What | State |
 |---|---|
-| vzdump of the persistent VMs (`worms-stateful`, 02:30 daily, keep 7 daily / 4 weekly) | Created only if `backup_storage` is set ([`backup.tf`](../opentofu/stacks/infrastructure/persistent/backup.tf)); off by default |
+| vzdump of the persistent VMs (`worms-stateful`, 02:30 daily, keep 7 daily / 4 weekly) | Created only if `backup_storage` is set ([`backup.tf`](../opentofu/stacks/infrastructure/persistent/backup.tf)); off by default. It selects the pool `persistent` (database, dashboard, orchestrator, syslog), not their VM IDs: a rebuilt VM gets a new ID, and `worms vm rebuild` (`-target ... -replace`) leaves the job as it is; `worms status` names a job whose VM IDs are gone |
 | Database dumps | None scheduled. By hand: `worms db backup` (a `pg_dump -Fc` streamed to the controller, 0600, [3](03-manage-py.md#operate)) |
 | Controller state: vault, `.vault_pass`, `ansible/pki/worms/`, `terraform.tfstate` | By hand, off the host ([2](02-installation.md#4-build)) |

@@ -16,19 +16,16 @@ variable "backup_storage" {
   default     = ""
 }
 
-locals {
-  # The database is the source of truth; the dashboard keeps the uploaded worms;
-  # the orchestrator its state files; syslog the audit logs.
-  backed_up = ["database", "dashboard", "orchestrator", "syslog"]
-}
-
 resource "proxmox_backup_job" "stateful" {
   count = var.backup_storage == "" ? 0 : 1
 
-  id       = "worms-stateful"
-  node     = var.proxmox_instance
-  storage  = var.backup_storage
-  vmid     = [for name in local.backed_up : tostring(module.infrastructure_vms[name].vm_id)]
+  id      = "worms-stateful"
+  node    = var.proxmox_instance
+  storage = var.backup_storage
+  # The members of the pool `persistent`: database (the source of truth), dashboard (the uploaded
+  # worms), orchestrator (its state files), syslog (the audit logs). By pool, not by VM ID: a
+  # rebuilt VM (`-target ... -replace`, which skips this job) gets a new ID (T3).
+  pool     = "persistent"
   schedule = "*-*-* 02:30"
   mode     = "snapshot"
   compress = "zstd"

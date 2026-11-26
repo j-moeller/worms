@@ -2443,6 +2443,17 @@ def _interrupt_when_ready(marks):
     threading.Thread(target=interrupt, daemon=True).start()
 
 
+def test_a_child_in_its_own_session_reads_dev_null_not_the_terminal():
+    # In a session of its own a child has no controlling terminal: qm fails on one as stdin.
+    from round_agent import child
+
+    script = "import os; print(os.path.realpath('/proc/self/fd/0'), os.getsid(0) == os.getpid())"
+    done = child.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert done.stdout.split() == ["/dev/null", "True"]
+    given = child.run([sys.executable, "-c", "import sys; print(sys.stdin.read())"], input="data", capture_output=True, text=True)
+    assert given.stdout.strip() == "data"
+
+
 def test_an_interrupt_stops_the_child_with_one_sigint_and_waits_for_it(tmp_path):
     """OpenTofu and Ansible finish what they do on one SIGINT: the CLI sends it once and waits."""
     import os

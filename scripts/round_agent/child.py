@@ -41,7 +41,12 @@ def _name(proc) -> str:
 
 
 def start(argv, **kwargs) -> subprocess.Popen:
-    """subprocess.Popen, in a session of its own."""
+    """subprocess.Popen, in a session of its own, its stdin /dev/null unless given. A child in a
+    session of its own has no controlling terminal, so the terminal is no stdin for it: Proxmox's
+    `qm` takes a terminal on stdin for its own and fails ("failed to tcsetpgrp: Inappropriate
+    ioctl for device", no worker started), which stopped `worms round start` at a terminal
+    (2026-11-26) from shutting the devboxes down."""
+    kwargs.setdefault("stdin", subprocess.DEVNULL)
     return subprocess.Popen(argv, start_new_session=True, **kwargs)
 
 

@@ -21,3 +21,6 @@ opentofu/stacks/devbox/generated_devboxes.tf
 
 # worms-sbom's output (docs/03-manage-py.md#worms-sbom)
 /sbom/
+
+# The zips `worms round dev-test` offers (teams' solutions: never in this public repository)
+/solutions/

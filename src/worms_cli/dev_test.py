@@ -3,8 +3,8 @@
 Three questions, nothing else (and, not on worms-dev, whether to run a development command here):
 
     1. the gameplan: one of gameplans/ (its round_duration is the round's duration per team)
-    2. an upload zip: its path
-    3. another upload zip? [y/N]: its path, and the same question again
+    2. an upload zip: one of solutions/ (this checkout's, git-ignored), or a path
+    3. another upload zip? [y/N]: another of solutions/, and the same question again
 
 Then, for each zip, a user (devtest-<time>-<n>@example.org, no password: nobody logs in as it) in a
 team of its own (DevTest <time> #<n>), the zip its upload, and a round of those teams only
@@ -74,11 +74,19 @@ def _gameplan(folder: Path) -> tuple[str, int]:
     return name, duration
 
 
-def _zip(first: bool) -> tuple[str, bytes]:
-    """A zip's path, asked until it is one the dashboard takes (dev_reset._zip)."""
+def _zip(folder: Path, first: bool) -> tuple[str, bytes]:
+    """A zip: one of `folder` (solutions/) by its number or name, or any path; asked until it is one
+    the dashboard takes (dev_reset._zip). Without a zip in `folder`, a path."""
+    zips = sorted(path.name for path in folder.glob("*.zip")) if folder.is_dir() else []
+    for n, name in enumerate(zips, 1):
+        print(f"  {n}. {name}")
+    choice = f"1-{len(zips)}, its name, or a path" if zips else "its path"
     while True:
-        path = PROMPT(output.color(f"  {'an' if first else 'another'} upload zip, its path: ", "yellow")).strip()
-        data, problem = dev_reset._zip(path) if path else (None, "a path, please")
+        answer = PROMPT(output.color(f"  {'an' if first else 'another'} upload zip [{choice}]: ", "yellow")).strip()
+        if answer.isdigit() and 1 <= int(answer) <= len(zips):
+            answer = zips[int(answer) - 1]
+        path = str(folder / answer) if answer in zips else answer
+        data, problem = dev_reset._zip(path) if path else (None, f"{choice}, please")
         if data is not None:
             return path, data
         output.error(problem)
@@ -198,9 +206,10 @@ def run(config) -> int:
     try:
         gameplan, duration = _gameplan(Path(config.repo_root) / "gameplans")
         print(output.heading("the uploads"))
-        zips = [_zip(first=True)]
+        solutions = Path(config.repo_root) / "solutions"
+        zips = [_zip(solutions, first=True)]
         while ASK("Another upload zip?", False):
-            zips.append(_zip(first=False))
+            zips.append(_zip(solutions, first=False))
     except (KeyboardInterrupt, EOFError):
         print("\nnothing made")
         return 130

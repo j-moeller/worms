@@ -500,6 +500,31 @@ def test_a_failed_build_starts_the_devboxes_again(host, monkeypatch):
     assert steps(host)[-1] == ("host", "qm start 116")
 
 
+@pytest.mark.parametrize("failure", [BuildError("Site.yml failed"), KeyboardInterrupt()])
+def test_a_failed_apply_leaves_the_service_vms_at_their_snapshot(host, monkeypatch, capsys, failure):
+    """All or nothing: rolled back before the configuration, the service VMs go back to their
+    snapshot again when it fails or is interrupted (not configured half-way while their snapshot
+    and deployed.json keep the old one), and no new snapshot is taken."""
+    original = Recorder.ansible
+
+    def ansible(self, playbook, *args, **kwargs):
+        if playbook == "Site.yml":
+            self.calls.append(("ansible", playbook))
+            raise failure
+        return original(self, playbook, *args, **kwargs)
+
+    monkeypatch.setattr(Recorder, "ansible", ansible)
+    with pytest.raises(type(failure)):
+        host.build_all()
+    calls = steps(host)
+    rollbacks = [c[1] for c in calls if c[0] == "host" and "rollback" in c[1]]
+    assert rollbacks == ["qm rollback 100 clean --start 1", "qm rollback 111 clean --start 1"] * 2
+    assert calls.index(("ansible", "Site.yml")) < max(i for i, c in enumerate(calls) if c[0] == "host" and "rollback" in c[1])
+    assert not [c for c in calls if c[0] == "host" and "qm snapshot" in c[1]]
+    out = capsys.readouterr().out
+    assert "back at their snapshot (worms abc1234): fix the cause and run the same apply again" in out
+
+
 def test_a_build_configures_clean_services_and_snapshots_them_again(host):
     """A snapshot that kept up with every build: what it changed stays, and since the VMs
     were rolled back first, nothing a team VM did."""

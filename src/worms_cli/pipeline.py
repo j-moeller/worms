@@ -129,6 +129,9 @@ class Pipeline:
             # it, the devbox map on scoring and logging among it (_push_devbox_map).
             "rolled_back": [],
             "devbox_map_failed": False,  # a rollback of scoring or logging left them without it
+            # A build's service VMs got their snapshot again (_snapshot_after_build): until then, a
+            # failure rolls them back to it once more (_back_to_snapshot).
+            "snapshot_done": False,
         }
 
     @property
@@ -257,6 +260,7 @@ class Pipeline:
         error, and replaces the step's. A cache left in online mode answers every request it
         cannot fetch with an error (503): said loudly, but the step's error stays the one."""
         still_open = None
+        self._back_to_snapshot()
         for scope in reversed(active):
             if scope == INTERNET:
                 _stopping("closing the internet window")
@@ -450,12 +454,41 @@ class Pipeline:
 
     def _roll_back_for_build(self, recreated=()) -> None:
         """`recreated`: VMs this build recreates, which count as new (their snapshot is taken again)."""
+        self.data["snapshot_done"] = False
         self.data["services_before"] = [vm["vmid"] for vm in self._service_vms() if vm["name"] not in recreated]
         self.data["services_reset"] = sorted(self._roll_back_services())
 
     def _snapshot_after_build(self) -> None:
         before, reset = set(self.data["services_before"] or ()), set(self.data["services_reset"] or ())
         self._snapshot_services(lambda vm: vm["vmid"] in reset or vm["vmid"] not in before)
+        self.data["snapshot_done"] = True
+
+    def _back_to_snapshot(self) -> None:
+        """A build of service VMs that failed (an error, Ctrl-C) between their rollback and their
+        new snapshot: the ones it rolled back go back to that snapshot once more, so that an apply
+        is all or nothing. Before 2026-11-26 they kept a half-applied configuration while their
+        snapshot and deployed.json kept the old one, and the next reset or round build quietly
+        returned them to it. One the build created has no snapshot to go back to: named, left."""
+        reset = set(self.data["services_reset"] or ())
+        if not reset or self.data["snapshot_done"]:
+            return
+        self.data["services_reset"] = None  # once
+        try:
+            vms = [vm for vm in self._service_vms() if vm["vmid"] in reset]
+            new = sorted(vm["name"] for vm in self._service_vms() if vm["vmid"] not in set(self.data["services_before"] or ()))
+            _stopping(f"rolling {', '.join(vm['name'] for vm in vms)} back to their snapshot")
+            taken = sorted({(self.runner.snapshot(vm, SERVICE_SNAPSHOT) or {}).get("description", "").strip() for vm in vms})
+            self._rollback(vms, detail=f"{SERVICE_SNAPSHOT}: apply failed")
+            self._wait_for(vms)
+            self._push_devbox_map(vms)
+        except BaseException as exc:  # noqa: BLE001  (Ctrl-C again, or the host: said; the step's error stays the one)
+            output.error(f"!!! the service VMs may hold a half-applied configuration ({exc or type(exc).__name__}): "
+                         "`worms vm reset services` returns them to their snapshot")  # fmt: skip
+            return
+        print(output.color(f"{', '.join(vm['name'] for vm in vms)} are back at their snapshot ({'; '.join(taken) or '?'}): "
+                           "fix the cause and run the same apply again", "yellow"))  # fmt: skip
+        if new:
+            print(output.color(f"{', '.join(new)}: new in this build, no snapshot to go back to: left as they are", "yellow"))
 
     # -- the service VMs: reset, snapshot, rebuild ------------------------------
 
@@ -500,12 +533,12 @@ class Pipeline:
             limit = ",".join(vm["name"].replace("-", "_") for vm in vms)
             self._ansible("WaitForVMs.yml", "--limit", limit, user_args=False)
 
-    def _rollback(self, vms: list[dict]) -> None:
-        """These VMs back to their snapshot, started: all at once."""
+    def _rollback(self, vms: list[dict], detail: str = SERVICE_SNAPSHOT) -> None:
+        """These VMs back to their snapshot, started: all at once. `detail`: the VM history's."""
         codes = self.runner.host_parallel([[f"qm rollback {vm['vmid']} {SERVICE_SNAPSHOT} --start 1"] for vm in vms])
         done = [vm for vm, code in zip(vms, codes) if code == 0]
         self.data["rolled_back"] = sorted({*self.data["rolled_back"], *(vm["name"] for vm in done)})
-        self._history(done, "rolled_back", SERVICE_SNAPSHOT)
+        self._history(done, "rolled_back", detail)
         failed = [vm["name"] for vm, code in zip(vms, codes) if code != 0]
         if failed:
             raise BuildError(f"not rolled back to their snapshot: {', '.join(failed)}")

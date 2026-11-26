@@ -300,6 +300,12 @@ class Runner:
         """Every VM on the host, with its vmid, name, pool, status and node."""
         return self._host_json("pvesh", "get", "/cluster/resources", "--type", "vm", "--output-format", "json")
 
+    def vm_status(self, vm: dict) -> str:
+        """A VM's status now (status/current). vms() reads /cluster/resources, which pvestatd
+        refreshes every few seconds: a VM stopped a moment ago may still read running there."""
+        path = f"/nodes/{vm['node']}/qemu/{int(vm['vmid'])}/status/current"
+        return str(self._host_json("pvesh", "get", path, "--output-format", "json").get("status") or "")
+
     def snapshot(self, vm: dict, name: str) -> dict | None:
         """A VM's snapshot of that name (snaptime, description), if it has one."""
         path = f"/nodes/{vm['node']}/qemu/{vm['vmid']}/snapshot"

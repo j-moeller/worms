@@ -781,12 +781,16 @@ def _verified(session) -> bool:
     queued, running, left = _host_jobs(agent_stopped=units.stopped("agent"))
     jobs = [_describe(job) for job in queued] + [_running_by(job) for job in running]
     jobs += [f"{_describe(job)}: {why} (`worms jobs cancel {job.id}`)" for job, why in left]
+    # The listing lags (pvestatd, every few seconds): a devbox it still says runs, right after the
+    # shutdown above, is asked now (on 2026-11-26 the last one stopped read running, and the round
+    # did not start).
+    on = [vm["name"] for vm in vms if vm.get("pool") == "devbox" and vm.get("status") != "stopped"
+          and machines.runner.vm_status(vm) != "stopped"]  # fmt: skip
     checks = [
         ("the orchestrator's services are stopped", not units.active("orchestrator"), ", ".join(units.active("orchestrator"))),
         ("the round agent is stopped", not units.active("agent"), "worms-round-agent is active"),
         ("no host job is queued or running", not jobs, "; ".join(jobs)),
-        ("every devbox VM is stopped", all(vm.get("status") == "stopped" for vm in vms if vm.get("pool") == "devbox"),
-         ", ".join(vm["name"] for vm in vms if vm.get("pool") == "devbox" and vm.get("status") != "stopped")),
+        ("every devbox VM is stopped", not on, ", ".join(on)),
         ("the internet window is closed", not machines.runner.flag_exists(power.INTERNET_FLAG), "`worms internet off`"),
     ]  # fmt: skip
     for label, ok, detail in checks:

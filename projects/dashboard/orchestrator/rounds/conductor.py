@@ -738,9 +738,35 @@ class Conductor:
         if run.upload_id is None:
             self.set_state(run, S.SKIPPED, finished_at=self.now(), error="no upload before the round's start")
         else:
-            self.run_attempt(run)
+            try:
+                self.run_attempt(run)
+            except BaseException as error:  # Ctrl-C twice, SIGTERM, SIGHUP (worms_cli/rounds.py), or an error of ours
+                self.interrupted(run, error)
+                raise
         run.refresh_from_db()
         return run
+
+    def interrupted(self, run, error):
+        """The session ends in the middle of `run`: closed now, as `abandon` closes one an earlier
+        session left (its VMs stopped, the teardown: scoring's and logging's current team
+        cleared), so that nothing waits on it (a dev upload: devbox_runs.deploy_waits_for, until
+        2026-11-26 up to the next `worms round start`). It does not count against the team.
+        Another interrupt cuts the closing short; the run is marked over all the same, and
+        `worms round start --resume` or `worms round teardown` deals with its VMs."""
+        if run.state in DONE:
+            return
+        said = f"{type(error).__name__}: {error}" if str(error) else type(error).__name__
+        why = f"the round session ended during {run.state} ({said})"
+        log.warning("run %s (%s, attempt %s): %s: closing it (its VMs stopped, the teardown)", run.uuid, run.team.name,
+                    run.attempt, why)  # fmt: skip
+        try:
+            self.abandon(run, why)
+        except BaseException as again:  # noqa: BLE001  (Ctrl-C again: out, but not with the run marked active)
+            log.warning("run %s: closing it was cut short (%s)", run.uuid, type(again).__name__)
+        if run.state not in DONE:
+            state = S.FINISHED if run.state in (S.ENDING, S.TEARING_DOWN) else S.FAILED
+            self.set_state(run, state, finished_at=self.now(), error=f"{why}; closing it was cut short: its VMs may "
+                           "still run (`worms round start --resume` or `worms round teardown`)"[:2000])  # fmt: skip
 
     def again(self, run):
         """Another attempt of a team whose last one failed: a new pending run (attempt + 1)."""
@@ -752,13 +778,14 @@ class Conductor:
             gameplan_sha256=run.gameplan_sha256, gameplan_version_id=run.gameplan_version_id, duration=run.duration,
         )  # fmt: skip
 
-    def abandon(self, run):
-        """An attempt an earlier `worms round start` left under way (it was killed): it cannot be
-        resumed. Past its end only the teardown is left; before it, it fails."""
+    def abandon(self, run, why="left under way by an earlier `worms round start` (it was stopped)"):
+        """An attempt an earlier `worms round start` left under way (it was killed), or this one's
+        that ends (interrupted): it cannot be resumed. Past its end only the teardown is left;
+        before it, it fails, not counted against the team."""
         if run.state in (S.ENDING, S.TEARING_DOWN):
             self.end(run)
         else:
-            self.fail(run, "left under way by an earlier `worms round start` (it was stopped)", counts=False)
+            self.fail(run, why, counts=False)
 
     def build_sandbox(self, run):
         """build(), then snapshot(): the round's sandbox from the gameplan `run` (an attempt still

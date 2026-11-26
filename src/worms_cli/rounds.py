@@ -544,11 +544,105 @@ def _running_by(job) -> str:
     return said + (f", its heartbeat {int((timezone.now() - beat).total_seconds())} s ago" if beat else "")
 
 
+# What a round session stopped and has not started again, and the session (its pid): written as it
+# stops each, each taken off as it is started again, gone at the session's end when nothing is
+# left. A session that ends without starting them (Ctrl-C twice, SIGTERM, SIGHUP, an error, a
+# SIGKILL) leaves it: `worms status` says what is still stopped and what starts it (manage.py).
+STOPPED_RECORD = "/var/lib/worms/round-stopped.json"
+START_AGAIN = {  # in the order they are started again
+    "devboxes": ("the devboxes", "worms vm start devboxes", "Start the devboxes again?"),
+    "agent": ("the round agent", "worms service start agent", "Start the round agent again?"),
+    "orchestrator": ("the orchestrator", "worms service start orchestrator", "Start the orchestrator again?"),
+}
+
+
+def stopped_record() -> dict:
+    """{round, round_id, pid, since, stopped: [orchestrator|agent|devboxes]}, or {}."""
+    try:
+        record = json.loads(Path(STOPPED_RECORD).read_text())
+    except (OSError, ValueError):
+        return {}
+    return record if isinstance(record, dict) else {}
+
+
+def _note(session, stopped=(), started=()) -> list:
+    """The record, this session's (what an earlier one left stopped stays in it). Returns what
+    it says is still stopped."""
+    from datetime import timezone
+
+    record = stopped_record()
+    names = [name for name in record.get("stopped", []) if name in START_AGAIN and name not in started]
+    names += [name for name in stopped if name not in names]
+    record = {"round": session.round.name, "round_id": session.round.id, "pid": os.getpid(),
+              "since": record.get("since") or datetime.now(timezone.utc).isoformat(timespec="seconds"), "stopped": names}  # fmt: skip
+    path = Path(STOPPED_RECORD)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.with_suffix(".tmp").write_text(json.dumps(record) + "\n")
+        os.replace(path.with_suffix(".tmp"), path)
+    except OSError as exc:
+        output.warn(f"could not write {STOPPED_RECORD} ({exc}): `worms status` will not say what this session stopped")
+    return names
+
+
+def _close_record(session) -> None:
+    """At the session's end: the record goes when nothing it lists is still stopped."""
+    record = stopped_record()
+    if record.get("pid") == os.getpid() and not record.get("stopped"):
+        Path(STOPPED_RECORD).unlink(missing_ok=True)
+
+
+def _say_still_stopped(session) -> None:
+    """On the way out without _afterwards: what stays stopped, and what starts it again."""
+    names = stopped_record().get("stopped", [])
+    if not names:
+        return
+    lines = [f"{START_AGAIN[name][0]}: {START_AGAIN[name][1]}" for name in START_AGAIN if name in names]
+    session.summary.note("still stopped (this session did not start them again): " + "; ".join(lines))
+    try:
+        print(output.color("still stopped, this session did not start them again (`worms status` says so too):\n  "
+                           + "\n  ".join(lines), "red"))  # fmt: skip
+    except OSError:
+        pass  # no terminal any more: summary.log and round.log have it
+
+
+def _start_again(session, names) -> None:
+    """Each of `names` started again, asked: what this session (or an earlier one) stopped."""
+    from worms_cli import power, services
+
+    acts = {"devboxes": lambda: power.Power(session.config).start(["devboxes"]),
+            "agent": lambda: services.Units(session.config).start(["agent"]),
+            "orchestrator": lambda: services.Units(session.config).start(["orchestrator"])}  # fmt: skip
+    for name in [name for name in START_AGAIN if name in names]:
+        _what, command, question = START_AGAIN[name]
+        says(command)
+        if ask(question, True, session.yes):
+            try:
+                acts[name]()
+                _note(session, started=[name])
+            except BuildError as exc:
+                output.error(str(exc))
+                print(f"  later: {command}")
+        else:
+            print(f"  later: {command}")
+
+
+def _not_run(session) -> int:
+    """The round does not run after all (a no, a failed check, the preflight): what was stopped
+    for it is started again, asked."""
+    names = stopped_record().get("stopped", [])
+    if names:
+        print(output.heading("start again what was stopped for the round"))
+        _start_again(session, names)
+    return 1
+
+
 def _stop_everything(session) -> bool:
     """Ask for each thing that must be stopped, in order; False at the first no."""
     from worms_cli import control, power, services
 
     yes = session.yes
+    _note(session)  # this session's from now: `worms status` sees it run
     units = services.Units(session.config)
     # 1. The orchestrator: nothing queues a devbox job or counts a submission meanwhile.
     print(output.heading("1. the orchestrator"))
@@ -561,6 +655,7 @@ def _stop_everything(session) -> bool:
         if not ask("Stop the orchestrator?", True, yes):
             print("The round does not start while the orchestrator runs.")
             return False
+        _note(session, stopped=["orchestrator"])  # first: a stop cut short may have stopped part of it
         units.stop(["orchestrator"])
     else:
         print(output.status_cell("ok", "stopped already"))
@@ -576,6 +671,7 @@ def _stop_everything(session) -> bool:
         if not ask("Stop the round agent?", True, yes):
             print("The round does not start while the round agent runs.")
             return False
+        _note(session, stopped=["agent"])
         units.stop(["agent"])
     else:
         print(output.status_cell("ok", "the round agent is stopped already"))
@@ -612,6 +708,7 @@ def _stop_everything(session) -> bool:
         if not ask(f"Stop these {len(running_vms)} devbox VM(s) (a shutdown, forced after 120 s)?", True, yes):
             print("The round does not start while devbox VMs run.")
             return False
+        _note(session, stopped=["devboxes"])
         if machines.stop(["devboxes"]) != 0:
             print("Not every devbox VM stopped: the round does not start.")
             return False
@@ -937,7 +1034,7 @@ def unpublish(round_, yes=False) -> int:
 
 def _afterwards(session):
     """Each thing stopped before, started again: asked."""
-    from worms_cli import power, services
+    from worms_cli import power
 
     yes = session.yes
     sandbox = [vm["name"] for vm in power.Power(session.config).runner.vms() if vm.get("pool") == "sandbox"]
@@ -969,21 +1066,7 @@ def _afterwards(session):
         else:
             print("  kept; later: worms round teardown")
     print(output.heading("start again what was stopped"))
-    for question, command, act in (
-        ("Start the devboxes again?", "worms vm start devboxes", lambda: power.Power(session.config).start(["devboxes"])),
-        ("Start the round agent again?", "worms service start agent", lambda: services.Units(session.config).start(["agent"])),
-        ("Start the orchestrator again?", "worms service start orchestrator",
-         lambda: services.Units(session.config).start(["orchestrator"])),
-    ):
-        says(command)
-        if ask(question, True, yes):
-            try:
-                act()
-            except BuildError as exc:
-                output.error(str(exc))
-                print(f"  later: {command}")
-        else:
-            print(f"  later: {command}")
+    _start_again(session, list(START_AGAIN))
 
 
 def start(config, args) -> int:
@@ -1082,7 +1165,7 @@ def start(config, args) -> int:
                 session.conductor.resume_build = True
 
         if not _stop_everything(session) or not _verified(session):
-            return 1
+            return _not_run(session)
         print(output.heading("5. the host's preflight"))
         first = next((run for run in runs if run.upload_id is not None), None)
         if first is not None:
@@ -1095,7 +1178,7 @@ def start(config, args) -> int:
                                         next_step="mend it (memory, disk: its log says which check), then the same command again",
                                         refers=last.get("entry"))  # fmt: skip
                 print(output.color(f"    its log: {last.get('log') or '(none)'}\n    summary.log: {session.summary.path}", "yellow"))
-                return 1
+                return _not_run(session)
             print(output.status_cell("ok", "the host is ready (memory, disk, the sandbox's needs)"))
         minutes = sum(run.duration or round_.team_duration for run in runs if run.upload_id) // 60
         print(output.heading("6. the round"))
@@ -1103,7 +1186,7 @@ def start(config, args) -> int:
               "plus the sandbox (built once, about an hour; a rollback to its snapshot before every team but the "
               "first, minutes) and about 15 min per team")  # fmt: skip
         if not ask(f"Run round {round_.name!r} now? This terminal stays with it to the end.", False, args.yes):
-            return 1
+            return _not_run(session)
         _interrupt(session)
         if not _build(session, RoundRun.objects.select_related("round", "team").get(pk=first.pk)):  # pinned since
             signal.signal(signal.SIGINT, signal.default_int_handler)
@@ -1119,17 +1202,20 @@ def start(config, args) -> int:
         _say_summary(session)
         return 1 if session.stopped_on_failure else 0
     except KeyboardInterrupt:
-        session.summary.end("out at once (Ctrl-C twice): what was under way may be left as it was")
-        print(output.color("\nout at once: what was under way may be left as it was. `worms round` and `worms vm` say "
-                           "what is; `worms round start` again fails an attempt left under way.", "red"))  # fmt: skip
+        print(output.color("\nout at once: an attempt under way is marked failed, not counted against its team (its VMs "
+                           f"stopped, unless Ctrl-C cut that short). `worms round start {round_.id} --resume` goes on; "
+                           "`worms round teardown` destroys the sandbox.", "red"))  # fmt: skip
+        _say_still_stopped(session)
+        session.summary.end("out at once (Ctrl-C twice): the attempt under way marked failed")
         return 130
     except SystemExit as exc:  # _end_on_signals
-        session.summary.end(f"{exc}: the step under way is marked failed")
         try:
-            print(output.color(f"\n{exc}: the step under way is marked failed. `worms round start {round_.id} --resume` "
-                               "fails an attempt left under way and goes on.", "red"))  # fmt: skip
+            print(output.color(f"\n{exc}: the step and the attempt under way are marked failed (not counted against "
+                               f"the team). `worms round start {round_.id} --resume` goes on.", "red"))  # fmt: skip
         except OSError:
             pass  # no terminal any more: round.log has it
+        _say_still_stopped(session)
+        session.summary.end(f"{exc}: the step and the attempt under way marked failed")
         raise
     except Exception as exc:
         # The session's own error (a BuildError says what to do; anything else, where it was raised).
@@ -1143,12 +1229,14 @@ def start(config, args) -> int:
             except ImportError:  # before the host's steps were set up
                 headline, detail = f"{type(exc).__name__}: {exc}", traceback.format_exc()[-3000:]
         session.summary.failure("the session itself stopped", headline, detail, str(session.dir / "round.log"))
+        _say_still_stopped(session)
         session.summary.end("stopped by an error")
         print(output.color(f"summary.log: {session.summary.path}", "yellow"), file=sys.stderr)
         raise
     finally:
         if session.summary.status == "running":
             session.summary.end("ended before the round ran: a question answered no, or a check failed (round.log has it)")
+        _close_record(session)
         if key is not None:
             key.stop()
         tee.stop()
@@ -1213,9 +1301,10 @@ def teardown(config, yes=False) -> int:
     """`worms round teardown`: the round's sandbox destroyed: one a session kept (powered off, for
     another attempt), one whose build stopped half-way, or what OpenTofu still holds of one whose
     VMs were deleted by hand."""
+    from core.models.rounds import RoundRun
     from django.conf import settings
 
-    from orchestrator.rounds.conductor import Conductor
+    from orchestrator.rounds.conductor import ACTIVE, Conductor
     from orchestrator.rounds.power import ProxmoxPower
     from worms_cli import power
     from worms_cli.summary import Summary
@@ -1230,6 +1319,16 @@ def teardown(config, yes=False) -> int:
     _end_on_signals()
     _repo_root, jobs, key = _host_steps(config, lambda run=None: folder, summary)
     try:
+        settings.PROXMOX["node"] = config.proxmox_node()
+        conductor = Conductor(jobs=jobs, power=ProxmoxPower(api=Pvesh()))
+        # An attempt a session left under way (a SIGKILL: nothing closed it) holds up every dev
+        # upload (devbox_runs.deploy_waits_for) until it is closed: here, or by the next session.
+        for run in RoundRun.objects.filter(state__in=ACTIVE).select_related("team", "round"):
+            print(f"{run.team.name}'s attempt {run.attempt} in round {run.round.name!r} was left {run.state} by a "
+                  "session that ended.")  # fmt: skip
+            if ask("Close it (failed, not counted against the team; its VMs stopped)?", True, yes):
+                conductor.abandon(run)
+                summary.note(f"✓ {run.team.name}'s attempt {run.attempt} closed (left {run.state})")
         record = jobs.handlers.unfinished_build(jobs.cfg)
         try:
             held = bool(jobs.executor.tofu_output("sandbox"))
@@ -1243,8 +1342,7 @@ def teardown(config, yes=False) -> int:
         print("  Destroyed, the next `worms round start` builds it again (about an hour) instead of rolling it back.")
         if not ask(f"Destroy it{f' ({len(sandbox)} VMs)' if sandbox else ''}?", False, yes):
             return 1
-        settings.PROXMOX["node"] = config.proxmox_node()
-        Conductor(jobs=jobs, power=ProxmoxPower(api=Pvesh())).destroy_sandbox()
+        conductor.destroy_sandbox()
     except BuildError:
         summary.end("stopped by an error")
         raise

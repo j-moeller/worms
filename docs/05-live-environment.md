@@ -140,7 +140,7 @@ The run's clock starts at `armed_at + 15 s` and ends after the round's duration 
   - Its captures are `FlagCapture.published()`; its logs are published too.
   - A team sees nothing of a run before: its progression is `withheld`, and the API returns no submissions or logs.
   - Points of failed attempts are discarded.
-- **Ctrl-C** in the session fails the attempt under way at its next step (its VMs stopped, its sandbox kept); twice, out at once. An attempt left under way that way fails as the next session starts (ENDING and TEARING_DOWN are completed).
+- **Ctrl-C** in the session fails the attempt under way at its next step (its VMs stopped, its sandbox kept); twice, out, with the attempt closed first (failed, not counted; SIGTERM and SIGHUP alike). Only a SIGKILL leaves one under way: it fails as the next session starts, or at `worms round teardown` (ENDING and TEARING_DOWN are completed).
 
 ### Scoring
 

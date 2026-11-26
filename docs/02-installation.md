@@ -173,6 +173,7 @@ Without them the platform has to be rebuilt. Nothing backs up the database ([6](
 
 | Symptom | Do |
 |---|---|
+| After a round session ended early (Ctrl-C twice, a lost SSH session, an error): devbox resets fail, dev uploads say "a round's attempt is under way" | `worms status` says what the session left stopped and its commands (`worms service start orchestrator`, `worms service start agent`, `worms vm start devboxes`). An attempt still under way (only after a SIGKILL): `worms round teardown` or `worms round start <r> --resume` |
 | `root on this host does not accept the WORMS key`, or tofu fails to authenticate over SSH | `worms init` |
 | `the vault lacks ...`, `there is no vault` | `worms secret` |
 | `proxmox-token: MISSING` | `worms secret issue <name>` |

@@ -219,8 +219,10 @@ grep -lx '\[clean\]' /etc/pve/qemu-server/*.conf 2>/dev/null; echo '#--'
 for unit in {units}; do printf '%s %s\n' "$unit" "$(systemctl is-active "$unit")"; done; echo '#--'
 tail -n 20000 {ledger} 2>/dev/null; echo '#--'
 grep -H '^meta:' /etc/pve/qemu-server/*.conf 2>/dev/null; echo '#--'
+cat {stopped} 2>/dev/null; echo; echo '#--'
+pid=$(sed -n 's/.*"pid": *\([0-9][0-9]*\).*/\1/p' {stopped} 2>/dev/null); [ -n "$pid" ] && tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null; echo; echo '#--'
 """
-PROBED = ("held", "window", "clean", "active", "ledger", "meta")
+PROBED = ("held", "window", "clean", "active", "ledger", "meta", "stopped", "session")
 
 
 def _host_probe(config) -> dict:
@@ -235,8 +237,10 @@ def _host_probe(config) -> dict:
     if not config.ssh and not os.path.isdir(PVE_CONFIG_DIR):
         return {"error": "not on it: set WORMS_SSH"}
     units = [unit for service in services.SERVICES.values() if service.where == "host" for unit in service.up_units]
+    from worms_cli.rounds import STOPPED_RECORD
+
     script = HOST_PROBE.format(held=power.HELD_DEVBOXES, window=power.WINDOW_STOPPED, units=" ".join(map(shlex.quote, units)),
-                               ledger=shlex.quote(history.LEDGER))  # fmt: skip
+                               ledger=shlex.quote(history.LEDGER), stopped=shlex.quote(STOPPED_RECORD))  # fmt: skip
     try:
         code, out, err = for_config(config).host_run(["sh", "-c", script])
     except (SessionError, OSError) as exc:
@@ -245,6 +249,35 @@ def _host_probe(config) -> dict:
     if code != 0 and len(parts) < len(PROBED):
         return {"error": err.strip()[:60] or f"exit {code}"}
     return dict(zip(PROBED, parts + [""] * len(PROBED)))
+
+
+def _round_session_rows(probe, vms) -> list[list[str]]:
+    """What a round session stopped (worms_cli/rounds.py STOPPED_RECORD): while the session runs,
+    said; once it has ended, what it left stopped that still is, and what starts it again."""
+    import json
+
+    from worms_cli.rounds import START_AGAIN, STOPPED_RECORD
+
+    try:
+        record = json.loads(probe.get("stopped", "").strip() or "{}")
+    except ValueError:
+        return [["round session", output.status_cell("warn", f"its record is unreadable ({STOPPED_RECORD})")]]
+    if not isinstance(record, dict) or not record:
+        return []
+    names = [name for name in record.get("stopped") or [] if name in START_AGAIN]
+    who = f"the session of round {record.get('round')!r} (pid {record.get('pid')}, since {record.get('since', '?')})"
+    if "round start" in probe.get("session", ""):
+        what = ", ".join(START_AGAIN[name][0] for name in START_AGAIN if name in names) or "nothing yet"
+        return [["round session", output.status_cell("running", f"{who} runs: it stopped {what}, and starts them again "
+                                                     "at its end")]]  # fmt: skip
+    if "worms-round-agent active" in probe.get("active", ""):
+        names = [name for name in names if name != "agent"]
+    if vms is not None and all(vm.get("status") == "running" for vm in vms if vm.get("pool") == "devbox"):
+        names = [name for name in names if name != "devboxes"]
+    if not names:
+        return []
+    return [["round session", output.status_cell("error", f"{who} has ended, and left stopped: " + "; ".join(
+        f"{START_AGAIN[name][0]} (`{START_AGAIN[name][1]}`)" for name in START_AGAIN if name in names))]]  # fmt: skip
 
 
 def _attention(config, listing, internet, probe) -> list[list[str]]:
@@ -283,6 +316,7 @@ def _attention(config, listing, internet, probe) -> list[list[str]]:
         if down:
             rows.append(["host services", output.status_cell("error", f"not active: {', '.join(down)} (`worms log agent`, "
                                                              "`worms log firewall`)")])  # fmt: skip
+        rows += _round_session_rows(probe, vms)
     try:
         from worms_cli import django_setup
 

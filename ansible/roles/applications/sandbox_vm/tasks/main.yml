@@ -5,8 +5,8 @@
 # host and arrive tagged !unsafe (scripts/round_agent/handlers.py): none of it is templated.
 # Packages come from the private apt cache: a gameplan's must be in apt_cache_seed_packages.
 #
-# In order: packages, users (groups, shells, sudo rules), SSH password logins, files, setup
-# commands, removals (after the setup, which may still use what goes), services.
+# In order: the hostname, packages, users (groups, shells, sudo rules), SSH password logins,
+# files, setup commands, removals (after the setup, which may still use what goes), services.
 
 - name: The gameplan's part for this VM
   ansible.builtin.set_fact:
@@ -14,6 +14,33 @@
     sandbox_vm_removed: >-
       {{ (sandbox_vm_config[inventory_hostname] | default({})).uninstall | default([])
          + (sandbox_vm_config[inventory_hostname] | default({})).purge | default([]) }}
+
+# The gameplan's hostname (BasicVM.hostname, sandbox-<n> unless given): what the worm sees. Before
+# the packages, so that what they set up takes it. cloud-init would set the VM's own name again at
+# every boot (every attempt starts from a boot of the snapshot): it keeps the hostname instead.
+- name: Keep the hostname over reboots (cloud-init does not set it again)
+  when: sandbox_vm.hostname is defined
+  ansible.builtin.copy:
+    dest: /etc/cloud/cloud.cfg.d/99-worms-hostname.cfg
+    content: "preserve_hostname: true\n"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Set the gameplan's hostname
+  when: sandbox_vm.hostname is defined
+  ansible.builtin.hostname:
+    name: "{{ sandbox_vm.hostname }}"
+
+- name: Resolve the hostname to the VM itself
+  when: sandbox_vm.hostname is defined
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.1\.1\s'
+    line: "127.0.1.1 {{ sandbox_vm.hostname }}"
+    owner: root
+    group: root
+    mode: "0644"
 
 - name: Install the gameplan's packages
   when: sandbox_vm.install | default([]) | length > 0

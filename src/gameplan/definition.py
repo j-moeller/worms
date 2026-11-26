@@ -64,6 +64,9 @@ LIMITS = {
 }
 
 VM_ATTRIBUTE = re.compile(r"^[a-z](?:[a-z0-9_]{0,39}[a-z0-9])?$")
+# A VM's hostname (BasicVM.hostname), what the worm sees there: one DNS label (RFC 1123).
+HOSTNAME = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+RESERVED_HOSTNAMES = {"localhost", "sandbox-gw"}
 PACKAGE = re.compile(r"^[a-z0-9][a-z0-9+.-]{1,62}$")
 SERVICE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9@._-]{0,62}$")
 USER = re.compile(r"^[a-z][a-z0-9_-]{0,30}$")
@@ -399,6 +402,10 @@ class BasicVM:
     Where a method takes a user (owner=, user=) and is given none, it is debian, the image's
     login user: ~ is /home/debian. (The worm starts as root on the entry VM.)
     `ssh_port` is the port sshd answers on in the sandbox networks (22; `set_ssh_port`).
+    `hostname` is what the VM calls itself (/etc/hostname, `hostname`), BasicVM(hostname="web01") or
+    on a class: one DNS label, lowercase. Without one, sandbox-1, sandbox-2, ... in the order the
+    VMs are assigned (those taken skipped). The platform names the VM by its attribute
+    (sandbox-<attribute>) all the same: the worm never sees that.
 
     Per run: `write_file(path, content)`, text or a document, archive or vault (also
     Gameplan.write_file).
@@ -417,9 +424,11 @@ class BasicVM:
     setup: tuple = ()
     services: tuple = ()
     ssh_port = 22
+    hostname = None  # sandbox-<n> unless given (Plan._hostnames)
 
-    def __init__(self, *, cores=None, memory=None, disk=None, image=None):
+    def __init__(self, *, cores=None, memory=None, disk=None, image=None, hostname=None):
         cls = type(self)
+        self.hostname = cls.hostname if hostname is None else hostname
         self.cores = cls.cores if cores is None else cores
         self.memory = cls.memory if memory is None else memory
         self.disk = cls.disk if disk is None else disk
@@ -737,6 +746,8 @@ class _Plan:
             errors.append(problem)
 
         addresses = self._addresses()
+        hostnames, problems = self._hostnames()
+        errors += problems
         vms = []
         for index, vm in enumerate(self.vms):
             errors += self._vm_problems(vm)
@@ -750,7 +761,7 @@ class _Plan:
             if len(nics) > LIMITS["nics"]:
                 errors.append(f"{vm.name} is in more than {LIMITS['nics']} networks")
             vms.append({
-                "name": vm.name, "kind": type(vm).__name__, "image": vm.image, "cores": vm.cores,
+                "name": vm.name, "hostname": hostnames[vm.name], "kind": type(vm).__name__, "image": vm.image, "cores": vm.cores,
                 "memory": vm.memory, "disk": vm.disk,
                 "maintenance": f"{MAINTENANCE_NETWORK.network_address + MAINTENANCE_FIRST_HOST + index}/{MAINTENANCE_NETWORK.prefixlen}",
                 "nics": nics,
@@ -830,6 +841,31 @@ class _Plan:
             "files": files,
             "reads": [{"id": i, "vm": name, "path": path} for i, (name, path) in enumerate(self.readable())],
         }
+
+    def _hostnames(self):
+        """({VM name: its hostname}, [problems]): each VM's own (BasicVM.hostname), else sandbox-<n>,
+        n counting from 1 in the VMs' order, a number some VM took for its own skipped."""
+        problems, out = [], {}
+        for vm in self.vms:
+            name = vm.hostname
+            if name is None:
+                continue
+            if not isinstance(name, str) or not HOSTNAME.fullmatch(name) or name in RESERVED_HOSTNAMES:
+                problems.append(f"{vm.name}: hostname {name!r} is one DNS label: lowercase letters, digits and -, at "
+                                "most 63, neither starting nor ending with - (not localhost, not sandbox-gw)")  # fmt: skip
+            elif name in out.values():
+                other = next(key for key, value in out.items() if value == name)
+                problems.append(f"{vm.name}: hostname {name!r} is {other}'s already")
+            out[vm.name] = name
+        n = 1
+        for vm in self.vms:
+            if vm.name in out:
+                continue
+            while f"sandbox-{n}" in out.values():
+                n += 1
+            out[vm.name] = f"sandbox-{n}"
+            n += 1
+        return out, problems
 
     def _addresses(self):
         """{(network, VM): address}, from .10 on, shuffled the same way every time."""

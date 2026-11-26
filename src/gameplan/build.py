@@ -75,6 +75,7 @@ def ansible_vars(spec: dict) -> dict:
     return {
         "sandbox_vm_config": {
             vm["name"]: {
+                "hostname": vm["hostname"],
                 "install": vm["install"],
                 "uninstall": vm["uninstall"],
                 "purge": vm["purge"],

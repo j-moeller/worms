@@ -213,7 +213,8 @@ class RoundOne(Gameplan):                       # gameplans/round_one.py
 
 - **VMs.** Assign them to `self.<attr>`; the VM is then named `sandbox-<attr>`, with `_` becoming `-`. A list becomes `sandbox-<attr>-<i>`. `gw` is reserved.
 - **VM classes.**
-  - `BasicVM(cores=1, memory=512, disk=5)`: Debian 13. Class attributes `packages`, `files`, `setup` (root shell commands), `remove`, `purge`, `services` and `ssh_port`; per instance, `install()`, `uninstall()`, `add_setup()`, `add_service()`, `add_user()` and `set_ssh_port()`.
+  - `BasicVM(cores=1, memory=512, disk=5, hostname=None)`: Debian 13. Class attributes `packages`, `files`, `setup` (root shell commands), `remove`, `purge`, `services`, `ssh_port` and `hostname`; per instance, `install()`, `uninstall()`, `add_setup()`, `add_service()`, `add_user()` and `set_ssh_port()`.
+  - **Hostname.** `hostname` is what the VM calls itself (`/etc/hostname`, `hostname`, the `127.0.1.1` line of `/etc/hosts`): `BasicVM(hostname="web01")`, `hostname = "web01"` on a VM class, or `vm.hostname = "web01"` in `__init__`. One DNS label: lowercase letters, digits and `-`, at most 63 (not `localhost` or `sandbox-gw`), each used once. Without one, `sandbox-1`, `sandbox-2`, … in the order the VMs are assigned, skipping a number a VM took itself. Set when the sandbox is built (role `sandbox_vm`), before its packages, and kept over every boot (cloud-init's `preserve_hostname`). The platform names the VM by its attribute (`sandbox-<attribute>`: Proxmox, the inventory, the records); the worm sees only the hostname.
   - `DjangoVM`: a Django project served by gunicorn on :8000.
   - `PostgreVM`: PostgreSQL on :5432, password logins from the sandbox networks.
   - Subclass `BasicVM` for your own.

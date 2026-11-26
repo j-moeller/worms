@@ -264,6 +264,34 @@ def test_a_private_key_is_the_default_users_and_with_add_to_root_roots_too():
         keys(add_to_root="yes")
 
 
+def test_a_vms_hostname_is_its_own_or_sandbox_n():
+    """BasicVM.hostname (a class's, or given): what the VM calls itself; without one sandbox-1,
+    sandbox-2, ... in the VMs' order, a number another took skipped. One DNS label, used once."""
+
+    class Web(BasicVM):
+        hostname = "web01"
+
+    def hostnames(c=None):
+        class Plan(Chain):
+            def __init__(self):
+                self.a, self.b, self.c, self.d = BasicVM(), Web(), BasicVM(hostname=c), BasicVM()
+                self.register_network([self.a, self.b, self.c, self.d])
+                self.set_worm_entrypoint(self.a)
+
+        spec = spec_of(Plan)
+        assert {name: config["hostname"] for name, config in build.ansible_vars(spec)["sandbox_vm_config"].items()} \
+            == {vm["name"]: vm["hostname"] for vm in spec["vms"]}  # fmt: skip
+        return {vm["name"]: vm["hostname"] for vm in spec["vms"]}
+
+    assert hostnames() == {"sandbox-a": "sandbox-1", "sandbox-b": "web01", "sandbox-c": "sandbox-2", "sandbox-d": "sandbox-3"}
+    assert hostnames("sandbox-1") == {"sandbox-a": "sandbox-2", "sandbox-b": "web01", "sandbox-c": "sandbox-1",
+                                      "sandbox-d": "sandbox-3"}  # fmt: skip
+    for bad, why in (("Web01", "one DNS label"), ("-web", "one DNS label"), ("web_01", "one DNS label"),
+                     ("x" * 64, "one DNS label"), ("localhost", "one DNS label"), ("web01", "sandbox-b's already")):  # fmt: skip
+        with pytest.raises(GameplanError, match=why):
+            hostnames(bad)
+
+
 def test_secrets_belong_in_run_files_not_in_the_build():
     class Leaky(BasicVM):
         setup = ()

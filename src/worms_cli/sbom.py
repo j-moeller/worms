@@ -112,6 +112,8 @@ def deb_namespace(origin: str) -> str:
     """The purl namespace of a Debian package: debian, or the vendor of the repository it is from
     (download.proxmox.com: proxmox)."""
     where = re.search(r"\(([^ )]+)", origin or "")
+    if where and where.group(1).startswith("/"):  # a mirror list apt read (/etc/apt/mirrors/debian.list)
+        return "debian" if "debian" in where.group(1).rsplit("/", 1)[-1] else Path(where.group(1)).stem
     # Behind the apt cache the index's URL starts with its address (10.2.0.20:3142/deb.debian.org/...).
     hosts = [h for h in (where.group(1).split("/") if where else []) if h and not re.fullmatch(r"[\d.]+(:\d+)?", h)]
     host = hosts[0].split(":")[0] if hosts else ""

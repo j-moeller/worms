@@ -96,6 +96,8 @@ def test_a_debian_package_is_identified_by_its_purl_with_its_vendor():
     assert proxmox["Unique identifier"].startswith("pkg:deb/proxmox/")
     cached = sbom.deb_row({**p, "origin": "apt (10.2.0.20:3142/deb.debian.org/debian trixie/main)"}, "debian-13", "devpi", "x")
     assert cached["Unique identifier"].startswith("pkg:deb/debian/")  # the index through the apt cache: still Debian's
+    mirror = sbom.deb_row({**p, "origin": "apt (/etc/apt/mirrors/debian.list trixie/main)"}, "debian-13", "dashboard", "x")
+    assert mirror["Unique identifier"].startswith("pkg:deb/debian/")  # Debian's image: mirror+file: sources
     assert sbom.deb_row({**p, "name": "tofu", "origin": ""}, "debian-13", "host", "x")["License"] == "MPL-2.0"
 
 

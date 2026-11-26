@@ -183,7 +183,11 @@ def origin_of(list_name: str) -> str:
     site, _, rest = base.partition("_dists_")
     parts = rest.split("_")
     where = f" {parts[0]}/{parts[1]}" if len(parts) > 2 else ""
-    return f"apt ({site.replace('_', '/')}{where})"
+    site = site.replace("_", "/")
+    if site.startswith("/"):  # mirror+file: sources (Debian's image: /etc/apt/mirrors/debian.list): its first URL
+        url = next((line.split()[0] for line in read_text(site).splitlines() if line.strip() and not line.startswith("#")), "")
+        site = re.sub(r"^\w+://", "", url).rstrip("/") or site
+    return f"apt ({site}{where})"
 
 
 INDEX_FIELDS = {"Package", "Version", "Architecture", "SHA256", "Filename", "Maintainer", "Homepage", "Source"}

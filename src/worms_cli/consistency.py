@@ -106,3 +106,35 @@ def snapshot_rows(vms: list, snapshots: dict, deployed: dict, events: list) -> l
         rows.append(Row("configured after its snapshot", "warn", ", ".join(after) + ": the next reset or round build "
                         "undoes that configuration", "`worms apply <component>` (it snapshots at its end)"))  # fmt: skip
     return rows
+
+
+# -- which commit this system runs (T7) -------------------------------------------------------
+
+
+def version_summary(checkout: str, deployed: dict, expected, snapshots: dict, running: dict) -> tuple[str, list[str]]:
+    """("on" or "mixed", the lines `worms status` shows): one answer to "which commit does this
+    system run?". `checkout`: this checkout's HEAD (`-dirty` with changes); `deployed`:
+    deployed.json ({component: {commit}}), `expected` the components it should name (a missing
+    one reads "unknown"); `snapshots`: {service VM: its `clean` snapshot's commit}; `running`:
+    {app: the commit its units started with (T8)}. On one commit only when every one of them,
+    and the checkout, agree and the checkout is clean."""
+    groups: dict[str, list[str]] = {}
+
+    def add(commit, label):
+        groups.setdefault(commit or "unknown", []).append(label)
+
+    for name in expected:
+        entry = deployed.get(name) if isinstance(deployed, dict) else None
+        add(entry.get("commit", "") if isinstance(entry, dict) else "", name)
+    for vm, commit in sorted(snapshots.items()):
+        add(commit, f"{vm} (snapshot)")
+    for app, commit in sorted(running.items()):
+        add(commit, f"{app} (running)")
+    if len(groups) == 1 and checkout in groups and not checkout.endswith("-dirty"):
+        return "on", [f"system: on {checkout}"]
+
+    def said(labels):
+        return ", ".join(labels) if len(labels) <= 5 else f"{len(labels)} components"
+
+    order = sorted(groups.items(), key=lambda item: (item[0] == "unknown", -len(item[1]), item[0]))
+    return "mixed", ["system: mixed", *(f"  {commit}: {said(labels)}" for commit, labels in order), f"  checkout: {checkout}"]

@@ -651,3 +651,38 @@ def test_a_login_onto_a_service_vm_says_its_changes_do_not_last(capsys):
     assert "dns: changes made here are lost at the next reset or round build" in capsys.readouterr().err
     catalogue.service_notice([{"name": "dashboard", "pool": "persistent"}, None])
     assert capsys.readouterr().err == ""
+
+
+# --- which commit this system runs: the version block (worms_cli/consistency.py) ---------------
+
+
+def _version(checkout="a3a66c9", deployed=None, expected=("dns", "scoring", "workspace"), snapshots=None, running=None):
+    sys.path.insert(0, str(REPO / "src"))
+    from worms_cli import consistency
+
+    deployed = {"dns": {"commit": "a3a66c9"}, "scoring": {"commit": "a3a66c9"}, "workspace": {"commit": "a3a66c9"}} \
+        if deployed is None else deployed  # fmt: skip
+    return consistency.version_summary(checkout, deployed, list(expected), snapshots or {"dns": "a3a66c9"},
+                                       running or {"dashboard": "a3a66c9"})  # fmt: skip
+
+
+def test_a_system_on_one_commit_says_so():
+    assert _version() == ("on", ["system: on a3a66c9"])
+
+
+def test_one_component_on_another_commit_makes_it_mixed():
+    state, lines = _version(deployed={"dns": {"commit": "9f1e2d0"}, "scoring": {"commit": "a3a66c9"},
+                                      "workspace": {"commit": "a3a66c9"}}, snapshots={"dns": "9f1e2d0"})  # fmt: skip
+    assert state == "mixed" and lines[0] == "system: mixed"
+    assert "  a3a66c9: scoring, workspace, dashboard (running)" in lines
+    assert "  9f1e2d0: dns, dns (snapshot)" in lines and lines[-1] == "  checkout: a3a66c9"
+
+
+def test_a_dirty_checkout_is_never_on_one_commit():
+    state, lines = _version(checkout="a3a66c9-dirty")
+    assert state == "mixed" and lines[-1] == "  checkout: a3a66c9-dirty"
+
+
+def test_a_component_without_a_record_reads_unknown():
+    state, lines = _version(deployed={"dns": {"commit": "a3a66c9"}, "workspace": {"commit": "a3a66c9"}})
+    assert state == "mixed" and lines[-2] == "  unknown: scoring"

@@ -324,7 +324,7 @@ def analyse(config, session) -> tuple[list[Change], dict, list[str]]:
     repo = config.repo_root
     here = Tree(repo)
     record = deployed(session)
-    vms = vm_commits(session)
+    vms = vm_commits(session)  # the devboxes' alone: shown, never applied by `worms apply`
     bases: dict[str, str] = {}
     changes: list[Change] = []
     every_prefix: list = []  # what any component is made from: a changed file outside them all is said
@@ -332,9 +332,9 @@ def analyse(config, session) -> tuple[list[Change], dict, list[str]]:
     for name, component in components.COMPONENTS.items():
         if component.kind == "stack":
             continue  # OpenTofu's own plan says (plan_stacks)
+        # deployed.json alone decides (T7): a component it does not name runs an unknown commit, and
+        # is applied. The VM history is an audit log, not a record of what runs.
         base, since = record.get(name, ("", ""))
-        if not base and component.kind == "vm":
-            base = vms.get(name, "")
         if not base and component.kind == "devbox":
             base = _oldest(repo, {c for vm, c in vms.items() if re.fullmatch(r"devbox-t\d+-(a|b|c|gw)", vm)})
         bases[name] = base

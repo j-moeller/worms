@@ -131,6 +131,12 @@ class Runner:
             # outputs (ansible role round_agent, tasks/workspace.yml).
             self.ansible("SetupRoundAgent.yml", "--tags", "agent-sync")
             self._host_ready = True
+            try:  # what the workspace runs now (deployed.json: `worms status`'s version block, T7)
+                from worms_cli import changes
+
+                changes.record_deployed(self.session, ["workspace"], self.commit())
+            except Exception as exc:  # noqa: BLE001  (the record is no reason to stop)
+                output.warn(f"the record of what runs did not get the workspace: {exc}")
         if not self.session.laptop:
             return self._run(["sh", "-c", f"{HOST_RUN} {shlex.quote(cwd)} {shlex.quote(command)}"],
                              f"({cwd}) {command}", "in the agent's workspace", self.session.env, check, False)  # fmt: skip

@@ -322,32 +322,51 @@ def _service_rows(states, during_round=False) -> list[list[str]]:
     return [["platform services", output.status_cell("error", "not active: " + "; ".join(down))]]
 
 
-def _code_row(config, probe) -> list[str]:
-    """The commit each component was last brought up to (the host's record, worms_cli/changes.py),
-    next to this checkout's: what runs, and whether a deploy would change it."""
+RUNNING_APPS = ("dashboard", "orchestrator")  # the Django apps whose units record what they started with (T8)
+
+
+def _running_commits(config, listed=None) -> dict:
+    """{app: the commit its units started with}: /run/worms-django/running-<app> on its VM
+    (django_app's ExecStartPost, T8), read over SSH. An app not answering is left out."""
+    from worms_cli import services
+    from worms_cli.vms import Catalogue
+
+    try:
+        units = services.Units(config, catalogue=Catalogue(config, vms=listed))
+    except Exception:  # noqa: BLE001  (no catalogue: nothing to say)
+        return {}
+    found = {}
+    for app in RUNNING_APPS:
+        try:
+            _code, out = units._sh(app, f"cat /run/worms-django/running-{app} 2>/dev/null || true", check=False)
+        except Exception:  # noqa: BLE001  (unreachable: left out)
+            continue
+        if out.split():
+            found[app] = out.split()[0]
+    return found
+
+
+def _version_lines(config, listing, probe, running) -> list[str]:
+    """`worms status`'s first block: the one answer to "which commit does this system run?"
+    (consistency.version_summary): deployed.json's record of each component and the workspace,
+    each service VM's `clean` snapshot, what the Django apps run, next to this checkout."""
     import json
 
-    from worms_cli.changes import DEPLOYED
+    from worms_cli import components, consistency
 
-    here = build.Runner(config).commit()
+    if probe.get("error"):
+        return [output.status_cell("unknown", f"the host could not be read ({probe['error']})")]
     try:
-        record = json.loads(probe.get("deployed", "").strip() or "{}")
+        deployed = json.loads(probe.get("deployed", "").strip() or "{}")
     except ValueError:
-        record = {}
-    if not isinstance(record, dict) or not record:
-        return ["code", output.status_cell("unknown", f"this checkout {here}; no deploy recorded ({DEPLOYED})")]
-    by_commit: dict[str, list[str]] = {}
-    for name, entry in sorted(record.items()):
-        by_commit.setdefault(entry.get("commit", "?") if isinstance(entry, dict) else "?", []).append(name)
-    if here == "unknown":
-        return ["code", output.status_cell("unknown", "this checkout's commit unknown; " + "; ".join(
-            f"{', '.join(names) if len(names) <= 4 else f'{len(names)} components'} at {commit}" for commit, names in by_commit.items()))]  # fmt: skip
-    other = {commit: names for commit, names in by_commit.items() if commit.removesuffix("-dirty") != here.removesuffix("-dirty")}
-    if not other:
-        return ["code", output.status_cell("ok", f"every component at this checkout ({here})")]
-    said = "; ".join(f"{', '.join(names) if len(names) <= 4 else f'{len(names)} components'} at {commit}"
-                     for commit, names in other.items())  # fmt: skip
-    return ["code", output.status_cell("warn", f"this checkout {here}; {said} (`worms apply --plan` says what differs)")]
+        deployed = {}
+    expected = [name for name, c in components.COMPONENTS.items() if c.kind in ("vm", "host", "gameplans")] + ["workspace"]
+    vms = listing[0] or []
+    by_vmid = consistency.parse_snapshots(probe.get("clean", ""))
+    snapshots = {vm["name"]: by_vmid.get(int(vm["vmid"]), {}).get("commit", "") for vm in vms
+                 if vm.get("pool") in consistency.SERVICE_POOLS}  # fmt: skip
+    state, lines = consistency.version_summary(build.Runner(config).commit(), deployed, expected, snapshots, running)
+    return [output.status_cell("ok" if state == "on" else "warn", lines[0]), *lines[1:]]
 
 
 def _service_states(config, listed=None) -> tuple[dict, str]:
@@ -470,17 +489,23 @@ def cmd_status(config, args) -> int:
     what it could not check), else 0: an unconfigured checkout is not a problem."""
     from concurrent.futures import ThreadPoolExecutor
 
-    # The platform's services are asked over SSH, a VM each (seconds): meanwhile, the rest.
+    # The platform's services and what its apps run are asked over SSH, a VM each (seconds):
+    # meanwhile, the rest.
     listing = _list_vms(config)
-    with ThreadPoolExecutor(max_workers=1) as pool:
+    with ThreadPoolExecutor(max_workers=2) as pool:
         services_found = pool.submit(_service_states, config, listing[0])
+        running = pool.submit(_running_commits, config, listing[0])
         internet, probe = _internet_status(config), _host_probe(config)
         attention = _attention(config, listing, internet, probe, services_found.result)
+        version = _version_lines(config, listing, probe, running.result())
+    print(output.heading("version"))
+    print("\n".join(version))
+    print()
     print(output.heading("attention"))
     print(output.table(attention))
     print()
     print(output.heading("platform"))
-    print(output.table(_platform_rows(config, internet) + ([] if probe.get("error") else [_code_row(config, probe)])))
+    print(output.table(_platform_rows(config, internet)))
     print()
     print(output.heading("VMs"))
     print(output.table(_vm_rows(config, listing, probe), headers=VM_HEADERS))
@@ -857,10 +882,9 @@ def _ran_before(pipe, names) -> dict:
 
     try:
         recorded = {name: commit for name, (commit, _time) in changes.deployed(pipe.runner.session).items()}
-        vms = changes.vm_commits(pipe.runner.session)  # a VM's last configuration, when no apply recorded it
     except Exception:  # noqa: BLE001  (the record is a convenience)
         return {}
-    return {name: recorded.get(name) or vms[name] for name in names if recorded.get(name) or vms.get(name)}
+    return {name: recorded[name] for name in names if recorded.get(name)}
 
 
 def _apply_components(config, args, names, rebuild=False) -> int:
@@ -1117,6 +1141,7 @@ def _record_deployed(pipe, names) -> None:
     from worms_cli import changes, components
 
     kept = [n for n in names if components.COMPONENTS[n].kind in ("vm", "host", "gameplans")]
+    kept += ["workspace"] if "round-agent" in kept else []  # its configuration syncs the workspace (T7)
     if not kept:
         return
     try:

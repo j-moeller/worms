@@ -78,3 +78,4 @@
     - role: apt_client
     - role: ntp_client
     - role: devbox
+    - role: login_sessions

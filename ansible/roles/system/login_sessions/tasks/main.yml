@@ -1,0 +1,43 @@
+---
+# Processes outlive their logins, on sandbox and devbox VMs (docs/05-live-environment.md): a worm
+# logs into a VM over SSH or telnet, starts something there and goes on, and a connection may end
+# or break. Every such login is a logind session (pam_systemd, in sshd's and login's PAM stacks;
+# telnet's `remote` is login's). logind keeps a logged-out user's processes (KillUserProcesses=no,
+# Debian's default, stated here) and their IPC (RemoveIPC=no: shared memory, semaphores and message
+# queues of a process that lives on), and each user lingers (their user manager and /run/user/<uid>
+# stay: what runs under it lives on too). What its terminal's hang-up reaches still ends: that is
+# for the worm to deal with.
+
+- name: Create logind's configuration directory
+  ansible.builtin.file:
+    path: /etc/systemd/logind.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Keep a logged-out user's processes and IPC
+  ansible.builtin.copy:
+    dest: /etc/systemd/logind.conf.d/50-worms.conf
+    content: |
+      # worms (role login_sessions): processes outlive their logins.
+      [Login]
+      KillUserProcesses=no
+      RemoveIPC=no
+    owner: root
+    group: root
+    mode: "0644"
+  register: login_sessions_logind
+
+# Its sessions stay (logind keeps their state across a restart).
+- name: Restart logind with it
+  when: login_sessions_logind is changed
+  ansible.builtin.systemd:
+    name: systemd-logind
+    state: restarted
+
+- name: Let the login users linger
+  ansible.builtin.command:
+    cmd: "loginctl enable-linger {{ item }}"
+    creates: "/var/lib/systemd/linger/{{ item }}"
+  loop: "{{ login_sessions_linger }}"

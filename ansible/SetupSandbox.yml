@@ -58,3 +58,7 @@
     - role: apt_client
     - role: ntp_client
     - role: sandbox_vm
+    # After sandbox_vm, which makes the gameplan's users: they linger too.
+    - role: login_sessions
+      vars:
+        login_sessions_linger: "{{ ['root', 'debian'] + (sandbox_vm_config[inventory_hostname] | default({})).users | default([]) }}"

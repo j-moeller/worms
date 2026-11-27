@@ -1,0 +1,4 @@
+---
+# The users that linger (role login_sessions): their user manager and /run/user/<uid> stay from
+# boot, after their last logout too. SetupSandbox.yml adds the gameplan's users.
+login_sessions_linger: [root, debian]

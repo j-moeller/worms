@@ -14,6 +14,10 @@ team of its own (DevTest <time> #<n>), the zip its upload, and a round of those 
 host's workspace first, every time and uncommitted changes too (rounds._sync_workspace, force):
 the gameplan runs as it is on disk, not as an earlier sync left it.
 
+At each attempt's end its VMs keep running, for a look: the session lists `worms login <vm>`
+for each and asks "Shut its VMs down now (then its teardown)? [y/N]" (no: asked again); yes, and
+the attempt ends as in any round (rounds._hold).
+
 After the round: "Replay the same gameplan (its sandbox kept: no build, no teardown) with another
 or an updated zip? [y/N]". Yes: each team's zip, from the same list (empty: as before); each new
 one is that team's upload, the round's start moves after them, and the round runs again: its

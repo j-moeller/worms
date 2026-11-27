@@ -934,6 +934,76 @@ def test_a_dev_test_replays_the_same_gameplan_with_another_zip_and_never_starts_
     assert rounds.stopped_record()["stopped"] == ["devboxes"]
 
 
+def test_a_dev_tests_attempt_ends_with_its_vms_running_until_the_operator_says(one_run, gameplans):
+    """The conductor's hold (a dev test's session sets it): once the attempt's time is up it is
+    ENDING, its VMs still run, nothing stopped them; after the hold they stop and it ends as any."""
+    from core.models.rounds import RoundRun
+
+    power = fake_power()
+    conductor, agent, clock = make_conductor(gameplans, power)
+    api, seen = power.api(), []
+
+    def hold(run):
+        names = sorted(run.virtual_machines.values_list("vm_identifier", flat=True))
+        seen.append((RoundRun.objects.get(pk=run.pk).state, {name: api.state[name] for name in names}, list(api.stopped)))
+
+    conductor.hold = hold
+    assert run_round(conductor, one_run["round"])[1] is None
+    [(state, states, stopped)] = seen
+    assert state == RoundRun.State.ENDING
+    vm0, vm1 = sorted(states)
+    assert states[vm1] == "running" and stopped == [vm0]  # vm0: the gameplan stopped it
+    assert api.stopped[len(stopped):] == [vm1]  # after the hold
+    assert RoundRun.objects.get(pk=one_run["run"].pk).state == RoundRun.State.FINISHED
+
+
+class _Terminal:
+    """stdin as a terminal, with these lines typed."""
+
+    def __init__(self, typed):
+        import os
+
+        read, write = os.pipe()
+        os.write(write, typed.encode())
+        os.close(write)
+        self.file = os.fdopen(read)
+
+    def isatty(self):
+        return True
+
+    def fileno(self):
+        return self.file.fileno()
+
+    def readline(self):
+        return self.file.readline()
+
+
+def test_a_dev_test_lists_the_logins_and_asks_until_yes(ran, monkeypatch, capsys):
+    """rounds._hold: `worms login` for each of the attempt's VMs, the question again after a no,
+    and back at the yes; at once once Ctrl-C asked the session to stop, or without a terminal."""
+    from worms_cli import rounds
+
+    run = ran["run"]
+    notes = []
+    session = SimpleNamespace(conductor=SimpleNamespace(stopping=False), summary=SimpleNamespace(note=notes.append))
+    monkeypatch.setattr(sys, "stdin", _Terminal("n\n\ny\n"))
+    rounds._hold(session)(run)
+    out = capsys.readouterr().out
+    for name in run.virtual_machines.values_list("vm_identifier", flat=True):
+        assert f"worms login {name}" in out
+    assert out.count("Shut its VMs down now") == 3 and out.count("they keep running") == 2
+    assert len(notes) == 1 and "kept running for a look" in notes[0]
+
+    session.conductor.stopping = True  # Ctrl-C: nothing read
+    monkeypatch.setattr(sys, "stdin", _Terminal(""))
+    rounds._hold(session)(run)
+    assert capsys.readouterr().out.count("Shut its VMs down now") == 1 and len(notes) == 1
+    session.conductor.stopping = False
+    monkeypatch.setattr(sys, "stdin", SimpleNamespace(isatty=lambda: False))
+    rounds._hold(session)(run)
+    assert capsys.readouterr().out == ""
+
+
 def test_a_round_a_session_runs_is_running_on_the_dashboard_between_its_steps(one_run):
     """Its runs pinned and none under way (the sandbox's build, a preflight, between two teams): the
     runs alone read stopped; with the session's mark fresh it is running, with the host step it

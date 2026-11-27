@@ -50,6 +50,7 @@ import json
 import logging
 import os
 import re
+import select
 import signal
 import socket
 import subprocess
@@ -915,6 +916,43 @@ def _without(session):
     return ask_it
 
 
+def _hold(session):
+    """`worms round dev-test`'s: an attempt's time is up, and its VMs keep running for a look
+    (`worms login <vm>`, in another terminal) until the operator says they may stop; then the
+    attempt ends as any other (the conductor's `hold`). Ctrl-C: they stop, as the dev test does.
+    Without a terminal it does not wait."""
+
+    def typed():
+        """The line typed, or None once Ctrl-C asked the session to stop (looked at every second)."""
+        while not session.conductor.stopping:
+            if select.select([sys.stdin], [], [], 1.0)[0]:
+                line = sys.stdin.readline()
+                return line.strip().lower() if line else "y"  # the end of the input: no one to ask
+        return None
+
+    def hold(run):
+        if not sys.stdin.isatty():
+            return
+        began = time.monotonic()
+        print(output.heading(f"{run.team.name}'s attempt {run.attempt}: its time is up, its VMs still run"))
+        print("  For a look, in another terminal (the worm runs on; what it sends from 2 minutes after the end does not count):")
+        for name in sorted(run.virtual_machines.values_list("vm_identifier", flat=True)):
+            says(f"worms login {name}")
+        while True:
+            print(output.color("Shut its VMs down now (then its teardown)? [y/N] ", "yellow"), end="", flush=True)
+            answer = typed()
+            if answer is None:
+                print()
+                return
+            if answer in ("y", "yes"):
+                break
+            print(output.color("    they keep running", "dim"))
+        held = timedelta(seconds=int(time.monotonic() - began))
+        session.summary.note(f"{run.team.name}'s attempt {run.attempt}: its VMs kept running for a look, {held}")
+
+    return hold
+
+
 def _attempt_ended(session, run, took):
     """An attempt's end, said: on the terminal (how, why, the log with the rest, summary.log) and
     in summary.log. A failure a host step caused names that step's entry instead of repeating it."""
@@ -1201,6 +1239,8 @@ def start(config, args) -> int:
         repo_root, session.jobs, key = _host_steps(config, session.folder, session.summary)
         settings.PROXMOX["node"] = config.proxmox_node()
         session.conductor = Conductor(jobs=session.jobs, power=ProxmoxPower(api=Pvesh()), on_watch=_count)
+        if session.dev_test:
+            session.conductor.hold = _hold(session)
 
         left = list(RoundRun.objects.filter(round=round_, state__in=ACTIVE).select_related("team", "round"))
         for run in left:

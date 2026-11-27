@@ -14,7 +14,8 @@ terminal, one team after another. Nothing here starts, stops, retries or waits b
         prepare()          (the run's secrets, files, flags)
         check()            (the host, and probes inside every VM)
         gameplan()         (gameplan.execute(): deploy_worm, waits, power, flags), the VMs watched
-                           meanwhile (AttemptBackend); the rest of the run's time, stop every VM,
+                           meanwhile (AttemptBackend); the rest of the run's time, stop every VM
+                           (a dev test's session first keeps them running for a look: hold),
                            drain, the attempt's end (teardown keep: its secrets gone, its VMs off)
     delete_snapshot()      (destroy_sandbox, once the round is complete: the session asks)
     teardown()
@@ -576,6 +577,9 @@ class Conductor:
         self.jobs = jobs
         self.on_watch = on_watch
         self.stopping = False  # Ctrl-C: the attempt under way fails at its next wait
+        # `worms round dev-test`'s session (worms_cli/rounds.py _hold): hold(run) once an attempt's
+        # time is up (ENDING), before its VMs are stopped: they run until it returns.
+        self.hold = None
         # The operator's yes to continuing an unfinished sandbox build (worms_cli/rounds.py): the
         # next build does (scripts/round_agent/handlers.py, build), once.
         self.resume_build = False
@@ -919,6 +923,9 @@ class Conductor:
                 raise backend.failed  # the gameplan caught it and went on
             for note in notes:
                 log.info("run %s: %s", run.uuid, note)
+            if self.hold is not None:
+                self.set_state(run, S.ENDING)
+                self.hold(run)
         except (RoundError, Stopping, AttemptFailed) as error:
             self.fail(run, str(error), counts=not isinstance(error, Stopping), ours=isinstance(error, AttemptFailed),
                       failure=failure_of(error, run.state))  # fmt: skip

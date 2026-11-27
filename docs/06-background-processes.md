@@ -50,7 +50,7 @@ The dashboard runs no background work of its own: it has no timers and no Django
 | Unit | Does |
 |---|---|
 | `sandbox-api` | Flask under gunicorn (1 worker, 8 threads), user `sandbox-api`. May reach only the database (`IPAddressAllow`). Reads `/etc/sandbox-api/current-team` and `devbox-teams` on each request (cached by mtime) |
-| `nginx` | nginx.org's, as on the dashboard. `POST /submit` only; body caps; 50 r/s per source |
+| `nginx` | nginx.org's, as on the dashboard. `POST /submit` only; body caps; per source 50 r/s on scoring, 170 r/s with bursts of 1000 on logging |
 
 ## Monitor VM
 

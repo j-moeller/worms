@@ -96,7 +96,7 @@ curl -sS -X POST https://logging.worms.internal/submit -H 'Content-Type: applica
 - **Errors.** `400` (malformed), `403` (unknown source), `409` (no round running), `413` (too large), `415` (not JSON), `429` with `Retry-After` (rate), `503`.
 - **Limits.**
   - Scoring: about 30 requests a minute per team, with bursts of 10; 100 rejected requests within a minute bring a 5-minute ban.
-  - Logging: about 600 requests a minute per team (10 a second), with bursts of 120; only 6000 rejected requests within a minute bring a ban, of a minute. Log as you would print, but a loop that logs as fast as it can is refused (`429` with `Retry-After`).
+  - Logging: about 10,000 requests a minute per team, with bursts of 1000; only 20,000 rejected requests within a minute bring a ban, of a minute. Underneath, the logging service takes at most 170 requests a second from the sandbox (bursts of 1000), and each VM opens at most 170 new connections a second to the services (bursts of 1000). Log as you would print, but a loop that logs as fast as it can is refused (`429` with `Retry-After`).
   - New connections to the services are limited to 20 a second per VM.
 
 ## What your VMs can reach

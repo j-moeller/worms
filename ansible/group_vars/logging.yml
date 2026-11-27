@@ -15,10 +15,17 @@ sandbox_api_max_body_bytes: 16384
 
 # A team's rate (files/app.py, TeamLimiter). Higher than scoring's (30 a minute, a ban after 100
 # refused within a minute, for 5 minutes: it keeps a team from guessing flags): teams log as they
-# would print, and the old limits locked them out for 5 minutes (2026-11-23). 10 a second, bursts of
-# 120; only a flood is banned (6000 refused within a minute; a VM opens at most 20 new connections a
-# second to the services, host_sandbox_limits), and only for a minute.
-sandbox_api_team_rate_per_minute: 600
-sandbox_api_team_burst: 120
-sandbox_api_team_ban_after: 6000
+# would print, and the old limits locked them out for 5 minutes (2026-11-23). 10,000 a minute, bursts
+# of 1000 (2026-11-27; 600 and 120 before); only a flood is banned (20,000 refused within a minute),
+# and only for a minute. The network limits under it are raised to match (2026-11-27), so that
+# this one is what a team meets: nginx here, per source (every sandbox VM arrives as sandbox-gw,
+# so it is the whole sandbox's; a devbox comes from its team's gateway), and the host's per-VM
+# limit of new connections to the services (host_sandbox_limits).
+sandbox_api_team_rate_per_minute: 10000
+sandbox_api_team_burst: 1000
+sandbox_api_team_ban_after: 20000
 sandbox_api_team_ban_seconds: 60
+# 10,000 a minute is 167 a second (scoring keeps the role's 50, bursts of 100, 200 connections).
+sandbox_api_nginx_rate_per_second: 170
+sandbox_api_nginx_burst: 1000
+sandbox_api_nginx_max_connections: 1000

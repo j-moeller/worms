@@ -14,11 +14,20 @@ team of its own (DevTest <time> #<n>), the zip its upload, and a round of those 
 host's workspace first, every time and uncommitted changes too (rounds._sync_workspace, force):
 the gameplan runs as it is on disk, not as an earlier sync left it.
 
+After the round: "Replay the same gameplan (its sandbox kept: no build, no teardown) with another
+or an updated zip? [y/N]". Yes: each team's zip, from the same list (empty: as before); each new
+one is that team's upload, the round's start moves after them, and the round runs again: its
+session finds the teams whose upload changed (conductor.stale), keeps their earlier attempts as
+superseded and runs them anew from the sandbox's snapshot, the workspace as it was (no sync).
+Then the same question. No: the round agent and the orchestrator start again; the devboxes stay
+stopped (`worms vm start devboxes`), and so does the sandbox, for the next dev test of the same
+gameplan (`worms round teardown` destroys it). The round, its teams and uploads are kept.
+
 Ctrl-C, whenever: everything it made goes, as if the round never was. The attempt under way fails
-(its VMs stopped) and the session ends; the sandbox is destroyed (`worms round teardown`); what the
-session stopped is started again; then the round with its attempts and their records, the uploads
-and their zips on the dashboard VM, the teams and the users. Ctrl-C is ignored while that runs, so
-that it ends complete. The audit logs keep their rows. A round that runs to its end is kept.
+(its VMs stopped) and the session ends; the sandbox is destroyed (`worms round teardown`); the
+round agent and the orchestrator are started again (not the devboxes); then the round with its
+attempts and their records, the uploads and their zips on the dashboard VM, the teams and the
+users. Ctrl-C is ignored while that runs, so that it ends complete. The audit logs keep their rows.
 """
 
 from __future__ import annotations
@@ -77,18 +86,17 @@ def _gameplan(folder: Path) -> tuple[str, int]:
     return name, duration
 
 
-def _zip(folder: Path, first: bool) -> tuple[str, bytes] | None:
+def _zip(folder: Path, label: str, empty: str = "") -> tuple[str, bytes] | None:
     """A zip: one of `folder` (solutions/) by its number or name, or any path; asked until it is one
-    the dashboard takes (dev_reset._zip). Without a zip in `folder`, a path. None: left empty (not
-    for the first: a round needs one)."""
+    the dashboard takes (dev_reset._zip). Without a zip in `folder`, a path. None: left empty, when
+    `empty` says what that means (else it is asked again)."""
     zips = sorted(path.name for path in folder.glob("*.zip")) if folder.is_dir() else []
     for n, name in enumerate(zips, 1):
         print(f"  {n}. {name}")
     choice = f"1-{len(zips)}, its name, or a path" if zips else "its path"
     while True:
-        answer = PROMPT(output.color(f"  {'an' if first else 'another'} upload zip [{choice}"
-                                     f"{'' if first else '; empty: no more?'}]: ", "yellow")).strip()  # fmt: skip
-        if not answer and not first:
+        answer = PROMPT(output.color(f"  {label} [{choice}{f'; empty: {empty}' if empty else ''}]: ", "yellow")).strip()
+        if not answer and empty:
             return None
         if answer.isdigit() and 1 <= int(answer) <= len(zips):
             answer = zips[int(answer) - 1]
@@ -104,7 +112,6 @@ def _make(config, made: Made, gameplan: str, duration: int, zips: list) -> None:
     from core.models.competition import ApplicationSetting, Round
     from core.models.team import Team, TeamMembership
     from core.models.user import User
-    from core.models.worms import MalwareArtifact, Upload
     from django.utils import timezone
 
     competition = ApplicationSetting.get_current_competition()
@@ -119,10 +126,7 @@ def _make(config, made: Made, gameplan: str, duration: int, zips: list) -> None:
         team = Team.objects.create(name=f"DevTest {stamp} #{n}", competition=competition)
         made.teams.append(team)
         TeamMembership.objects.create(user=user, team=team)
-        content_hash, storage_key = dev_reset._store(config, data)
-        artifact, _ = MalwareArtifact.objects.get_or_create(content_hash=content_hash, defaults={"storage_key": storage_key})
-        made.uploads.append(Upload.objects.create(artifact=artifact, user=user, team=team, devbox=False))
-        print(output.status_cell("ok", f"{team.name}: {user.username}, upload {content_hash[:12]} ({Path(path).name})"))
+        _upload(config, made, team, user, path, data)
     now = timezone.now()  # after the uploads: each is its team's latest before the start
     window = max(4 * 3600, len(zips) * (duration + 1800) + 7200)  # the build, every team, room to spare
     made.round = Round.objects.create(
@@ -133,6 +137,54 @@ def _make(config, made: Made, gameplan: str, duration: int, zips: list) -> None:
     events.platform("dev_test", actor="console", detail={"round": made.round.id, "teams": [t.name for t in made.teams]})
     print(output.status_cell("ok", f"round {made.round.id} {made.round.name!r}: {gameplan}, {duration} s per team, "
                                    f"{len(made.teams)} team(s), starting now"))  # fmt: skip
+
+
+def _upload(config, made: Made, team, user, path: str, data: bytes) -> None:
+    """The zip stored as the dashboard stores an upload (dev_reset._store), the team's latest upload."""
+    from core.models.worms import MalwareArtifact, Upload
+
+    content_hash, storage_key = dev_reset._store(config, data)
+    artifact, _ = MalwareArtifact.objects.get_or_create(content_hash=content_hash, defaults={"storage_key": storage_key})
+    made.uploads.append(Upload.objects.create(artifact=artifact, user=user, team=team, devbox=False))
+    print(output.status_cell("ok", f"{team.name}: {user.username}, upload {content_hash[:12]} ({Path(path).name})"))
+
+
+def _replay(config, made: Made, solutions: Path) -> bool:
+    """Each team's zip again (empty: as before); the new ones its uploads, the round's start moved
+    after them (its end too, if it would come first). False: no new upload."""
+    from core.models.competition import Round
+    from django.utils import timezone
+
+    print(output.heading("the replay: the same gameplan, its sandbox kept"))
+    new = 0
+    for team, user in zip(made.teams, made.users):
+        picked = _zip(solutions, f"{team.name}'s zip", empty="as before")
+        if picked is not None:
+            _upload(config, made, team, user, *picked)
+            new += 1
+    if not new:
+        print("Every team's upload is as before: nothing to replay.")
+        return False
+    now = timezone.now()  # after the new uploads: each is its team's latest before the start
+    end = max(made.round.round_end, now + timedelta(seconds=len(made.teams) * (made.round.team_duration + 1800) + 3600))
+    Round.objects.filter(pk=made.round.pk).update(round_start=now, round_end=end)
+    made.round.refresh_from_db()
+    return True
+
+
+def finish(config, made: Made) -> None:
+    """The dev test's end (no replay): the round agent and the orchestrator started again; the
+    devboxes stay stopped, the sandbox kept."""
+    from worms_cli import rounds
+
+    print(output.heading("the dev test ends"))
+    stopped = rounds.stopped_record().get("stopped", [])
+    if stopped:
+        session = SimpleNamespace(config=config, yes=True, round=made.round, dev_test=True)
+        rounds._start_again(session, stopped)
+        rounds._close_record(session)
+    print(output.color(f"Round {made.round.id} {made.round.name!r}, its teams and uploads are kept. Its sandbox too, for the "
+                       "next dev test of this gameplan: `worms round teardown` destroys it.", "dim"))  # fmt: skip
 
 
 def _remove_uploads(config, uploads) -> None:
@@ -178,8 +230,8 @@ def discard(config, made: Made) -> None:
             except Exception as exc:  # noqa: BLE001  (said; the rest goes on)
                 output.error(f"the sandbox: {exc}; later: `worms round teardown`")
             stopped = rounds.stopped_record().get("stopped", [])
-            if stopped:
-                session = SimpleNamespace(config=config, yes=True, round=made.round)
+            if stopped:  # not the devboxes: a dev test never starts them (rounds._start_again)
+                session = SimpleNamespace(config=config, yes=True, round=made.round, dev_test=True)
                 rounds._start_again(session, stopped)
                 rounds._close_record(session)
         if made.round is not None:
@@ -214,9 +266,9 @@ def run(config) -> int:
         gameplan, duration = _gameplan(Path(config.repo_root) / "gameplans")
         print(output.heading("the uploads"))
         solutions = Path(config.repo_root) / "solutions"
-        zips = [_zip(solutions, first=True)]
+        zips = [_zip(solutions, "an upload zip")]
         while True:  # the list again after each; left empty, asked whether another comes
-            picked = _zip(solutions, first=False)
+            picked = _zip(solutions, "another upload zip", empty="no more?")
             if picked is not None:
                 zips.append(picked)
             elif not ASK("Include another upload?", False):
@@ -228,9 +280,17 @@ def run(config) -> int:
     try:
         _make(config, made, gameplan, duration, zips)
         made.ran = True
-        code = rounds.start(config, Namespace(round=str(made.round.id), yes=True, resume=False, team=[], dev_test=True))
+        args = Namespace(round=str(made.round.id), yes=True, resume=False, team=[], dev_test=True, replay=False)
+        code = rounds.start(config, args)
+        while code != 130 and ASK("Replay the same gameplan (its sandbox kept: no build, no teardown) with another or an "
+                                  "updated zip?", False):  # fmt: skip
+            if _replay(config, made, solutions):
+                args.replay = True
+                code = rounds.start(config, args)
     except KeyboardInterrupt:
         code = 130
     if code == 130:
         discard(config, made)
+    else:
+        finish(config, made)
     return code

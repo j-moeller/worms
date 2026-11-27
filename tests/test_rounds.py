@@ -877,10 +877,58 @@ def test_a_dev_test_makes_its_teams_and_round_and_ctrl_c_takes_them_away(db_clea
     assert list(Upload.objects.values_list("team__name", flat=True)) == [other.name]
 
     # Run to its end: all of it is kept.
-    answers, asked = iter(["two.py", "", str(repo / "solutions" / "a.zip"), ""]), iter([False])  # the first needs one; a path
+    # The first needs one; a path. After the round: no replay.
+    answers, asked = iter(["two.py", "", str(repo / "solutions" / "a.zip"), ""]), iter([False, False])
     monkeypatch.setattr(rounds, "start", lambda config, args: 0)
     assert dev_test.run(config) == 0
     assert Round.objects.filter(name__startswith="dev-test").count() == 1 and Team.objects.count() == 2
+
+
+def test_a_dev_test_replays_the_same_gameplan_with_another_zip_and_never_starts_the_devboxes(db_clean, gameplans, tmp_path,
+                                                                                             monkeypatch):  # fmt: skip
+    """After the round: a replay with another zip (the round's start moved after its upload, the
+    session run again as a replay: no sync), then none; the end starts the agent and the
+    orchestrator again, never the devboxes."""
+    sys.path.insert(0, str(REPO / "src"))
+    from core.models.competition import ApplicationSetting, Competition, Round
+    from core.models.worms import Upload
+    from django.utils import timezone
+    from worms_cli import dev_reset, dev_test, power, rounds, services, session
+
+    competition = Competition.objects.create(name="c", registration_starts_at=timezone.now(), registration_ends_at=timezone.now())
+    ApplicationSetting.objects.create(key="current", current_competition=competition)
+    repo = tmp_path / "repo"
+    (repo / "gameplans").mkdir(parents=True)
+    (repo / "gameplans" / "two.py").write_text(GAMEPLAN)
+    (repo / "solutions").mkdir()
+    for name in ("a.zip", "b.zip"):
+        with __import__("zipfile").ZipFile(repo / "solutions" / name, "w") as archive:
+            archive.writestr("main.sh", f"echo {name}\n")
+    answers = iter(["1", "a.zip", "", "b.zip"])  # the gameplan, a zip, no more?; the replay: the team's zip
+    asked = iter([False, True, False])  # include another? no; replay? yes; replay? no
+    monkeypatch.setattr(dev_test, "PROMPT", lambda text: next(answers))
+    monkeypatch.setattr(dev_test, "ASK", lambda question, default: next(asked))
+    monkeypatch.setattr(session, "for_config", lambda config: SimpleNamespace(environment=lambda: {"name": "development"}))
+    monkeypatch.setattr(dev_reset, "_store", lambda config, data: (sha(data.decode("latin-1")), f"k/{len(data)}.zip"))
+    starts = []
+
+    def start(config, args):
+        round_obj = Round.objects.get(pk=int(args.round))
+        starts.append((args.replay, round_obj.round_start))
+        return 0
+
+    monkeypatch.setattr(rounds, "start", start)
+    monkeypatch.setattr(rounds, "STOPPED_RECORD", str(tmp_path / "stopped.json"))
+    (tmp_path / "stopped.json").write_text('{"pid": 1, "stopped": ["devboxes", "agent", "orchestrator"]}\n')
+    started = []
+    monkeypatch.setattr(power, "Power", lambda config: SimpleNamespace(start=lambda names: started.append(names)))
+    monkeypatch.setattr(services, "Units", lambda config: SimpleNamespace(start=lambda names: started.append(names)))
+    assert dev_test.run(SimpleNamespace(repo_root=repo)) == 0
+    assert [replay for replay, _start in starts] == [False, True] and starts[1][1] > starts[0][1]
+    [team_uploads] = [list(Upload.objects.order_by("id").values_list("created_at", flat=True))]
+    assert len(team_uploads) == 2 and team_uploads[1] < starts[1][1]  # the new upload, before the moved start
+    assert started == [["agent"], ["orchestrator"]]  # the devboxes stay stopped
+    assert rounds.stopped_record()["stopped"] == ["devboxes"]
 
 
 def test_a_session_marks_its_round_while_it_runs(one_run):

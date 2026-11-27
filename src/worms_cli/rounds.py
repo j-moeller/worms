@@ -664,6 +664,9 @@ def _start_again(session, names) -> None:
     """Each of `names` started again, asked: what this session (or an earlier one) stopped."""
     from worms_cli import power, services
 
+    if getattr(session, "dev_test", False) and "devboxes" in names:
+        names = [name for name in names if name != "devboxes"]
+        print(output.color("the devboxes stay stopped after a dev test: `worms vm start devboxes` starts them", "dim"))
     acts = {"devboxes": lambda: power.Power(session.config).start(["devboxes"]),
             "agent": lambda: services.Units(session.config).start(["agent"]),
             "orchestrator": lambda: services.Units(session.config).start(["orchestrator"])}  # fmt: skip
@@ -1095,6 +1098,10 @@ def _afterwards(session):
     from worms_cli import power
 
     yes = session.yes
+    if session.dev_test and not session.interrupts:
+        # `worms round dev-test` asks what next (worms_cli/dev_test.py): a replay on this sandbox, or its end.
+        print(output.heading("the dev test: its sandbox kept, nothing started again (it asks what next)"))
+        return
     sandbox = [vm["name"] for vm in power.Power(session.config).runner.vms() if vm.get("pool") == "sandbox"]
     record = session.jobs.handlers.unfinished_build(session.jobs.cfg) if session.jobs else None
     if record:
@@ -1187,7 +1194,10 @@ def start(config, args) -> int:
 
         # This checkout's code in the host's workspace, before anything is stopped (T10); then the
         # round agent's environment and code, as the service has them.
-        _sync_workspace(config, force=session.dev_test)  # a dev test: the gameplans as they are on disk
+        if getattr(args, "replay", False):  # a dev test's replay: the workspace, and its sandbox, as they were
+            print(output.status_cell("ok", "a replay: the host's workspace as the dev test left it"))
+        else:
+            _sync_workspace(config, force=session.dev_test)  # a dev test: the gameplans as they are on disk
         repo_root, session.jobs, key = _host_steps(config, session.folder, session.summary)
         settings.PROXMOX["node"] = config.proxmox_node()
         session.conductor = Conductor(jobs=session.jobs, power=ProxmoxPower(api=Pvesh()), on_watch=_count)

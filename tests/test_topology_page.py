@@ -212,11 +212,20 @@ def test_next_event_and_shareable_hash(observed):
     assert checks["hash"].startswith(f"#run={topology_fixtures.RUN_UUID}&t=")
 
 
-def test_live_refresh_keeps_speed_and_zoom(observed):
+def test_back_from_an_event_keeps_the_feeds_scroll(observed):
+    scroll = observed["checks"]["feedScroll"]
+    assert scroll["before"] > 0  # the feed did scroll
+    assert scroll["event"] == 0  # an event opens at its top
+    assert abs(scroll["back"] - scroll["before"]) <= 1
+    assert abs(scroll["escape"] - scroll["before"]) <= 1
+
+
+def test_live_refresh_keeps_speed_zoom_and_scroll(observed):
     refresh = observed["checks"]["refresh"]
     assert refresh["modelFetches"] > refresh["fetchesBefore"]  # it did refresh
     assert refresh["speed"] == 60
     assert abs(refresh["k"] - refresh["k0"]) < 1e-9
+    assert refresh["top0"] > 0 and abs(refresh["top"] - refresh["top0"]) <= 1
 
 
 def test_failed_run_and_back_to_live(observed):

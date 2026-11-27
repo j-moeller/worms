@@ -127,6 +127,19 @@ const requests = [];
     out.checks.xssFired = await page.evaluate(() => window.__xss === 1);
     out.checks.imgInSide = await page.locator("#topo-side img").count();
 
+    // Back from an event: the feed is where it was (a short panel, so that it scrolls).
+    const sideTop = () => page.evaluate(() => document.getElementById("topo-side").scrollTop);
+    await page.locator("#topo-side button", { hasText: "Back" }).click();
+    await page.evaluate(() => { const side = document.getElementById("topo-side"); side.style.height = "160px"; side.scrollTop = side.scrollHeight; });
+    out.checks.feedScroll = { before: await sideTop() };
+    await page.locator("#topo-feed li").last().click();
+    out.checks.feedScroll.event = await sideTop();
+    await page.locator("#topo-side button", { hasText: "Back" }).click();
+    out.checks.feedScroll.back = await sideTop();
+    await page.locator("#topo-feed li").last().click();
+    await page.keyboard.press("Escape");
+    out.checks.feedScroll.escape = await sideTop();
+
     // VM power state over time.
     const stoppedId = await page.evaluate(() => document.getElementById("topo").topoState.timeline.nodes[3].id);
     await seekUI(150);
@@ -145,16 +158,19 @@ const requests = [];
     out.checks.afterDot = await S();
     out.checks.dotSide = await page.locator("#topo-side").innerText();
 
-    // The live snapshot refreshes (every 700 ms here): the chosen speed and
-    // the user's zoom survive it.
+    // The live snapshot refreshes (every 700 ms here): the chosen speed, the
+    // user's zoom and the feed's scroll survive it.
     await page.locator("#topo-side button", { hasText: "Back" }).click();
     await page.locator("#topo-speed").selectOption("60");
     await page.locator("#topo-zoom-in").click();
     const k0 = await page.evaluate(() => document.getElementById("topo").topoState.view.k);
+    await page.evaluate(() => { document.getElementById("topo-side").scrollTop = 40; });
+    const top0 = await sideTop();
     const fetchesBefore = modelFetches;
     await page.waitForTimeout(1800);
     out.checks.refresh = await page.evaluate(() => { const s = document.getElementById("topo").topoState; return { speed: s.speed, k: s.view.k }; });
-    Object.assign(out.checks.refresh, { k0, fetchesBefore, modelFetches });
+    Object.assign(out.checks.refresh, { k0, fetchesBefore, modelFetches, top0, top: await sideTop() });
+    await page.evaluate(() => { document.getElementById("topo-side").style.height = ""; });
     await page.locator("#topo-fit").click();
 
     // The Download menu: the server's zip, with the parts asked for.

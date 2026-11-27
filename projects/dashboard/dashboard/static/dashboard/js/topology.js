@@ -2100,8 +2100,30 @@
         }
     }
 
+    // A list keeps its scroll (the summary's feed, a VM's events; per round, run or file): back
+    // from an event (← Back, Escape, ▶ Continue) or redrawn by a refresh, it is where it was. An
+    // event or a connection opens at its top, and a refresh leaves it where it was.
+    const sideScroll = new Map();
+    let sideShown = null; // { key: its list's, or null; sel: what was selected }
+
+    function sideKey(sel) {
+        if (sel && sel.type !== "node") return null;
+        return `${S.mode}:${S.roundId || ""}:${S.runUuid || ""}:${sel ? `node:${sel.id}` : "summary"}`;
+    }
+
     function renderSide() {
+        const was = sideShown;
+        const top = side.scrollTop;
+        if (was && was.key) sideScroll.set(was.key, top);
+        sideShown = null; // a VM that is gone shows the summary instead (select(null), within)
         clear(side);
+        fillSide();
+        const key = sideKey(S.selected);
+        side.scrollTop = key ? sideScroll.get(key) || 0 : was && was.sel === S.selected ? top : 0;
+        sideShown = { key, sel: S.selected };
+    }
+
+    function fillSide() {
         const sel = S.selected;
         if (sel && sel.type === "node") return renderNodeDetails(sel.id);
         if (sel && sel.type === "event") return renderEventDetails(sel.event);

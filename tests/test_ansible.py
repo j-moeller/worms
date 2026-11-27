@@ -74,6 +74,29 @@ def test_every_vm_group_is_in_the_inventory():
     assert "monitor" in groups["network_monitor_hosts"]["children"]
 
 
+def test_login_sessions_change_the_sandbox_and_devbox_vms_only():
+    """Role login_sessions (KillUserProcesses=no, RemoveIPC=no, lingering) on the VMs teams log
+    into and nowhere else: only the plays of the `sandbox` and `devbox` groups name it, and those
+    groups hold no gateway (scripts/generate_inventory.py). Every other VM keeps logind's defaults."""
+    import importlib.util
+
+    role = ANSIBLE / "roles" / "system" / "login_sessions"
+    naming = sorted(str(path.relative_to(ANSIBLE)) for path in ANSIBLE.rglob("*.yml")
+                    if role not in path.parents and "login_sessions" in path.read_text())  # fmt: skip
+    assert naming == ["SetupDevbox.yml", "SetupSandbox.yml"]
+    for playbook, group in (("SetupSandbox.yml", "sandbox"), ("SetupDevbox.yml", "devbox")):
+        plays = [play for play in yaml.safe_load((ANSIBLE / playbook).read_text())
+                 if "login_sessions" in yaml.safe_dump(play)]  # fmt: skip
+        assert [play["hosts"] for play in plays] == [group], playbook
+    spec = importlib.util.spec_from_file_location("generate_inventory", REPO / "scripts" / "generate_inventory.py")
+    inventory = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(inventory)
+    group_of = dict(inventory.VM_STACKS)
+    assert group_of["sandbox"]("sandbox_gw") == "sandbox_gw" and group_of["sandbox"]("sandbox-a") == "sandbox"
+    assert group_of["devbox"]("devbox-t1-gw") == "devbox_gw" and group_of["devbox"]("ssh_gateway") == "ssh_gateway"
+    assert group_of["devbox"]("devbox-t1-a") == "devbox"
+
+
 def test_monitor_role_in_configure_sequence():
     # Site.yml: the monitor beside the database's own setup (its shipper retries until the grants
     # exist), the grants in the last phase, after the migrations.

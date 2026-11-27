@@ -27,10 +27,17 @@
     group: root
     mode: "0644"
 
+# Tried again: hostnamectl gives systemd-hostnamed 25 s. The sandbox's VMs refresh their package
+# index together just before, and the host's disk can take that long to write it out: a VM
+# writing then stalls (2026-11-27: 31 s, and the build failed after 19 minutes).
 - name: Set the gameplan's hostname
   when: sandbox_vm.hostname is defined
   ansible.builtin.hostname:
     name: "{{ sandbox_vm.hostname }}"
+  register: sandbox_vm_hostname
+  until: sandbox_vm_hostname is succeeded
+  retries: 3
+  delay: 5
 
 - name: Resolve the hostname to the VM itself
   when: sandbox_vm.hostname is defined

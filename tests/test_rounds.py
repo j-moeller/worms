@@ -931,6 +931,50 @@ def test_a_dev_test_replays_the_same_gameplan_with_another_zip_and_never_starts_
     assert rounds.stopped_record()["stopped"] == ["devboxes"]
 
 
+def test_a_round_a_session_runs_is_running_on_the_dashboard_between_its_steps(one_run):
+    """Its runs pinned and none under way (the sandbox's build, a preflight, between two teams): the
+    runs alone read stopped; with the session's mark fresh it is running, with the host step it
+    runs. A mark gone stale: stopped again, `--resume` the way on."""
+    from core.models.competition import Round
+    from core.models.rounds import HostJob, RoundRun
+    from dashboard.views import round_progress
+    from django.utils import timezone
+
+    round_obj = one_run["round"]
+    RoundRun.objects.filter(round=round_obj).update(gameplan_sha256="ab" * 32)
+    runs = list(RoundRun.objects.filter(round=round_obj))
+    now = timezone.now()
+
+    def phase():
+        return round_progress.phase(Round.objects.get(pk=round_obj.pk), runs, now)
+
+    assert (phase().label, phase().tone) == ("stopped", "warn") and "--resume" in phase().text
+    Round.objects.filter(pk=round_obj.pk).update(session_seen_at=now)
+    assert phase().label == "running" and "between its steps" in phase().text
+    assert round_progress.under_way() == round_obj
+    job = HostJob.objects.create(kind=HostJob.Kind.BUILD, params={"round": round_obj.pk}, state=HostJob.State.RUNNING, started_at=now)
+    assert phase().text == f"`worms round start` runs it: building the sandbox (#{job.id}, since {now:%H:%M} UTC)."
+    Round.objects.filter(pk=round_obj.pk).update(session_seen_at=now - timezone.timedelta(seconds=Round.SESSION_STALE + 1))
+    assert phase().label == "stopped"
+
+
+def test_a_dev_test_session_is_a_session_for_worms_status():
+    """`worms status` knows a round session by its record's process: `worms round start`, and a
+    `worms round dev-test`, which status read as ended (and the services it stopped as down)."""
+    import json as _json
+
+    sys.path.insert(0, str(REPO / "src"))
+    import manage
+
+    record = _json.dumps({"round": "dev-test 011542", "round_id": 3, "pid": 1, "stopped": ["orchestrator", "agent", "devboxes"]})
+    for command, runs in (("/usr/bin/python3 src/manage.py round dev-test", True), ("python3 manage.py round start 3 --yes", True),
+                          ("python3 manage.py status", False), ("", False)):  # fmt: skip
+        probe = {"stopped": record, "session": command, "active": ""}
+        assert manage._session_runs(probe) is runs, command
+        [[label, cell]] = manage._round_session_rows(probe, vms=[])
+        assert ("runs: it stopped" in cell) is runs and ("has ended" in cell) is not runs, command
+
+
 def test_a_session_marks_its_round_while_it_runs(one_run):
     """`worms round start` marks its round (Round.session_seen_at) from its start to its end: the
     dashboard refuses changes while the mark is fresh; a killed session's goes stale."""

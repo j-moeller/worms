@@ -77,8 +77,32 @@ class Phase:
     tone: str = ""  # a badge/alert modifier: ok, warn, bad, accent
 
 
+# A host step of the round's session, said while no attempt is under way (phase).
+SESSION_STEPS = {
+    HostJob.Kind.GAMEPLANS: "the gameplans checked", HostJob.Kind.PREFLIGHT: "the host's preflight",
+    HostJob.Kind.BUILD: "building the sandbox", HostJob.Kind.SNAPSHOT: "the sandbox's snapshot",
+    HostJob.Kind.DELETE_SNAPSHOT: "the sandbox's snapshot deleted", HostJob.Kind.TEARDOWN: "the sandbox destroyed",
+}  # fmt: skip
+
+
+def _session_text(round_) -> str:
+    """What the round's session does while no attempt is under way: its host step that runs (the
+    round's own, or one of its attempts' before that attempt begins, as the preflight), if any."""
+    job = (HostJob.objects.filter(Q(run__isnull=True, params__round=round_.pk) | Q(run__round=round_), state=HostJob.State.RUNNING)
+           .order_by("-id").first())  # fmt: skip
+    if job is None:
+        return "`worms round start` runs it: between its steps (the gameplan's check, the host's preflight, or between two teams)."
+    since = f", since {job.started_at:%H:%M} UTC" if job.started_at else ""
+    return f"`worms round start` runs it: {SESSION_STEPS.get(job.kind, job.kind)} (#{job.id}{since})."
+
+
 def under_way():
-    """The round whose attempts run now or are pinned to come (one at a time), or None."""
+    """The round a session runs now (its mark, Round.session_running), else the one whose attempts
+    run or are pinned to come (one at a time), or None."""
+    marked = (Round.objects.filter(session_seen_at__gt=timezone.now() - timedelta(seconds=Round.SESSION_STALE))
+              .order_by("round_start", "id").first())  # fmt: skip
+    if marked is not None:
+        return marked
     run = (
         RoundRun.objects.filter(Q(state__in=ACTIVE) | (Q(state=S.PENDING) & ~Q(gameplan_sha256="")))
         .select_related("round").order_by("round__round_start", "round_id").first()
@@ -92,7 +116,13 @@ def phase(round_, runs, window_now, current=None) -> Phase:
     start = round_.round_start
     if start is None:
         return Phase("undated", "undated", "No dates: it never starts.")
+    # A session in progress (its mark, written in real time): running, also while no attempt is
+    # under way (its checks, the sandbox's build and snapshot, a preflight, between two teams),
+    # which the runs alone read as stopped.
+    session = round_.session_running(timezone.now())
     if not runs:
+        if session:
+            return Phase("running", "running", "`worms round start` begins it: its checks, then its runs are planned.", "accent")
         if window_now < start:
             return Phase("scheduled", "scheduled", "Nothing is built before its start.")
         return Phase("planning", "not started", f"Its start has passed: it runs when the operator starts it (`worms round start {round_.id}`).", "accent")
@@ -100,6 +130,8 @@ def phase(round_, runs, window_now, current=None) -> Phase:
         return Phase("done", "done", "Every team's run is over.", "ok")
     if any(run.state in ACTIVE for run in runs):
         return Phase("running", "running", "The teams run one after another (`worms round start` on the host).", "accent")
+    if session:
+        return Phase("running", "running", _session_text(round_), "accent")
     if any(run.state == S.PENDING and run.gameplan_sha256 for run in runs):
         return Phase("running", "stopped", f"Teams are still to run: `worms round start {round_.id} --resume`.", "warn")
     if not any(run.state == S.PENDING and run.upload_id for run in runs):

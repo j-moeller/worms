@@ -268,9 +268,15 @@ def _host_probe(config) -> dict:
     return dict(zip(PROBED, parts + [""] * len(PROBED)))
 
 
+# The commands that run a round session (worms_cli/rounds.py start; dev_test.py runs it in its own process).
+SESSION_COMMAND = re.compile(r"\bround (start|dev-test)\b")
+
+
 def _session_runs(probe) -> bool:
-    """A `worms round start` runs on the host now (its record's pid, worms_cli/rounds.py)."""
-    return "round start" in probe.get("session", "")
+    """A round session runs on the host now: the process its record names (its pid) is a `worms
+    round start` or a `worms round dev-test` (worms_cli/rounds.py). Until 2026-11-27 a dev test's
+    read as ended: status said it had left the services and devboxes stopped."""
+    return SESSION_COMMAND.search(probe.get("session", "")) is not None
 
 
 def _round_session_rows(probe, vms, service_states=None) -> list[list[str]]:

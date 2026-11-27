@@ -918,6 +918,8 @@ def test_a_dev_test_replays_the_same_gameplan_with_another_zip_and_never_starts_
         return 0
 
     monkeypatch.setattr(rounds, "start", start)
+    torn = []
+    monkeypatch.setattr(rounds, "teardown", lambda config, yes=False: torn.append(yes))
     monkeypatch.setattr(rounds, "STOPPED_RECORD", str(tmp_path / "stopped.json"))
     (tmp_path / "stopped.json").write_text('{"pid": 1, "stopped": ["devboxes", "agent", "orchestrator"]}\n')
     started = []
@@ -927,6 +929,7 @@ def test_a_dev_test_replays_the_same_gameplan_with_another_zip_and_never_starts_
     assert [replay for replay, _start in starts] == [False, True] and starts[1][1] > starts[0][1]
     [team_uploads] = [list(Upload.objects.order_by("id").values_list("created_at", flat=True))]
     assert len(team_uploads) == 2 and team_uploads[1] < starts[1][1]  # the new upload, before the moved start
+    assert torn == [True]  # no replay: the sandbox destroyed
     assert started == [["agent"], ["orchestrator"]]  # the devboxes stay stopped
     assert rounds.stopped_record()["stopped"] == ["devboxes"]
 

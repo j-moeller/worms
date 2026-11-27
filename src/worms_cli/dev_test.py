@@ -19,9 +19,9 @@ or an updated zip? [y/N]". Yes: each team's zip, from the same list (empty: as b
 one is that team's upload, the round's start moves after them, and the round runs again: its
 session finds the teams whose upload changed (conductor.stale), keeps their earlier attempts as
 superseded and runs them anew from the sandbox's snapshot, the workspace as it was (no sync).
-Then the same question. No: the round agent and the orchestrator start again; the devboxes stay
-stopped (`worms vm start devboxes`), and so does the sandbox, for the next dev test of the same
-gameplan (`worms round teardown` destroys it). The round, its teams and uploads are kept.
+Then the same question. No: the sandbox is destroyed (`worms round teardown`), the round agent
+and the orchestrator start again; the devboxes stay stopped (`worms vm start devboxes`). The
+round, its teams and uploads are kept.
 
 Ctrl-C, whenever: everything it made goes, as if the round never was. The attempt under way fails
 (its VMs stopped) and the session ends; the sandbox is destroyed (`worms round teardown`); the
@@ -173,18 +173,23 @@ def _replay(config, made: Made, solutions: Path) -> bool:
 
 
 def finish(config, made: Made) -> None:
-    """The dev test's end (no replay): the round agent and the orchestrator started again; the
-    devboxes stay stopped, the sandbox kept."""
+    """The dev test's end (no replay): its sandbox destroyed (`worms round teardown`, which also
+    closes an attempt left under way), then the round agent and the orchestrator started again;
+    the devboxes stay stopped. Until 2026-11-27 the sandbox was kept, for the next dev test of the
+    gameplan, and every later `worms apply` refused while it was there."""
     from worms_cli import rounds
 
-    print(output.heading("the dev test ends"))
+    print(output.heading("the dev test ends: its sandbox destroyed"))
+    try:
+        rounds.teardown(config, yes=True)
+    except Exception as exc:  # noqa: BLE001  (said; what was stopped is started again all the same)
+        output.error(f"the sandbox: {exc}; later: `worms round teardown`")
     stopped = rounds.stopped_record().get("stopped", [])
     if stopped:
         session = SimpleNamespace(config=config, yes=True, round=made.round, dev_test=True)
         rounds._start_again(session, stopped)
         rounds._close_record(session)
-    print(output.color(f"Round {made.round.id} {made.round.name!r}, its teams and uploads are kept. Its sandbox too, for the "
-                       "next dev test of this gameplan: `worms round teardown` destroys it.", "dim"))  # fmt: skip
+    print(output.color(f"Round {made.round.id} {made.round.name!r}, its teams and uploads are kept.", "dim"))
 
 
 def _remove_uploads(config, uploads) -> None:

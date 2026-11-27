@@ -244,21 +244,24 @@ def test_api_misuse_is_refused_where_it_happens():
         assert reachable == []
 
 
-def test_a_private_key_is_the_default_users_and_with_add_to_root_roots_too():
+@pytest.mark.parametrize("half", ["private", "public"])
+def test_a_key_is_the_default_users_and_with_add_to_root_roots_too(half):
+    # add_private_ssh_key: ~/.ssh/<name> and the user's ssh-agent; add_public_ssh_key: the user's
+    # ~/.ssh/authorized_keys. add_to_root=True: root's as well.
     def keys(**options):
         class Plan(Chain):
             def __init__(self):
                 self.a, self.b = BasicVM(), BasicVM()
                 self.key = self.generate_ssh_key()
-                self.add_private_ssh_key(self.a, self.key, **options)
-                self.add_public_ssh_key(self.b, self.key)
+                self.add_private_ssh_key(self.a, self.key, **(options if half == "private" else {}))
+                self.add_public_ssh_key(self.b, self.key, **(options if half == "public" else {}))
                 self.register_network([self.a, self.b])
                 self.set_worm_entrypoint(self.a)
 
-        return [s["user"] for s in spec_of(Plan)["setup"] if s["op"] == "private_key"]
+        return [s["user"] for s in spec_of(Plan)["setup"] if s["op"] == f"{half}_key"]
 
-    assert keys() == ["debian"]  # /home/debian/.ssh, debian's ssh-agent
-    assert keys(add_to_root=True) == ["debian", "root"]  # and /root/.ssh, root's ssh-agent
+    assert keys() == ["debian"]
+    assert keys(add_to_root=True) == ["debian", "root"]
     assert keys(user="root", add_to_root=True) == ["root"]
     with pytest.raises(GameplanError, match="add_to_root is True or False"):
         keys(add_to_root="yes")

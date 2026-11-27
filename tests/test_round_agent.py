@@ -699,6 +699,19 @@ def test_a_key_given_to_debian_and_root_is_in_both_homes_and_both_agents():
         assert f"Match localuser {user}\n    IdentityAgent {home}/.ssh/agent.sock" in agent
 
 
+def test_a_public_key_given_to_debian_and_root_is_in_both_authorized_keys():
+    # add_public_ssh_key(add_to_root=True): one public_key step per user (gameplan/definition.py).
+    ex = FakeExecutor()
+    spec = {"secrets": [{"id": "key1"}], "setup": [
+        {"op": "public_key", "vm": "sandbox-b", "secret": "key1", "user": user, "name": "id_ed25519"}
+        for user in ("debian", "root")]}  # fmt: skip
+    handlers._apply_setup(ex, {"sandbox-b": {"maintenance_ip": "10.4.0.11"}}, spec, {"key1": {"public": "ssh-ed25519 AAAA"}})
+    added = [(c["argv"][-1], c["input"]) for c in ex.ssh_calls if c["argv"][:3] == ["sudo", "tee", "-a"]]
+    assert added == [("/home/debian/.ssh/authorized_keys", "ssh-ed25519 AAAA\n"), ("/root/.ssh/authorized_keys", "ssh-ed25519 AAAA\n")]
+    owners = [c["argv"][2] for c in ex.ssh_calls if c["argv"][:2] == ["sudo", "chown"]]
+    assert owners == ["debian:debian", "root:root"]
+
+
 def test_a_run_gets_its_own_keys_password_files_and_flags_before_the_worm():
     ex = FakeExecutor()
     result = _prepare(ex)

@@ -1244,10 +1244,15 @@ class Gameplan:
         if add_to_root and user != "root":
             self._add_key("private_key", vms, key, "root")
 
-    def add_public_ssh_key(self, vms, key, user=DEFAULT_USER):
+    def add_public_ssh_key(self, vms, key, user=DEFAULT_USER, add_to_root=False):
         """The public key, in ~/.ssh/authorized_keys of `user` (debian unless given): the private
-        key logs in as it."""
+        key logs in as it. With add_to_root=True also in /root/.ssh/authorized_keys: it logs in as
+        root too (sshd lets root in with a key, never with a password)."""
+        if not isinstance(add_to_root, bool):
+            raise GameplanError("add_public_ssh_key: add_to_root is True or False")
         self._add_key("public_key", vms, key, user)
+        if add_to_root and user != "root":
+            self._add_key("public_key", vms, key, "root")
 
     def _add_key(self, op, vms, key, user):
         plan = self._plan

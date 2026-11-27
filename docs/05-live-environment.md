@@ -254,6 +254,7 @@ class RoundOne(Gameplan):                       # gameplans/round_one.py
   | Call | The worm needs |
   |---|---|
   | `add_ssh_key_login(vms, key, user="debian")` | the private key (`add_public_ssh_key` alone, for an existing user) |
+  | `add_public_ssh_key(vms, key, user="debian", add_to_root=False)` | the private key: it logs in as `user` (in `~/.ssh/authorized_keys`); with `add_to_root=True` as root too (`/root/.ssh/authorized_keys`) |
   | `add_ssh_pwd_login(vms, login)` | the password; only these users may use one over SSH |
   | `add_ssh_totp_login(vms, key, totp, user)` | the private key **and** the current code ([`pam_google_authenticator`](https://github.com/google/google-authenticator-libpam), ±8 codes). Only `user` is asked for one |
   | `add_telnet_login(vms, login)` | the password, on port 23 (`inetutils-telnetd` under inetd; PAM service `remote`, with a list of the telnet users) |

@@ -220,6 +220,25 @@ def test_back_from_an_event_keeps_the_feeds_scroll(observed):
     assert abs(scroll["escape"] - scroll["before"]) <= 1
 
 
+def test_the_legend_switches_parts_off_and_on(observed):
+    checks = observed["checks"]
+    assert {"lan", "scoring", "logging", "pi:dns", "pi:apt-cache"} <= set(checks["parts"])
+    scoring = checks["scoring"]
+    assert scoring["dotsOn"] > 0 and any("flag submitted" in text for text in scoring["feedOn"])
+    assert scoring["pressed"] == "false" and scoring["dotsOff"] == 0 and scoring["faint"] >= 1
+    assert not any("flag submitted" in text for text in scoring["feedOff"])
+    assert scoring["feedAgain"] == scoring["feedOn"]
+
+
+def test_an_event_is_shown_beside_the_feed_and_the_logs_alone(observed):
+    split = observed["checks"]["split"]
+    opened, down, logs = split["opened"], split["down"], split["logs"]
+    assert opened["split"] and opened["feed"] and opened["marked"] is not None and opened["title"] == "worm started"
+    assert down["split"] and down["marked"] != opened["marked"] and down["title"] != "worm started"
+    assert logs["texts"] == ["log received (stored) — sandbox-vm0"]  # the log records alone
+    assert split["xss"] is False
+
+
 def test_live_refresh_keeps_speed_zoom_and_scroll(observed):
     refresh = observed["checks"]["refresh"]
     assert refresh["modelFetches"] > refresh["fetchesBefore"]  # it did refresh

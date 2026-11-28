@@ -109,6 +109,12 @@
     .topo-legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; background: currentColor; }
     .topo-legend i.dash { background: repeating-linear-gradient(90deg, currentColor 0 4px, transparent 4px 7px); }
     .topo-legend i.dot { width: 9px; height: 9px; border-radius: 50%; }
+    /* The legend's parts: each a toggle (pressed: shown). Off: not drawn, faint cards and lines. */
+    .topo-toggles { display: inline-flex; flex-wrap: wrap; gap: 4px 6px; margin-right: 8px; }
+    .topo .topo-toggle { display: inline-flex; align-items: center; gap: 5px; padding: 1px 9px; border-radius: 10px; font-size: 11px; }
+    .topo .topo-toggle[aria-pressed="false"] { opacity: .5; }
+    .topo .topo-toggle.off { text-decoration: line-through; }
+    .topo svg .filtered { opacity: .2; }
 
     .topo-side {
         background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; font-size: 13px;
@@ -139,6 +145,18 @@
     .topo-side .feed li.past { opacity: .55; }
     .topo-side .feed .t { font-family: "Share Tech Mono", monospace; color: var(--muted); min-width: 52px; }
     .topo-side .feed .sw { width: 8px; height: 8px; border-radius: 50%; flex: none; align-self: center; }
+    .topo-side .feed { position: relative; }
+    .topo-side .feed li.is-selected { background: var(--bg); box-shadow: inset 3px 0 0 var(--accent); }
+    .topo-side .feed .txt { flex: 1; min-width: 0; }
+    .topo-side .feed .txt.mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .topo-side .feed .m { color: var(--muted); font-size: 11px; white-space: nowrap; }
+    .topo-list__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .topo-list__head .topo-toggle { margin-top: 8px; }
+    /* An event beside the feed: the details above, the feed below, each scrolling on its own. */
+    .topo-side.split { display: flex; flex-direction: column; overflow: hidden; }
+    .topo-side.split .topo-detail { flex: 0 1 auto; max-height: 55%; overflow: auto; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+    .topo-side.split .topo-list { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+    .topo-side.split .feed { flex: 1 1 auto; min-height: 0; overflow: auto; }
 
     /* Player */
     .topo-player { margin-top: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
@@ -241,6 +259,7 @@
         .topo-body { grid-template-columns: 1fr; }
         .topo-stage { height: 70vh; min-height: 420px; }
         .topo-side { height: auto; max-height: 60vh; }
+        .topo-side.split { height: 75vh; max-height: none; }
     }
     @media (prefers-reduced-motion: reduce) {
         .topo svg .badge { transition: none; }

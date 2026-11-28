@@ -814,6 +814,58 @@
     const FAILED_STATES = new Set(["S0", "REJ", "RSTOS0", "RSTRH", "SH", "SHR", "OTH"]);
 
     // ------------------------------------------------------------------
+    // Filters (the legend's toggles). A connection, an event or a card is
+    // of one part: "lan" (the traffic between VMs, sandbox or devbox, and
+    // to their gateway), "scoring", "logging", or a service of the private
+    // internet ("pi:<its name>"). What is off is not drawn, not on the
+    // timeline and not in the feed; its cards and lines are faint.
+    // ------------------------------------------------------------------
+
+    const partCache = new Map(); // `${kind}>${dst}` -> part, for the scene drawn
+
+    function flowPart(f) {
+        if (f.kind === "scoring" || f.kind === "logging") return f.kind;
+        if (f.kind !== "private_internet" && f.kind !== "dns") return "lan";
+        const key = `${f.kind}>${f.dst}`;
+        if (!partCache.has(key)) {
+            const n = resolveNode(f.dst, null, f.dst_name);
+            partCache.set(key, `pi:${n && n.group === "group:pi" ? n.info.name : f.dst_name || f.dst}`);
+        }
+        return partCache.get(key);
+    }
+
+    const eventPart = (e) => (e.kind === "flag_submitted" ? "scoring" : e.kind === "log_received" ? "logging" : null);
+    const flowShown = (f) => !S.hidden.size || !S.hidden.has(flowPart(f));
+    const eventShown = (e) => !S.hidden.size || !S.hidden.has(eventPart(e));
+    const nodePart = (n) => (n.role === "scoring" || n.role === "logging" ? n.role : n.group === "group:pi" && n.info ? `pi:${n.info.name}` : null);
+    const piParts = () => (S.scene ? S.scene.order.filter((n) => n.group === "group:pi" && n.info).map(nodePart) : []);
+
+    function edgeOff(e) {
+        if (e.kind.startsWith("lan")) return S.hidden.has("lan");
+        if (e.kind === "service pi") return piParts().length > 0 && piParts().every((p) => S.hidden.has(p));
+        const target = e.kind === "service" && S.scene.nodes.get(e.to);
+        return !!target && S.hidden.has(nodePart(target));
+    }
+
+    function applyFilters() {
+        if (!S.scene) return;
+        for (const n of S.scene.order) if (n.el) n.el.classList.toggle("filtered", S.hidden.has(nodePart(n)));
+        for (const e of S.scene.edges) if (e.el) e.el.classList.toggle("filtered", edgeOff(e));
+    }
+
+    function togglePart(part) {
+        if (S.hidden.has(part)) S.hidden.delete(part);
+        else S.hidden.add(part);
+        applyFilters();
+        renderLegend();
+        drawFrame();
+        drawDensity();
+        updateBadges(S.t);
+        S.feedReset = true;
+        renderSide();
+    }
+
+    // ------------------------------------------------------------------
     // State
     // ------------------------------------------------------------------
 
@@ -854,6 +906,9 @@
         badges: new Map(),
         lastStatusKey: "",
         feedIndex: -1,
+        hidden: new Set(), // the parts the legend switched off (flowPart, eventPart)
+        feedLogs: false, // the feed: the log records only
+        feedReset: false, // the feed's list changed: its scroll starts again
     };
 
     // The player is on: a run (from the server or a file) is shown.
@@ -1402,6 +1457,7 @@
         clear(svg);
         S.badges.clear();
         routeCache.clear();
+        partCache.clear();
         S.lastStatusKey = "";
         const sc = S.scene;
         svg.appendChild(addDefs());
@@ -1414,7 +1470,10 @@
 
         for (const g of sc.groups) layers.groups.appendChild(drawGroup(g));
         // The shared lane to the private internet (one line, however many groups).
-        for (const e of sc.edges) layers.edges.appendChild(drawEdge(e));
+        for (const e of sc.edges) {
+            e.el = drawEdge(e);
+            layers.edges.appendChild(e.el);
+        }
         for (const hub of sc.hubs.values()) layers.hubs.appendChild(drawHub(hub));
         for (const g of sc.groups) if (g.anchor) layers.hubs.appendChild(drawAnchor(g));
         for (const n of sc.order) {
@@ -1424,6 +1483,7 @@
         }
         applyView();
         updateSelectionClasses();
+        applyFilters();
     }
 
     function drawGroup(g) {
@@ -1910,7 +1970,7 @@
         const out = [];
         for (let i = hi - 1; i >= lo && out.length < MAX_DOTS; i--) {
             const f = flows[i];
-            if (t - f.t <= travel(f)) out.push(f);
+            if (t - f.t <= travel(f) && flowShown(f)) out.push(f);
         }
         return out;
     }
@@ -1996,7 +2056,7 @@
         const hold = HOLD * S.speed;
         const lo = lowerBound(events, t - hold, (e) => e.t);
         const hi = lowerBound(events, t + 1e-9, (e) => e.t);
-        return events.slice(lo, hi);
+        return events.slice(lo, hi).filter(eventShown);
     }
 
     function badgeElement(e, look) {
@@ -2086,8 +2146,11 @@
     }
 
     function select(sel) {
+        // An event while another is shown beside the feed: only its details change, the feed stays.
+        const inPlace = sel && sel.type === "event" && S.selected && S.selected.type === "event" && side.classList.contains("split");
         S.selected = sel;
-        renderSide();
+        if (inPlace) showInPlace(sel.event);
+        else renderSide();
         updateSelectionClasses();
         drawFrame();
         updateBadges(S.t);
@@ -2114,19 +2177,69 @@
     function renderSide() {
         const was = sideShown;
         const top = side.scrollTop;
+        // An event beside the feed: the feed scrolls on its own, and a redraw keeps it where it was.
+        const feedTop = side.classList.contains("split") && !S.feedReset && $("topo-feed") ? $("topo-feed").scrollTop : null;
+        S.feedReset = false;
         if (was && was.key) sideScroll.set(was.key, top);
         sideShown = null; // a VM that is gone shows the summary instead (select(null), within)
         clear(side);
+        side.classList.remove("split");
         fillSide();
         const key = sideKey(S.selected);
         side.scrollTop = key ? sideScroll.get(key) || 0 : was && was.sel === S.selected ? top : 0;
         sideShown = { key, sel: S.selected };
+        const feed = side.classList.contains("split") && $("topo-feed");
+        if (feed && feedTop !== null) feed.scrollTop = feedTop;
+        else if (feed) reveal(feed, true);
+    }
+
+    // An event: its details, and the feed under them, the event marked in it (a timeline's).
+    function renderEventSplit(e) {
+        if (!S.timeline) return renderEventDetails(e, side);
+        side.classList.add("split");
+        const detail = el("div", { class: "topo-detail", id: "topo-detail" });
+        side.appendChild(detail);
+        renderEventDetails(e, detail);
+        appendFeed(S.timeline);
+    }
+
+    function showInPlace(e) {
+        const detail = $("topo-detail");
+        clear(detail);
+        detail.scrollTop = 0;
+        renderEventDetails(e, detail);
+        sideShown = { key: null, sel: S.selected };
+        const feed = $("topo-feed");
+        if (!feed) return;
+        for (const li of feed.children) li.classList.toggle("is-selected", Number(li.dataset.id) === e.id);
+        reveal(feed, false);
+    }
+
+    // The feed scrolled to its marked event: to the middle (just opened), or just into view.
+    function reveal(feed, middle) {
+        const li = feed.querySelector("li.is-selected");
+        if (!li) return;
+        const top = li.offsetTop;
+        const bottom = top + li.offsetHeight;
+        if (middle) feed.scrollTop = top - feed.clientHeight / 2;
+        else if (top < feed.scrollTop) feed.scrollTop = top;
+        else if (bottom > feed.scrollTop + feed.clientHeight) feed.scrollTop = bottom - feed.clientHeight;
+    }
+
+    // ↑/↓ with an event shown: the one above or below it in the feed.
+    function stepFeed(dir) {
+        const feed = $("topo-feed");
+        if (!feed || !feed.children.length) return false;
+        const at = feed.querySelector("li.is-selected");
+        const next = at ? (dir > 0 ? at.nextElementSibling : at.previousElementSibling) : feed.children[0];
+        if (next) next.click();
+        return true;
     }
 
     function fillSide() {
         const sel = S.selected;
         if (sel && sel.type === "node") return renderNodeDetails(sel.id);
-        if (sel && sel.type === "event") return renderEventDetails(sel.event);
+        if (sel && sel.type === "event") return renderEventSplit(sel.event);
         if (sel && sel.type === "flow") return renderFlowDetails(sel.flow);
         if (replaying() && S.doc && S.doc.simulation) return renderSimSummary();
         if (SIM && S.mode !== "file") return append(side, [el("h3", null, "Simulation"), el("p", { class: S.timelineError ? "is-warn" : "hint" },
@@ -2231,22 +2344,40 @@
         appendFeed(tl);
     }
 
-    // Every event, the newest first (clicking one seeks there and shows it), following the clock:
-    // what the playhead has passed is marked (updateFeed). The newest 600.
+    // Every event the legend shows, the newest first (clicking one seeks there and shows it beside
+    // the feed), following the clock: what the playhead has passed is marked (updateFeed). The
+    // newest 600. "Only logs": the log records alone, each with its size; its record opens beside.
     function appendFeed(tl) {
         const feed = el("ul", { class: "feed", id: "topo-feed" });
-        const notable = tl.events.filter((e) => e.kind !== "flag_submitted" || e.data.result !== "invalid").slice(-600).reverse();
-        for (const e of notable) {
+        const chosen = S.selected && S.selected.type === "event" ? S.selected.event.id : null;
+        const shown = tl.events.filter((e) => (e.kind !== "flag_submitted" || e.data.result !== "invalid") && eventShown(e)
+            && (!S.feedLogs || e.kind === "log_received"));
+        for (const e of shown.slice(-600).reverse()) {
             const look = eventLook(e);
             const vm = e.vm ? resolveNode(e.vm) : e.node ? resolveNode(e.node) : null;
             const who = vm && vm.info ? ` — ${vm.info.name}` : "";
-            const li = el("li", { "data-t": e.t, onclick: () => { seek(e.t); pause(); select({ type: "event", event: e }); } },
-                el("span", { class: "t" }, fmtTime(e.t)),
-                el("span", { class: "sw", style: `background: var(${look.color})` }),
-                el("span", null, `${look.label}${who}`));
+            const size = e.kind === "log_received" && isObj(e.data.log) ? num(e.data.log.size) : null;
+            const li = el("li", {
+                "data-t": e.t, "data-id": e.id, class: e.id === chosen ? "is-selected" : null,
+                onclick: () => { seek(e.t); pause(); select({ type: "event", event: e }); },
+            },
+            el("span", { class: "t" }, fmtTime(e.t)),
+            el("span", { class: "sw", style: `background: var(${look.color})` }),
+            el("span", { class: "txt" }, `${look.label}${who}`),
+            size !== null ? el("span", { class: "m" }, `${size} ch`) : null);
             feed.appendChild(li);
         }
-        append(side, [el("h4", null, `Events (${tl.events.length}), the newest first`), feed]);
+        const logs = tl.events.filter((e) => e.kind === "log_received" && eventShown(e)).length;
+        const all = tl.events.length;
+        const head = el("div", { class: "topo-list__head" },
+            el("h4", null, S.feedLogs ? `Logs (${logs}), the newest first`
+                : `Events (${shown.length}${shown.length < all ? ` of ${all}` : ""}), the newest first`),
+            logs || S.feedLogs ? el("button", {
+                type: "button", class: "topo-toggle", "aria-pressed": String(S.feedLogs), id: "topo-only-logs",
+                title: "The log records alone (↑/↓ step through them once one is open)",
+                onclick: () => { S.feedLogs = !S.feedLogs; S.feedReset = true; renderSide(); },
+            }, "only logs") : null);
+        side.appendChild(el("div", { class: "topo-list" }, head, feed));
         S.feedIndex = -1;
         updateFeed(S.t);
     }
@@ -2334,7 +2465,7 @@
             }
             if (info.run.captured_at !== null && info.run.captured_at !== undefined) append(side, [el("p", { class: "is-bad" }, `Captured at ${fmtTime(info.run.captured_at)}.`)]);
             if (!S.scene.team) renderFirewall(info.run.firewall || sandboxFirewall());
-            const mine = S.timeline.events.filter((e) => e.vm === info.id || e.node === info.id || (e.data && e.data.source_vm === info.id));
+            const mine = S.timeline.events.filter((e) => (e.vm === info.id || e.node === info.id || (e.data && e.data.source_vm === info.id)) && eventShown(e));
             if (mine.length) {
                 const feed = el("ul", { class: "feed" });
                 for (const e of mine.slice(-300).reverse()) {  // the newest first, as the feed
@@ -2375,7 +2506,8 @@
                 el("td", { class: "mono" }, [r.group, r.iface].filter(Boolean).join("@")))))) : el("p", { class: "hint" }, "none")]);
     }
 
-    function renderEventDetails(e) {
+    // An event's details: into the side panel, or the details pane beside the feed.
+    function renderEventDetails(e, into) {
         const look = eventLook(e);
         const d = e.data || {};
         const vm = e.vm ? resolveNode(e.vm) : null;
@@ -2391,19 +2523,19 @@
             rows.push(["stored", d.stored ? "yes (in the round's logs)" : "no"]);
             rows.push(["sent by", d.source_label ? `${d.source_label} (inferred)` : "unknown"]);
         }
-        append(side, [backButton(), el("h3", null, look.label), el("div", { class: "sub" }, `at ${fmtTime(e.t)}`), kvTable(rows)]);
+        append(into, [backButton(), el("h3", null, look.label), el("div", { class: "sub" }, `at ${fmtTime(e.t)}`), kvTable(rows)]);
         if (e.kind === "log_received" && isObj(d.log)) {
             const size = num(d.log.size);
             const box = el("pre", { class: "log-record" }, "");
-            append(side, [el("h4", null, size !== null ? `Log record (${size} characters)` : "Log record"), box]);
+            append(into, [el("h4", null, size !== null ? `Log record (${size} characters)` : "Log record"), box]);
             showLog(e, box);
         } else {
-            append(side, [el("h4", null, "Data"), el("pre", null, JSON.stringify(d, null, 2))]);
+            append(into, [el("h4", null, "Data"), el("pre", null, JSON.stringify(d, null, 2))]);
         }
         const actions = el("div", { class: "actions" });
         actions.appendChild(el("button", { type: "button", onclick: () => { select(null); play(); } }, "▶ Continue"));
         if (vm && vm.info) actions.appendChild(el("button", { type: "button", onclick: () => select({ type: "node", id: vm.id }) }, `Show ${vm.info.name}`));
-        side.appendChild(actions);
+        into.appendChild(actions);
     }
 
     // The record of a log event: inline (an older file), else fetched or read
@@ -2613,7 +2745,7 @@
         const [lo, hi] = range();
         const bins = Math.max(20, Math.floor(rect.width / 4));
         const counts = new Array(bins).fill(0);
-        for (const f of S.timeline.flows) counts[clamp(Math.floor(((f.t - lo) / (hi - lo)) * bins), 0, bins - 1)]++;
+        for (const f of S.timeline.flows) if (flowShown(f)) counts[clamp(Math.floor(((f.t - lo) / (hi - lo)) * bins), 0, bins - 1)]++;
         const max = Math.max(1, ...counts);
         const bw = rect.width / bins;
         g.fillStyle = S.colors["--muted"];
@@ -2625,7 +2757,7 @@
         }
         g.globalAlpha = 0.9;
         for (const e of S.timeline.events) {
-            if (e.kind !== "flag_submitted" && e.kind !== "log_received") continue;
+            if ((e.kind !== "flag_submitted" && e.kind !== "log_received") || !eventShown(e)) continue;
             const x = ((e.t - lo) / (hi - lo)) * rect.width;
             g.fillStyle = S.colors[e.kind === "log_received" ? "--c-logging" : e.data.result === "captured" ? "--c-flag" : "--c-scoring"];
             g.fillRect(x - 0.75, e.kind === "log_received" ? 0 : 3, 1.5, 4);
@@ -2692,6 +2824,8 @@
                 seek(S.t + (ev.key === "ArrowLeft" ? -1 : 1) * (ev.shiftKey ? 60 : 10));
             } else if (ev.key === "," || ev.key === ".") {
                 jumpEvent(ev.key === "," ? -1 : 1);
+            } else if ((ev.key === "ArrowUp" || ev.key === "ArrowDown") && S.selected && S.selected.type === "event") {
+                if (stepFeed(ev.key === "ArrowDown" ? 1 : -1)) ev.preventDefault(); // down: older (the feed is the newest first)
             } else if (ev.key === "f" || ev.key === "F") {
                 fit();
             } else if (ev.key === "Escape") {
@@ -2701,7 +2835,7 @@
     }
 
     function jumpEvent(dir) {
-        const events = ((S.timeline && S.timeline.events) || []).filter((e) => e.kind !== "flag_submitted" || e.data.result !== "invalid");
+        const events = ((S.timeline && S.timeline.events) || []).filter((e) => (e.kind !== "flag_submitted" || e.data.result !== "invalid") && eventShown(e));
         if (!events.length) return;
         let target;
         if (dir > 0) target = events.find((e) => e.t > S.t + 0.05);
@@ -3066,55 +3200,50 @@
         if (S.mode === "round") meta.appendChild(document.createTextNode(" · infrastructure status is live; the sandbox is the run's"));
     }
 
+    // The legend: first the parts, each a toggle (on: shown; off: not drawn,
+    // not on the timeline, not in the feed), then what the lines mean.
     function renderLegend() {
         const legend = clear($("topo-legend"));
         const item = (cls, color, label) => el("span", { style: `color: var(${color})` }, el("i", { class: cls }), el("span", { style: "color: var(--muted)" }, label));
-        if (S.scene && S.scene.simulation && !S.scene.team) {
+        const part = (key, color, label, what) => {
+            const off = S.hidden.has(key);
+            return el("button", {
+                type: "button", class: `topo-toggle${off ? " off" : ""}`, "aria-pressed": String(!off), "data-part": key,
+                title: `${off ? "Show" : "Hide"} ${what}`, onclick: () => togglePart(key),
+            }, el("i", { class: "dot", style: `background: var(${color})` }), label);
+        };
+        const sc = S.scene;
+        const team = !!(sc && sc.team);
+        const dev = team && S.doc && S.doc.environment === "dev";
+        append(legend, [el("span", { class: "topo-toggles", role: "group", "aria-label": "Show or hide" }, [
+            part("lan", dev ? "--c-devbox" : "--c-lan", "VM ↔ VM", "the traffic between the VMs (sandbox, devbox)"),
+            part("scoring", "--c-scoring", "scoring", "scoring: its connections and the flags submitted"),
+            part("logging", "--c-logging", "logging", "logging: its connections and the logs sent"),
+            ...piParts().map((key) => part(key, "--c-pi", key.slice(3), `${key.slice(3)} (private internet): its connections`)),
+        ])]);
+        append(legend, [item("", "--c-service", "→ scoring / logging"), item("", "--c-pi", "→ private internet")]);
+        if (sc && sc.simulation && !team) {
             append(legend, [
-                item("", "--c-service", "→ scoring / logging"),
-                item("", "--c-pi", "→ private internet"),
                 item("", "--c-lan", "sandbox network"),
                 item("dash", "--muted", "faint VM: stopped or paused"),
                 item("", "--muted", "grey bar on the timeline: a wait"),
             ]);
             return;
         }
-        if (S.scene && S.scene.team) {
-            const dev = S.doc && S.doc.environment === "dev";
+        if (team) {
             append(legend, [
-                item("", "--c-service", "→ scoring / logging"),
-                item("", "--c-pi", "→ private internet"),
                 dev ? item("", "--c-devbox", "devbox link") : item("", "--c-lan", "sandbox network"),
                 item("dash", "--muted", "faint VM: not captured yet"),
             ]);
-            if (replaying() && S.timeline.flows.length) {
-                append(legend, [
-                    item("dot", "--c-lan", "VM ↔ VM"),
-                    item("dot", "--c-scoring", "→ scoring"),
-                    item("dot", "--c-logging", "→ logging"),
-                    item("dot", "--c-pi", "→ private internet / DNS"),
-                    item("dot", "--bad", "not established (ring)"),
-                ]);
-            }
-            return;
-        }
-        append(legend, [
-            item("", "--c-db", "database ingress (firewall)"),
-            item("", "--c-service", "→ scoring / logging"),
-            item("", "--c-pi", "→ private internet"),
-            item("", "--c-lan", "sandbox network"),
-            item("", "--c-devbox", "devbox link"),
-            item("dash", "--muted", "by design, not verified"),
-        ]);
-        if (replaying()) {
+        } else {
             append(legend, [
-                item("dot", "--c-lan", "VM ↔ VM"),
-                item("dot", "--c-scoring", "→ scoring"),
-                item("dot", "--c-logging", "→ logging"),
-                item("dot", "--c-pi", "→ private internet / DNS"),
-                item("dot", "--bad", "not established (ring)"),
+                item("", "--c-db", "database ingress (firewall)"),
+                item("", "--c-lan", "sandbox network"),
+                item("", "--c-devbox", "devbox link"),
+                item("dash", "--muted", "by design, not verified"),
             ]);
         }
+        if (replaying() && S.timeline.flows.length) append(legend, [item("dot", "--bad", "not established (ring)")]);
     }
 
     function writeHash() {

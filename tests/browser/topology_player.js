@@ -173,6 +173,44 @@ const requests = [];
     await page.evaluate(() => { document.getElementById("topo-side").style.height = ""; });
     await page.locator("#topo-fit").click();
 
+    // The legend's parts: each a toggle. Scoring off: its submissions leave the feed, its dots the
+    // stage, its card is faint; on again, they are back.
+    const feedTexts = () => page.locator("#topo-feed li").allInnerTexts();
+    const scoringDots = () => page.evaluate(() => document.getElementById("topo").topoState.dots.filter((d) => d.f.kind === "scoring").length);
+    out.checks.parts = await page.locator(".topo-toggle[data-part]").evaluateAll((bs) => bs.map((b) => b.dataset.part));
+    await seekUI(95);
+    out.checks.scoring = { dotsOn: await scoringDots(), feedOn: await feedTexts() };
+    await page.locator('.topo-toggle[data-part="scoring"]').click();
+    await seekUI(95.2);
+    Object.assign(out.checks.scoring, {
+        pressed: await page.locator('.topo-toggle[data-part="scoring"]').getAttribute("aria-pressed"),
+        dotsOff: await scoringDots(), feedOff: await feedTexts(), faint: await page.locator("[data-node].filtered").count(),
+    });
+    await page.locator('.topo-toggle[data-part="scoring"]').click();
+    out.checks.scoring.feedAgain = await feedTexts();
+
+    // An event beside the feed, both at once: the event marked in the feed, which stays; ↓ the one
+    // below it (older); "only logs": the log records alone.
+    const split = () => page.evaluate(() => {
+        const feed = document.getElementById("topo-feed");
+        const marked = feed && feed.querySelector("li.is-selected");
+        const title = document.querySelector("#topo-detail h3");
+        return {
+            split: document.getElementById("topo-side").classList.contains("split"), feed: !!feed,
+            marked: marked ? marked.dataset.id : null, title: title ? title.textContent : null,
+            texts: feed ? [...feed.querySelectorAll("li .txt")].map((x) => x.textContent) : [],
+        };
+    });
+    await page.locator("#topo-feed li", { hasText: "worm started" }).first().click();
+    out.checks.split = { opened: await split() };
+    await page.keyboard.press("ArrowDown");
+    out.checks.split.down = await split();
+    await page.locator("#topo-only-logs").click();
+    out.checks.split.logs = await split();
+    out.checks.split.xss = await page.evaluate(() => window.__xss === 1);
+    await page.locator("#topo-only-logs").click();
+    await page.keyboard.press("Escape");
+
     // The Download menu: the server's zip, with the parts asked for.
     await page.locator("#topo-download-menu > summary").click();
     const zipHref = () => page.evaluate(() => { const a = document.getElementById("topo-dl-zip"); return a.hidden ? null : a.getAttribute("href"); });

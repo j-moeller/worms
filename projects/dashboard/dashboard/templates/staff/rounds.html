@@ -4,100 +4,57 @@
 <header class="page-head">
     <p class="page-head__kicker">Staff</p>
     <h1 class="page-head__title">Rounds</h1>
-    <p class="page-head__lead">A round is defined here: its window, its gameplan and the duration per team. Nothing is built until it starts. Then the conductor runs every team's worm, one after another, one round at a time: the round agent on the Proxmox host builds the gameplan's sandbox once and rolls it back for each team, and the gameplan's <code>execute()</code> plays out. An attempt the infrastructure fails is thrown away and run again. A round without a valid gameplan at its start waits, alone, with the uploads from before its start: the rounds after it go ahead, and it begins once one is chosen.</p>
+    <p class="page-head__lead">Every team's worm runs by the round's gameplan, one team after another: <code>worms round start &lt;id&gt;</code> on the host.</p>
 </header>
 {% include "staff/_tabs.html" with section="rounds" %}
 
 {% if progress %}{% include "staff/_round_progress.html" with p=progress show_name=True %}{% endif %}
 
-<div class="grid grid--2">
-    <section class="panel" aria-labelledby="now-title">
-        <header class="panel__head"><h2 class="panel__title" id="now-title">Right now</h2></header>
-        <div class="panel__body">
-            {% if active_run %}
-            <p><strong>{{ active_run.team.name }}</strong> in <a href="{% url 'staff_round' active_run.round.uuid %}">{{ active_run.round.name }}</a>: <span class="badge badge--state">{{ active_run.state }}</span>{% if active_run.state_changed_at %} since {{ active_run.state_changed_at|date:"H:i" }} UTC{% endif %}</p>
-            {% else %}
-            <p class="empty">No run in progress.</p>
-            {% endif %}
-        </div>
-        <div class="table-wrap">
-            <table class="table">
-                <thead><tr><th scope="col">Host job</th><th scope="col">Run</th><th scope="col">State</th><th scope="col">Requested</th></tr></thead>
-                <tbody>
-                    {% for job in jobs %}
-                    <tr><td class="mono">{{ job.kind }}</td><td>{% if job.run %}{{ job.run.round.name }} · {{ job.run.team.name }}{% else %}<span class="muted">devbox</span>{% endif %}</td><td><span class="badge badge--state">{{ job.state }}</span></td><td>{{ job.requested_at|date:"H:i:s" }}</td></tr>
-                    {% empty %}
-                    <tr><td colspan="4" class="empty">No host job queued or running.</td></tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% if failed_jobs %}
-        <div class="panel__body">
-            <p class="field__label">Recently failed</p>
-            <ul class="checklist">
-                {% for job in failed_jobs %}<li><span class="badge badge--bad">{{ job.kind }}</span> {% if job.run %}{{ job.run.round.name }} · {{ job.run.team.name }}: {% endif %}<span class="mono truncate">{{ job.error|truncatechars:160 }}</span></li>{% endfor %}
-            </ul>
-        </div>
-        {% endif %}
-    </section>
-
-    <section class="panel" aria-labelledby="live-title">
-        <header class="panel__head"><h2 class="panel__title" id="live-title">Live rounds</h2><p class="panel__meta">{{ teams }} team{{ teams|pluralize }}</p></header>
-        <div class="table-wrap">
-            <table class="table">
-                <thead><tr><th scope="col">Round</th><th scope="col">Window (UTC)</th><th scope="col">Gameplan</th><th scope="col">Runs</th><th scope="col">Fits</th><th scope="col">Note <span class="field__help">(staff only)</span></th></tr></thead>
-                <tbody>
-                    {% for row in live_rounds %}
-                    <tr>
-                        <th scope="row"><a href="{% url 'staff_round' row.round.uuid %}">{{ row.round.name }}</a> <span class="badge{% if row.phase.tone %} badge--{{ row.phase.tone }}{% endif %}" title="{{ row.phase.text }}">{{ row.phase.label }}</span>{% if row.round.results_published_at %} <span class="badge" title="its results are shown to the teams (`worms round unpublish {{ row.round.id }}` hides them)">published</span>{% endif %}</th>
-                        <td>{{ row.round.round_start|date:"Y-m-d H:i" }} – {{ row.round.round_end|date:"H:i" }}</td>
-                        <td>{% include "staff/_gameplan.html" with round=row.round sha256=row.version %}</td>
-                        <td>{% for state, count in row.states %}<span class="badge badge--state">{{ state }} {{ count }}</span> {% empty %}<span class="muted">planned at the start</span>{% endfor %}</td>
-                        <td>{% if row.estimate.fits %}<span class="badge badge--ok">yes</span>{% else %}<span class="badge badge--bad" title="room for {{ row.estimate.max_teams }} teams">no</span>{% endif %}</td>
-                        <td class="row-action">
-                            <form method="post" action="{% url 'staff_round_note' row.round.uuid %}">
-                                {% csrf_token %}
-                                <input type="text" name="note" value="{{ row.round.note }}" maxlength="500" placeholder="a note for staff" aria-label="Note on {{ row.round.name }} (staff only)">
-                                <button type="submit" class="btn btn--ghost btn--sm">Save</button>
-                            </form>
-                        </td>
-                    </tr>
-                    {% empty %}
-                    <tr><td colspan="6" class="empty">No rounds yet.</td></tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </section>
-</div>
-
-<section class="panel" aria-labelledby="new-round-title">
+<section class="panel" aria-labelledby="rounds-title">
     <header class="panel__head">
-        <h2 class="panel__title" id="new-round-title">New round</h2>
-        <p class="panel__meta">each team's slot: {{ timing.worm_start_delay }} s fuse + its duration + {{ timing.end_drain }} s drain + {{ timing.slot_overhead }} s build/teardown</p>
+        <h2 class="panel__title" id="rounds-title">Rounds</h2>
+        <p class="panel__meta">{{ teams }} team{{ teams|pluralize }}</p>
     </header>
-    <form method="post" class="panel__body form">
-        {% csrf_token %}
-        {% include "staff/_errors.html" %}
-        <fieldset class="fieldset">
-            <legend>Round</legend>
-            <div class="fields">
-                {% include "staff/_field.html" with field=form.name %}
-                {% include "staff/_field.html" with field=form.round_start %}
-                {% include "staff/_field.html" with field=form.round_end %}
-                {% include "staff/_field.html" with field=form.seed %}
-            </div>
-        </fieldset>
-        <fieldset class="fieldset">
-            <legend>Each team's run</legend>
-            <div class="fields">
-                {% include "staff/_field.html" with field=form.gameplan %}
-                {% include "staff/_field.html" with field=form.team_duration %}
-            </div>
-            {% if form.gameplan.field.choices|length == 1 %}<p class="form__note">No gameplan is valid yet: the round can be created without one and given one later. Gameplans are files in <code>gameplans/</code> on the host and the orchestrator; the orchestrator's journal (<code>journalctl -u orchestrator-conduct-rounds</code>) says what is wrong with one.</p>{% endif %}
-        </fieldset>
-        <div class="form__actions"><button type="submit" class="btn btn--primary">Create round</button></div>
-    </form>
+    <div class="panel__body add-round">
+        <details class="add-round__box"{% if form.errors %} open{% endif %}>
+            <summary class="btn btn--primary btn--sm">Add round</summary>
+            <form method="post" class="form add-round__form">
+                {% csrf_token %}
+                {% include "staff/_errors.html" %}
+                <div class="fields">
+                    {% include "staff/_field.html" with field=form.name %}
+                    {% include "staff/_field.html" with field=form.round_start %}
+                    {% include "staff/_field.html" with field=form.round_end %}
+                    {% include "staff/_field.html" with field=form.gameplan %}
+                    {% include "staff/_field.html" with field=form.team_duration %}
+                    {% include "staff/_field.html" with field=form.seed %}
+                </div>
+                {% include "staff/_field.html" with field=form.note %}
+                <p class="form__note">Each team's slot: {{ timing.worm_start_delay }} s fuse + its duration + {{ timing.end_drain }} s drain + {{ timing.slot_overhead }} s build and teardown.{% if form.gameplan.field.choices|length == 1 %} No gameplan is valid yet: one can be chosen later.{% endif %}</p>
+                <div class="form__actions"><button type="submit" class="btn btn--primary">Create round</button></div>
+            </form>
+        </details>
+    </div>
+    <div class="table-wrap">
+        <table class="table">
+            <thead><tr><th scope="col">Round</th><th scope="col">Window (UTC)</th><th scope="col">Gameplan</th><th scope="col">Runs</th><th scope="col">Fits</th></tr></thead>
+            <tbody>
+                {% for row in live_rounds %}
+                <tr>
+                    <th scope="row">
+                        <a href="{% url 'staff_round' row.round.uuid %}">{{ row.round.name }}</a> <span class="badge{% if row.phase.tone %} badge--{{ row.phase.tone }}{% endif %}" title="{{ row.phase.text }}">{{ row.phase.label }}</span>{% if row.round.results_published_at %} <span class="badge" title="its results are shown to the teams (`worms round unpublish {{ row.round.id }}` hides them)">published</span>{% endif %}
+                        {% if row.round.note %}<p class="round-note" title="a note for staff">{{ row.round.note }}</p>{% endif %}
+                    </th>
+                    <td>{{ row.round.round_start|date:"Y-m-d H:i" }} – {{ row.round.round_end|date:"H:i" }}</td>
+                    <td>{% include "staff/_gameplan.html" with round=row.round sha256=row.version %}</td>
+                    <td>{% for state, count in row.states %}<span class="badge badge--state">{{ state }} {{ count }}</span> {% empty %}<span class="muted">planned at the start</span>{% endfor %}</td>
+                    <td>{% if row.estimate.fits %}<span class="badge badge--ok">yes</span>{% else %}<span class="badge badge--bad" title="room for {{ row.estimate.max_teams }} teams">no</span>{% endif %}</td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="5" class="empty">No rounds yet.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
 </section>
 {% endblock %}

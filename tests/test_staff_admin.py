@@ -354,8 +354,7 @@ def test_create_a_round(staff_site):
     assert created.competition == competition() and created.seed >= 0
     assert (created.gameplan, created.team_duration) == ("", 3600)
     page = text(get(staff_site, f"/staff/rounds/{created.uuid}/"))
-    assert "Nothing is built until worms round start runs it" in page and f"seed {created.seed}" in page
-    assert "Choose its gameplan before then" in page and "none yet" in page
+    assert f"seed {created.seed}" in page and "no gameplan yet" in page
 
     # With a gameplan the orchestrator lists as valid; never one it does not.
     valid_gameplan()
@@ -368,6 +367,13 @@ def test_create_a_round(staff_site):
                    page="/staff/rounds/")  # fmt: skip
     assert refused.status_code == 200 and "Select a valid choice" in text(refused)
     assert not Round.objects.filter(name="R3").exists()
+    # The form is open again with what failed (it waits behind "Add round" otherwise).
+    assert '<details class="add-round__box" open>' in refused.content.decode()
+
+    # Its note, for staff, comes with the form.
+    assert post(staff_site, "/staff/rounds/", round_data(name="R4", note="  the dry run  ", **clock_window(days=4)),
+                page="/staff/rounds/").status_code == 302  # fmt: skip
+    assert Round.objects.get(name="R4").note == "the dry run"
 
 
 def clock_window(days):
@@ -456,7 +462,7 @@ def test_edit_and_delete_before_the_runs_exist(staff_site):
     with as_role("postgres"):
         RoundRun.objects.filter(pk=run.pk).update(state=RoundRun.State.FINISHED, gameplan_sha256="ab" * 32)
     page = text(get(staff_site, f"/staff/rounds/{r1.uuid}/"))
-    assert "Teams have run" in page and "Seed" not in page
+    assert "a change reaches the teams that ran" in page and "Seed" not in page
     earlier = round_data(name="R1c", team_duration=40, gameplan="", round_start="2020-01-01T10:00", round_end="2020-01-01T23:00")
     saved = post(staff_site, f"/staff/rounds/{r1.uuid}/", earlier, page=f"/staff/rounds/{r1.uuid}/")
     assert saved.status_code == 302, text(saved)[:1500]
@@ -468,7 +474,7 @@ def test_edit_and_delete_before_the_runs_exist(staff_site):
 
     with as_role("postgres"):
         Round.objects.filter(pk=r1.pk).update(session_seen_at=clock.now())
-    assert "runs this round now" in text(get(staff_site, f"/staff/rounds/{r1.uuid}/"))
+    assert "runs it now" in text(get(staff_site, f"/staff/rounds/{r1.uuid}/"))
     post(staff_site, f"/staff/rounds/{r1.uuid}/", round_data(name="nope"), page=f"/staff/rounds/{r1.uuid}/")
     r1.refresh_from_db()
     assert r1.name == "R1c"
@@ -488,19 +494,25 @@ def test_edit_and_delete_before_the_runs_exist(staff_site):
 
 
 def test_a_rounds_note_is_staffs_own(staff_site):
-    """A quick note from the rounds panel: saved any time, only the note, shown escaped on the
-    staff page; empty removes it; no one else can write it, and no team template shows it."""
+    """A note: in the round's form (created with it, edited with it), or alone while a session
+    runs the round (only the note); shown as text, escaped, on the staff pages; empty removes it;
+    no one else can write it, and no team template shows it."""
     from core.models.competition import Round
     from core.models.user import User
 
     post(staff_site, "/staff/rounds/", round_data(), page="/staff/rounds/")
     r1 = Round.objects.get(name="R1")
-    saved = post(staff_site, f"/staff/rounds/{r1.uuid}/note/", {"note": "  check the seed <b>first</b>  "}, page="/staff/rounds/")
-    assert saved.status_code == 302 and saved["Location"] == "/staff/rounds/"
+    edited = post(staff_site, f"/staff/rounds/{r1.uuid}/", round_data(note="from the form"), page=f"/staff/rounds/{r1.uuid}/")
+    assert edited.status_code == 302, text(edited)[:1500]
+    r1.refresh_from_db()
+    assert r1.note == "from the form"
+    saved = post(staff_site, f"/staff/rounds/{r1.uuid}/note/", {"note": "  check the seed <b>first</b>  "}, page=f"/staff/rounds/{r1.uuid}/")
+    assert saved.status_code == 302 and saved["Location"] == f"/staff/rounds/{r1.uuid}/"
     r1.refresh_from_db()
     assert r1.note == "check the seed <b>first</b>" and r1.name == "R1"
-    page = get(staff_site, "/staff/rounds/").content.decode()
-    assert 'value="check the seed &lt;b&gt;first&lt;/b&gt;"' in page and "<b>first</b>" not in page
+    for path in ("/staff/rounds/", f"/staff/rounds/{r1.uuid}/"):
+        page = get(staff_site, path).content.decode()
+        assert '<p class="round-note' in page and "check the seed &lt;b&gt;first&lt;/b&gt;" in page and "<b>first</b>" not in page
     post(staff_site, f"/staff/rounds/{r1.uuid}/note/", {"note": "x" * 600}, page="/staff/rounds/")
     r1.refresh_from_db()
     assert r1.note == "x" * 500
@@ -515,7 +527,7 @@ def test_a_rounds_note_is_staffs_own(staff_site):
     assert r1.note == ""
     templates = REPO / "projects" / "dashboard" / "dashboard" / "templates"
     shown = [p.relative_to(templates).as_posix() for p in templates.rglob("*.html") if re.search(r"round\w*\.note\b", p.read_text())]
-    assert shown == ["staff/rounds.html"], shown
+    assert sorted(shown) == ["staff/round.html", "staff/rounds.html"], shown
 
 
 def test_a_round_is_deleted_with_its_attempts_unless_a_session_runs_it(staff_site):
@@ -568,69 +580,46 @@ def test_a_round_is_deleted_with_its_attempts_unless_a_session_runs_it(staff_sit
         assert cursor.fetchone() == (True, True, False)
 
 
-def test_the_round_page_lists_its_logs_newest_first_with_their_records(staff_site):
-    """Logs: what each attempt's worm sent the logging service, the newest first, with when (since
-    the worm's start too), team, attempt and the record itself (escaped; a long one cut, with
-    the whole one's link)."""
+def test_the_round_page_has_its_attempts_and_host_steps_on_its_timeline(staff_site):
+    """The round page: the rounds before and after it; its timeline, each attempt's block linking
+    its details (replay, upload) and the host's steps under them (a failed one with why); no runs
+    table, no logs, no host jobs table, nothing of what teams read. The rounds page: a timeline
+    only while a round is being run, and the new round's form behind "Add round"."""
     from core import clock
     from core.models.competition import Round
-    from core.models.logging import Logging, LoggingAttempt
-    from core.models.rounds import RoundRun
+    from core.models.rounds import HostJob, RoundRun, RunEvent
     from core.models.team import Team
 
-    post(staff_site, "/staff/rounds/", round_data(name="R1"), page="/staff/rounds/")
-    r1 = Round.objects.get(name="R1")
+    for name, days in (("R1", 1), ("R2", 2), ("R3", 3)):
+        post(staff_site, "/staff/rounds/", round_data(name=name, **clock_window(days=days)), page="/staff/rounds/")
+    r1, r2, r3 = (Round.objects.get(name=name) for name in ("R1", "R2", "R3"))
     now = clock.now()
     with as_role("postgres"):
         team = Team.objects.create(name="Blue", competition=competition())
-        run = RoundRun.objects.create(round=r1, team=team, position=0, seed=1, duration=3000, state=RoundRun.State.FINISHED,
-                                      worm_start_at=now - timedelta(minutes=10))  # fmt: skip
-        attempts = []
-        for minutes, data in ((9, {"msg": "first <b>"}), (2, {"msg": "second", "big": "x" * 5000})):
-            attempt = LoggingAttempt.objects.create(team_uuid=str(team.uuid), log_data=data, created_at=now - timedelta(minutes=minutes))
-            Logging.objects.create(team=team, round=r1, logging_attempt=attempt, run=run)
-            attempts.append(attempt)
-    page = get(staff_site, f"/staff/rounds/{r1.uuid}/").content.decode()
-    assert "2 log records, the newest first" in page
-    assert page.index("second") < page.index("first &lt;b&gt;") and "first <b>" not in page
-    assert ">8:00<" in page and ">1:00<" in page  # since the worm's start
-    assert f"/rounds/{run.uuid}/progression/logs/{attempts[1].uuid}/" in page  # the long one: its whole record
-    assert f"/rounds/{run.uuid}/progression/logs/{attempts[0].uuid}/" not in page
+        run = RoundRun.objects.create(round=r2, team=team, position=0, seed=1, duration=3000, state=RoundRun.State.FINISHED,
+                                      worm_start_at=now - timedelta(minutes=10), finished_at=now - timedelta(minutes=2))  # fmt: skip
+        RunEvent.objects.create(run=run, kind=RunEvent.Kind.STATE, data={"state": "preparing"}, ts=now - timedelta(minutes=12))
+        build = HostJob.objects.create(kind=HostJob.Kind.BUILD, params={"round": r2.pk}, state=HostJob.State.FAILED, error="tofu died",
+                                       started_at=now - timedelta(minutes=30), finished_at=now - timedelta(minutes=20))  # fmt: skip
+        prepare = HostJob.objects.create(kind=HostJob.Kind.PREPARE, run=run, state=HostJob.State.DONE,
+                                         started_at=now - timedelta(minutes=12), finished_at=now - timedelta(minutes=11))  # fmt: skip
+    page = get(staff_site, f"/staff/rounds/{r2.uuid}/").content.decode()
+    assert f'href="/staff/rounds/{r1.uuid}/" rel="prev"' in page and f'href="/staff/rounds/{r3.uuid}/" rel="next"' in page
+    assert f'href="#run-{run.uuid}"' in page and f'id="run-{run.uuid}"' in page and f"#run={run.uuid}" in page
+    assert f'href="#job-{build.id}"' in page and f'id="job-{build.id}"' in page and "tofu died" in page
+    assert f'href="#job-{prepare.id}"' in page and f'id="job-{prepare.id}"' in page
+    for gone in ("What teams read", 'id="runs-title"', 'id="logs-title"', 'id="jobs-title"', 'id="params-title"'):
+        assert gone not in page, gone
+    first = get(staff_site, f"/staff/rounds/{r1.uuid}/").content.decode()
+    assert "no earlier round" in first and f'href="/staff/rounds/{r2.uuid}/" rel="next"' in first
 
-
-def test_staff_download_the_upload_an_attempt_runs(staff_site):
-    """The round page's Upload column: each attempt's zip, byte for byte, for staff only."""
-    import hashlib
-    from pathlib import Path
-
-    from core.models.competition import Round
-    from core.models.rounds import RoundRun
-    from core.models.team import Team
-    from core.models.user import User
-    from core.models.worms import MalwareArtifact, Upload
-    from django.conf import settings
-
-    post(staff_site, "/staff/rounds/", round_data(name="R1"), page="/staff/rounds/")
-    r1 = Round.objects.get(name="R1")
-    data = b"PK\x03\x04 a worm"
-    content_hash = hashlib.sha256(data).hexdigest()
-    key = f"malware-artifacts/{content_hash[:2]}/{content_hash[2:4]}/{content_hash}.zip"
-    (Path(settings.MEDIA_ROOT) / key).parent.mkdir(parents=True, exist_ok=True)
-    (Path(settings.MEDIA_ROOT) / key).write_bytes(data)
+    rounds = get(staff_site, "/staff/rounds/").content.decode()
+    assert 'id="round-progress"' not in rounds and "Right now" not in rounds  # no round is being run
+    assert '<details class="add-round__box">' in rounds and "Add round" in rounds
     with as_role("postgres"):
-        team = Team.objects.create(name="Blue Team", competition=competition())
-        artifact = MalwareArtifact.objects.create(content_hash=content_hash, storage_key=key)
-        upload = Upload.objects.create(artifact=artifact, user=User.objects.create(username="blue"), team=team)
-        run = RoundRun.objects.create(round=r1, team=team, position=0, seed=1, duration=3000, upload=upload)
-        bare = RoundRun.objects.create(round=r1, team=team, position=0, attempt=1, seed=1, duration=3000)
-    page = get(staff_site, f"/staff/rounds/{r1.uuid}/").content.decode()
-    assert f"/staff/runs/{run.uuid}/upload/" in page and f"/staff/runs/{bare.uuid}/upload/" not in page
-    response = get(staff_site, f"/staff/runs/{run.uuid}/upload/")
-    assert response.status_code == 200 and b"".join(response.streaming_content) == data
-    assert f'filename="worm-blue-team-{content_hash[:12]}.zip"' in response["Content-Disposition"]
-    assert get(staff_site, f"/staff/runs/{bare.uuid}/upload/").status_code == 404
-    staff_site.force_login(User.objects.create(username="student-dl"))
-    assert get(staff_site, f"/staff/runs/{run.uuid}/upload/").status_code == 302
+        Round.objects.filter(pk=r2.pk).update(session_seen_at=clock.now())
+    rounds = get(staff_site, "/staff/rounds/").content.decode()
+    assert 'id="round-progress"' in rounds and f'id="run-{run.uuid}"' in rounds
 
 
 def test_round_parameters_reach_the_runs_and_the_conductor(db_clean):

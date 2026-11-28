@@ -395,7 +395,7 @@ They are stopped, by the operator, before the round's first attempt: `worms roun
 
 ### Following a round
 
-**Staff → Rounds** shows the round under way, or else the one that waits or is about to begin. Each round's page shows its own. The panel refreshes every 30 s. It is read from the runs, their events, host jobs and captures ([`round_progress.py`](../projects/dashboard/dashboard/views/round_progress.py)); it writes nothing and never reads the gameplan.
+**Staff → Rounds** shows the timeline of the round being run right now (a session runs it, or an attempt is under way), and nothing when none is; under it the list of rounds (each with its note for staff) and the new round's form behind **Add round** (its note too). Each round's page shows its own timeline, links the rounds before and after it, and folds its gameplan and schedule away. The panel refreshes every 30 s; an attempt opened stays open. It is read from the runs, their events, host jobs and captures ([`round_progress.py`](../projects/dashboard/dashboard/views/round_progress.py)); it writes nothing and never reads the gameplan.
 
 - **Phase.** scheduled, planning, waiting for a gameplan, gameplan not valid, queued (behind the round under way), starting, running or done.
 - **Summary.** Teams done of all, with a progress bar; the flags counted (finished attempts only); restarts; skipped teams; and an estimate of when the last team is done, flagged when that is after the round's end.
@@ -403,9 +403,10 @@ They are stopped, by the operator, before the round's first attempt: `worms roun
   - every attempt as a block: finished, failed (run again) or under way;
   - the teams to come as dashed blocks (an estimate, one slot each);
   - the wait before the first attempt;
-  - the skipped teams, the round's end and now.
-  Hovering over a block shows its team, attempt, times, flags or error.
-- **Teams.** One card per team in running order: finished with its flags, skipped, under way, next or to come, its restarts and why each failed attempt failed.
+  - the skipped teams, the round's end and now;
+  - under them, the host's steps: the round's own (its sandbox's build and snapshot, its teardown) and each attempt's, a failed one in red (not the observe jobs that went well).
+  Hovering over a block shows its team, attempt, times, flags or error; clicking it opens its details below.
+- **Attempts.** One row per attempt in running order (its state, flags, times, why it failed), opening to its details: the team, its upload (to download), the worm's start, its sandbox's VMs and networks, its captures, its replay (Play, JSON, Zip) and its host steps with how long each took and why one failed. The round's own host steps are a row of their own.
 - **The attempt under way.**
   - Its steps (build, checks, gameplan, drain, teardown, done) with the time it reached each.
   - The worm's run time as a progress bar, and the flags so far (they count only if the attempt finishes).

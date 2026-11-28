@@ -1,41 +1,63 @@
 {% comment %}A round's progress (dashboard/views/round_progress.py), read from its runs, their events
-and host jobs: the round's annotated timeline (every attempt on one time axis, the time it waited,
-what is left as an estimate), every team's outcome, and the attempt under way with the gameplan's
-steps so far. `p`: progress(); `show_name`: link the round. The page refreshes this panel every 30 s
-(enhance.js, data-autorefresh). Times UTC.{% endcomment %}
+and host jobs: its timeline (every attempt on one time axis, the host's steps under them, what is
+left as an estimate), each attempt's details (a block on the timeline links to them), the round's
+own host steps, and the attempt under way with the gameplan's steps so far. `p`: progress();
+`show_name`: link the round. The page refreshes this panel every 30 s (enhance.js,
+data-autorefresh; an open attempt stays open). Times UTC.{% endcomment %}
 <section class="panel progress" id="round-progress" data-autorefresh aria-labelledby="progress-title">
     <header class="panel__head">
-        <h2 class="panel__title" id="progress-title">{% if show_name %}<a href="{% url 'staff_round' p.round.uuid %}">{{ p.round.name }}</a>: progress{% else %}Progress{% endif %} <span class="badge{% if p.phase.tone %} badge--{{ p.phase.tone }}{% endif %}">{{ p.phase.label }}</span></h2>
-        <p class="panel__meta">as of {{ p.updated|date:"H:i:s" }} UTC · refreshes every 30 s</p>
+        <h2 class="panel__title" id="progress-title">{% if show_name %}<a href="{% url 'staff_round' p.round.uuid %}">{{ p.round.name }}</a>{% else %}Timeline{% endif %} <span class="badge{% if p.phase.tone %} badge--{{ p.phase.tone }}{% endif %}">{{ p.phase.label }}</span></h2>
+        <p class="panel__meta">as of {{ p.updated|date:"H:i:s" }} UTC</p>
     </header>
     <div class="panel__body">
         <p class="progress__lead">{{ p.phase.text }}</p>
-        {% if p.teams %}
+        {% if p.attempts %}
         <div class="progress__summary">
             <progress class="pbar" max="{{ p.teams_total }}" value="{{ p.teams_done }}">{{ p.teams_done }} of {{ p.teams_total }}</progress>
-            <p><strong>{{ p.teams_done }} of {{ p.teams_total }}</strong> team{{ p.teams_total|pluralize }} done · <strong>{{ p.flags }}</strong> flag{{ p.flags|pluralize }} counted · {{ p.restarts }} restart{{ p.restarts|pluralize }} · {{ p.skipped }} skipped{% if p.estimate_end %} · the last team done about {{ p.estimate_end|date:"H:i" }} UTC (an estimate){% if p.late %}, <span class="progress__late">after the round's end</span>{% endif %}{% endif %}</p>
+            <p><strong>{{ p.teams_done }} of {{ p.teams_total }}</strong> team{{ p.teams_total|pluralize }} done · <strong>{{ p.flags }}</strong> flag{{ p.flags|pluralize }} counted{% if p.restarts %} · {{ p.restarts }} restart{{ p.restarts|pluralize }}{% endif %}{% if p.skipped %} · {{ p.skipped }} skipped{% endif %}{% if p.estimate_end %} · done about {{ p.estimate_end|date:"H:i" }} UTC{% if p.late %}, <span class="progress__late">after the round's end</span>{% endif %}{% endif %}</p>
         </div>
 
-        <svg class="tl" role="img" aria-label="{{ p.timeline.summary }}" width="100%" height="76">
+        <svg class="tl" role="img" aria-label="{{ p.timeline.summary }}" width="100%" height="100">
             <line class="tl__base" x1="0" x2="100%" y1="38" y2="38"></line>
-            {% for b in p.timeline.blocks %}<g class="tl__block tl__block--{{ b.cls }}"><title>{{ b.title }}</title><rect x="{{ b.x }}" y="24" width="{{ b.w }}" height="28" rx="3"></rect>{% if b.wide %}<text x="{{ b.mid }}" y="42" text-anchor="middle">{{ b.label }}</text>{% endif %}</g>{% endfor %}
-            {% for m in p.timeline.marks %}<g class="tl__mark tl__mark--{{ m.cls }}"><title>{{ m.title }}</title><line x1="{{ m.x }}" x2="{{ m.x }}" y1="{% if m.label %}16{% else %}24{% endif %}" y2="56"></line>{% if m.label %}<text x="{{ m.x }}" y="11" text-anchor="middle">{{ m.label }}</text>{% endif %}</g>{% endfor %}
-            {% for t in p.timeline.ticks %}<text class="tl__tick" x="{{ t.x }}" y="72" text-anchor="{{ t.anchor }}">{{ t.text }}</text>{% endfor %}
+            {% for b in p.timeline.blocks %}{% if b.href %}<a href="{{ b.href }}">{% endif %}<g class="tl__block tl__block--{{ b.cls }}"><title>{{ b.title }}</title><rect x="{{ b.x }}" y="24" width="{{ b.w }}" height="28" rx="3"></rect>{% if b.wide %}<text x="{{ b.mid }}" y="42" text-anchor="middle">{{ b.label }}</text>{% endif %}</g>{% if b.href %}</a>{% endif %}{% endfor %}
+            {% for b in p.timeline.host %}<a href="{{ b.href }}"><g class="tl__block tl__block--{{ b.cls }}"><title>{{ b.title }}</title><rect x="{{ b.x }}" y="60" width="{{ b.w }}" height="14" rx="2"></rect>{% if b.wide %}<text x="{{ b.mid }}" y="71" text-anchor="middle">{{ b.label }}</text>{% endif %}</g></a>{% endfor %}
+            {% for m in p.timeline.marks %}<g class="tl__mark tl__mark--{{ m.cls }}"><title>{{ m.title }}</title><line x1="{{ m.x }}" x2="{{ m.x }}" y1="{% if m.label %}16{% else %}24{% endif %}" y2="78"></line>{% if m.label %}<text x="{{ m.x }}" y="11" text-anchor="middle">{{ m.label }}</text>{% endif %}</g>{% endfor %}
+            {% for t in p.timeline.ticks %}<text class="tl__tick" x="{{ t.x }}" y="94" text-anchor="{{ t.anchor }}">{{ t.text }}</text>{% endfor %}
         </svg>
-        <p class="tl__legend"><span><span class="key key--finished"></span>finished</span> <span><span class="key key--failed"></span>failed, run again</span> <span><span class="key key--active"></span>under way</span> <span><span class="key key--planned"></span>to come (an estimate)</span> <span><span class="key key--wait"></span>waiting</span> <span>· hover for details</span></p>
+        <p class="tl__legend"><span><span class="key key--finished"></span>finished</span> <span><span class="key key--failed"></span>failed</span> <span><span class="key key--active"></span>under way</span> <span><span class="key key--planned"></span>to come</span> <span><span class="key key--wait"></span>waiting</span> <span><span class="key key--job"></span>host step (below)</span> <span><span class="key key--job-failed"></span>host step failed</span> <span>· click one for its details</span></p>
 
-        <ol class="pteams" aria-label="The teams, in running order">
-            {% for t in p.teams %}
-            <li class="pteam pteam--{{ t.state }}{% if t.current %} is-current{% endif %}{% if t.next %} is-next{% endif %}">
-                <span class="pteam__pos">#{{ t.position }}</span>
-                <a class="pteam__name" href="{% url 'staff_team' t.team.uuid %}">{{ t.team.name }}</a>
-                <span class="pteam__state">{% if t.current %}under way: {{ t.state }}{% elif t.next %}next{% elif t.state == 'finished' %}finished{% elif t.state == 'skipped' %}skipped: no upload{% elif t.state == 'failed' %}failed, no attempt left{% elif t.no_upload %}to come: no upload, skipped{% else %}to come{% endif %}</span>
-                {% if t.flags is not None %}<span class="pteam__flags">{{ t.flags }} flag{{ t.flags|pluralize }}</span>{% elif t.flags_so_far is not None %}<span class="pteam__flags muted">{{ t.flags_so_far }} flag{{ t.flags_so_far|pluralize }} so far</span>{% endif %}
-                {% if t.restarts %}<span><span class="badge badge--warn">{{ t.restarts }} restart{{ t.restarts|pluralize }}</span></span>{% endif %}
-                {% for a in t.failed %}<span class="pteam__error" title="{{ a.error }}">attempt {{ a.attempt|add:1 }} failed: {{ a.error|truncatechars:120 }}</span>{% endfor %}
-            </li>
-            {% endfor %}
+        <ol class="attempts" aria-label="The attempts, in running order">
+            {% for a in p.attempts %}{% with run=a.run %}
+            <li><details class="attempt attempt--{{ run.state }}" id="run-{{ run.uuid }}">
+                <summary>
+                    <span class="attempt__pos">#{{ run.position|add:1 }}</span>
+                    <span class="attempt__name">{{ run.team.name }}</span>
+                    <span class="muted">attempt {{ run.attempt|add:1 }}</span>
+                    <span class="badge badge--state">{{ run.state }}</span>
+                    {% if run.state == "finished" %}<span class="attempt__flags">{{ a.flags }} flag{{ a.flags|pluralize }}</span>{% endif %}
+                    {% if a.began %}<span class="mono muted">{{ a.began|date:"H:i" }}–{{ run.finished_at|date:"H:i"|default:"…" }}</span>{% endif %}
+                    {% if run.failure or run.error %}<span class="attempt__error">{{ run.failure.headline|default:run.error|truncatechars:110 }}</span>{% endif %}
+                </summary>
+                <div class="attempt__body">
+                    <dl class="kv kv--tight">
+                        <div><dt>Team</dt><dd><a href="{% url 'staff_team' run.team.uuid %}">{{ run.team.name }}</a></dd></div>
+                        <div><dt>Upload</dt><dd>{% if run.upload %}<span class="mono" title="uploaded {{ run.upload.created_at|date:'Y-m-d H:i' }} UTC">{{ run.upload.artifact.content_hash|slice:":12" }}</span> <a class="btn btn--ghost btn--sm" href="{% url 'staff_run_upload' run.uuid %}">Download</a>{% else %}<span class="muted">none</span>{% endif %}</dd></div>
+                        <div><dt>Worm start</dt><dd>{{ run.worm_start_at|date:"H:i:s"|default:"—" }}{% if run.ends_at %} · ends {{ run.ends_at|date:"H:i:s" }}{% endif %}</dd></div>
+                        <div><dt>Sandbox</dt><dd>{% if run.vm_count %}{{ run.vm_count }} VMs{% if a.networks %}, {{ a.networks }} networks{% endif %}{% else %}<span class="muted">—</span>{% endif %}</dd></div>
+                        <div><dt>Captured</dt><dd>{{ a.flags }}{% if run.state != "finished" and a.flags %} <span class="muted">(counts only if it finishes)</span>{% endif %}</dd></div>
+                        <div><dt>Replay</dt><dd><a class="btn btn--ghost btn--sm" href="{% url 'topology' %}#run={{ run.uuid }}">Play</a> <a class="btn btn--ghost btn--sm" href="{% url 'run_progression' run.uuid %}">JSON</a> <a class="btn btn--ghost btn--sm" href="{% url 'run_progression_download' run.uuid %}">Zip</a>{% if run.failure %} <a class="btn btn--ghost btn--sm" href="{% url 'staff_round' p.round.uuid %}#failure-{{ run.uuid }}">Why it failed</a>{% endif %}</dd></div>
+                    </dl>
+                    {% if a.jobs %}{% include "staff/_round_jobs.html" with rows=a.jobs %}{% endif %}
+                </div>
+            </details></li>
+            {% endwith %}{% endfor %}
         </ol>
+        {% if p.own_jobs %}
+        <details class="attempt" id="jobs-round">
+            <summary><span class="attempt__name">The round's own host steps</span> <span class="muted">{{ p.own_jobs|length }}: its sandbox's build and snapshot, its teardown</span></summary>
+            <div class="attempt__body">{% include "staff/_round_jobs.html" with rows=p.own_jobs %}</div>
+        </details>
+        {% endif %}
 
         {% with a=p.attempt %}{% if a %}
         <div class="progress__attempt">
@@ -44,7 +66,7 @@ steps so far. `p`: progress(); `show_name`: link the round. The page refreshes t
                 {% for s in a.steps %}<li class="step step--{{ s.status }}" title="{{ s.help }}"{% if s.status == 'current' %} aria-current="step"{% endif %}><span class="step__label">{{ s.label }}</span><span class="step__at">{% if s.at %}{{ s.at|date:"H:i:s" }}{% else %}&nbsp;{% endif %}</span></li>{% endfor %}
             </ol>
             {% if a.run_time %}
-            <p class="progress__run"><span>The worm's run: <strong>{{ a.run_time.elapsed_text }}</strong> of {{ a.run_time.total_text }}</span> <progress class="pbar pbar--run" max="{{ a.run_time.total }}" value="{{ a.run_time.elapsed }}">{{ a.run_time.percent }}%</progress> <span>{{ a.run_time.percent }}% · {{ a.flags }} flag{{ a.flags|pluralize }} so far (they count if the attempt finishes)</span></p>
+            <p class="progress__run"><span>The worm's run: <strong>{{ a.run_time.elapsed_text }}</strong> of {{ a.run_time.total_text }}</span> <progress class="pbar pbar--run" max="{{ a.run_time.total }}" value="{{ a.run_time.elapsed }}">{{ a.run_time.percent }}%</progress> <span>{{ a.run_time.percent }}% · {{ a.flags }} flag{{ a.flags|pluralize }} so far</span></p>
             {% endif %}
             {% if a.waiting_on %}<p class="muted">Waiting for the host: <span class="mono">{{ a.waiting_on.kind }}</span>, {{ a.waiting_on.state }} since {{ a.waiting_on.requested_at|date:"H:i:s" }} UTC.</p>{% endif %}
             <svg class="tl tl--attempt" role="img" aria-label="The attempt's steps over time" width="100%" height="70">
@@ -54,7 +76,7 @@ steps so far. `p`: progress(); `show_name`: link the round. The page refreshes t
                 {% for m in a.marks %}<g class="tl__mark tl__mark--{{ m.cls }}"><title>{{ m.title }}</title><line x1="{{ m.x }}" x2="{{ m.x }}" y1="14" y2="52"></line><text x="{{ m.x }}" y="9" text-anchor="middle">{{ m.label }}</text></g>{% endfor %}
                 {% for t in a.axis_ticks %}<text class="tl__tick" x="{{ t.x }}" y="66" text-anchor="{{ t.anchor }}">{{ t.text }}</text>{% endfor %}
             </svg>
-            <p class="field__label">What the attempt did, the newest first{% if a.log_cut %} (the latest {{ a.log|length }}){% endif %}: time from the worm's start (0:00), then UTC</p>
+            <p class="field__label">What it did, the newest first{% if a.log_cut %} (the latest {{ a.log|length }}){% endif %}: from the worm's start (0:00), then UTC</p>
             <ol class="tl-log">
                 {% for e in a.log %}<li class="tl-log__{{ e.kind }}"><span class="mono">{{ e.offset }}</span><span class="mono muted">{{ e.ts|date:"H:i:s" }}</span><span>{{ e.text }}</span></li>{% empty %}<li><span></span><span></span><span class="muted">Nothing yet.</span></li>{% endfor %}
             </ol>

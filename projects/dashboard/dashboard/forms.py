@@ -177,26 +177,19 @@ class RoundForm(StyledForm):
     after another (docs/05-live-environment.md)."""
 
     name = forms.CharField(max_length=100)
-    round_start = _datetime("Starts", help_text="UTC. The upload deadline: each team's latest upload before it runs.")
-    round_end = _datetime("Ends", help_text="UTC. When the round should be over. Every team still runs, retries "
-                                             "included; results are final when the last one has.")  # fmt: skip
-    gameplan = forms.ChoiceField(
-        required=False,
-        help_text="A file in gameplans/ (docs/05-live-environment.md). Only gameplans the orchestrator and the host both "
-                  "hold, and find valid, are listed. It can be chosen later, until the first team's attempt starts: "
-                  "the round waits for it, alone (the rounds after it go ahead), with the uploads from before its start.",
-    )  # fmt: skip
+    round_start = _datetime("Starts", help_text="UTC. The upload deadline.")
+    round_end = _datetime("Ends", help_text="UTC.")
+    # Only gameplans the orchestrator and the host both hold, and find valid (docs/05-live-environment.md).
+    gameplan = forms.ChoiceField(required=False, help_text="A valid file in gameplans/; it can be chosen later.")
     team_duration = _minutes(
         "Duration per team (min)", schedule.TEAM_DURATION[0] // 60, schedule.TEAM_DURATION[1] // 60,
-        schedule.TEAM_DURATION[2] // 60, help_text="From a team's worm starting to the end of its run: the "
-        "gameplan's round_duration.",
+        schedule.TEAM_DURATION[2] // 60, help_text="From the worm's start: the gameplan's round_duration.",
     )  # fmt: skip
-    seed = forms.IntegerField(
-        required=False, min_value=0, max_value=2**62,
-        help_text="Empty: random. The order the teams run in derives from it.",
-    )  # fmt: skip
+    seed = forms.IntegerField(required=False, min_value=0, max_value=2**62, help_text="Empty: random. It sets the teams' order.")
+    note = forms.CharField(required=False, max_length=500, strip=True, widget=forms.Textarea(attrs={"rows": 2}),
+                           help_text="For staff: never shown to a team.")  # fmt: skip
     # A round whose runs are planned: all but its seed (the order the teams run in, fixed then).
-    PLANNED_FIELDS = ("name", "round_start", "round_end", "gameplan", "team_duration")
+    PLANNED_FIELDS = ("name", "round_start", "round_end", "gameplan", "team_duration", "note")
 
     def __init__(self, *args, competition=None, instance=None, planned=False, **kwargs):
         from core.models.rounds import GameplanFile
@@ -257,6 +250,7 @@ class RoundForm(StyledForm):
             "seed": round_obj.seed,
             "gameplan": round_obj.gameplan,
             "team_duration": round_obj.team_duration // 60,
+            "note": round_obj.note,
         }
 
 

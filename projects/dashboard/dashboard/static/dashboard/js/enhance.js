@@ -262,6 +262,11 @@
                 const fresh = doc.getElementById(section.id);
                 const current = document.getElementById(section.id);
                 if (fresh && current) {
+                    // What was open stays open (a round's attempts).
+                    for (const open of current.querySelectorAll("details[open][id]")) {
+                        const again = fresh.querySelector(`#${CSS.escape(open.id)}`);
+                        if (again) again.open = true;
+                    }
                     current.replaceWith(fresh);
                     localTimes(document.getElementById(section.id));
                 }
@@ -269,10 +274,36 @@
         }, 30000);
     }
 
+    // ---- a link to a part of the page that is folded away ----------------
+    // (a round's timeline links its attempts and host steps): what holds it opens.
+    function openTarget() {
+        const show = () => {
+            const id = decodeURIComponent(location.hash.slice(1));
+            const target = id && document.getElementById(id);
+            if (!target) return;
+            let opened = false;
+            for (let d = target.closest("details"); d; d = d.parentElement && d.parentElement.closest("details")) {
+                if (!d.open) {
+                    d.open = true;
+                    opened = true;
+                }
+            }
+            if (opened) target.scrollIntoView({ block: "nearest" });
+        };
+        window.addEventListener("hashchange", show);
+        // The same link again (the hash unchanged, the attempt folded since): open it again.
+        document.addEventListener("click", (ev) => {
+            const link = ev.target.closest && ev.target.closest("a");
+            const href = link && link.getAttribute("href");
+            if (href && href.startsWith("#")) setTimeout(show, 0);
+        });
+        show();
+    }
+
     function init() {
         [
             () => localTimes(), startCountdowns, () => copyButtons(),
-            envToggle, () => staffMenu(), () => uploadForm(), autoRefresh,
+            envToggle, () => staffMenu(), () => uploadForm(), autoRefresh, openTarget,
         ].forEach((fn) => {
             try { fn(); } catch (e) { /* one broken enhancement must not stop the others */ }
         });

@@ -99,7 +99,7 @@ const input = JSON.parse(fs.readFileSync(0, 'utf8'));
         await page.waitForURL(input.base + '/login/');
         await login(input.admin, input.adminPassword, '/staff/rounds/');
         await page.getByRole('link', { name: 'Journey Round', exact: true }).first().click();
-        await page.getByRole('heading', { name: 'Runs', exact: true }).waitFor();
+        await page.getByRole('heading', { name: /^Timeline/ }).waitFor();
         await page.screenshot({ path: path.join(input.output, 'staff-round.png'), fullPage: true });
         assert.deepEqual(errors, []);
         process.stdout.write(JSON.stringify({ archive, record, errors }));

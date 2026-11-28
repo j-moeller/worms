@@ -595,6 +595,51 @@ p + .code-label, .code + .code-label { margin-top: 14px; }
 .key--active { background: var(--accent); }
 .key--planned { border: 1px dashed var(--border-strong); }
 .key--wait { background: color-mix(in srgb, var(--warn) 18%, transparent); border: 1px dashed color-mix(in srgb, var(--warn) 60%, transparent); }
+/* The host's steps, under the attempts on a round's timeline; a block links to its row. */
+.tl a { cursor: pointer; }
+.tl a:hover rect { stroke: var(--text); stroke-width: 1.5; }
+.tl__block--job rect { fill: color-mix(in srgb, var(--text) 35%, var(--surface)); stroke: none; }
+.tl__block--job-running rect { fill: color-mix(in srgb, var(--accent) 55%, var(--surface)); stroke: none; }
+.tl__block--job-failed rect { fill: var(--bad); stroke: none; }
+.tl__block--job text, .tl__block--job-running text, .tl__block--job-failed text { fill: var(--bg); font-size: 9px; }
+.key--job { background: color-mix(in srgb, var(--text) 35%, var(--surface)); }
+.key--job-failed { background: var(--bad); }
+/* A round's attempts, each opening to its details (the timeline's blocks link here). */
+.attempts { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 6px; }
+.attempt { border: var(--border-w) solid var(--border); border-left: 4px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface-2); }
+.attempt--finished { border-left-color: var(--ok); }
+.attempt--failed { border-left-color: var(--bad); }
+.attempt--preparing, .attempt--checking, .attempt--running, .attempt--ending, .attempt--tearing_down { border-left-color: var(--accent); }
+.attempt--skipped, .attempt--superseded { opacity: .7; }
+.attempt > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 7px 10px; cursor: pointer; font-size: .85rem; list-style: none; }
+.attempt > summary::-webkit-details-marker { display: none; }
+.attempt > summary::before { content: "▸"; color: var(--faint); }
+.attempt[open] > summary::before { content: "▾"; }
+.attempt:target, tr:target > td { outline: 2px solid var(--accent); outline-offset: -2px; }
+#jobs-round { margin-top: 6px; }
+.attempt__pos { font-family: var(--font-mono); font-size: .72rem; color: var(--faint); }
+.attempt__name { font-weight: 600; }
+.attempt__flags { font-family: var(--font-mono); font-size: .8rem; }
+.attempt__error { flex-basis: 100%; color: var(--bad); font-size: .76rem; overflow-wrap: anywhere; }
+.attempt__body { padding: 2px 12px 12px; }
+.kv--tight { gap: 6px; }
+.kv--tight > div { grid-template-columns: 100px 1fr; }
+.table--compact th, .table--compact td { padding: 5px 10px; font-size: .8rem; }
+/* The round pages: the rounds before and after, the note, a folded panel, "Add round". */
+.round-nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 4px; }
+.round-nav .is-disabled { opacity: .45; pointer-events: none; }
+.round-note { margin: 4px 0 0; padding-left: 8px; border-left: 2px solid var(--border-strong); font-size: .8rem; font-weight: 400; color: var(--muted); white-space: pre-line; max-width: 60ch; }
+.round-note--head { margin-top: 10px; font-size: .9rem; }
+.panel--fold > summary { cursor: pointer; list-style: none; }
+.panel--fold > summary::-webkit-details-marker { display: none; }
+.panel--fold > summary .panel__title::before { content: "▸ "; color: var(--faint); }
+.panel--fold[open] > summary .panel__title::before { content: "▾ "; }
+.panel--fold:not([open]) > summary { border-bottom: none; }
+.add-round { padding-top: 12px; padding-bottom: 12px; }
+.add-round__box > summary { list-style: none; display: inline-flex; }
+.add-round__box > summary::-webkit-details-marker { display: none; }
+.add-round__box[open] > summary { opacity: .6; }
+.add-round__form { margin-top: 14px; }
 .pteams { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
 .pteam { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 8px 10px; font-size: .85rem; background: var(--surface-2); border: var(--border-w) solid var(--border); border-left: 4px solid var(--border-strong); border-radius: var(--radius-sm); }
 .pteam--finished { border-left-color: var(--ok); }

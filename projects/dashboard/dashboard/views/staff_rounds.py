@@ -22,13 +22,11 @@ missing or not valid (round_progress.warnings, through render_with_base_info).
 
 from __future__ import annotations
 
-import json
 from collections import Counter
 
 from core import clock, events, schedule
 from core.locking import serialized_resource
 from core.models.competition import Competition, Round
-from core.models.logging import Logging
 from core.models.rounds import GameplanFile, HostJob, RoundRun, round_gameplan
 from core.models.scoring import FlagCapture
 from core.models.team import Team
@@ -39,20 +37,16 @@ from dashboard.views.util import render_with_base_info
 from django.contrib import messages
 from django.db import transaction
 from django.core.files.storage import default_storage
-from django.db.models import Count, Q
+from django.db.models import Q
 from django.http import FileResponse, Http404, HttpRequest
 from django.shortcuts import get_object_or_404, redirect
 from django.utils.text import slugify
 from django.views.decorators.http import require_GET, require_POST
 
-ACTIVE_STATES = [s for s in RoundRun.State.values if s not in ("pending", "finished", "failed", "skipped", "superseded")]
 RUNNING = "`worms round start` runs this round now: it can change once that session has ended."
 CHANGED = (" Teams have run: the next `worms round start` runs again, asked, every team whose attempt no longer "
            "matches it (their earlier attempts kept, superseded, no longer counted).")  # fmt: skip
 NOTE_LIMIT = 500
-LOG_LIMIT = 100  # the round page's log records, the newest first
-LOG_SHOWN = 4000  # characters of a record's content on the page; the whole of it: its JSON (run_log)
-LOG_PREVIEW = 160
 
 
 
@@ -116,6 +110,7 @@ def rounds(request: HttpRequest):
                     created = Round.objects.create(
                         competition=comp, name=data["name"], seed=form.chosen_seed(),
                         round_start=start, round_end=end, gameplan=data["gameplan"], team_duration=duration,
+                        note=data.get("note", ""),
                     )  # fmt: skip
                     events.competition("round_created", request=request, round_id=created.pk, detail={"name": created.name})
                     note = "" if created.gameplan else " It has no gameplan yet: choose one on its page. Without one at its start it waits, alone."
@@ -143,46 +138,15 @@ def rounds(request: HttpRequest):
         return rows
 
     rows = listing(comp)
-    # The round under way; else the one that waits or is about to begin.
-    focus = current or next((row["round"] for row in rows if row["phase"].key in ("planning", "waiting", "queued", "starting")), None)
-
-    active_run = (
-        RoundRun.objects.filter(state__in=ACTIVE_STATES).select_related("round", "team")
-        .order_by("round_id", "position", "attempt").first()
-    )
+    # The timeline only of a round being run right now (a session's, or an attempt under way).
+    running = round_progress.active()
     return render_with_base_info(request, "staff/rounds.html", {
         "form": form,
         "live_rounds": rows,
-        "progress": round_progress.progress(focus, current=current) if focus is not None else None,
+        "progress": round_progress.progress(running, current=current) if running is not None else None,
         "teams": teams,
-        "active_run": active_run,
-        "jobs": HostJob.objects.filter(state__in=[HostJob.State.QUEUED, HostJob.State.RUNNING])
-        .select_related("run__team", "run__round").order_by("id")[:20],
-        "failed_jobs": HostJob.objects.filter(state=HostJob.State.FAILED)
-        .select_related("run__team", "run__round").order_by("-id")[:5],
         "timing": schedule.timing_defaults(),
     })  # fmt: skip
-
-
-def _logs(round_obj) -> tuple[list[dict], int]:
-    """(the round's newest log records, LOG_LIMIT at most, how many it has): what each attempt's
-    worm sent the logging service, with when it came (UTC, and since that attempt's worm start),
-    its team and attempt, its size, and its content (pretty JSON, LOG_SHOWN characters; the
-    whole record is the staff log endpoint's)."""
-    rows = (Logging.objects.filter(round=round_obj).select_related("team", "run", "logging_attempt")
-            .order_by("-logging_attempt__created_at", "-id"))  # fmt: skip
-    out = []
-    for log in rows[:LOG_LIMIT]:
-        attempt, run = log.logging_attempt, log.run
-        text = json.dumps(attempt.log_data, indent=2, ensure_ascii=False, default=str)
-        since = None
-        if run is not None and run.worm_start_at is not None:
-            seconds = int((attempt.created_at - run.worm_start_at).total_seconds())
-            since = f"{'-' if seconds < 0 else ''}{abs(seconds) // 60}:{abs(seconds) % 60:02d}"
-        out.append({"at": attempt.created_at, "since": since, "team": log.team, "run": run, "ref": str(attempt.uuid),
-                    "size": len(text), "preview": " ".join(text.split())[:LOG_PREVIEW], "text": text[:LOG_SHOWN],
-                    "cut": len(text) > LOG_SHOWN})  # fmt: skip
-    return out, rows.count()
 
 
 def _ran(runs) -> bool:
@@ -196,18 +160,7 @@ def round_detail(request: HttpRequest, round_uuid):
     comp = request.competition
     round_obj = get_object_or_404(Round, uuid=round_uuid, competition=comp)
     now = clock.now()
-    runs = list(
-        RoundRun.objects.filter(round=round_obj)
-        .select_related("team", "upload__artifact")
-        .annotate(vm_count=Count("virtual_machines"))
-        .order_by("position", "attempt")
-    )
-    # Per attempt: a failed one's captures are kept for the record but never count.
-    captures = Counter(FlagCapture.objects.filter(round=round_obj).values_list("vm__run_id", flat=True))
-    for run in runs:
-        run.captured = captures.get(run.pk, 0)
-        nodes = (run.topology or {}).get("nodes") or []
-        run.network_count = sum(1 for node in nodes if isinstance(node, dict) and node.get("type") == "network")
+    runs = list(RoundRun.objects.filter(round=round_obj).select_related("team").order_by("position", "attempt"))
     # Changed whenever no `worms round start` runs it; once its runs are planned, all but its seed.
     running = round_obj.session_running(now)
     planned = bool(runs)
@@ -237,9 +190,10 @@ def round_detail(request: HttpRequest, round_uuid):
                         if not form.errors:
                             round_obj.name, round_obj.round_start, round_obj.round_end = data["name"], start, end
                             round_obj.gameplan, round_obj.team_duration = data["gameplan"], duration
+                            round_obj.note = data.get("note", "")
                             # The orchestrator checks it again against the new values.
                             round_obj.gameplan_status = ""
-                            fields = ["name", "round_start", "round_end", "gameplan", "team_duration", "gameplan_status"]
+                            fields = ["name", "round_start", "round_end", "gameplan", "team_duration", "note", "gameplan_status"]
                             if not planned:
                                 round_obj.seed = form.chosen_seed()
                                 fields.append("seed")
@@ -259,6 +213,9 @@ def round_detail(request: HttpRequest, round_uuid):
     # params name the round (orchestrator/rounds/conductor.py build_sandbox, destroy_sandbox).
     own = Q(run__isnull=True, params__round=round_obj.pk)
     step_failures = list(HostJob.objects.filter(own, state=HostJob.State.FAILED).order_by("-id")[:10])
+    # The rounds before and after it, in the order of their starts (the rounds page's).
+    order = list(Round.objects.filter(competition=round_obj.competition).order_by("round_start", "id").values("pk", "uuid", "name"))
+    at = next(i for i, r in enumerate(order) if r["pk"] == round_obj.pk)
     return render_with_base_info(request, "staff/round.html", {
         "round": round_obj,
         "status": _status(round_obj, now),
@@ -272,13 +229,10 @@ def round_detail(request: HttpRequest, round_uuid):
         "ran": _ran(runs),
         "timing": schedule.timing_defaults(),
         "estimate": _estimate(round_obj, teams),
-        # Not the observe jobs that went well: one a minute while an attempt runs, they say
-        # nothing staff need (the host's memory is in the orchestrator's journal).
-        "jobs": HostJob.objects.filter(Q(run__round=round_obj) | own).exclude(kind=HostJob.Kind.OBSERVE, state=HostJob.State.DONE)
-        .select_related("run__team").order_by("-id")[:50],
         "version": round_gameplan(round_obj),
-        "logs": _logs(round_obj),
         "progress": round_progress.progress(round_obj),
+        "previous": order[at - 1] if at > 0 else None,
+        "following": order[at + 1] if at + 1 < len(order) else None,
     })  # fmt: skip
 
 
@@ -305,16 +259,16 @@ def run_upload(request: HttpRequest, run_uuid):
 @staff_required
 @require_POST
 def round_note(request: HttpRequest, round_uuid):
-    """Staff's quick note on a round, from the rounds panel: any time, a round under way too. Only
-    the note is written (nothing else of the round, which may be changing meanwhile); empty removes
-    it. Shown on the staff pages only, never to a team."""
+    """Staff's note on a round while a session runs it (the round's form, which has it too, waits
+    then): only the note is written (nothing else of the round, which may be changing meanwhile);
+    empty removes it. Shown on the staff pages only, never to a team."""
     round_obj = get_object_or_404(Round, uuid=round_uuid, competition=request.competition)
     note = request.POST.get("note", "").strip()[:NOTE_LIMIT]
     if note != round_obj.note:
         Round.objects.filter(pk=round_obj.pk).update(note=note)
         events.competition("round_note", request=request, round_id=round_obj.pk, detail={"name": round_obj.name})
     messages.success(request, f"Note on {round_obj.name} saved." if note else f"Note on {round_obj.name} removed.")
-    return redirect("staff_rounds")
+    return redirect("staff_round", round_uuid=round_obj.uuid)
 
 
 @staff_required

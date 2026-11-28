@@ -1,0 +1,12 @@
+{% comment %}Host jobs on a round's timeline (round_progress._jobs rows): `rows`. Each row is the target
+of its block's link (#job-<id>).{% endcomment %}
+<div class="table-wrap">
+    <table class="table table--compact">
+        <thead><tr><th scope="col">Host step</th><th scope="col">State</th><th scope="col">From (UTC)</th><th scope="col">Took</th><th scope="col">Error</th></tr></thead>
+        <tbody>
+            {% for row in rows %}{% with job=row.job %}
+            <tr id="job-{{ job.id }}"><td class="mono">{{ job.kind }} <span class="muted">#{{ job.id }}</span></td><td><span class="badge{% if job.state == 'failed' %} badge--bad{% else %} badge--state{% endif %}">{{ job.state }}</span></td><td class="mono">{{ row.start|date:"H:i:s" }}</td><td>{{ row.took|default:"—" }}</td><td>{% if row.failure %}<details class="failure failure--job"><summary class="mono">{{ row.failure.headline|default:job.error|truncatechars:160 }}</summary>{% include "staff/_failure.html" with f=row.failure open=True %}</details>{% elif job.error %}<span class="mono truncate">{{ job.error|truncatechars:160 }}</span>{% endif %}</td></tr>
+            {% endwith %}{% endfor %}
+        </tbody>
+    </table>
+</div>

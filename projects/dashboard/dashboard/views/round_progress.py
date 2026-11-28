@@ -23,7 +23,7 @@ from core import clock, schedule
 from core.models.competition import Round
 from core.models.rounds import HostJob, RoundRun, RunEvent
 from core.models.scoring import FlagCapture
-from django.db.models import Q
+from django.db.models import Count, Q
 from django.utils import timezone
 
 S = RoundRun.State
@@ -96,17 +96,25 @@ def _session_text(round_) -> str:
     return f"`worms round start` runs it: {SESSION_STEPS.get(job.kind, job.kind)} (#{job.id}{since})."
 
 
-def under_way():
-    """The round a session runs now (its mark, Round.session_running), else the one whose attempts
-    run or are pinned to come (one at a time), or None."""
+def active():
+    """The round being run right now: the one a session runs (its mark, Round.session_running),
+    else the one with an attempt under way; or None. The rounds page shows its timeline only then."""
     marked = (Round.objects.filter(session_seen_at__gt=timezone.now() - timedelta(seconds=Round.SESSION_STALE))
               .order_by("round_start", "id").first())  # fmt: skip
     if marked is not None:
         return marked
-    run = (
-        RoundRun.objects.filter(Q(state__in=ACTIVE) | (Q(state=S.PENDING) & ~Q(gameplan_sha256="")))
-        .select_related("round").order_by("round__round_start", "round_id").first()
-    )  # fmt: skip
+    run = RoundRun.objects.filter(state__in=ACTIVE).select_related("round").order_by("round__round_start", "round_id").first()
+    return run.round if run else None
+
+
+def under_way():
+    """The round being run (active()), else the one whose attempts are pinned to come (one at a
+    time: stopped part way), or None."""
+    current = active()
+    if current is not None:
+        return current
+    run = (RoundRun.objects.filter(state=S.PENDING).exclude(gameplan_sha256="").select_related("round")
+           .order_by("round__round_start", "round_id").first())  # fmt: skip
     return run.round if run else None
 
 
@@ -231,11 +239,42 @@ class Axis:
         return out
 
 
+JOB_LIMIT = 400  # the newest host jobs of a round on its timeline
+
+
+def _jobs(round_, now):
+    """The host's steps of the round and of its attempts, the oldest first (the newest JOB_LIMIT;
+    not the observe jobs that went well: one a minute while an attempt runs, they say nothing
+    staff need): each with its span on the timeline, how long it took and why it failed."""
+    own = Q(run__isnull=True, params__round=round_.pk)
+    found = (HostJob.objects.filter(Q(run__round=round_) | own).exclude(kind=HostJob.Kind.OBSERVE, state=HostJob.State.DONE)
+             .select_related("run__team").order_by("-id")[:JOB_LIMIT])  # fmt: skip
+    rows = []
+    for job in reversed(found):
+        start = job.started_at or job.requested_at
+        if start is None:
+            continue
+        going = job.state in (HostJob.State.QUEUED, HostJob.State.RUNNING)
+        end = max(job.finished_at or (now if going else start), start + timedelta(seconds=1))
+        took = _span((job.finished_at - start).total_seconds()) if job.finished_at else None
+        failure = (job.result or {}).get("failure") if isinstance(job.result, dict) else None
+        who = f"{job.run.team.name}, attempt {job.run.attempt + 1}" if job.run_id else "the round"
+        failed = job.state == HostJob.State.FAILED
+        why = f" · {(failure or {}).get('headline') or job.error}"[:240] if failed else ""
+        rows.append({
+            "job": job, "start": start, "end": end, "took": took, "failure": failure, "who": who,
+            "cls": "job-failed" if failed else "job-running" if going else "job",
+            "title": f"#{job.id} {job.kind} ({who}): {job.state} · {start:%H:%M:%S}–{end:%H:%M:%S} UTC" + (f" · {took}" if took else "") + why,
+        })  # fmt: skip
+    return rows
+
+
 def progress(round_, now=None, window_now=None, current=None):
     """The round's progress, for the staff pages; None before its runs are planned."""
     now = now or timezone.now()
     window_now = window_now or clock.now()
-    runs = list(RoundRun.objects.filter(round=round_).select_related("team").order_by("position", "attempt"))
+    runs = list(RoundRun.objects.filter(round=round_).select_related("team", "upload__artifact")
+                .annotate(vm_count=Count("virtual_machines")).order_by("position", "attempt"))  # fmt: skip
     current = current if current is not None else under_way()
     ph = phase(round_, runs, window_now, current)
     if not runs:
@@ -247,6 +286,7 @@ def progress(round_, now=None, window_now=None, current=None):
     for run_id, ts, data in RunEvent.objects.filter(run_id__in=ids, kind=RunEvent.Kind.STATE).order_by("ts", "id").values_list("run_id", "ts", "data"):
         entered[run_id].append((ts, (data or {}).get("state", "")))
     captured = Counter(FlagCapture.objects.filter(round=round_).values_list("vm__run_id", flat=True))
+    jobs = _jobs(round_, now)
 
     def began(run):
         for ts, state in entered[run.pk]:
@@ -298,7 +338,7 @@ def progress(round_, now=None, window_now=None, current=None):
                 cursor += slot
     ends = [run.finished_at for run in runs if run.finished_at]
     first_start = min((t for t in (began(run) for run in runs) if t), default=None)
-    axis_end = max([round_.round_end, *ends, *([now, cursor] if ph.key != "done" else [])])
+    axis_end = max([round_.round_end, *ends, *(row["end"] for row in jobs), *([now, cursor] if ph.key != "done" else [])])
     axis = Axis(round_.round_start, axis_end)
 
     blocks, marks = [], []
@@ -328,14 +368,26 @@ def progress(round_, now=None, window_now=None, current=None):
         else:
             cls, title = "active", f"#{run.position + 1} {run.team.name}, attempt {run.attempt + 1}: {run.state}"
         label = ("✕ " if run.state == S.FAILED else "") + run.team.name
-        blocks.append(axis.block(start, end, cls=cls, label=label, title=f"{title} · {start:%H:%M}–{end:%H:%M} UTC"))
+        blocks.append(axis.block(start, end, cls=cls, label=label, title=f"{title} · {start:%H:%M}–{end:%H:%M} UTC", href=f"#run-{run.uuid}"))
     for run, start, end in projected:
         label = f"{run.team.name}" + (f" (attempt {run.attempt + 1})" if run.attempt else "")
-        blocks.append(axis.block(start, end, cls="planned", label=label,
+        blocks.append(axis.block(start, end, cls="planned", label=label, href=f"#run-{run.uuid}",
                                  title=f"#{run.position + 1} {label}: to come, about {start:%H:%M}–{end:%H:%M} UTC (an estimate)"))  # fmt: skip
     marks.append(axis.mark(round_.round_end, cls="end", label="end", title=f"The round's end: {round_.round_end:%Y-%m-%d %H:%M} UTC"))
     if ph.key != "done":
         marks.append(axis.mark(now, cls="now", label="now", title=f"Now: {now:%H:%M} UTC"))
+    # The host's steps under the attempts: the round's own (its sandbox's build and snapshot, its
+    # teardown) and each attempt's.
+    host = [axis.block(row["start"], row["end"], cls=row["cls"], label=row["job"].kind, href=f"#job-{row['job'].id}", title=row["title"])
+            for row in jobs]  # fmt: skip
+    attempts = []
+    for run in runs:
+        nodes = (run.topology or {}).get("nodes") or []
+        attempts.append({
+            "run": run, "began": began(run), "flags": captured.get(run.pk, 0),
+            "networks": sum(1 for node in nodes if isinstance(node, dict) and node.get("type") == "network"),
+            "jobs": [row for row in jobs if row["job"].run_id == run.pk],
+        })  # fmt: skip
 
     out = {
         "round": round_,
@@ -347,8 +399,10 @@ def progress(round_, now=None, window_now=None, current=None):
         "flags": flags,
         "restarts": sum(team["restarts"] for team in teams),
         "skipped": sum(1 for team in teams if team["state"] == S.SKIPPED),
-        "timeline": {"blocks": blocks, "marks": marks, "ticks": axis.ticks(),
+        "timeline": {"blocks": blocks, "host": host, "marks": marks, "ticks": axis.ticks(),
                      "summary": f"{round_.name}: {done} of {len(teams)} teams done, {ph.label}"},  # fmt: skip
+        "attempts": attempts,
+        "own_jobs": [row for row in jobs if row["job"].run_id is None],
         "estimate_end": cursor if projected or active else None,
         "late": bool(projected or active) and cursor > round_.round_end,
         "attempt": _attempt(active, entered[active.pk], captured.get(active.pk, 0), now, timing) if active else None,
